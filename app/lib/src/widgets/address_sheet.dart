@@ -22,6 +22,10 @@ class MorphAddressSheet extends StatefulWidget {
     this.onReload,
     this.onDesktopSiteChanged,
     this.onFind,
+    this.bookmarked = false,
+    this.onToggleBookmark,
+    this.onHistory,
+    this.onBookmarks,
     this.identityLabel,
     this.profiles,
   });
@@ -37,6 +41,10 @@ class MorphAddressSheet extends StatefulWidget {
   final VoidCallback? onReload;
   final ValueChanged<bool>? onDesktopSiteChanged;
   final VoidCallback? onFind;
+  final bool bookmarked;
+  final VoidCallback? onToggleBookmark;
+  final VoidCallback? onHistory;
+  final VoidCallback? onBookmarks;
   final String? identityLabel;
 
   /// Optional profiles section (mobile). Desktop uses the nav-row button.
@@ -76,6 +84,17 @@ class _MorphAddressSheetState extends State<MorphAddressSheet> {
     _focus.dispose();
     _url.dispose();
     super.dispose();
+  }
+
+  /// Closes the sheet, then runs [action], or says [feature] is coming soon.
+  VoidCallback _closeThen(VoidCallback? action, String feature) {
+    if (action == null) {
+      return () => _comingSoon(feature);
+    }
+    return () {
+      Navigator.of(context).maybePop();
+      action();
+    };
   }
 
   void _comingSoon(String feature) {
@@ -200,20 +219,19 @@ class _MorphAddressSheetState extends State<MorphAddressSheet> {
                 const SizedBox(height: 8),
                 _RowTile(
                   key: const Key('sheet-bookmark'),
-                  icon: Icons.bookmark_border,
-                  label: 'Bookmark page',
-                  onTap: () => _comingSoon('Bookmarks'),
+                  icon: widget.bookmarked
+                      ? Icons.bookmark
+                      : Icons.bookmark_border,
+                  label: widget.bookmarked
+                      ? 'Remove bookmark'
+                      : 'Bookmark page',
+                  onTap: _closeThen(widget.onToggleBookmark, 'Bookmarks'),
                 ),
                 _RowTile(
                   key: const Key('sheet-find'),
                   icon: Icons.search,
                   label: 'Find in page',
-                  onTap: widget.onFind == null
-                      ? () => _comingSoon('Find in page')
-                      : () {
-                          Navigator.of(context).maybePop();
-                          widget.onFind!();
-                        },
+                  onTap: _closeThen(widget.onFind, 'Find in page'),
                 ),
                 SwitchListTile(
                   key: const Key('sheet-desktop'),
@@ -248,13 +266,13 @@ class _MorphAddressSheetState extends State<MorphAddressSheet> {
                       key: const Key('sheet-history'),
                       icon: Icons.history,
                       label: 'History',
-                      onTap: () => _comingSoon('History'),
+                      onTap: _closeThen(widget.onHistory, 'History'),
                     ),
                     _Tile(
                       key: const Key('sheet-bookmarks'),
                       icon: Icons.bookmarks_outlined,
                       label: 'Bookmarks',
-                      onTap: () => _comingSoon('Bookmarks'),
+                      onTap: _closeThen(widget.onBookmarks, 'Bookmarks'),
                     ),
                     _Tile(
                       key: const Key('sheet-downloads'),
