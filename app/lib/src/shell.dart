@@ -23,6 +23,7 @@ import 'widgets/address_sheet.dart';
 import 'widgets/brand.dart';
 import 'widgets/desktop_chrome.dart';
 import 'widgets/find_bar.dart';
+import 'widgets/device_link.dart';
 import 'widgets/identity_onboarding.dart';
 import 'widgets/library_page.dart';
 import 'widgets/mobile_gestures.dart';
@@ -35,6 +36,7 @@ import 'widgets/tab_switcher.dart';
 import 'widgets/window_chrome.dart';
 import 'window/morph_desktop_window.dart';
 import 'window/window_buttons.dart';
+import 'qr_scanner.dart';
 import 'surface_watch.dart';
 
 /// Morph shell: address-bar chrome, Linux web-view texture, and Rust wiring.
@@ -48,9 +50,14 @@ class MorphShell extends StatefulWidget {
     this.showDebugPanel = false,
     this.links,
     this.defaultBrowser,
+    this.scanQr,
   });
 
   final MorphApi api;
+
+  /// The QR scanner for "Add device"; null uses [MorphQrScanner] where the
+  /// platform has one (Android). Tests pass a fake.
+  final Future<String?> Function()? scanQr;
 
   /// Web links from the system, each opened in a new tab.
   final MorphIncomingLinks? links;
@@ -1118,6 +1125,18 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
             Navigator.of(panel).pop();
           },
           onSkip: () => Navigator.of(panel).pop(),
+          linkFromDevice: (_) => MorphLinkFromDevice(
+            api: widget.api,
+            profileId: profileId,
+            home: home,
+            onDone: (identity) {
+              finished = true;
+              if (mounted && profileId == _profileId) {
+                setState(() => _identity = identity);
+              }
+              Navigator.of(panel).pop();
+            },
+          ),
         ),
       );
     } finally {
@@ -1155,13 +1174,24 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
             SelectableText(identity.fingerprint, style: mono),
             const SizedBox(height: 8),
             Text(
-              identity.imported
+              identity.linked
+                  ? 'Linked from another device.'
+                  : identity.imported
                   ? 'Restored from recovery words.'
                   : 'Created in this profile.',
             ),
           ],
         ),
         actions: [
+          TextButton.icon(
+            key: const Key('identity-add-device'),
+            onPressed: () {
+              Navigator.of(context).pop();
+              unawaited(_openAddDevice());
+            },
+            icon: const Icon(Icons.qr_code_scanner),
+            label: const Text('Add device'),
+          ),
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
             child: const Text('Close'),
@@ -1170,6 +1200,35 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
       ),
     );
     _onOverlayClosed();
+  }
+
+  /// QR login, existing-device side: send this profile's identity to a new
+  /// device that shows a link code.
+  Future<void> _openAddDevice() async {
+    if (!mounted) {
+      return;
+    }
+    await _showPanel(
+      (panel) => Scaffold(
+        key: const Key('add-device-panel'),
+        appBar: AppBar(title: Text('Add a device · $_profileName')),
+        body: SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+            child: MorphAddDevice(
+              api: widget.api,
+              profileId: _profileId,
+              profileName: _profileName,
+              home: _home,
+              scan:
+                  widget.scanQr ??
+                  (MorphQrScanner.available ? MorphQrScanner.scan : null),
+              onClose: () => Navigator.of(panel).pop(),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _openLibrary(MorphLibraryTab tab) async {
