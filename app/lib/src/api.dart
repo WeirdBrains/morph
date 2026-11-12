@@ -28,6 +28,56 @@ abstract class MorphApi {
     String? home,
     String? profileId,
   });
+
+  /// Bookmarks for [profileId], newest first.
+  Future<List<MorphBookmark>> listBookmarks(String profileId, {String? home});
+  Future<List<MorphBookmark>> addBookmark(
+    String profileId,
+    String url,
+    String title, {
+    String? home,
+  });
+  Future<List<MorphBookmark>> removeBookmark(
+    String profileId,
+    String url, {
+    String? home,
+  });
+
+  /// Browsing history for [profileId], newest first.
+  Future<void> recordVisit(
+    String profileId,
+    String url,
+    String title, {
+    String? home,
+  });
+  Future<List<MorphHistoryEntry>> listHistory(
+    String profileId, {
+    String query = '',
+    int limit = 0,
+    String? home,
+  });
+  Future<void> deleteHistoryUrl(String profileId, String url, {String? home});
+  Future<void> clearHistory(String profileId, {String? home});
+}
+
+class MorphBookmark {
+  const MorphBookmark({required this.url, this.title = '', this.added});
+
+  final String url;
+  final String title;
+  final DateTime? added;
+}
+
+class MorphHistoryEntry {
+  const MorphHistoryEntry({
+    required this.url,
+    this.title = '',
+    required this.visited,
+  });
+
+  final String url;
+  final String title;
+  final DateTime visited;
 }
 
 class IdentityStatusView {

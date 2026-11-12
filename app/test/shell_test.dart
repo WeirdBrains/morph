@@ -179,6 +179,89 @@ class FakeMorphApi implements MorphApi {
   }) async {
     tabsByProfile[_tabKey(profileId)] = snapshot;
   }
+
+  final bookmarksByProfile = <String, List<MorphBookmark>>{};
+  final historyByProfile = <String, List<MorphHistoryEntry>>{};
+
+  @override
+  Future<List<MorphBookmark>> listBookmarks(
+    String profileId, {
+    String? home,
+  }) async => List.of(bookmarksByProfile[profileId] ?? const []);
+
+  @override
+  Future<List<MorphBookmark>> addBookmark(
+    String profileId,
+    String url,
+    String title, {
+    String? home,
+  }) async {
+    final list = bookmarksByProfile.putIfAbsent(profileId, () => []);
+    list.removeWhere((b) => b.url == url);
+    list.insert(0, MorphBookmark(url: url, title: title));
+    return List.of(list);
+  }
+
+  @override
+  Future<List<MorphBookmark>> removeBookmark(
+    String profileId,
+    String url, {
+    String? home,
+  }) async {
+    final list = bookmarksByProfile.putIfAbsent(profileId, () => []);
+    list.removeWhere((b) => b.url == url);
+    return List.of(list);
+  }
+
+  @override
+  Future<void> recordVisit(
+    String profileId,
+    String url,
+    String title, {
+    String? home,
+  }) async {
+    final list = historyByProfile.putIfAbsent(profileId, () => []);
+    if (list.isNotEmpty && list.first.url == url) {
+      list.removeAt(0);
+    }
+    list.insert(
+      0,
+      MorphHistoryEntry(url: url, title: title, visited: DateTime.now()),
+    );
+  }
+
+  @override
+  Future<List<MorphHistoryEntry>> listHistory(
+    String profileId, {
+    String query = '',
+    int limit = 0,
+    String? home,
+  }) async {
+    final q = query.toLowerCase();
+    final list = [
+      for (final e
+          in historyByProfile[profileId] ?? const <MorphHistoryEntry>[])
+        if (q.isEmpty ||
+            e.url.toLowerCase().contains(q) ||
+            e.title.toLowerCase().contains(q))
+          e,
+    ];
+    return limit > 0 && list.length > limit ? list.sublist(0, limit) : list;
+  }
+
+  @override
+  Future<void> deleteHistoryUrl(
+    String profileId,
+    String url, {
+    String? home,
+  }) async {
+    historyByProfile[profileId]?.removeWhere((e) => e.url == url);
+  }
+
+  @override
+  Future<void> clearHistory(String profileId, {String? home}) async {
+    historyByProfile.remove(profileId);
+  }
 }
 
 /// Wait until identity info is on screen. Do not wait for `ready`: that flag

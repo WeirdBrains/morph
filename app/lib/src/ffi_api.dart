@@ -5,6 +5,7 @@ import 'api.dart';
 import 'rust/api/events.dart' as rust_events;
 import 'rust/api/identity.dart' as rust_identity;
 import 'rust/api/info.dart' as rust_info;
+import 'rust/api/library.dart' as rust_library;
 import 'rust/api/page.dart' as rust_page;
 import 'rust/api/profiles.dart' as rust_profiles;
 import 'rust/api/settings.dart' as rust_settings;
@@ -258,4 +259,91 @@ class FfiMorphApi implements MorphApi {
       tabs: tabs,
     );
   }
+
+  static List<MorphBookmark> _bookmarks(List<rust_library.BookmarkView> list) =>
+      [
+        for (final b in list)
+          MorphBookmark(
+            url: b.url,
+            title: b.title,
+            added: DateTime.fromMillisecondsSinceEpoch(b.addedMs.toInt()),
+          ),
+      ];
+
+  @override
+  Future<List<MorphBookmark>> listBookmarks(
+    String profileId, {
+    String? home,
+  }) async => _bookmarks(
+    await rust_library.listBookmarks(home: home, profileId: profileId),
+  );
+
+  @override
+  Future<List<MorphBookmark>> addBookmark(
+    String profileId,
+    String url,
+    String title, {
+    String? home,
+  }) async => _bookmarks(
+    await rust_library.addBookmark(
+      home: home,
+      profileId: profileId,
+      url: url,
+      title: title,
+    ),
+  );
+
+  @override
+  Future<List<MorphBookmark>> removeBookmark(
+    String profileId,
+    String url, {
+    String? home,
+  }) async => _bookmarks(
+    await rust_library.removeBookmark(
+      home: home,
+      profileId: profileId,
+      url: url,
+    ),
+  );
+
+  @override
+  Future<void> recordVisit(
+    String profileId,
+    String url,
+    String title, {
+    String? home,
+  }) => rust_library.recordVisit(
+    home: home,
+    profileId: profileId,
+    url: url,
+    title: title,
+  );
+
+  @override
+  Future<List<MorphHistoryEntry>> listHistory(
+    String profileId, {
+    String query = '',
+    int limit = 0,
+    String? home,
+  }) async => [
+    for (final e in await rust_library.listHistory(
+      home: home,
+      profileId: profileId,
+      query: query,
+      limit: limit,
+    ))
+      MorphHistoryEntry(
+        url: e.url,
+        title: e.title,
+        visited: DateTime.fromMillisecondsSinceEpoch(e.visitedMs.toInt()),
+      ),
+  ];
+
+  @override
+  Future<void> deleteHistoryUrl(String profileId, String url, {String? home}) =>
+      rust_library.deleteHistoryUrl(home: home, profileId: profileId, url: url);
+
+  @override
+  Future<void> clearHistory(String profileId, {String? home}) =>
+      rust_library.clearHistory(home: home, profileId: profileId);
 }
