@@ -5,12 +5,35 @@ import 'package:flutter/widgets.dart';
 
 import 'events.dart';
 import 'platform.dart';
+import 'surface_health.dart';
 
 /// Public handle used by the Morph shell and by widget tests (via a fake session).
 class MorphWebViewController {
-  MorphWebViewController({this.initialUrl = 'https://example.com'});
+  MorphWebViewController({
+    this.initialUrl = 'https://example.com',
+    this.surfaceSettle = const Duration(milliseconds: 600),
+    this.rebuildCooldown = const Duration(seconds: 20),
+    DateTime Function()? clock,
+  }) : _clock = clock ?? DateTime.now;
 
   final String initialUrl;
+
+  /// How long a rebuilt surface gets to paint before it is checked again.
+  final Duration surfaceSettle;
+
+  /// Minimum gap between two automatic rebuilds, so a page that really is a
+  /// flat colour can never put the view into a rebuild loop.
+  final Duration rebuildCooldown;
+
+  final DateTime Function() _clock;
+  Future<void>? _creating;
+  Future<MorphSurfaceVerdict>? _healing;
+  DateTime? _lastRebuild;
+  int _surfaceRebuilds = 0;
+
+  /// How many times this view rebuilt its native surface to recover from a
+  /// blank or lost surface.
+  int get surfaceRebuilds => _surfaceRebuilds;
 
   MorphWebViewSession? _session;
   String? _pendingUrl;
@@ -54,6 +77,45 @@ class MorphWebViewController {
       );
       return;
     }
+    // Layout can ask again (keyboard, sheet, rotation) while the first
+    // create is still in flight. Creating twice would leave two native views
+    // racing for this tab, so later callers wait for the first one.
+    final inFlight = _creating;
+    if (inFlight != null) {
+      await inFlight;
+      if (_session != null) {
+        await resize(
+          width: width,
+          height: height,
+          devicePixelRatio: devicePixelRatio,
+        );
+      }
+      return;
+    }
+    final creating = _create(
+      width: width,
+      height: height,
+      devicePixelRatio: devicePixelRatio,
+      userScript: userScript,
+      profileId: profileId,
+    );
+    _creating = creating;
+    try {
+      await creating;
+    } finally {
+      if (identical(_creating, creating)) {
+        _creating = null;
+      }
+    }
+  }
+
+  Future<void> _create({
+    required int width,
+    required int height,
+    required double devicePixelRatio,
+    required String userScript,
+    required String profileId,
+  }) async {
     final url = _pendingUrl ?? initialUrl;
     _pendingUrl = null;
     final session = await MorphWebViewPlatform.instance.create(
@@ -79,6 +141,78 @@ class MorphWebViewController {
         _cursorController.add(event);
       }),
     );
+    _subs.add(
+      session.surfaceLost.listen((_) => unawaited(_rebuild(force: true))),
+    );
+    final pending = _pendingUrl;
+    if (pending != null) {
+      // An address submitted while create was in flight.
+      _pendingUrl = null;
+      await session.loadUrl(pending);
+    }
+  }
+
+  /// Makes sure the visible surface is painting the page, and recovers it
+  /// when it is not: first a repaint nudge, then (if the page has content but
+  /// the frame is still flat) a fresh native view on the same URL.
+  ///
+  /// Concurrent calls share one check. Call it after anything that can leave
+  /// a stale surface: the keyboard or a sheet closing, the app resuming,
+  /// returning from the tab grid, a tab or profile switch, a finished load.
+  Future<MorphSurfaceVerdict> ensureSurfaceHealthy() {
+    final running = _healing;
+    if (running != null) {
+      return running;
+    }
+    final heal = _heal();
+    _healing = heal;
+    return heal.whenComplete(() {
+      if (identical(_healing, heal)) {
+        _healing = null;
+      }
+    });
+  }
+
+  Future<MorphSurfaceVerdict> _heal() async {
+    final session = _session;
+    if (session == null) {
+      return MorphSurfaceVerdict.unknown;
+    }
+    await session.repaintSurface();
+    final verdict = await session.checkSurface();
+    if (verdict != MorphSurfaceVerdict.blank &&
+        verdict != MorphSurfaceVerdict.rendererGone) {
+      return verdict;
+    }
+    if (!await _rebuild(force: verdict == MorphSurfaceVerdict.rendererGone)) {
+      return verdict;
+    }
+    await Future<void>.delayed(surfaceSettle);
+    if (!identical(_session, session)) {
+      return MorphSurfaceVerdict.unknown;
+    }
+    return session.checkSurface();
+  }
+
+  Future<bool> _rebuild({required bool force}) async {
+    final session = _session;
+    if (session == null) {
+      return false;
+    }
+    final now = _clock();
+    final last = _lastRebuild;
+    // A dead renderer is rebuilt right away, but never more than once every
+    // couple of seconds so a page that crashes it on load cannot spin.
+    final gap = force ? const Duration(seconds: 2) : rebuildCooldown;
+    if (last != null && now.difference(last) < gap) {
+      return false;
+    }
+    final rebuilt = await session.rebuildSurface();
+    if (rebuilt) {
+      _lastRebuild = now;
+      _surfaceRebuilds++;
+    }
+    return rebuilt;
   }
 
   Future<void> resize({
@@ -96,7 +230,8 @@ class MorphWebViewController {
   Future<void> loadUrl(String url) async {
     if (_session == null) {
       // The shell can submit an address before the first platform view
-      // attaches (common on Android while the system WebView starts).
+      // attaches (common on Android while the system WebView starts). If a
+      // create is already in flight it loads this once it lands.
       _pendingUrl = url;
       return;
     }
