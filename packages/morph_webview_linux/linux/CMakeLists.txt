@@ -25,6 +25,7 @@ pkg_check_modules(WPE_PLATFORM QUIET IMPORTED_TARGET wpe-platform-2.0)
 list(APPEND PLUGIN_SOURCES
   "morph_webview_linux_plugin.cc"
   "render_path.cc"
+  "ime_context.cc"
 )
 
 add_library(${PLUGIN_NAME} SHARED

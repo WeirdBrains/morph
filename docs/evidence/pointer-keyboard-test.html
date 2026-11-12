@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Morph pointer and keyboard test</title>
+  <style>
+    body { font-family: sans-serif; background: #0d0d12; color: #eee; margin: 24px; }
+    a { color: #00e5ff; cursor: pointer; }
+    .hover-box {
+      width: 280px; height: 80px; line-height: 80px; text-align: center;
+      background: #222; border: 2px solid #555; margin: 16px 0;
+    }
+    .hover-box:hover { background: #ff2bd6; color: #0d0d12; border-color: #00e5ff; }
+    input, textarea {
+      display: block; width: 320px; margin: 8px 0; padding: 8px;
+      font-size: 16px; background: #1a1a22; color: #fff; border: 1px solid #555;
+    }
+  </style>
+</head>
+<body>
+  <h1>Morph input test</h1>
+  <div id="hover" class="hover-box">Hover me — I should change color</div>
+  <p><a id="link" href="#ok">A cursor:pointer link</a></p>
+  <label>Input <input id="field" type="text" placeholder="type here"></label>
+  <label>Textarea <textarea id="area" rows="4" placeholder="type here too"></textarea></label>
+</body>
+</html>
