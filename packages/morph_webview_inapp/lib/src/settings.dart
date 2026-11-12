@@ -57,6 +57,9 @@ InAppWebViewSettings morphInAppWebViewSettings({
     // Android: report a dead renderer so the tab shows its crash state and
     // can be rebuilt, instead of the whole app being killed.
     useOnRenderProcessGone: true,
+    // Android: failed loads show Morph's own error page (MorphLoadErrorGate),
+    // not Chromium's, so every platform shows the same pages.
+    disableDefaultErrorPage: true,
     // window.open and target=_blank open a real second web view (see
     // popups.dart). Without this, Android loads the new window's address
     // into the tab itself and the page loses window.opener: Google sign-in
