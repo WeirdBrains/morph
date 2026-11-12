@@ -51,7 +51,7 @@ jobs:
       run:
         working-directory: app
     env:
-      CARGO_TARGET_DIR: ${{ runner.temp }}/morph-cargo-target
+      CARGO_TARGET_DIR: /tmp/morph-cargo-target
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -64,7 +64,7 @@ jobs:
         with:
           workspaces: |
             crates/morph-bridge -> ../../app/.dart_tool/hooks_runner
-            . -> ${{ runner.temp }}/morph-cargo-target
+            . -> /tmp/morph-cargo-target
       - name: Linux build dependencies
         run: |
           sudo apt-get update
