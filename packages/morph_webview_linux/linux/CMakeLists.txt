@@ -51,12 +51,45 @@ else()
   message(STATUS "morph_webview_linux: WPE not found; snapshot path only")
 endif()
 
+# In-process gRPC control layer (staticlib). Never drop cargo target/ inside the repo.
+if(DEFINED ENV{CARGO_TARGET_DIR} AND NOT "$ENV{CARGO_TARGET_DIR}" STREQUAL "")
+  set(MORPH_CARGO_TARGET_DIR "$ENV{CARGO_TARGET_DIR}")
+else()
+  set(MORPH_CARGO_TARGET_DIR "/tmp/morph-cargo-target")
+endif()
+set(MORPH_CONTROL_LIB "${MORPH_CARGO_TARGET_DIR}/release/libmorph_webview_control.a")
+# Flutter adds this file via an ephemeral symlink; resolve it so paths stay in the repo.
+get_filename_component(MORPH_PLUGIN_LINUX_DIR "${CMAKE_CURRENT_LIST_DIR}" REALPATH)
+get_filename_component(MORPH_WORKSPACE_DIR "${MORPH_PLUGIN_LINUX_DIR}/../../.." REALPATH)
+
+add_custom_command(
+  OUTPUT "${MORPH_CONTROL_LIB}"
+  COMMAND ${CMAKE_COMMAND} -E env
+    "CARGO_TARGET_DIR=${MORPH_CARGO_TARGET_DIR}"
+    cargo build --release --locked -p morph-webview-control
+  WORKING_DIRECTORY "${MORPH_WORKSPACE_DIR}"
+  DEPENDS
+    "${MORPH_WORKSPACE_DIR}/crates/morph-webview-control/src/lib.rs"
+    "${MORPH_WORKSPACE_DIR}/crates/morph-webview-control/src/server.rs"
+    "${MORPH_WORKSPACE_DIR}/crates/morph-webview-control/src/ffi.rs"
+    "${MORPH_WORKSPACE_DIR}/crates/morph-webview-control/src/endpoint.rs"
+    "${MORPH_WORKSPACE_DIR}/crates/morph-webview-control/Cargo.toml"
+    "${MORPH_WORKSPACE_DIR}/crates/morph-webview-control/proto/morph.webview.v1.proto"
+  COMMENT "Building morph-webview-control staticlib"
+  VERBATIM
+)
+add_custom_target(morph_webview_control_lib DEPENDS "${MORPH_CONTROL_LIB}")
+add_dependencies(${PLUGIN_NAME} morph_webview_control_lib)
+
 target_include_directories(${PLUGIN_NAME} INTERFACE
   "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_include_directories(${PLUGIN_NAME} PRIVATE
+  "${MORPH_WORKSPACE_DIR}/crates/morph-webview-control/include")
 target_link_libraries(${PLUGIN_NAME} PRIVATE flutter)
 target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::GTK)
 target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::WEBKIT)
 target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::EGL)
+target_link_libraries(${PLUGIN_NAME} PRIVATE "${MORPH_CONTROL_LIB}" pthread dl m)
 
 set(morph_webview_linux_bundled_libraries
   ""

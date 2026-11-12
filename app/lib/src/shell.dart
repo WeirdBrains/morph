@@ -125,6 +125,12 @@ class MorphShellState extends State<MorphShell> {
   }
 
   Future<void> _onPageMessage(String json) async {
+    if (webView.handlesPageBridge) {
+      if (mounted) {
+        setState(() => pageReply = json);
+      }
+      return;
+    }
     try {
       final reply = await widget.api.handlePageMessage(json: json);
       if (!mounted) {

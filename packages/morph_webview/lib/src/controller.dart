@@ -23,6 +23,7 @@ class MorphWebViewController {
   MorphRenderPathInfo get renderPath => _renderPath;
   int? get textureId => _session?.textureId;
   bool get isAttached => _session != null;
+  bool get handlesPageBridge => _session?.handlesPageBridge ?? false;
 
   Stream<MorphNavigationEvent> get navigation => _navController.stream;
   Stream<String> get pageMessages => _pageController.stream;

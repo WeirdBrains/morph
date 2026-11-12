@@ -34,6 +34,10 @@ abstract class MorphWebViewSession {
   Stream<MorphNavigationEvent> get navigation;
   Stream<String> get pageMessages;
 
+  /// When true, the control layer already ran the page-bridge hook and delivered
+  /// any reply; the shell should not call `handlePageMessage` again.
+  bool get handlesPageBridge => false;
+
   Future<void> resize({
     required int width,
     required int height,

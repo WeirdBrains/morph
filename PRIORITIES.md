@@ -9,8 +9,11 @@ Implementation started 2026-11-11 on M1's first slice: the Rust workspace, Flutt
 flutter_rust_bridge wiring, and Weirdnet 0.1.0 identity helpers. As of 2026-11-12 the
 Linux `morph_webview` plugin loads pages through the webkit2gtk-4.1 snapshot texture
 fallback (WPE DMA-BUF is feature-detected and compiled when the libraries are present).
-The Android in-app web view, DMA-BUF frame-rate measurements, hidden-text-layer
-alignment tests, and a fully wired in-process gRPC control stream are still ahead in M1.
+The Linux plugin now talks to that view over the in-process gRPC control
+stream for navigation, input, and page-bridge handling (the method channel
+remains for create/dispose/resize and the texture id). The Android in-app
+web view, DMA-BUF frame-rate measurements, hidden-text-layer alignment
+tests, and macOS/Windows backends are still ahead in M1.
 
 1. Webview _(moved up: everything else plugs into it)_
     - System web views: WebView2 (Windows), WKWebView (Apple), WebKit (Linux: WPE + webkit2gtk), Android WebView _(changed 2026-11-11)_
