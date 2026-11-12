@@ -38,6 +38,7 @@ class MorphWebViewLinux extends MorphWebViewPlatform {
     required int height,
     required double devicePixelRatio,
     String userScript = '',
+    String profileId = 'default',
   }) async {
     final result = await _channel.invokeMapMethod<String, Object?>('create', {
       'initialUrl': initialUrl,
@@ -45,6 +46,7 @@ class MorphWebViewLinux extends MorphWebViewPlatform {
       'height': height,
       'devicePixelRatio': devicePixelRatio,
       'userScript': userScript,
+      'profileId': profileId,
     });
     if (result == null) {
       throw StateError('morph_webview_linux create returned null');

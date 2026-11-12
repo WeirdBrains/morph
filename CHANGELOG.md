@@ -47,6 +47,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   restarts and tab recreation. `window.open` / new-window requests open a
   related view instead of being dropped. macOS, Windows, and Android keep
   the shared, non-incognito cookie store used by flutter_inappwebview.
+- Chrome-style user profiles are unlimited. Each profile keeps an isolated
+  WebKit session under `<morph home>/profiles/<id>/webkit/` (cookies,
+  localStorage, IndexedDB, cache). Tabs in the same profile share that
+  session; cookies and localStorage set in one profile are invisible to
+  the others. Existing Morph data is migrated into the `default` profile.
 - Linux web views turn on MediaSource, encrypted media, WebGL, and always-on
   hardware acceleration so sites can play video. YouTube and Instagram still
   need the usual GStreamer codec plugins (`gst-plugins-good`,

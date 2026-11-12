@@ -52,6 +52,7 @@ struct _MorphPixelBufferTexture {
 
 struct MorphView {
   int64_t view_id;
+  gchar* profile_id;
   MorphWebviewLinuxPlugin* plugin;
   FlTextureRegistrar* textures;
   MorphPixelBufferTexture* texture;
@@ -369,7 +370,8 @@ static MorphView* morph_view_create(MorphWebviewLinuxPlugin* plugin,
                                     uint32_t height,
                                     double dpr,
                                     const gchar* user_script,
-                                    WebKitWebView* related);
+                                    WebKitWebView* related,
+                                    const gchar* profile_id);
 static void morph_view_destroy(MorphView* view);
 
 static gboolean destroy_view_idle(gpointer user_data) {
@@ -392,7 +394,8 @@ static GtkWidget* on_web_view_create(WebKitWebView* web_view,
                                      gpointer user_data) {
   MorphView* parent = static_cast<MorphView*>(user_data);
   MorphView* popup = morph_view_create(parent->plugin, nullptr, parent->logical_width,
-                                       parent->logical_height, parent->dpr, nullptr, web_view);
+                                       parent->logical_height, parent->dpr, nullptr, web_view,
+                                       parent->profile_id);
   g_autoptr(FlValue) event = fl_value_new_map();
   fl_value_set_string_take(event, "type", fl_value_new_string("new-window"));
   const gchar* uri = nullptr;
@@ -413,7 +416,8 @@ static MorphView* morph_view_create(MorphWebviewLinuxPlugin* plugin,
                                     uint32_t height,
                                     double dpr,
                                     const gchar* user_script,
-                                    WebKitWebView* related) {
+                                    WebKitWebView* related,
+                                    const gchar* profile_id) {
   if (morph_should_disable_webkit_dmabuf_renderer() &&
       g_getenv("WEBKIT_DISABLE_DMABUF_RENDERER") == nullptr) {
     g_setenv("WEBKIT_DISABLE_DMABUF_RENDERER", "1", FALSE);
@@ -424,6 +428,7 @@ static MorphView* morph_view_create(MorphWebviewLinuxPlugin* plugin,
   view->plugin = plugin;
   view->textures = plugin->textures;
   view->view_id = plugin->next_view_id++;
+  view->profile_id = g_strdup(profile_id != nullptr && profile_id[0] != '\0' ? profile_id : "default");
   gchar* reason = nullptr;
   MorphRenderPath path = morph_detect_render_path(&reason);
   view->render_path = g_strdup(morph_render_path_name(path));
@@ -449,8 +454,9 @@ static MorphView* morph_view_create(MorphWebviewLinuxPlugin* plugin,
                                                  settings, nullptr));
   } else {
     view->web_view = WEBKIT_WEB_VIEW(g_object_new(
-        WEBKIT_TYPE_WEB_VIEW, "web-context", morph_session_shared_context(),
-        "user-content-manager", manager, "settings", settings, nullptr));
+        WEBKIT_TYPE_WEB_VIEW, "web-context",
+        morph_session_context_for_profile(view->profile_id), "user-content-manager", manager,
+        "settings", settings, nullptr));
   }
   g_object_unref(settings);
   g_object_unref(manager);
@@ -516,6 +522,7 @@ static void morph_view_destroy(MorphView* view) {
   g_free(view->render_path);
   g_free(view->render_reason);
   g_free(view->cursor_shape);
+  g_free(view->profile_id);
   g_free(view->pending_phase);
   if (view->pending_move_source != 0) {
     g_source_remove(view->pending_move_source);
@@ -1220,8 +1227,10 @@ static FlMethodResponse* handle_create(MorphWebviewLinuxPlugin* plugin, FlValue*
   int64_t height = arg_int(args, "height", 600);
   double dpr = arg_float(args, "devicePixelRatio", 1);
   const gchar* script = arg_string(args, "userScript", "");
+  const gchar* profile_id = arg_string(args, "profileId", "default");
   MorphView* view = morph_view_create(plugin, url, static_cast<uint32_t>(width),
-                                      static_cast<uint32_t>(height), dpr, script, nullptr);
+                                      static_cast<uint32_t>(height), dpr, script, nullptr,
+                                      profile_id);
   g_autoptr(FlValue) result = fl_value_new_map();
   fl_value_set_string_take(result, "viewId", fl_value_new_int(view->view_id));
   fl_value_set_string_take(result, "textureId",

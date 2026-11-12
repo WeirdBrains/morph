@@ -1,6 +1,11 @@
 #include "session.h"
 
 #include <errno.h>
+#include <string.h>
+#include <glib/gstdio.h>
+
+#include <map>
+#include <string>
 
 // WebKitGTK 2.54 reports Version/60.5, which is not a real Safari release and
 // causes some sites (including Meta login) to treat the browser as unknown.
@@ -11,7 +16,9 @@ static const gchar kSafariCompatibleUserAgent[] =
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) "
     "Version/26.0 Safari/605.1.15";
 
-static WebKitWebContext* g_shared_context = nullptr;
+static const gchar kDefaultProfileId[] = "default";
+
+static std::map<std::string, WebKitWebContext*> g_contexts;
 
 gchar* morph_session_home_dir(void) {
   const gchar* env = g_getenv("MORPH_HOME");
@@ -21,18 +28,42 @@ gchar* morph_session_home_dir(void) {
   return g_build_filename(g_get_home_dir(), ".morph", nullptr);
 }
 
-gchar* morph_session_profile_dir(void) {
+static gboolean morph_session_is_valid_id(const gchar* id) {
+  if (id == nullptr || id[0] == '\0' || strlen(id) > 64) {
+    return FALSE;
+  }
+  if (!g_ascii_isalnum(id[0])) {
+    return FALSE;
+  }
+  for (const gchar* p = id + 1; *p != '\0'; p++) {
+    if (!g_ascii_isalnum(*p) && *p != '_' && *p != '-') {
+      return FALSE;
+    }
+  }
+  return TRUE;
+}
+
+static const gchar* morph_session_normalize_id(const gchar* profile_id) {
+  return morph_session_is_valid_id(profile_id) ? profile_id : kDefaultProfileId;
+}
+
+gchar* morph_session_webkit_dir(const gchar* profile_id) {
+  const gchar* id = morph_session_normalize_id(profile_id);
   gchar* home = morph_session_home_dir();
-  gchar* dir = g_build_filename(home, "profile", "default", "webkit", nullptr);
+  gchar* dir = g_build_filename(home, "profiles", id, "webkit", nullptr);
   g_free(home);
   return dir;
 }
 
-gchar* morph_session_cookie_path(void) {
-  gchar* profile = morph_session_profile_dir();
-  gchar* path = g_build_filename(profile, "cookies.sqlite", nullptr);
-  g_free(profile);
+gchar* morph_session_cookie_path(const gchar* profile_id) {
+  gchar* webkit = morph_session_webkit_dir(profile_id);
+  gchar* path = g_build_filename(webkit, "cookies.sqlite", nullptr);
+  g_free(webkit);
   return path;
+}
+
+gchar* morph_session_profile_dir(void) {
+  return morph_session_webkit_dir(kDefaultProfileId);
 }
 
 static gboolean ensure_directory(const gchar* path) {
@@ -41,6 +72,58 @@ static gboolean ensure_directory(const gchar* path) {
     return FALSE;
   }
   return TRUE;
+}
+
+static gboolean dir_is_empty(const gchar* path) {
+  GDir* dir = g_dir_open(path, 0, nullptr);
+  if (dir == nullptr) {
+    return TRUE;
+  }
+  const gboolean empty = g_dir_read_name(dir) == nullptr;
+  g_dir_close(dir);
+  return empty;
+}
+
+// Move leftover `<home>/profile/default[/webkit]` into `<home>/profiles/default/webkit`.
+static void migrate_legacy_default_webkit(void) {
+  gchar* home = morph_session_home_dir();
+  gchar* dest = g_build_filename(home, "profiles", kDefaultProfileId, "webkit", nullptr);
+  gchar* old_root = g_build_filename(home, "profile", kDefaultProfileId, nullptr);
+  gchar* old_nested = g_build_filename(old_root, "webkit", nullptr);
+  const gchar* source = nullptr;
+  if (g_file_test(old_nested, G_FILE_TEST_IS_DIR)) {
+    source = old_nested;
+  } else if (g_file_test(old_root, G_FILE_TEST_IS_DIR)) {
+    source = old_root;
+  }
+  if (source != nullptr) {
+    const gboolean dest_missing = !g_file_test(dest, G_FILE_TEST_EXISTS);
+    const gboolean dest_empty = g_file_test(dest, G_FILE_TEST_IS_DIR) && dir_is_empty(dest);
+    if (dest_missing || dest_empty) {
+      gchar* parent = g_path_get_dirname(dest);
+      ensure_directory(parent);
+      g_free(parent);
+      if (dest_empty) {
+        g_rmdir(dest);
+      }
+      if (g_rename(source, dest) != 0) {
+        g_warning("morph_webview: failed to migrate %s to %s: %s", source, dest,
+                  g_strerror(errno));
+      }
+    }
+    gchar* legacy_parent = g_build_filename(home, "profile", nullptr);
+    if (dir_is_empty(old_root)) {
+      g_rmdir(old_root);
+    }
+    if (dir_is_empty(legacy_parent)) {
+      g_rmdir(legacy_parent);
+    }
+    g_free(legacy_parent);
+  }
+  g_free(home);
+  g_free(dest);
+  g_free(old_root);
+  g_free(old_nested);
 }
 
 const gchar* morph_session_user_agent(void) {
@@ -67,26 +150,39 @@ WebKitSettings* morph_session_create_settings(void) {
   webkit_settings_set_hardware_acceleration_policy(settings,
                                                    WEBKIT_HARDWARE_ACCELERATION_POLICY_ALWAYS);
   webkit_settings_set_media_content_types_requiring_hardware_support(settings, "");
+  // Website storage must stay on so logins and site data persist in the
+  // profile's WebsiteDataManager. Private browsing would isolate and drop it.
+  webkit_settings_set_enable_html5_local_storage(settings, TRUE);
+  webkit_settings_set_enable_html5_database(settings, TRUE);
+  webkit_settings_set_enable_page_cache(settings, TRUE);
+  // Offline AppCache and private-browsing setters are deprecated no-ops in
+  // WebKitGTK 2.54. Persistence comes from a non-ephemeral WebsiteDataManager
+  // with base-data/base-cache directories under the profile.
   return settings;
 }
 
-WebKitWebContext* morph_session_shared_context(void) {
-  if (g_shared_context != nullptr) {
-    return g_shared_context;
+WebKitWebContext* morph_session_context_for_profile(const gchar* profile_id) {
+  const gchar* id = morph_session_normalize_id(profile_id);
+  auto it = g_contexts.find(id);
+  if (it != g_contexts.end()) {
+    return it->second;
   }
 
-  gchar* profile = morph_session_profile_dir();
-  gchar* data_dir = g_build_filename(profile, "data", nullptr);
-  gchar* cache_dir = g_build_filename(profile, "cache", nullptr);
-  gchar* cookie_path = g_build_filename(profile, "cookies.sqlite", nullptr);
+  if (g_strcmp0(id, kDefaultProfileId) == 0) {
+    migrate_legacy_default_webkit();
+  }
+
+  gchar* webkit = morph_session_webkit_dir(id);
+  gchar* data_dir = g_build_filename(webkit, "data", nullptr);
+  gchar* cache_dir = g_build_filename(webkit, "cache", nullptr);
+  gchar* cookie_path = g_build_filename(webkit, "cookies.sqlite", nullptr);
   ensure_directory(data_dir);
   ensure_directory(cache_dir);
-  ensure_directory(profile);
+  ensure_directory(webkit);
 
-  // Without base-data-directory WebKit still writes localStorage under
-  // $XDG_DATA_HOME/<prgname>, but cookies stay in memory unless persistent
-  // storage is configured. Logins then vanish after a restart, and some
-  // OAuth flows (Instagram / Facebook) bounce back to the login page.
+  // One WebsiteDataManager per profile, shared by that profile's tabs.
+  // Cookies, localStorage, IndexedDB, service workers, Cache Storage, and
+  // WebSQL all live under these directories and must never leak across ids.
   WebKitWebsiteDataManager* manager = webkit_website_data_manager_new(
       "base-data-directory", data_dir, "base-cache-directory", cache_dir, nullptr);
   // Leave ITP at the WebKitGTK default (disabled). Enabling it would go
@@ -98,19 +194,26 @@ WebKitWebContext* morph_session_shared_context(void) {
   webkit_cookie_manager_set_persistent_storage(cookies, cookie_path,
                                                WEBKIT_COOKIE_PERSISTENT_STORAGE_SQLITE);
 
-  g_shared_context = webkit_web_context_new_with_website_data_manager(manager);
+  WebKitWebContext* context = webkit_web_context_new_with_website_data_manager(manager);
   g_object_unref(manager);
+  g_contexts[id] = context;
 
-  g_free(profile);
+  g_free(webkit);
   g_free(data_dir);
   g_free(cache_dir);
   g_free(cookie_path);
-  return g_shared_context;
+  return context;
+}
+
+WebKitWebContext* morph_session_shared_context(void) {
+  return morph_session_context_for_profile(kDefaultProfileId);
 }
 
 void morph_session_reset_for_tests(void) {
-  if (g_shared_context != nullptr) {
-    g_object_unref(g_shared_context);
-    g_shared_context = nullptr;
+  for (auto& entry : g_contexts) {
+    if (entry.second != nullptr) {
+      g_object_unref(entry.second);
+    }
   }
+  g_contexts.clear();
 }

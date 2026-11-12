@@ -121,8 +121,8 @@ static SoupServer* start_server(guint* port) {
   return server;
 }
 
-static WebKitWebView* make_view() {
-  WebKitWebContext* context = morph_session_shared_context();
+static WebKitWebView* make_view_for_profile(const char* profile_id) {
+  WebKitWebContext* context = morph_session_context_for_profile(profile_id);
   WebKitSettings* settings = morph_session_create_settings();
   WebKitWebView* view = WEBKIT_WEB_VIEW(g_object_new(WEBKIT_TYPE_WEB_VIEW, "web-context", context,
                                                      "settings", settings, nullptr));
@@ -145,18 +145,23 @@ static void destroy_view(WebKitWebView* view) {
 
 static void check_paths() {
   gchar* home = morph_session_home_dir();
-  gchar* profile = morph_session_profile_dir();
-  gchar* cookies = morph_session_cookie_path();
+  gchar* webkit = morph_session_webkit_dir("default");
+  gchar* cookies = morph_session_cookie_path("default");
   const gchar* expected_home = g_getenv("MORPH_HOME");
   expect_true(expected_home != nullptr && std::strcmp(home, expected_home) == 0,
               "home dir should follow MORPH_HOME");
-  std::string expected_profile = std::string(expected_home) + "/profile/default/webkit";
-  expect_true(expected_profile == profile, "profile dir should be under Morph home");
-  std::string expected_cookies = expected_profile + "/cookies.sqlite";
+  std::string expected_webkit = std::string(expected_home) + "/profiles/default/webkit";
+  expect_true(expected_webkit == webkit, "webkit dir should be under profiles/<id>/webkit");
+  std::string expected_cookies = expected_webkit + "/cookies.sqlite";
   expect_true(expected_cookies == cookies, "cookie path should be cookies.sqlite in the profile");
+  gchar* other = morph_session_webkit_dir("p1");
+  expect_true(std::string(other) == std::string(expected_home) + "/profiles/p1/webkit",
+              "each profile id gets its own webkit directory");
+  expect_true(std::strcmp(webkit, other) != 0, "default and p1 directories must differ");
   g_free(home);
-  g_free(profile);
+  g_free(webkit);
   g_free(cookies);
+  g_free(other);
 }
 
 static void check_context_setup() {
@@ -174,7 +179,7 @@ static void check_context_setup() {
               "cache directory should be under MORPH_HOME");
   expect_true(!webkit_website_data_manager_get_itp_enabled(manager),
               "ITP should stay at the WebKitGTK default (disabled)");
-  WebKitWebView* view = make_view();
+  WebKitWebView* view = make_view_for_profile("default");
   expect_true(!webkit_web_view_is_ephemeral(view), "views must not be ephemeral");
   expect_true(webkit_web_view_get_context(view) == context, "view should use the shared context");
   WebKitSettings* settings = webkit_web_view_get_settings(view);
@@ -208,6 +213,11 @@ static void check_context_setup() {
     expect_true(policy == WEBKIT_HARDWARE_ACCELERATION_POLICY_ALWAYS,
                 "hardware acceleration should be always on");
   }
+  expect_true(webkit_settings_get_enable_html5_local_storage(configured),
+              "html5 localStorage should be enabled");
+  expect_true(webkit_settings_get_enable_html5_database(configured),
+              "html5 database / WebSQL should be enabled");
+  expect_true(webkit_settings_get_enable_page_cache(configured), "page cache should be enabled");
   g_object_unref(configured);
 }
 
@@ -219,6 +229,94 @@ static bool body_has_session_cookie(WebKitWebView* view) {
   }
   g_free(body);
   return ok;
+}
+
+
+static void write_profile_state(WebKitWebView* view, const char* token) {
+  gchar* script = g_strdup_printf(
+      "document.cookie = 'morph_session=%s; path=/; max-age=86400';"
+      "try { localStorage.setItem('k', '%s'); } catch (e) {}"
+      "document.cookie + '|' + (function(){ try { return localStorage.getItem('k'); } catch(e) { return 'ERR'; } })();",
+      token, token);
+  gchar* result = eval_js(view, script);
+  g_free(script);
+  g_free(result);
+}
+
+static bool profile_state_is(WebKitWebView* view, const char* token, bool log_mismatch = true) {
+  gchar* cookie = eval_js(view, "document.cookie");
+  gchar* ls = eval_js(view,
+                      "try { localStorage.getItem('k') || ''; } catch (e) { 'ERR'; }");
+  const bool cookie_ok = cookie != nullptr && std::strstr(cookie, token) != nullptr;
+  const bool ls_ok = ls != nullptr && std::strcmp(ls, token) == 0;
+  if (log_mismatch && (!cookie_ok || !ls_ok)) {
+    std::fprintf(stderr, "  expected token %s, cookie=%s localStorage=%s\n", token,
+                 cookie != nullptr ? cookie : "(null)", ls != nullptr ? ls : "(null)");
+  }
+  g_free(cookie);
+  g_free(ls);
+  return cookie_ok && ls_ok;
+}
+
+static void check_profile_isolation(const char* check_url) {
+  WebKitWebView* a = make_view_for_profile("default");
+  WebKitWebView* b = make_view_for_profile("p1");
+  WebKitWebView* c = make_view_for_profile("p2");
+  expect_true(webkit_web_view_get_context(a) != webkit_web_view_get_context(b) &&
+                  webkit_web_view_get_context(b) != webkit_web_view_get_context(c) &&
+                  webkit_web_view_get_context(a) != webkit_web_view_get_context(c),
+              "each profile must have its own WebKit context");
+  load_and_wait(a, check_url);
+  load_and_wait(b, check_url);
+  load_and_wait(c, check_url);
+  write_profile_state(a, "alpha");
+  write_profile_state(b, "bravo");
+  write_profile_state(c, "charlie");
+  expect_true(profile_state_is(a, "alpha"), "profile default should keep its own cookie and localStorage");
+  expect_true(profile_state_is(b, "bravo"), "profile p1 should keep its own cookie and localStorage");
+  expect_true(profile_state_is(c, "charlie"), "profile p2 should keep its own cookie and localStorage");
+  expect_true(!profile_state_is(a, "bravo", false) && !profile_state_is(a, "charlie", false),
+              "default must not see p1 or p2 data");
+  expect_true(!profile_state_is(b, "alpha", false) && !profile_state_is(b, "charlie", false),
+              "p1 must not see default or p2 data");
+  expect_true(!profile_state_is(c, "alpha", false) && !profile_state_is(c, "bravo", false),
+              "p2 must not see default or p1 data");
+
+  // sessionStorage survives in-tab navigation and stays per view.
+  gchar* set_ss = eval_js(a, "sessionStorage.setItem('s','keep'); sessionStorage.getItem('s');");
+  expect_true(set_ss != nullptr && std::strcmp(set_ss, "keep") == 0, "sessionStorage should write");
+  g_free(set_ss);
+  load_and_wait(a, check_url);
+  gchar* get_ss = eval_js(a, "sessionStorage.getItem('s');");
+  expect_true(get_ss != nullptr && std::strcmp(get_ss, "keep") == 0,
+              "sessionStorage should survive in-tab navigation");
+  g_free(get_ss);
+  gchar* other_ss = eval_js(b, "sessionStorage.getItem('s');");
+  expect_true(other_ss != nullptr && (other_ss[0] == '\0' || std::strcmp(other_ss, "null") == 0 ||
+                                      std::strcmp(other_ss, "undefined") == 0),
+              "sessionStorage must not be shared with another profile");
+  g_free(other_ss);
+
+  destroy_view(a);
+  destroy_view(b);
+  destroy_view(c);
+  drain_main_loop_ms(400);
+  morph_session_reset_for_tests();
+
+  WebKitWebView* a2 = make_view_for_profile("default");
+  WebKitWebView* b2 = make_view_for_profile("p1");
+  WebKitWebView* c2 = make_view_for_profile("p2");
+  load_and_wait(a2, check_url);
+  load_and_wait(b2, check_url);
+  load_and_wait(c2, check_url);
+  expect_true(profile_state_is(a2, "alpha"), "default cookie and localStorage should survive a restart");
+  expect_true(profile_state_is(b2, "bravo"), "p1 cookie and localStorage should survive a restart");
+  expect_true(profile_state_is(c2, "charlie"), "p2 cookie and localStorage should survive a restart");
+  destroy_view(a2);
+  destroy_view(b2);
+  destroy_view(c2);
+  drain_main_loop_ms(200);
+  morph_session_reset_for_tests();
 }
 
 int main(int argc, char** argv) {
@@ -244,7 +342,7 @@ int main(int argc, char** argv) {
 
   check_context_setup();
 
-  WebKitWebView* first = make_view();
+  WebKitWebView* first = make_view_for_profile("default");
   load_and_wait(first, set_url);
   const char* after_redirect = webkit_web_view_get_uri(first);
   expect_true(after_redirect != nullptr && std::strstr(after_redirect, "/check") != nullptr,
@@ -255,7 +353,7 @@ int main(int argc, char** argv) {
               "document.cookie should expose the session cookie");
   g_free(document_cookie);
 
-  WebKitWebView* second = make_view();
+  WebKitWebView* second = make_view_for_profile("default");
   expect_true(webkit_web_view_get_context(second) == webkit_web_view_get_context(first),
               "tabs should share one persistent network session");
   load_and_wait(second, check_url);
@@ -264,7 +362,7 @@ int main(int argc, char** argv) {
   destroy_view(first);
   destroy_view(second);
 
-  WebKitWebView* recreated = make_view();
+  WebKitWebView* recreated = make_view_for_profile("default");
   load_and_wait(recreated, check_url);
   expect_true(body_has_session_cookie(recreated), "cookie should survive view recreation");
   destroy_view(recreated);
@@ -273,17 +371,19 @@ int main(int argc, char** argv) {
   // same Morph home and confirm the sqlite cookie jar is still used.
   drain_main_loop_ms(400);
   morph_session_reset_for_tests();
-  WebKitWebView* restarted = make_view();
+  WebKitWebView* restarted = make_view_for_profile("default");
   load_and_wait(restarted, check_url);
   expect_true(body_has_session_cookie(restarted), "cookie should survive an app restart");
   destroy_view(restarted);
   drain_main_loop_ms(200);
   morph_session_reset_for_tests();
 
-  gchar* cookie_path = morph_session_cookie_path();
+  gchar* cookie_path = morph_session_cookie_path("default");
   expect_true(g_file_test(cookie_path, G_FILE_TEST_EXISTS),
               "cookies.sqlite should be created in the Morph profile");
   g_free(cookie_path);
+
+  check_profile_isolation(check_url);
 
   g_object_unref(server);
   g_free(set_url);
