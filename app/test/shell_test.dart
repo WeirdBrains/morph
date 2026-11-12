@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:morph/src/api.dart';
 import 'package:morph/src/app.dart';
+import 'package:morph/src/widgets/address_sheet.dart';
 import 'package:morph/src/shell.dart';
 import 'package:morph/src/theme/morph_theme.dart';
 import 'package:morph/src/widgets/start_page.dart';
@@ -77,6 +78,24 @@ Future<void> _pumpUntilWebViewAttached(
   }
   final state = tester.state<MorphShellState>(find.byType(MorphShell));
   fail('web view did not attach; ready=${state.ready} error=${state.error}');
+}
+
+Future<void> _enterAndSubmitUrl(WidgetTester tester, String url) async {
+  final mobile =
+      debugDefaultTargetPlatformOverride == TargetPlatform.android ||
+      debugDefaultTargetPlatformOverride == TargetPlatform.iOS;
+  if (mobile) {
+    await tester.tap(find.byKey(const Key('address-bar')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('address-sheet')), findsOneWidget);
+    await tester.enterText(find.byKey(const Key('address-sheet-url')), url);
+    await tester.testTextInput.receiveAction(TextInputAction.go);
+    await tester.pumpAndSettle();
+  } else {
+    await tester.enterText(find.byKey(const Key('address-bar')), url);
+    await tester.testTextInput.receiveAction(TextInputAction.go);
+    await tester.pump();
+  }
 }
 
 void main() {
@@ -180,12 +199,7 @@ void main() {
       expect(find.byKey(const Key('debug-panel')), findsNothing);
       expect(find.byKey(const Key('address-bar')), findsOneWidget);
 
-      await tester.enterText(
-        find.byKey(const Key('address-bar')),
-        'example.com',
-      );
-      await tester.testTextInput.receiveAction(TextInputAction.go);
-      await tester.pump();
+      await _enterAndSubmitUrl(tester, 'example.com');
       await _pumpUntilWebViewAttached(tester, fakeWebView);
 
       expect(fakeWebView.lastSession, isNotNull);
@@ -298,25 +312,41 @@ void main() {
         );
         await _pumpUntilIdentity(tester);
 
-        await tester.enterText(
-          find.byKey(const Key('address-bar')),
-          'https://example.com/path',
-        );
-        await tester.tap(find.byKey(const Key('address-bar')));
-        await tester.pump();
-
-        final field = tester.widget<TextField>(
-          find.byKey(const Key('address-bar')),
-        );
-        final value = field.controller!.value;
-        expect(
-          value.selection,
-          const TextSelection(
-            baseOffset: 0,
-            extentOffset: 'https://example.com/path'.length,
-          ),
-          reason: '$platform',
-        );
+        const url = 'https://example.com/path';
+        final mobile =
+            platform == TargetPlatform.android ||
+            platform == TargetPlatform.iOS;
+        if (mobile) {
+          await tester.tap(find.byKey(const Key('address-bar')));
+          await tester.pumpAndSettle();
+          expect(find.byKey(const Key('address-sheet')), findsOneWidget);
+          await tester.enterText(
+            find.byKey(const Key('address-sheet-url')),
+            url,
+          );
+          await tester.tap(find.byKey(const Key('address-sheet-url')));
+          await tester.pump();
+          final field = tester.widget<TextField>(
+            find.byKey(const Key('address-sheet-url')),
+          );
+          expect(
+            field.controller!.value.selection,
+            const TextSelection(baseOffset: 0, extentOffset: url.length),
+            reason: '$platform',
+          );
+        } else {
+          await tester.enterText(find.byKey(const Key('address-bar')), url);
+          await tester.tap(find.byKey(const Key('address-bar')));
+          await tester.pump();
+          final field = tester.widget<TextField>(
+            find.byKey(const Key('address-bar')),
+          );
+          expect(
+            field.controller!.value.selection,
+            const TextSelection(baseOffset: 0, extentOffset: url.length),
+            reason: '$platform',
+          );
+        }
       } finally {
         debugDefaultTargetPlatformOverride = null;
         await tester.pumpWidget(const SizedBox.shrink());
@@ -346,22 +376,12 @@ void main() {
       );
       await _pumpUntilIdentity(tester);
 
-      await tester.enterText(
-        find.byKey(const Key('address-bar')),
-        'example.com',
-      );
-      await tester.testTextInput.receiveAction(TextInputAction.go);
-      await tester.pump();
+      await _enterAndSubmitUrl(tester, 'example.com');
       await _pumpUntilWebViewAttached(tester, fakeWebView);
       expect(fakeWebView.lastSession, isNotNull);
 
       // Walk history so back is available: load a second page.
-      await tester.enterText(
-        find.byKey(const Key('address-bar')),
-        'example.org',
-      );
-      await tester.testTextInput.receiveAction(TextInputAction.go);
-      await tester.pump();
+      await _enterAndSubmitUrl(tester, 'example.org');
       await _pumpUntilWebViewAttached(tester, fakeWebView);
 
       final session = fakeWebView.lastSession!;
@@ -384,6 +404,47 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(session.reloads, reloads + 1);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('phone address sheet has Firefox-style actions and coming soon', (
+    tester,
+  ) async {
+    final view = tester.view;
+    view.physicalSize = const Size(412, 915);
+    view.devicePixelRatio = 1.0;
+    addTearDown(view.reset);
+
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    const missingHome = '/tmp/morph-does-not-exist';
+    try {
+      await tester.pumpWidget(
+        MorphApp(
+          api: FakeMorphApi(),
+          home: missingHome,
+          subscribeToTicks: false,
+          loadPageBridgeAsset: false,
+        ),
+      );
+      await _pumpUntilIdentity(tester);
+
+      await tester.tap(find.byKey(const Key('address-bar')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('address-sheet')), findsOneWidget);
+      expect(find.byKey(const Key('address-sheet-url')), findsOneWidget);
+      expect(find.byKey(const Key('sheet-back')), findsOneWidget);
+      expect(find.byKey(const Key('sheet-forward')), findsOneWidget);
+      expect(find.byKey(const Key('sheet-share')), findsOneWidget);
+      expect(find.byKey(const Key('sheet-reload')), findsOneWidget);
+      expect(find.byKey(const Key('sheet-desktop')), findsOneWidget);
+      expect(find.text('VPN'), findsNothing);
+
+      await tester.tap(find.byKey(const Key('sheet-history')));
+      await tester.pump();
+      expect(find.text('History is coming soon'), findsOneWidget);
     } finally {
       debugDefaultTargetPlatformOverride = null;
     }
