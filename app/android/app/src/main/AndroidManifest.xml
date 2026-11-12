@@ -1,5 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Weirdnet nodes (QR device link) ask ConnectivityManager for DNS servers. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <!-- QR login: the camera is asked for only when the scanner opens. -->
     <uses-permission android:name="android.permission.CAMERA"/>
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
