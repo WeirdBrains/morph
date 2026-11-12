@@ -104,12 +104,12 @@ pub fn settings_path(home: impl AsRef<Path>) -> PathBuf {
 pub fn current_settings_path(home: impl AsRef<Path>) -> PathBuf {
     let home = home.as_ref();
     let catalog_path = crate::profiles::catalog_path(home);
-    if let Ok(raw) = fs::read_to_string(&catalog_path) {
-        if let Ok(catalog) = serde_json::from_str::<crate::profiles::Catalog>(&raw) {
-            if crate::profiles::is_valid_id(&catalog.current) && catalog.get(&catalog.current).is_some() {
-                return crate::profiles::settings_path(home, &catalog.current);
-            }
-        }
+    if let Ok(raw) = fs::read_to_string(&catalog_path)
+        && let Ok(catalog) = serde_json::from_str::<crate::profiles::Catalog>(&raw)
+        && crate::profiles::is_valid_id(&catalog.current)
+        && catalog.get(&catalog.current).is_some()
+    {
+        return crate::profiles::settings_path(home, &catalog.current);
     }
     let migrated = crate::profiles::settings_path(home, crate::profiles::DEFAULT_PROFILE_ID);
     if migrated.exists() {
