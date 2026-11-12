@@ -839,6 +839,21 @@ void main() {
       second.emitRenderer(null);
       await tester.pump();
 
+      // Submitting an address in a crashed tab recovers it and goes there.
+      second.emitRenderer(MorphRendererFault.crashed);
+      await tester.pump();
+      await tester.pump();
+      expect(find.byKey(const Key('page-crashed')), findsOneWidget);
+      await tester.enterText(
+        find.byKey(const Key('address-bar')),
+        'three.example',
+      );
+      await tester.testTextInput.receiveAction(TextInputAction.go);
+      await tester.pumpAndSettle();
+      expect(second.rendererRecoveries, 2);
+      expect(second.history.last, 'https://three.example');
+      expect(find.byKey(const Key('page-crashed')), findsNothing);
+
       // A background tab whose renderer died reloads when it is shown.
       first.emitRenderer(MorphRendererFault.killed);
       await tester.pump();
