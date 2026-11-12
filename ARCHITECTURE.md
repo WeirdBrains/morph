@@ -1630,3 +1630,30 @@ results), the macOS sandbox spike, Salty Gull's plan for the engine fork (Dart
 interpreter and BSD port), and the later design of internal `weirdnet://`
 messages. The exact names in the shared permission core can be settled when W17
 is specified.
+
+### 2026-11-12 — Real popup windows on Android (sign-in popups)
+
+Google sign-in (GSI One Tap / "Continue with Google") calls `window.open`
+and expects the popup to `postMessage` its opener and then `window.close()`.
+Morph never enabled multiple windows, so Android WebView loaded the popup's
+URL (`accounts.google.com/gsi/select?...`) into the tab itself. The opener
+page was gone, nothing received the result, and the tab stayed blank white.
+
+Decision: tabs set `supportMultipleWindows` and
+`javaScriptCanOpenWindowsAutomatically`. `onCreateWindow` builds a second
+`InAppWebView(windowId:)` in the **same profile** (its own keep-alive, so
+`WebViewProfiles` assigns the tab's androidx.webkit profile before the
+transport is set). It sits in a `MorphPopupStack` (at most 4) drawn by
+`MorphPopupOverlay` over the opener, which stays mounted, so `window.opener`
+and `postMessage` work. A bar shows "Title · host" and a close button.
+`onCloseWindow` (`window.close()`) or the button removes it and the tab is
+back. Nested popups stack. Rebuilding the tab's surface or closing the tab
+closes its popups. A popup's renderer crash goes through the tab's renderer
+watch, the same as the tab's own. Off Android (non-isolated sessions) we
+return false and the engine keeps its default.
+
+Verified on the emulator with a window.open + postMessage + window.close
+fixture (before: same-tab, message lost; after: opener got the message, the
+popup closed) and with linkedin.com → "Continue with Google", which now
+opens accounts.google.com in a popup over LinkedIn.
+
