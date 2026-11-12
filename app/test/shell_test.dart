@@ -56,6 +56,87 @@ class FakeMorphApi implements MorphApi {
   Future<void> saveSidebarCollapsed(bool collapsed, {String? home}) async {
     sidebarCollapsed = collapsed;
   }
+
+  String currentProfileId = 'default';
+  final List<ProfileInfo> profiles = [
+    const ProfileInfo(id: 'default', name: 'Default'),
+  ];
+  int _nextProfile = 1;
+
+  ProfileCatalog _catalog() =>
+      ProfileCatalog(current: currentProfileId, profiles: List.of(profiles));
+
+  ProfileInfo _require(String id) {
+    return profiles.firstWhere(
+      (profile) => profile.id == id,
+      orElse: () => throw StateError('unknown profile $id'),
+    );
+  }
+
+  String _home(String? home) => home ?? '/tmp/morph-fake';
+
+  @override
+  Future<ProfileCatalog> listProfiles({String? home}) async => _catalog();
+
+  @override
+  Future<ProfileCatalog> createProfile(String name, {String? home}) async {
+    final profile = ProfileInfo(id: 'p${_nextProfile++}', name: name);
+    profiles.add(profile);
+    currentProfileId = profile.id;
+    return _catalog();
+  }
+
+  @override
+  Future<ProfileCatalog> renameProfile(
+    String id,
+    String name, {
+    String? home,
+  }) async {
+    final index = profiles.indexWhere((profile) => profile.id == id);
+    if (index < 0) {
+      throw StateError('unknown profile $id');
+    }
+    profiles[index] = ProfileInfo(id: id, name: name);
+    return _catalog();
+  }
+
+  @override
+  Future<ProfileCatalog> deleteProfile(String id, {String? home}) async {
+    if (profiles.length == 1) {
+      throw StateError('cannot delete the last profile');
+    }
+    _require(id);
+    profiles.removeWhere((profile) => profile.id == id);
+    if (currentProfileId == id) {
+      currentProfileId = profiles.any((profile) => profile.id == 'default')
+          ? 'default'
+          : profiles.first.id;
+    }
+    return _catalog();
+  }
+
+  @override
+  Future<ProfileCatalog> setCurrentProfile(String id, {String? home}) async {
+    _require(id);
+    currentProfileId = id;
+    return _catalog();
+  }
+
+  @override
+  Future<ProfilePaths> profilePaths(String id, {String? home}) async {
+    _require(id);
+    final root = '${_home(home)}/profiles/$id';
+    return ProfilePaths(
+      id: id,
+      profileDir: root,
+      settingsPath: '$root/settings.json',
+      tabsPath: '$root/tabs.json',
+      webkitDir: '$root/webkit',
+      webkitDataDir: '$root/webkit/data',
+      webkitCacheDir: '$root/webkit/cache',
+      cookiesPath: '$root/webkit/cookies.sqlite',
+    );
+  }
 }
 
 /// Wait until identity info is on screen. Do not wait for `ready`: that flag

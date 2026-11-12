@@ -51,7 +51,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   WebKit session under `<morph home>/profiles/<id>/webkit/` (cookies,
   localStorage, IndexedDB, cache). Tabs in the same profile share that
   session; cookies and localStorage set in one profile are invisible to
-  the others. Existing Morph data is migrated into the `default` profile.
+  the others. Shell settings live in the current profile's
+  `settings.json`. Existing Morph data is migrated into the `default`
+  profile. The profile catalog is available over the FRB bridge; the
+  switcher UI is still to come.
 - Linux web views turn on MediaSource, encrypted media, WebGL, and always-on
   hardware acceleration so sites can play video. YouTube and Instagram still
   need the usual GStreamer codec plugins (`gst-plugins-good`,

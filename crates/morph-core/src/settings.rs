@@ -1,4 +1,4 @@
-//! Persisted Morph shell preferences, stored as `settings.json` in the Morph home.
+//! Persisted Morph shell preferences, stored as `settings.json` in the current profile.
 
 use std::fs;
 use std::io::Write;
@@ -61,18 +61,42 @@ pub enum SettingsError {
     Io(#[from] std::io::Error),
     #[error("parse settings: {0}")]
     Parse(#[from] serde_json::Error),
+    #[error("{0}")]
+    Profile(#[from] crate::profiles::ProfileError),
 }
 
-/// `settings.json` inside [home].
+/// Legacy `<home>/settings.json`. Prefer [current_settings_path] for new writes.
 pub fn settings_path(home: impl AsRef<Path>) -> PathBuf {
     home.as_ref().join("settings.json")
 }
 
-/// Load preferences from [home]. A missing file returns defaults.
+/// Settings file for the current profile, if a catalog already exists.
 ///
-/// This never creates the home directory.
+/// A missing catalog still reports the legacy root path so [load] can read
+/// leftover pre-profile files without creating anything.
+pub fn current_settings_path(home: impl AsRef<Path>) -> PathBuf {
+    let home = home.as_ref();
+    let catalog_path = crate::profiles::catalog_path(home);
+    if let Ok(raw) = fs::read_to_string(&catalog_path) {
+        if let Ok(catalog) = serde_json::from_str::<crate::profiles::Catalog>(&raw) {
+            if crate::profiles::is_valid_id(&catalog.current) && catalog.get(&catalog.current).is_some()
+            {
+                return crate::profiles::settings_path(home, &catalog.current);
+            }
+        }
+    }
+    let migrated = crate::profiles::settings_path(home, crate::profiles::DEFAULT_PROFILE_ID);
+    if migrated.exists() {
+        return migrated;
+    }
+    settings_path(home)
+}
+
+/// Load preferences from the current profile. A missing file returns defaults.
+///
+/// This never creates the home directory or the profile catalog.
 pub fn load(home: impl AsRef<Path>) -> Result<Settings, SettingsError> {
-    let path = settings_path(home);
+    let path = current_settings_path(home);
     if !path.exists() {
         return Ok(Settings::default());
     }
@@ -80,12 +104,16 @@ pub fn load(home: impl AsRef<Path>) -> Result<Settings, SettingsError> {
     Ok(serde_json::from_str(&raw)?)
 }
 
-/// Write [settings] to [home], creating the directory if needed.
+/// Write [settings] to the current profile, migrating leftover files first.
 pub fn save(home: impl AsRef<Path>, settings: &Settings) -> Result<(), SettingsError> {
     let home = home.as_ref();
-    fs::create_dir_all(home)?;
-    let path = settings_path(home);
-    let tmp = home.join("settings.json.tmp");
+    crate::profiles::migrate(home)?;
+    let current = crate::profiles::current(home)?;
+    let path = crate::profiles::settings_path(home, &current.id);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let tmp = path.with_extension("json.tmp");
     let body = serde_json::to_vec_pretty(settings)?;
     {
         let mut file = fs::File::create(&tmp)?;
@@ -137,8 +165,10 @@ mod tests {
             assert_eq!(saved.tab_position, position);
             let loaded = load(&home).unwrap();
             assert_eq!(loaded.tab_position, position);
-            let raw = fs::read_to_string(settings_path(&home)).unwrap();
+            let path = crate::profiles::settings_path(&home, crate::profiles::DEFAULT_PROFILE_ID);
+            let raw = fs::read_to_string(&path).unwrap();
             assert!(raw.contains(&format!("\"tab_position\": \"{}\"", position.as_str())), "{raw}");
+            assert!(!settings_path(&home).exists());
         }
     }
 
@@ -173,8 +203,9 @@ mod tests {
         assert_eq!(saved.tab_position, TabPosition::Top);
         let loaded = load(&home).unwrap();
         assert!(loaded.sidebar_collapsed);
-        let raw = fs::read_to_string(settings_path(&home)).unwrap();
+        let raw = fs::read_to_string(crate::profiles::settings_path(&home, crate::profiles::DEFAULT_PROFILE_ID)).unwrap();
         assert!(raw.contains("\"sidebar_collapsed\": true"), "{raw}");
+        assert!(!settings_path(&home).exists());
 
         let saved = set_sidebar_collapsed(&home, false).unwrap();
         assert!(!saved.sidebar_collapsed);
@@ -198,5 +229,49 @@ mod tests {
         assert_eq!(TabPosition::from_key("right"), TabPosition::Right);
         assert_eq!(TabPosition::from_key("nope"), TabPosition::Top);
         assert_eq!(TabPosition::Top.as_str(), "top");
+    }
+
+    #[test]
+    fn load_reads_legacy_root_settings_without_migrating() {
+        let tmp = tempdir().unwrap();
+        fs::write(settings_path(tmp.path()), "{\"tab_position\":\"left\"}\n").unwrap();
+        let settings = load(tmp.path()).unwrap();
+        assert_eq!(settings.tab_position, TabPosition::Left);
+        assert!(settings_path(tmp.path()).exists());
+        assert!(!crate::profiles::catalog_path(tmp.path()).exists());
+    }
+
+    #[test]
+    fn save_migrates_legacy_settings_into_the_default_profile() {
+        let tmp = tempdir().unwrap();
+        let home = tmp.path();
+        fs::write(settings_path(home), "{\"tab_position\":\"right\"}\n").unwrap();
+        let saved = set_sidebar_collapsed(home, true).unwrap();
+        assert_eq!(saved.tab_position, TabPosition::Right);
+        assert!(saved.sidebar_collapsed);
+        assert!(!settings_path(home).exists());
+        let path = crate::profiles::settings_path(home, crate::profiles::DEFAULT_PROFILE_ID);
+        assert!(path.exists());
+        assert_eq!(load(home).unwrap().tab_position, TabPosition::Right);
+    }
+
+    #[test]
+    fn each_profile_keeps_its_own_settings() {
+        let tmp = tempdir().unwrap();
+        let home = tmp.path();
+        set_tab_position(home, TabPosition::Left).unwrap();
+        let work = crate::profiles::create(home, "Work").unwrap();
+        assert_eq!(work.id, "p1");
+        set_tab_position(home, TabPosition::Right).unwrap();
+        let extra = crate::profiles::create(home, "Extra").unwrap();
+        set_tab_position(home, TabPosition::Bottom).unwrap();
+
+        assert_eq!(load(home).unwrap().tab_position, TabPosition::Bottom);
+        crate::profiles::set_current(home, "default").unwrap();
+        assert_eq!(load(home).unwrap().tab_position, TabPosition::Left);
+        crate::profiles::set_current(home, "p1").unwrap();
+        assert_eq!(load(home).unwrap().tab_position, TabPosition::Right);
+        crate::profiles::set_current(home, &extra.id).unwrap();
+        assert_eq!(load(home).unwrap().tab_position, TabPosition::Bottom);
     }
 }

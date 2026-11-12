@@ -8,6 +8,7 @@ import 'api/events.dart';
 import 'api/identity.dart';
 import 'api/info.dart';
 import 'api/page.dart';
+import 'api/profiles.dart';
 import 'api/settings.dart';
 
 import 'dart:async';
@@ -72,7 +73,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.13.0';
 
   @override
-  int get rustContentHash => -296459195;
+  int get rustContentHash => -1850655061;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -110,15 +111,43 @@ abstract class RustLibApi extends BaseApi {
 
   String crateApiInfoCoreVersion();
 
+  Future<CatalogView> crateApiProfilesCreateProfile({
+    String? home,
+    required String name,
+  });
+
+  Future<CatalogView> crateApiProfilesDeleteProfile({
+    String? home,
+    required String id,
+  });
+
   Stream<int> crateApiEventsEventTicks();
 
   Future<String> crateApiPageHandlePageMessage({required String json});
 
   Future<IdentityStatusView> crateApiIdentityIdentityDirInfo({String? home});
 
+  Future<CatalogView> crateApiProfilesListProfiles({String? home});
+
   Future<SettingsView> crateApiSettingsLoadSettings({String? home});
 
   Future<EphemeralUser> crateApiIdentityNewEphemeralUser();
+
+  Future<ProfilePathsView> crateApiProfilesProfilePaths({
+    String? home,
+    required String id,
+  });
+
+  Future<CatalogView> crateApiProfilesRenameProfile({
+    String? home,
+    required String id,
+    required String name,
+  });
+
+  Future<CatalogView> crateApiProfilesSetCurrentProfile({
+    String? home,
+    required String id,
+  });
 
   Future<SettingsView> crateApiSettingsSetSidebarCollapsed({
     String? home,
@@ -338,6 +367,76 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "core_version", argNames: []);
 
   @override
+  Future<CatalogView> crateApiProfilesCreateProfile({
+    String? home,
+    required String name,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_opt_String(home, serializer);
+          sse_encode_String(name, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 6,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_catalog_view,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiProfilesCreateProfileConstMeta,
+        argValues: [home, name],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiProfilesCreateProfileConstMeta =>
+      const TaskConstMeta(
+        debugName: "create_profile",
+        argNames: ["home", "name"],
+      );
+
+  @override
+  Future<CatalogView> crateApiProfilesDeleteProfile({
+    String? home,
+    required String id,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_opt_String(home, serializer);
+          sse_encode_String(id, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 7,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_catalog_view,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiProfilesDeleteProfileConstMeta,
+        argValues: [home, id],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiProfilesDeleteProfileConstMeta =>
+      const TaskConstMeta(
+        debugName: "delete_profile",
+        argNames: ["home", "id"],
+      );
+
+  @override
   Stream<int> crateApiEventsEventTicks() {
     final sink = RustStreamSink<int>();
     unawaited(
@@ -349,7 +448,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 6,
+              funcId: 8,
               port: port_,
             );
           },
@@ -379,7 +478,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 7,
+            funcId: 9,
             port: port_,
           );
         },
@@ -407,7 +506,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 8,
+            funcId: 10,
             port: port_,
           );
         },
@@ -426,6 +525,34 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "identity_dir_info", argNames: ["home"]);
 
   @override
+  Future<CatalogView> crateApiProfilesListProfiles({String? home}) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_opt_String(home, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 11,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_catalog_view,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiProfilesListProfilesConstMeta,
+        argValues: [home],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiProfilesListProfilesConstMeta =>
+      const TaskConstMeta(debugName: "list_profiles", argNames: ["home"]);
+
+  @override
   Future<SettingsView> crateApiSettingsLoadSettings({String? home}) {
     return handler.executeNormal(
       NormalTask(
@@ -435,7 +562,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 9,
+            funcId: 12,
             port: port_,
           );
         },
@@ -462,7 +589,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 10,
+            funcId: 13,
             port: port_,
           );
         },
@@ -481,6 +608,110 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "new_ephemeral_user", argNames: []);
 
   @override
+  Future<ProfilePathsView> crateApiProfilesProfilePaths({
+    String? home,
+    required String id,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_opt_String(home, serializer);
+          sse_encode_String(id, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 14,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_profile_paths_view,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiProfilesProfilePathsConstMeta,
+        argValues: [home, id],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiProfilesProfilePathsConstMeta =>
+      const TaskConstMeta(debugName: "profile_paths", argNames: ["home", "id"]);
+
+  @override
+  Future<CatalogView> crateApiProfilesRenameProfile({
+    String? home,
+    required String id,
+    required String name,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_opt_String(home, serializer);
+          sse_encode_String(id, serializer);
+          sse_encode_String(name, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 15,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_catalog_view,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiProfilesRenameProfileConstMeta,
+        argValues: [home, id, name],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiProfilesRenameProfileConstMeta =>
+      const TaskConstMeta(
+        debugName: "rename_profile",
+        argNames: ["home", "id", "name"],
+      );
+
+  @override
+  Future<CatalogView> crateApiProfilesSetCurrentProfile({
+    String? home,
+    required String id,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_opt_String(home, serializer);
+          sse_encode_String(id, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 16,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_catalog_view,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiProfilesSetCurrentProfileConstMeta,
+        argValues: [home, id],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiProfilesSetCurrentProfileConstMeta =>
+      const TaskConstMeta(
+        debugName: "set_current_profile",
+        argNames: ["home", "id"],
+      );
+
+  @override
   Future<SettingsView> crateApiSettingsSetSidebarCollapsed({
     String? home,
     required bool collapsed,
@@ -494,7 +725,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 11,
+            funcId: 17,
             port: port_,
           );
         },
@@ -529,7 +760,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 12,
+            funcId: 18,
             port: port_,
           );
         },
@@ -559,7 +790,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 13,
+            funcId: 19,
             port: port_,
           );
         },
@@ -586,7 +817,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 14,
+            funcId: 20,
             port: port_,
           );
         },
@@ -616,7 +847,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 15,
+            funcId: 21,
             port: port_,
           );
         },
@@ -663,6 +894,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   bool dco_decode_bool(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as bool;
+  }
+
+  @protected
+  CatalogView dco_decode_catalog_view(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return CatalogView(
+      current: dco_decode_String(arr[0]),
+      profiles: dco_decode_list_profile_view(arr[1]),
+    );
   }
 
   @protected
@@ -743,9 +986,45 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<ProfileView> dco_decode_list_profile_view(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_profile_view).toList();
+  }
+
+  @protected
   String? dco_decode_opt_String(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_String(raw);
+  }
+
+  @protected
+  ProfilePathsView dco_decode_profile_paths_view(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 8)
+      throw Exception('unexpected arr length: expect 8 but see ${arr.length}');
+    return ProfilePathsView(
+      id: dco_decode_String(arr[0]),
+      profileDir: dco_decode_String(arr[1]),
+      settingsPath: dco_decode_String(arr[2]),
+      tabsPath: dco_decode_String(arr[3]),
+      webkitDir: dco_decode_String(arr[4]),
+      webkitDataDir: dco_decode_String(arr[5]),
+      webkitCacheDir: dco_decode_String(arr[6]),
+      cookiesPath: dco_decode_String(arr[7]),
+    );
+  }
+
+  @protected
+  ProfileView dco_decode_profile_view(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return ProfileView(
+      id: dco_decode_String(arr[0]),
+      name: dco_decode_String(arr[1]),
+    );
   }
 
   @protected
@@ -819,6 +1098,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   bool sse_decode_bool(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getUint8() != 0;
+  }
+
+  @protected
+  CatalogView sse_decode_catalog_view(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_current = sse_decode_String(deserializer);
+    var var_profiles = sse_decode_list_profile_view(deserializer);
+    return CatalogView(current: var_current, profiles: var_profiles);
   }
 
   @protected
@@ -915,6 +1202,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<ProfileView> sse_decode_list_profile_view(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <ProfileView>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_profile_view(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
   String? sse_decode_opt_String(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
@@ -923,6 +1222,37 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     } else {
       return null;
     }
+  }
+
+  @protected
+  ProfilePathsView sse_decode_profile_paths_view(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_id = sse_decode_String(deserializer);
+    var var_profileDir = sse_decode_String(deserializer);
+    var var_settingsPath = sse_decode_String(deserializer);
+    var var_tabsPath = sse_decode_String(deserializer);
+    var var_webkitDir = sse_decode_String(deserializer);
+    var var_webkitDataDir = sse_decode_String(deserializer);
+    var var_webkitCacheDir = sse_decode_String(deserializer);
+    var var_cookiesPath = sse_decode_String(deserializer);
+    return ProfilePathsView(
+      id: var_id,
+      profileDir: var_profileDir,
+      settingsPath: var_settingsPath,
+      tabsPath: var_tabsPath,
+      webkitDir: var_webkitDir,
+      webkitDataDir: var_webkitDataDir,
+      webkitCacheDir: var_webkitCacheDir,
+      cookiesPath: var_cookiesPath,
+    );
+  }
+
+  @protected
+  ProfileView sse_decode_profile_view(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_id = sse_decode_String(deserializer);
+    var var_name = sse_decode_String(deserializer);
+    return ProfileView(id: var_id, name: var_name);
   }
 
   @protected
@@ -1015,6 +1345,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_catalog_view(CatalogView self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.current, serializer);
+    sse_encode_list_profile_view(self.profiles, serializer);
+  }
+
+  @protected
   void sse_encode_control_backend_event(
     ControlBackendEvent self,
     SseSerializer serializer,
@@ -1087,6 +1424,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_list_profile_view(
+    List<ProfileView> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_profile_view(item, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
@@ -1094,6 +1443,29 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     if (self != null) {
       sse_encode_String(self, serializer);
     }
+  }
+
+  @protected
+  void sse_encode_profile_paths_view(
+    ProfilePathsView self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.id, serializer);
+    sse_encode_String(self.profileDir, serializer);
+    sse_encode_String(self.settingsPath, serializer);
+    sse_encode_String(self.tabsPath, serializer);
+    sse_encode_String(self.webkitDir, serializer);
+    sse_encode_String(self.webkitDataDir, serializer);
+    sse_encode_String(self.webkitCacheDir, serializer);
+    sse_encode_String(self.cookiesPath, serializer);
+  }
+
+  @protected
+  void sse_encode_profile_view(ProfileView self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.id, serializer);
+    sse_encode_String(self.name, serializer);
   }
 
   @protected
