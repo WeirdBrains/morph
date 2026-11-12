@@ -11,6 +11,7 @@ import 'api/events.dart';
 import 'api/identity.dart';
 import 'api/info.dart';
 import 'api/page.dart';
+import 'api/profiles.dart';
 import 'api/settings.dart';
 
 import 'dart:async';
@@ -45,6 +46,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   bool dco_decode_bool(dynamic raw);
 
   @protected
+  CatalogView dco_decode_catalog_view(dynamic raw);
+
+  @protected
   ControlBackendEvent dco_decode_control_backend_event(dynamic raw);
 
   @protected
@@ -66,7 +70,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
 
   @protected
+  List<ProfileView> dco_decode_list_profile_view(dynamic raw);
+
+  @protected
   String? dco_decode_opt_String(dynamic raw);
+
+  @protected
+  ProfilePathsView dco_decode_profile_paths_view(dynamic raw);
+
+  @protected
+  ProfileView dco_decode_profile_view(dynamic raw);
 
   @protected
   SettingsView dco_decode_settings_view(dynamic raw);
@@ -102,6 +115,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   bool sse_decode_bool(SseDeserializer deserializer);
 
   @protected
+  CatalogView sse_decode_catalog_view(SseDeserializer deserializer);
+
+  @protected
   ControlBackendEvent sse_decode_control_backend_event(
     SseDeserializer deserializer,
   );
@@ -127,7 +143,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
 
   @protected
+  List<ProfileView> sse_decode_list_profile_view(SseDeserializer deserializer);
+
+  @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
+
+  @protected
+  ProfilePathsView sse_decode_profile_paths_view(SseDeserializer deserializer);
+
+  @protected
+  ProfileView sse_decode_profile_view(SseDeserializer deserializer);
 
   @protected
   SettingsView sse_decode_settings_view(SseDeserializer deserializer);
@@ -169,6 +194,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_bool(bool self, SseSerializer serializer);
 
   @protected
+  void sse_encode_catalog_view(CatalogView self, SseSerializer serializer);
+
+  @protected
   void sse_encode_control_backend_event(
     ControlBackendEvent self,
     SseSerializer serializer,
@@ -199,7 +227,22 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_profile_view(
+    List<ProfileView> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_profile_paths_view(
+    ProfilePathsView self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_profile_view(ProfileView self, SseSerializer serializer);
 
   @protected
   void sse_encode_settings_view(SettingsView self, SseSerializer serializer);
