@@ -9,9 +9,13 @@
 #include <libsoup/soup.h>
 #include <webkit2/webkit2.h>
 
+#include <signal.h>
+#include <unistd.h>
+
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <set>
 #include <string>
 
 static int g_failures = 0;
@@ -242,6 +246,161 @@ static void destroy_view(WebKitWebView* view) {
     g_object_steal_data(G_OBJECT(view), "morph-offscreen");
     gtk_widget_destroy(window);
   }
+}
+
+// Web content processes this process spawned (WebKitGTK names them
+// WebKitWebProcess; /proc truncates comm to 15 chars).
+static std::set<int> child_web_processes() {
+  std::set<int> pids;
+  GDir* dir = g_dir_open("/proc", 0, nullptr);
+  if (dir == nullptr) {
+    return pids;
+  }
+  const gchar* name;
+  int self = static_cast<int>(getpid());
+  while ((name = g_dir_read_name(dir)) != nullptr) {
+    char* end = nullptr;
+    long pid = std::strtol(name, &end, 10);
+    if (end == name || *end != '\0') {
+      continue;
+    }
+    gchar* stat_path = g_strdup_printf("/proc/%ld/stat", pid);
+    gchar* stat = nullptr;
+    if (g_file_get_contents(stat_path, &stat, nullptr, nullptr)) {
+      // pid (comm) state ppid ...
+      const char* open = std::strchr(stat, '(');
+      const char* close = std::strrchr(stat, ')');
+      if (open != nullptr && close != nullptr && close > open) {
+        std::string comm(open + 1, close);
+        int ppid = 0;
+        char state = 0;
+        if (std::sscanf(close + 1, " %c %d", &state, &ppid) == 2 && ppid == self &&
+            comm.rfind("WebKitWebProces", 0) == 0 && state != 'Z') {
+          pids.insert(static_cast<int>(pid));
+        }
+      }
+    }
+    g_free(stat);
+    g_free(stat_path);
+  }
+  g_dir_close(dir);
+  return pids;
+}
+
+struct TerminationState {
+  int count;
+  WebKitWebProcessTerminationReason reason;
+  GMainLoop* loop;
+};
+
+static void on_web_process_terminated(WebKitWebView*,
+                                      WebKitWebProcessTerminationReason reason,
+                                      gpointer user_data) {
+  TerminationState* state = static_cast<TerminationState*>(user_data);
+  state->count++;
+  state->reason = reason;
+  if (state->loop != nullptr) {
+    g_main_loop_quit(state->loop);
+  }
+}
+
+static gboolean quit_loop(gpointer user_data) {
+  g_main_loop_quit(static_cast<GMainLoop*>(user_data));
+  return G_SOURCE_REMOVE;
+}
+
+static void wait_for_termination(TerminationState* state, guint timeout_ms) {
+  if (state->count > 0) {
+    return;
+  }
+  state->loop = g_main_loop_new(nullptr, FALSE);
+  guint timeout = g_timeout_add(timeout_ms, quit_loop, state->loop);
+  g_main_loop_run(state->loop);
+  if (state->count > 0) {
+    g_source_remove(timeout);
+  }
+  g_main_loop_unref(state->loop);
+  state->loop = nullptr;
+}
+
+// One tab's renderer crashing (a real abort) or being ended through the
+// API must leave every other tab, in the same profile, running.
+static void check_crash_isolation() {
+  expect_true(std::strcmp(morph_session_fault_for_termination(WEBKIT_WEB_PROCESS_CRASHED),
+                          "crashed") == 0,
+              "a crash maps to the crashed fault");
+  expect_true(std::strcmp(morph_session_fault_for_termination(
+                              WEBKIT_WEB_PROCESS_EXCEEDED_MEMORY_LIMIT),
+                          "outOfMemory") == 0,
+              "a memory kill maps to outOfMemory");
+  expect_true(std::strcmp(morph_session_fault_for_termination(
+                              WEBKIT_WEB_PROCESS_TERMINATED_BY_API),
+                          "killed") == 0,
+              "an API terminate maps to killed");
+
+  const char* page_a = "data:text/html,<title>a</title><p>tab a</p>";
+  const char* page_b = "data:text/html,<title>b</title><p>tab b</p>";
+  WebKitWebView* a = make_view_for_profile("crash");
+  load_and_wait(a, page_a);
+  std::set<int> before = child_web_processes();
+  WebKitWebView* b = make_view_for_profile("crash");
+  load_and_wait(b, page_b);
+  std::set<int> after = child_web_processes();
+  int b_pid = 0;
+  for (int pid : after) {
+    if (before.count(pid) == 0) {
+      b_pid = pid;
+    }
+  }
+  expect_true(after.size() == before.size() + 1 && b_pid != 0,
+              "a second tab in the same profile gets its own web process");
+
+  TerminationState a_state = {0, WEBKIT_WEB_PROCESS_CRASHED, nullptr};
+  TerminationState b_state = {0, WEBKIT_WEB_PROCESS_TERMINATED_BY_API, nullptr};
+  g_signal_connect(a, "web-process-terminated", G_CALLBACK(on_web_process_terminated), &a_state);
+  g_signal_connect(b, "web-process-terminated", G_CALLBACK(on_web_process_terminated), &b_state);
+
+  if (b_pid != 0) {
+    // SIGABRT, like a failed assertion. JSC handles SIGSEGV itself, so a
+    // SIGSEGV sent from outside does not end the process.
+    kill(b_pid, SIGABRT);
+    wait_for_termination(&b_state, 10000);
+    expect_true(b_state.count == 1 && b_state.reason == WEBKIT_WEB_PROCESS_CRASHED,
+                "the crashed tab reports web-process-terminated (crashed)");
+    drain_main_loop_ms(300);
+    expect_true(a_state.count == 0, "the other tab sees no termination");
+    gchar* title = eval_js(a, "document.title");
+    expect_true(title != nullptr && std::strcmp(title, "a") == 0,
+                "the other tab still runs script after its neighbour crashed");
+    g_free(title);
+
+    // Reloading brings the crashed tab back in a new process.
+    load_and_wait(b, page_b);
+    gchar* back = eval_js(b, "document.title");
+    expect_true(back != nullptr && std::strcmp(back, "b") == 0,
+                "the crashed tab recovers on reload");
+    g_free(back);
+    expect_true(child_web_processes().count(b_pid) == 0,
+                "the recovered tab runs in a new process");
+  }
+
+  b_state.count = 0;
+  webkit_web_view_terminate_web_process(a);
+  wait_for_termination(&a_state, 10000);
+  expect_true(a_state.count == 1 && a_state.reason == WEBKIT_WEB_PROCESS_TERMINATED_BY_API,
+              "terminating a hung tab reports terminated-by-api for that tab");
+  drain_main_loop_ms(300);
+  expect_true(b_state.count == 0, "terminating one tab leaves the other alone");
+  gchar* still = eval_js(b, "document.title");
+  expect_true(still != nullptr && std::strcmp(still, "b") == 0,
+              "the other tab keeps running after a terminate");
+  g_free(still);
+
+  g_signal_handlers_disconnect_by_data(a, &a_state);
+  g_signal_handlers_disconnect_by_data(b, &b_state);
+  destroy_view(a);
+  destroy_view(b);
+  drain_main_loop_ms(200);
 }
 
 static void check_paths() {
@@ -527,6 +686,7 @@ int main(int argc, char** argv) {
   g_object_unref(oauth.idp);
 
   check_profile_isolation(check_url);
+  check_crash_isolation();
 
   g_object_unref(server);
   g_free(set_url);

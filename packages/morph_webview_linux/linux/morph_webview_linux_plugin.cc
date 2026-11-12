@@ -823,6 +823,34 @@ static void on_notify_nav(GObject* object, GParamSpec* pspec, gpointer user_data
   emit_navigation(static_cast<MorphView*>(user_data));
 }
 
+static void emit_renderer(MorphView* view, const gchar* fault) {
+  FlValue* event = fl_value_new_map();
+  fl_value_set_string_take(event, "type", fl_value_new_string("renderer"));
+  fl_value_set_string_take(event, "fault",
+                           fault != nullptr ? fl_value_new_string(fault) : fl_value_new_null());
+  emit_event(view, event);
+}
+
+// Each view has its own web process, so only this tab is affected; the shell
+// shows a per-tab "page crashed" state and reloads into a new process.
+static void on_web_process_terminated(WebKitWebView* web_view,
+                                      WebKitWebProcessTerminationReason reason,
+                                      gpointer user_data) {
+  (void)web_view;
+  MorphView* view = static_cast<MorphView*>(user_data);
+  const gchar* fault = morph_session_fault_for_termination(reason);
+  g_message("morph_webview: view %" G_GINT64_FORMAT " web process ended (%s)", view->view_id,
+            fault);
+  emit_renderer(view, fault);
+}
+
+static void on_notify_responsive(GObject* object, GParamSpec* pspec, gpointer user_data) {
+  (void)pspec;
+  MorphView* view = static_cast<MorphView*>(user_data);
+  gboolean responsive = webkit_web_view_get_is_web_process_responsive(WEBKIT_WEB_VIEW(object));
+  emit_renderer(view, responsive ? nullptr : "unresponsive");
+}
+
 static void on_script_message(WebKitUserContentManager* manager,
                               WebKitJavascriptResult* result,
                               gpointer user_data) {
@@ -1015,6 +1043,10 @@ static MorphView* morph_view_create(MorphWebviewLinuxPlugin* plugin,
                    view);
   g_signal_connect(view->web_view, "create", G_CALLBACK(on_web_view_create), view);
   g_signal_connect(view->web_view, "close", G_CALLBACK(on_web_view_close), view);
+  g_signal_connect(view->web_view, "web-process-terminated",
+                   G_CALLBACK(on_web_process_terminated), view);
+  g_signal_connect(view->web_view, "notify::is-web-process-responsive",
+                   G_CALLBACK(on_notify_responsive), view);
 
   apply_size(view, width, height, dpr);
   if (initial_url != nullptr && *initial_url != '\0') {
@@ -1050,6 +1082,11 @@ static void morph_view_destroy(MorphView* view) {
     view->pixel_texture = nullptr;
   }
   view->texture = nullptr;
+  if (view->web_view != nullptr) {
+    // Tearing the view down ends its web process; no handler may see the
+    // freed MorphView afterwards.
+    g_signal_handlers_disconnect_by_data(view->web_view, view);
+  }
   if (view->offscreen != nullptr) {
     gtk_widget_destroy(view->offscreen);
     view->offscreen = nullptr;
@@ -1888,6 +1925,9 @@ static void morph_webview_linux_plugin_handle_method_call(MorphWebviewLinuxPlugi
     } else if (strcmp(method, "dispose") == 0) {
       self->views->erase(view->view_id);
       morph_view_destroy(view);
+      response = FL_METHOD_RESPONSE(fl_method_success_response_new(fl_value_new_null()));
+    } else if (strcmp(method, "terminateWebProcess") == 0) {
+      webkit_web_view_terminate_web_process(view->web_view);
       response = FL_METHOD_RESPONSE(fl_method_success_response_new(fl_value_new_null()));
     } else if (strcmp(method, "resize") == 0) {
       apply_size(view, static_cast<uint32_t>(arg_int(args, "width", view->logical_width)),

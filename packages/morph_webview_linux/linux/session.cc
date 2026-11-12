@@ -217,3 +217,15 @@ void morph_session_reset_for_tests(void) {
   }
   g_contexts.clear();
 }
+
+const gchar* morph_session_fault_for_termination(WebKitWebProcessTerminationReason reason) {
+  switch (reason) {
+    case WEBKIT_WEB_PROCESS_EXCEEDED_MEMORY_LIMIT:
+      return "outOfMemory";
+    case WEBKIT_WEB_PROCESS_TERMINATED_BY_API:
+      return "killed";
+    case WEBKIT_WEB_PROCESS_CRASHED:
+    default:
+      return "crashed";
+  }
+}
