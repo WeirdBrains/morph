@@ -11,6 +11,7 @@ import 'shell_shortcuts.dart';
 import 'host_friendly_url.dart';
 export 'host_friendly_url.dart';
 import 'theme/morph_theme.dart';
+import 'tabs/tab_overflow.dart';
 import 'tabs/tab_position.dart';
 import 'tabs/tab_set.dart';
 import 'widgets/address_sheet.dart';
@@ -68,6 +69,7 @@ class MorphShellState extends State<MorphShell> {
   final _visited = <int, bool>{};
   MorphTabPosition _tabPosition = MorphTabPosition.top;
   bool _sidebarCollapsed = false;
+  double _sidebarWidth = MorphTabOverflow.defaultSidebarWidth;
   ProfileCatalog _catalog = const ProfileCatalog(
     current: 'default',
     profiles: [ProfileInfo(id: 'default', name: 'Default')],
@@ -194,10 +196,12 @@ class MorphShellState extends State<MorphShell> {
           await widget.api.loadTabPosition(home: _home),
         );
         final collapsed = await widget.api.loadSidebarCollapsed(home: _home);
+        final width = await widget.api.loadSidebarWidth(home: _home);
         if (mounted) {
           setState(() {
             _tabPosition = position;
             _sidebarCollapsed = collapsed;
+            _sidebarWidth = width.toDouble();
           });
         }
       } catch (_) {
@@ -581,6 +585,8 @@ class MorphShellState extends State<MorphShell> {
         await widget.api.loadTabPosition(home: _home),
       );
       _sidebarCollapsed = await widget.api.loadSidebarCollapsed(home: _home);
+      _sidebarWidth = (await widget.api.loadSidebarWidth(home: _home))
+          .toDouble();
     } catch (_) {}
     for (final tab in tabs.tabs) {
       if (tab.url.isNotEmpty && tab.url != 'about:blank') {
@@ -676,6 +682,23 @@ class MorphShellState extends State<MorphShell> {
     } catch (_) {
       // The in-memory choice still applies if persistence fails.
     }
+  }
+
+  void _setSidebarWidth(double width) {
+    setState(() => _sidebarWidth = width);
+  }
+
+  Future<void> _commitSidebarWidth() async {
+    try {
+      await widget.api.saveSidebarWidth(_sidebarWidth.round(), home: _home);
+    } catch (_) {
+      // The in-memory choice still applies if persistence fails.
+    }
+  }
+
+  Future<void> _resetSidebarWidth() async {
+    setState(() => _sidebarWidth = MorphTabOverflow.defaultSidebarWidth);
+    await _commitSidebarWidth();
   }
 
   KeyEventResult _onShellKey(KeyEvent event) {
@@ -857,6 +880,7 @@ class MorphShellState extends State<MorphShell> {
                   activeId: tabs.activeId,
                   position: _tabPosition,
                   sidebarCollapsed: _sidebarCollapsed,
+                  sidebarWidth: _sidebarWidth,
                   buttonMode: MorphWindowChrome.mode(),
                   useNativeMacButtons:
                       MorphDesktopWindow.usesNativeMacTrafficLights,
@@ -874,6 +898,13 @@ class MorphShellState extends State<MorphShell> {
                   onNewTab: _openTab,
                   onPositionChanged: _setTabPosition,
                   onToggleSidebar: _toggleSidebar,
+                  onSidebarWidthChanged: _setSidebarWidth,
+                  onSidebarWidthCommit: () {
+                    unawaited(_commitSidebarWidth());
+                  },
+                  onSidebarWidthReset: () {
+                    unawaited(_resetSidebarWidth());
+                  },
                   onDebugLongPress: _toggleDebugPanel,
                 ),
               ),
