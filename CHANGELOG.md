@@ -63,8 +63,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   session; cookies and localStorage set in one profile are invisible to
   the others. Shell settings live in the current profile's
   `settings.json`. Existing Morph data is migrated into the `default`
-  profile. The profile catalog is available over the FRB bridge; the
-  switcher UI is still to come.
+  profile. The profile catalog is available over the FRB bridge. A Glitch
+  avatar on the trailing end of the address row (under the window
+  buttons, on every desktop layout including macOS) opens a profile
+  menu to switch, add (name and color), rename, or delete — never the
+  last profile. The same picker sits in the mobile address sheet.
+  Switching restores that profile's saved tabs and recreates its web
+  views. Open-in-new-window is not available yet (window_manager 0.6
+  is single-window).
 - Linux web views present through a Flutter GL texture by default: frames
   come from the already-painted offscreen surface (BGRA upload, no CPU
   swizzle) at the display refresh rate, with pointer-move and scroll
