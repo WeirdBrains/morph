@@ -41,6 +41,24 @@ const gchar* morph_session_user_agent(void);
 // "crashed", "outOfMemory" or "killed" (terminated through the API).
 const gchar* morph_session_fault_for_termination(WebKitWebProcessTerminationReason reason);
 
+// Most popups (window.open) one view may have open at once; matches Android.
+#define MORPH_SESSION_MAX_POPUPS 4
+
+// How long after a navigation commits the dark backdrop stays before the
+// web's white default returns (a new page usually paints well within it).
+#define MORPH_SESSION_BACKDROP_MS 400
+
+// Whether a view that already has [open_popups] popups may open another.
+gboolean morph_session_popup_allowed(int open_popups);
+
+// Whether a failed main-frame load (GLib error [domain] name and [code]) gets
+// Morph's error page. Cancelled loads, policy changes (downloads) and plugin
+// handoffs keep the current page instead.
+gboolean morph_session_load_error_shown(const gchar* domain, int code);
+
+// Short reason for a TLS failure, from WebKit's certificate flags.
+const gchar* morph_session_tls_reason(GTlsCertificateFlags errors);
+
 // Drop every cached context so the next context_for_profile() rebuilds it.
 // For tests only; not used by the plugin.
 void morph_session_reset_for_tests(void);

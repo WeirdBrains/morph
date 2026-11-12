@@ -1703,3 +1703,52 @@ only when it looks like one: http(s) with a host and no spaces, `about:`,
 bare `host.tld[:port][/path]`. Everything else, including any input with a
 space and unknown schemes such as `javascript:`, is a DuckDuckGo search
 (`MorphIncomingLinks.searchUrl`) until a search-engine setting exists.
+
+### 2026-11-12 — Linux: WebKit's DMA-BUF renderer stays on; video crash fixed
+
+The plugin set `WEBKIT_DISABLE_DMABUF_RENDERER=1` on NVIDIA. With it,
+WebKitGTK 2.54 aborts the web process (SIGABRT from a DOM binding called by
+the player's JS) on YouTube watch pages and Facebook stories; reproduced in
+plain WebKitGTK (no Morph) with only that variable: crash in 13-38 s, while
+without it the same page decodes (readyState 4, 1280 px). GStreamer was
+complete (gst-libav, good/bad/ugly, nvcodec); ranking the nv/vulkan decoders
+to 0 did not help. Decision: Morph no longer sets it (WebKit has its own
+NVIDIA fallbacks); `MORPH_WEBKIT_DISABLE_DMABUF=1` opts back in. A crash
+event carries a hint: missing GStreamer formats (registry checked through a
+run-time `dlopen` of libgstreamer, no build dependency) or that variable being
+set. Package list in `docs/linux-media.md`.
+
+Crash pages were also 3-9 s late: the web process is only gone once
+systemd-coredump has written its core (gigabytes for a video page). The plugin
+sets `RLIMIT_CORE` to 0 at startup, inherited by web processes;
+`MORPH_KEEP_CORE_DUMPS=1` keeps them.
+
+### 2026-11-12 — Linux: passkeys fail fast
+
+WebKitGTK ships without WebAuthn (`PublicKeyCredential` and
+`navigator.credentials` are undefined), and Facebook's "Use face scan,
+fingerprint or screen lock" step spun forever. A document-start shim (all
+frames, secure contexts, only where the engine lacks the API) defines them:
+`get`/`create` with `publicKey` reject at once with `NotAllowedError` (what a
+dismissed prompt gives), and platform/conditional availability report false,
+so sites offer their other methods. Real passkeys need a native
+authenticator bridge: CTAP2 over USB HID (libfido2 or
+`webauthn-authenticator-rs`) and hybrid/caBLE v2 (QR with the FIDO URI, BLE
+advert via BlueZ, the tunnel WebSocket, Noise handshake), exposed to pages
+through this shim; phone-as-authenticator then works like Chrome's QR flow.
+
+### 2026-11-12 — Linux: damage-driven presents, no copies for hidden tabs
+
+Measured in Xvfb (dpr 2, 5120×2500 texture): one present copies 51 MB and
+took 18.9 ms on the main thread, and every tab presented on every tick once
+live, hidden tabs included; the main thread also waited on the raster
+thread's upload lock during its copy. Decisions: (1) a view copies only when
+Flutter drew its last frame (`frame_consumed`), so Offstage tabs stop copying
+until shown; (2) live presents follow the offscreen window's `damage-event`
+once one has been seen (unchanged frames are not copied; views that never
+report damage keep presenting every tick); (3) the copy into the back buffer
+runs without the lock, which now only covers resize and the swap. Navigations
+paint a dark backdrop from load start until 400 ms after commit (or load
+finish), so reloads and sign-in redirects no longer flash white. Zero-copy
+(WPE DMA-BUF import) remains the real fix for the per-frame copy and upload
+at HiDPI sizes.

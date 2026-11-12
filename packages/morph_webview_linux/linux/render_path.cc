@@ -56,7 +56,10 @@ const gchar* morph_render_path_name(MorphRenderPath path) {
 }
 
 gboolean morph_should_disable_webkit_dmabuf_renderer(void) {
-  return morph_has_nvidia_proprietary_driver();
+  // Opt-in only. Forcing it on NVIDIA made WebKitGTK 2.54 abort the web
+  // process on every video page (YouTube, Facebook stories); WebKit picks
+  // its own NVIDIA fallbacks.
+  return g_strcmp0(g_getenv("MORPH_WEBKIT_DISABLE_DMABUF"), "1") == 0;
 }
 
 MorphRenderPath morph_detect_render_path(gchar** reason) {

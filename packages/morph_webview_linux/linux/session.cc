@@ -218,6 +218,50 @@ void morph_session_reset_for_tests(void) {
   g_contexts.clear();
 }
 
+gboolean morph_session_load_error_shown(const gchar* domain, int code) {
+  if (g_strcmp0(domain, "WebKitNetworkError") == 0 && code == WEBKIT_NETWORK_ERROR_CANCELLED) {
+    return FALSE;
+  }
+  if (g_strcmp0(domain, "g-io-error-quark") == 0 && code == G_IO_ERROR_CANCELLED) {
+    return FALSE;
+  }
+  if (g_strcmp0(domain, "WebKitPolicyError") == 0 &&
+      code == WEBKIT_POLICY_ERROR_FRAME_LOAD_INTERRUPTED_BY_POLICY_CHANGE) {
+    return FALSE;
+  }
+  if (g_strcmp0(domain, "WebKitPluginError") == 0 &&
+      code == WEBKIT_PLUGIN_ERROR_WILL_HANDLE_LOAD) {
+    return FALSE;
+  }
+  return TRUE;
+}
+
+const gchar* morph_session_tls_reason(GTlsCertificateFlags errors) {
+  if (errors & G_TLS_CERTIFICATE_BAD_IDENTITY) {
+    return "The certificate is for a different site.";
+  }
+  if (errors & G_TLS_CERTIFICATE_EXPIRED) {
+    return "The certificate has expired.";
+  }
+  if (errors & G_TLS_CERTIFICATE_NOT_ACTIVATED) {
+    return "The certificate is not valid yet.";
+  }
+  if (errors & G_TLS_CERTIFICATE_REVOKED) {
+    return "The certificate was revoked.";
+  }
+  if (errors & G_TLS_CERTIFICATE_UNKNOWN_CA) {
+    return "The certificate is not signed by a trusted authority.";
+  }
+  if (errors & G_TLS_CERTIFICATE_INSECURE) {
+    return "The certificate uses insecure cryptography.";
+  }
+  return "The certificate is not valid.";
+}
+
+gboolean morph_session_popup_allowed(int open_popups) {
+  return open_popups >= 0 && open_popups < MORPH_SESSION_MAX_POPUPS;
+}
+
 const gchar* morph_session_fault_for_termination(WebKitWebProcessTerminationReason reason) {
   switch (reason) {
     case WEBKIT_WEB_PROCESS_EXCEEDED_MEMORY_LIMIT:

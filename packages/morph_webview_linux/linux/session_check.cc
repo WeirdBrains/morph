@@ -4,6 +4,7 @@
 // pair of origins exercises a cross-host OAuth-style redirect (client -> IdP
 // -> client callback) so the client state cookie is sent on the return hop.
 #include "session.h"
+#include "media_check.h"
 
 #include <gtk/gtk.h>
 #include <libsoup/soup.h>
@@ -424,6 +425,69 @@ static void check_paths() {
   g_free(other);
 }
 
+static void check_popup_cap() {
+  expect_true(morph_session_popup_allowed(0), "a view with no popups may open one");
+  expect_true(morph_session_popup_allowed(MORPH_SESSION_MAX_POPUPS - 1),
+              "the fourth popup is allowed");
+  expect_true(!morph_session_popup_allowed(MORPH_SESSION_MAX_POPUPS),
+              "a fifth stacked popup is refused");
+  expect_true(!morph_session_popup_allowed(-1), "a negative count is refused");
+}
+
+static void check_load_errors() {
+  expect_true(!morph_session_load_error_shown("WebKitNetworkError", WEBKIT_NETWORK_ERROR_CANCELLED),
+              "a load replaced by a newer one shows no error page");
+  expect_true(!morph_session_load_error_shown("g-io-error-quark", G_IO_ERROR_CANCELLED),
+              "a cancelled request shows no error page");
+  expect_true(!morph_session_load_error_shown(
+                  "WebKitPolicyError", WEBKIT_POLICY_ERROR_FRAME_LOAD_INTERRUPTED_BY_POLICY_CHANGE),
+              "a download keeps the current page");
+  expect_true(morph_session_load_error_shown("g-resolver-error-quark", 0),
+              "an unknown host shows the error page");
+  expect_true(morph_session_load_error_shown("WebKitNetworkError", WEBKIT_NETWORK_ERROR_FAILED),
+              "a network failure shows the error page");
+  expect_true(std::strstr(morph_session_tls_reason(G_TLS_CERTIFICATE_BAD_IDENTITY),
+                          "different site") != nullptr,
+              "a wrong-host certificate names the reason");
+  expect_true(std::strstr(morph_session_tls_reason(static_cast<GTlsCertificateFlags>(
+                              G_TLS_CERTIFICATE_EXPIRED | G_TLS_CERTIFICATE_UNKNOWN_CA)),
+                          "expired") != nullptr,
+              "an expired certificate says so");
+}
+
+static gboolean fake_has_element(const gchar* name, gpointer user_data) {
+  const char* const* installed = static_cast<const char* const*>(user_data);
+  for (; *installed != nullptr; installed++) {
+    if (std::strcmp(*installed, name) == 0) {
+      return TRUE;
+    }
+  }
+  return FALSE;
+}
+
+static void check_media_formats() {
+  const char* all[] = {"avdec_h264", "vp9dec", "av1dec", "opusdec", "avdec_aac",
+                       "matroskademux", "qtdemux", nullptr};
+  gchar* none = morph_media_missing_formats(fake_has_element, all);
+  expect_true(std::strcmp(none, "") == 0, "a full GStreamer install misses nothing");
+  const char* hw_only[] = {"nvh264dec", "nvvp9dec", "matroskademux", "qtdemux", nullptr};
+  gchar* some = morph_media_missing_formats(fake_has_element, hw_only);
+  expect_true(std::strcmp(some, "AV1, Opus, AAC") == 0, "hardware decoders count, missing audio shows");
+  gchar* hint = morph_media_crash_hint(some, nullptr);
+  expect_true(std::strstr(hint, "Opus") != nullptr && std::strstr(hint, "gst-libav") != nullptr,
+              "the crash hint names the formats and the packages");
+  gchar* dmabuf = morph_media_crash_hint("", "1");
+  expect_true(std::strstr(dmabuf, "WEBKIT_DISABLE_DMABUF_RENDERER") != nullptr,
+              "the crash hint names the setting that crashes video");
+  gchar* empty = morph_media_crash_hint("", "0");
+  expect_true(std::strcmp(empty, "") == 0, "no hint when nothing is wrong");
+  g_free(none);
+  g_free(some);
+  g_free(hint);
+  g_free(dmabuf);
+  g_free(empty);
+}
+
 static void check_context_setup() {
   WebKitWebContext* context = morph_session_shared_context();
   expect_true(!webkit_web_context_is_ephemeral(context), "shared context must not be ephemeral");
@@ -631,6 +695,9 @@ int main(int argc, char** argv) {
   g_setenv("MORPH_HOME", temp_home, TRUE);
 
   check_paths();
+  check_popup_cap();
+  check_load_errors();
+  check_media_formats();
 
   guint port = 0;
   SoupServer* server = start_server(&port);

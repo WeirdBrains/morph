@@ -14,6 +14,18 @@ extern "C" {
 // rate, with a 16 ms (60 Hz) fallback when the rate is unknown.
 guint morph_frame_interval_ms(void);
 
+// Whether a view's frame tick copies a new frame. [dirty]: something asked
+// for a present (input, resize, a draw). [live]: the view presents its
+// offscreen surface continuously. [damage_seen]/[damaged]: the offscreen
+// window reports damage, and did since the last present; then live presents
+// follow damage. [consumed]: Flutter drew the previous frame; a hidden tab's
+// texture is never drawn, so it stops copying until it is shown again.
+gboolean morph_frame_should_present(gboolean dirty,
+                                    gboolean live,
+                                    gboolean damage_seen,
+                                    gboolean damaged,
+                                    gboolean consumed);
+
 // Copy a CAIRO_FORMAT_ARGB32 image into a tightly packed BGRA buffer.
 // On little-endian this is a straight copy (no per-pixel swizzle).
 void morph_copy_cairo_to_bgra(cairo_surface_t* surface,

@@ -74,6 +74,22 @@ static void check_copies() {
   cairo_surface_destroy(surface);
 }
 
+static void check_present_gate() {
+  // A hidden tab (Flutter never drew its last frame) copies nothing.
+  expect_true(!morph_frame_should_present(TRUE, TRUE, TRUE, TRUE, FALSE),
+              "an undrawn frame blocks the next copy");
+  expect_true(morph_frame_should_present(TRUE, FALSE, FALSE, FALSE, TRUE),
+              "a requested present happens");
+  expect_true(!morph_frame_should_present(FALSE, TRUE, TRUE, FALSE, TRUE),
+              "a live view with no damage since the last present skips the copy");
+  expect_true(morph_frame_should_present(FALSE, TRUE, TRUE, TRUE, TRUE),
+              "damage brings the next present");
+  expect_true(morph_frame_should_present(FALSE, TRUE, FALSE, FALSE, TRUE),
+              "without damage reports a live view still presents every tick");
+  expect_true(!morph_frame_should_present(FALSE, FALSE, TRUE, TRUE, TRUE),
+              "an idle view that is not live stays idle");
+}
+
 static void check_gl_upload_choice() {
   // Flutter's Linux embedder hands populate() an OpenGL ES context. GLES must
   // never get the desktop GL_RGBA8 + GL_BGRA pairing (GL_INVALID_OPERATION
@@ -279,6 +295,7 @@ int main(int argc, char** argv) {
     g_setenv("MORPH_HOME", temp_home, TRUE);
   }
   check_copies();
+  check_present_gate();
   check_gl_upload_choice();
   check_blank_and_readback_helpers();
   bench_copies();
