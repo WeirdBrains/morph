@@ -1,7 +1,7 @@
 //! In-process gRPC control layer for Morph web views.
 //!
 //! The server lives in the Flutter embedder process and speaks tonic over a Unix domain
-//! socket on Linux and macOS, a named pipe (or loopback TCP) on Windows. A single
+//! socket on Linux and macOS, a named pipe on Windows (loopback TCP remains available). A single
 //! bidirectional `Session` stream carries navigation, input, and page-bridge messages
 //! with monotonic sequence numbers.
 pub mod endpoint;
@@ -10,6 +10,8 @@ pub mod proto {
     #![allow(clippy::result_large_err)]
     tonic::include_proto!("morph.webview.v1");
 }
+#[cfg(windows)]
+mod named_pipe;
 pub mod server;
 
 pub use endpoint::ControlEndpoint;

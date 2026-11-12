@@ -201,3 +201,20 @@ fn loopback_endpoint_accepts_a_session() {
     });
     server.shutdown();
 }
+
+#[cfg(windows)]
+#[test]
+fn named_pipe_endpoint_accepts_a_session() {
+    let backend = Arc::new(Recording::default());
+    let name = format!(r"\\.\pipe\morph-control-test-{}", std::process::id());
+    let server = ControlServer::start(Some(ControlEndpoint::NamedPipe(name)), backend).expect("start named pipe");
+    match server.endpoint() {
+        ControlEndpoint::NamedPipe(path) => assert!(path.contains("morph-control-test-")),
+        other => panic!("expected named pipe, got {other:?}"),
+    }
+    let rt = test_runtime();
+    rt.block_on(async {
+        timeout(Duration::from_secs(5), connect(server.endpoint())).await.expect("connect named pipe timeout").expect("connect named pipe");
+    });
+    server.shutdown();
+}
