@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:morph_webview/control.dart' as proto;
 import 'package:morph_webview/morph_webview.dart';
@@ -9,15 +10,44 @@ import 'package:morph_webview/morph_webview.dart';
 /// Lifecycle and texture ids stay on the method channel. Navigation, input,
 /// and the page bridge go over the in-process gRPC control session.
 class MorphWebViewLinux extends MorphWebViewPlatform {
-  MorphWebViewLinux({MethodChannel? channel})
+  MorphWebViewLinux({MethodChannel? channel, EventChannel? events})
     : _channel =
-          channel ?? const MethodChannel('org.weirdbrains.morph_webview');
+          channel ?? const MethodChannel('org.weirdbrains.morph_webview'),
+      _events =
+          events ?? const EventChannel('org.weirdbrains.morph_webview/events');
 
   final MethodChannel _channel;
+  final EventChannel _events;
   MorphControlClient? _control;
+  Stream<Map<Object?, Object?>>? _eventStream;
+
+  /// Native per-view events (renderer faults, new windows), shared by all
+  /// sessions; each session keeps the ones for its own view id.
+  Stream<Map<Object?, Object?>> get _nativeEvents => _eventStream ??= _events
+      .receiveBroadcastStream()
+      .where((event) => event is Map)
+      .cast<Map<Object?, Object?>>()
+      .asBroadcastStream();
 
   static void registerWith() {
     MorphWebViewPlatform.instance = MorphWebViewLinux();
+  }
+
+  /// A session over [events] without a native view, for tests.
+  @visibleForTesting
+  static MorphWebViewSession sessionForTesting({
+    required MethodChannel channel,
+    required int viewId,
+    required Stream<Map<Object?, Object?>> events,
+  }) {
+    return _LinuxWebViewSession(
+      channel: channel,
+      control: MorphControlClient('unix:///dev/null'),
+      viewId: viewId,
+      textureId: viewId,
+      renderPath: const MorphRenderPathInfo(path: 'test', reason: 'test'),
+      events: events,
+    );
   }
 
   Future<MorphControlClient> _connect(String endpoint) async {
@@ -68,6 +98,7 @@ class MorphWebViewLinux extends MorphWebViewPlatform {
       viewId: viewId,
       textureId: textureId,
       renderPath: path,
+      events: _nativeEvents,
     );
   }
 }
@@ -79,7 +110,16 @@ class _LinuxWebViewSession extends MorphWebViewSession {
     required this.viewId,
     required this.textureId,
     required this.renderPath,
+    required Stream<Map<Object?, Object?>> events,
   }) {
+    _eventSub = events.listen((event) {
+      if (event['viewId'] != viewId || event['type'] != 'renderer') {
+        return;
+      }
+      _rendererController.add(
+        MorphRendererEvent(morphRendererFaultFromName(event['fault'])),
+      );
+    });
     _navSub = _control.navigation.listen((entry) {
       if (entry.$1 == viewId) {
         _navController.add(entry.$2);
@@ -103,6 +143,8 @@ class _LinuxWebViewSession extends MorphWebViewSession {
   late final StreamSubscription<(int, MorphNavigationEvent)> _navSub;
   late final StreamSubscription<(int, String)> _pageSub;
   late final StreamSubscription<(int, MorphCursorEvent)> _cursorSub;
+  late final StreamSubscription<Map<Object?, Object?>> _eventSub;
+  final _rendererController = StreamController<MorphRendererEvent>.broadcast();
   final _navController = StreamController<MorphNavigationEvent>.broadcast();
   final _pageController = StreamController<String>.broadcast();
   final _cursorController = StreamController<MorphCursorEvent>.broadcast();
@@ -124,6 +166,18 @@ class _LinuxWebViewSession extends MorphWebViewSession {
 
   @override
   Stream<MorphCursorEvent> get cursor => _cursorController.stream;
+
+  @override
+  Stream<MorphRendererEvent> get renderer => _rendererController.stream;
+
+  @override
+  Future<void> terminateRenderer() =>
+      _channel.invokeMethod<void>('terminateWebProcess', {'viewId': viewId});
+
+  /// The web view survives its web process; the controller's reload of the
+  /// last URL starts a new one, so there is nothing to rebuild.
+  @override
+  Future<void> recoverRenderer() async {}
 
   @override
   Future<void> resize({
@@ -218,9 +272,25 @@ class _LinuxWebViewSession extends MorphWebViewSession {
     await _navSub.cancel();
     await _pageSub.cancel();
     await _cursorSub.cancel();
+    await _eventSub.cancel();
     await _channel.invokeMethod<void>('dispose', {'viewId': viewId});
     await _navController.close();
     await _pageController.close();
     await _cursorController.close();
+    await _rendererController.close();
   }
+}
+
+/// Maps a native fault name ("crashed", "outOfMemory", "killed",
+/// "unresponsive") to a fault; null means healthy.
+MorphRendererFault? morphRendererFaultFromName(Object? name) {
+  return switch (name) {
+    'crashed' => MorphRendererFault.crashed,
+    'outOfMemory' => MorphRendererFault.outOfMemory,
+    'killed' => MorphRendererFault.killed,
+    'unresponsive' => MorphRendererFault.unresponsive,
+    null => null,
+    // A reason this build does not know yet still means the page is gone.
+    _ => MorphRendererFault.crashed,
+  };
 }
