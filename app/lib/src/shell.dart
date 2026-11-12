@@ -1,3 +1,6 @@
+import 'default_browser.dart';
+import 'incoming_links.dart';
+
 import 'dart:async';
 import 'dart:io';
 
@@ -41,9 +44,17 @@ class MorphShell extends StatefulWidget {
     this.subscribeToTicks = true,
     this.loadPageBridgeAsset = true,
     this.showDebugPanel = false,
+    this.links,
+    this.defaultBrowser,
   });
 
   final MorphApi api;
+
+  /// Web links from the system, each opened in a new tab.
+  final MorphIncomingLinks? links;
+
+  /// Null uses [MorphDefaultBrowser.forPlatform] when Settings opens.
+  final MorphDefaultBrowser? defaultBrowser;
 
   /// Widget tests turn this off so a live tick stream cannot stall the tester.
   final bool subscribeToTicks;
@@ -303,6 +314,7 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
         userScript = script;
         ready = true;
       });
+      unawaited(_listenForLinks());
       await _ticks?.cancel();
       _ticks = null;
       if (widget.subscribeToTicks) {
@@ -413,6 +425,32 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
 
   bool get _onStartPage => !_tabHasPage(tabs.activeId);
 
+  StreamSubscription<String>? _linkSub;
+
+  Future<void> _listenForLinks() async {
+    final links = widget.links;
+    if (links == null || _linkSub != null) {
+      return;
+    }
+    _linkSub = links.later.listen((url) => unawaited(openIncomingLink(url)));
+    for (final url in await links.initialLinks()) {
+      await openIncomingLink(url);
+    }
+  }
+
+  /// Opens a link another app handed Morph in a new tab of the active
+  /// profile (reusing the tab if it is still an empty start page).
+  @visibleForTesting
+  Future<void> openIncomingLink(String url) async {
+    if (!mounted) {
+      return;
+    }
+    if (_tabHasPage(tabs.activeId) || _showSwitcher) {
+      _openTab();
+    }
+    await _submitUrl(url);
+  }
+
   Future<void> _submitUrl(String raw) async {
     var url = raw.trim();
     if (url.isEmpty) {
@@ -485,6 +523,7 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    unawaited(_linkSub?.cancel());
     WidgetsBinding.instance.removeObserver(this);
     morphSurfaceWatch.removeListener(_onOverlayClosed);
     _surfaceTimer?.cancel();
@@ -1163,6 +1202,9 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
     await _loadBookmarks();
   }
 
+  late final MorphDefaultBrowser _defaultBrowser =
+      widget.defaultBrowser ?? MorphDefaultBrowser.forPlatform();
+
   Future<void> _openSettings() async {
     final desktop = !_isMobile;
     await _showPanel(
@@ -1188,6 +1230,7 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
           Navigator.of(panel).pop();
           unawaited(_openLibrary(tab));
         },
+        defaultBrowser: _defaultBrowser,
       ),
     );
   }

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import 'api.dart';
+import 'default_browser.dart';
+import 'incoming_links.dart';
 import 'shell.dart';
 import 'theme/morph_theme.dart';
 import 'widgets/window_chrome.dart';
@@ -15,10 +17,18 @@ class MorphApp extends StatefulWidget {
     this.subscribeToTicks = true,
     this.loadPageBridgeAsset = true,
     this.showDebugPanel = false,
+    this.links,
+    this.defaultBrowser,
   });
 
   final MorphApi api;
   final String? home;
+
+  /// Links the system hands Morph; null means none (tests).
+  final MorphIncomingLinks? links;
+
+  /// Null uses [MorphDefaultBrowser.forPlatform].
+  final MorphDefaultBrowser? defaultBrowser;
   final bool subscribeToTicks;
   final bool loadPageBridgeAsset;
   final bool showDebugPanel;
@@ -55,6 +65,8 @@ class _MorphAppState extends State<MorphApp> {
         subscribeToTicks: widget.subscribeToTicks,
         loadPageBridgeAsset: widget.loadPageBridgeAsset,
         showDebugPanel: widget.showDebugPanel,
+        links: widget.links,
+        defaultBrowser: widget.defaultBrowser,
       ),
     );
   }
