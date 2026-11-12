@@ -1,7 +1,7 @@
 import 'dart:async';
-import 'dart:typed_data';
 import 'dart:collection';
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
@@ -132,8 +132,23 @@ class _InAppSession extends MorphWebViewSession {
          path: _renderPathForHost(),
          reason: _renderReasonForHost(profileId),
        ) {
-    _view = InAppWebView(
-      initialUrlRequest: URLRequest(url: WebUri(initialUrl)),
+    _view = _buildView(initialUrl);
+    _navSub = _client.navigation.listen((event) {
+      if (event.$1 == viewId) {
+        _navController.add(event.$2);
+      }
+    });
+    _pageSub = _client.pageMessages.listen((event) {
+      if (event.$1 == viewId) {
+        _pageController.add(event.$2);
+      }
+    });
+  }
+
+  InAppWebView _buildView(String url, {int generation = 0}) {
+    return InAppWebView(
+      key: ValueKey<int>(generation),
+      initialUrlRequest: URLRequest(url: WebUri(url)),
       webViewEnvironment: webViewEnvironment,
       initialSettings: morphInAppWebViewSettings(),
       initialUserScripts: UnmodifiableListView<UserScript>([
@@ -167,10 +182,23 @@ class _InAppSession extends MorphWebViewSession {
         _flushPending(controller);
       },
       onLoadStart: (controller, url) {
+        _rememberUrl(url);
         unawaited(_emitNav(controller, url, isLoading: true));
       },
       onLoadStop: (controller, url) {
+        _rememberUrl(url);
         unawaited(_emitNav(controller, url, isLoading: false, progress: 1));
+      },
+      onUpdateVisitedHistory: (controller, url, isReload) {
+        _rememberUrl(url);
+      },
+      onRenderProcessGone: (controller, detail) {
+        // The native WebView is unusable once its renderer is gone; the
+        // controller rebuilds it on the last URL.
+        _rendererGone = true;
+        if (!_surfaceLost.isClosed) {
+          _surfaceLost.add(null);
+        }
       },
       onProgressChanged: (controller, progress) {
         unawaited(
@@ -186,16 +214,6 @@ class _InAppSession extends MorphWebViewSession {
         unawaited(_emitNav(controller, null, title: title));
       },
     );
-    _navSub = _client.navigation.listen((event) {
-      if (event.$1 == viewId) {
-        _navController.add(event.$2);
-      }
-    });
-    _pageSub = _client.pageMessages.listen((event) {
-      if (event.$1 == viewId) {
-        _pageController.add(event.$2);
-      }
-    });
   }
 
   final int viewId;
@@ -208,7 +226,11 @@ class _InAppSession extends MorphWebViewSession {
   final MorphControlBindings _bindings;
   final Future<void> Function() _onDispose;
   final WebViewEnvironment? webViewEnvironment;
-  late final InAppWebView _view;
+  late InAppWebView _view;
+  final _generation = ValueNotifier<int>(0);
+  String? _lastUrl;
+  bool _rendererGone = false;
+  final _surfaceLost = StreamController<void>.broadcast();
   InAppWebViewController? _controller;
   final _pending = <MorphControlCommand>[];
   final _navController = StreamController<MorphNavigationEvent>.broadcast();
@@ -219,8 +241,104 @@ class _InAppSession extends MorphWebViewSession {
   @override
   int? get textureId => null;
 
+  /// Stable wrapper so the shell never sees the widget change; a rebuild swaps
+  /// the keyed [InAppWebView] inside it for a fresh native view.
   @override
-  Widget get platformView => _view;
+  late final Widget platformView = ValueListenableBuilder<int>(
+    valueListenable: _generation,
+    builder: (context, generation, _) => _view,
+  );
+
+  void _rememberUrl(WebUri? url) {
+    final value = url?.toString() ?? '';
+    if (value.isNotEmpty && value != 'about:blank') {
+      _lastUrl = value;
+    }
+  }
+
+  @override
+  Stream<void> get surfaceLost => _surfaceLost.stream;
+
+  @override
+  Future<void> repaintSurface() async {
+    final controller = _controller;
+    if (controller == null || _rendererGone) {
+      return;
+    }
+    try {
+      await controller
+          .evaluateJavascript(source: morphSurfaceRepaintScript)
+          .timeout(const Duration(seconds: 2));
+    } catch (_) {
+      // A page that is still navigating cannot run script; nothing to nudge.
+    }
+  }
+
+  @override
+  Future<MorphSurfaceVerdict> checkSurface() async {
+    if (_rendererGone) {
+      return MorphSurfaceVerdict.rendererGone;
+    }
+    final controller = _controller;
+    if (controller == null) {
+      return MorphSurfaceVerdict.unknown;
+    }
+    try {
+      final probe = MorphSurfaceProbe.tryParse(
+        await controller
+            .evaluateJavascript(source: morphSurfaceProbeScript)
+            .timeout(const Duration(seconds: 2)),
+      );
+      if (probe == null || !probe.hasVisibleContent) {
+        return MorphSurfaceVerdict.unknown;
+      }
+      final png = await controller
+          .takeScreenshot(
+            screenshotConfiguration: ScreenshotConfiguration(
+              snapshotWidth: 72,
+              compressFormat: CompressFormat.PNG,
+            ),
+          )
+          .timeout(const Duration(seconds: 3));
+      return morphClassifySurface(
+        probe: probe,
+        frameIsFlat: png == null ? null : await _frameIsFlat(png),
+      );
+    } catch (_) {
+      return MorphSurfaceVerdict.unknown;
+    }
+  }
+
+  static Future<bool?> _frameIsFlat(Uint8List png) async {
+    final codec = await ui.instantiateImageCodec(png);
+    try {
+      final frame = await codec.getNextFrame();
+      final image = frame.image;
+      try {
+        final data = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+        return data == null
+            ? null
+            : morphFrameIsFlat(data.buffer.asUint8List());
+      } finally {
+        image.dispose();
+      }
+    } finally {
+      codec.dispose();
+    }
+  }
+
+  @override
+  Future<bool> rebuildSurface() async {
+    // Commands wait for the new native view; the old one is disposed when
+    // its keyed widget leaves the tree.
+    _controller = null;
+    _rendererGone = false;
+    final url = _lastUrl ?? initialUrl;
+    final next = _generation.value + 1;
+    _view = _buildView(url, generation: next);
+    _generation.value = next;
+    return true;
+  }
 
   @override
   final MorphRenderPathInfo renderPath;
@@ -387,6 +505,8 @@ class _InAppSession extends MorphWebViewSession {
 
   @override
   Future<void> dispose() async {
+    await _surfaceLost.close();
+    _generation.dispose();
     await _navSub?.cancel();
     await _pageSub?.cancel();
     await _navController.close();
