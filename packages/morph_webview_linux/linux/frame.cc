@@ -123,3 +123,20 @@ void morph_swizzle_bgra_to_rgba(const uint8_t* src, uint8_t* dest, size_t pixel_
     dest += 4;
   }
 }
+
+gboolean morph_frame_should_present(gboolean dirty,
+                                    gboolean live,
+                                    gboolean damage_seen,
+                                    gboolean damaged,
+                                    gboolean consumed) {
+  if (!consumed) {
+    return FALSE;
+  }
+  if (dirty) {
+    return TRUE;
+  }
+  if (!live) {
+    return FALSE;
+  }
+  return damage_seen ? damaged : TRUE;
+}

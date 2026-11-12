@@ -12,6 +12,7 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(WEBKIT REQUIRED IMPORTED_TARGET webkit2gtk-4.1)
 pkg_check_modules(EGL REQUIRED IMPORTED_TARGET egl)
 pkg_check_modules(EPOXY REQUIRED IMPORTED_TARGET epoxy)
+pkg_check_modules(GMODULE REQUIRED IMPORTED_TARGET gmodule-2.0)
 
 # Optional WPE path (WPE Platform or WPEBackend-fdo), off by default.
 #
@@ -40,6 +41,7 @@ list(APPEND PLUGIN_SOURCES
   "key_map.cc"
   "session.cc"
   "frame.cc"
+  "media_check.cc"
 )
 
 add_library(${PLUGIN_NAME} SHARED
@@ -104,7 +106,7 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE flutter)
 target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::GTK)
 target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::WEBKIT)
 target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::EGL)
-target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::EPOXY)
+target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::EPOXY PkgConfig::GMODULE)
 target_link_libraries(${PLUGIN_NAME} PRIVATE "${MORPH_CONTROL_LIB}" pthread dl m)
 
 set(morph_webview_linux_bundled_libraries

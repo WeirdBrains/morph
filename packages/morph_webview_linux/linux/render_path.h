@@ -16,9 +16,10 @@ MorphRenderPath morph_detect_render_path(gchar** reason);
 
 const gchar* morph_render_path_name(MorphRenderPath path);
 
-// Disable WebKit's internal DMA-BUF renderer on NVIDIA (it is unreliable
-// with the proprietary driver). Morph can still upload frames through a
-// Flutter GL texture; true DMA-BUF import is the WPE path on Mesa.
+// Whether to disable WebKit's internal DMA-BUF renderer. Only when
+// MORPH_WEBKIT_DISABLE_DMABUF=1: with it disabled WebKitGTK 2.54 crashes on
+// video, so the old NVIDIA default is gone. True DMA-BUF import into Flutter
+// is the WPE path on Mesa.
 gboolean morph_should_disable_webkit_dmabuf_renderer(void);
 
 gboolean morph_has_nvidia_proprietary_driver(void);

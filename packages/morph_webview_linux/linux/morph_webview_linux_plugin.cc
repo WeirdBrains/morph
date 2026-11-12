@@ -6,6 +6,7 @@
 #include "render_path.h"
 #include "session.h"
 #include "frame.h"
+#include "media_check.h"
 
 #include <cairo/cairo.h>
 #include <flutter_linux/flutter_linux.h>
@@ -15,6 +16,7 @@
 #include <epoxy/gl.h>
 
 #include <cstring>
+#include <sys/resource.h>
 #include <map>
 #include <string>
 
@@ -49,6 +51,58 @@ static const char kNoDragShim[] = R"JS(
 window.addEventListener('dragstart', function (event) {
   event.preventDefault();
 }, true);
+)JS";
+
+// WebKitGTK builds ship without WebAuthn (no PublicKeyCredential and no
+// navigator.credentials), and sites that start a passkey step then wait
+// forever (Facebook's "Use face scan, fingerprint or screen lock" spinner).
+// Where the engine lacks the API, answer like a browser whose user dismissed
+// the passkey prompt: reject at once with NotAllowedError and report no
+// platform authenticator, so the site offers its other methods. A WebKit with
+// real WebAuthn keeps its own implementation.
+static const char kNoWebAuthnShim[] = R"JS(
+(function () {
+  if (window.PublicKeyCredential || !window.isSecureContext) {
+    return;
+  }
+  var notAllowed = function () {
+    return Promise.reject(new DOMException(
+      'Passkeys are not available in this browser yet.', 'NotAllowedError'));
+  };
+  function PublicKeyCredential() {
+    throw new TypeError('Illegal constructor');
+  }
+  PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable =
+      function () { return Promise.resolve(false); };
+  PublicKeyCredential.isConditionalMediationAvailable =
+      function () { return Promise.resolve(false); };
+  PublicKeyCredential.getClientCapabilities =
+      function () { return Promise.resolve({}); };
+  Object.defineProperty(window, 'PublicKeyCredential', {
+    value: PublicKeyCredential, configurable: true, writable: true });
+  var existing = navigator.credentials;
+  var credentials = existing || {};
+  var originalGet = existing && existing.get ? existing.get.bind(existing) : null;
+  var originalCreate = existing && existing.create ? existing.create.bind(existing) : null;
+  credentials.get = function (options) {
+    if (options && options.publicKey) { return notAllowed(); }
+    return originalGet ? originalGet(options) : Promise.resolve(null);
+  };
+  credentials.create = function (options) {
+    if (options && options.publicKey) { return notAllowed(); }
+    return originalCreate ? originalCreate(options) : Promise.resolve(null);
+  };
+  if (!credentials.store) {
+    credentials.store = function () { return Promise.resolve(); };
+  }
+  if (!credentials.preventSilentAccess) {
+    credentials.preventSilentAccess = function () { return Promise.resolve(); };
+  }
+  if (!existing) {
+    Object.defineProperty(navigator, 'credentials', {
+      value: credentials, configurable: true });
+  }
+})();
 )JS";
 
 struct MorphView;
@@ -88,6 +142,9 @@ struct _MorphGlTexture {
 
 struct MorphView {
   int64_t view_id;
+  // The view whose window.open made this one; 0 for a tab's own view.
+  int64_t opener_id;
+  gint64 created_us;
   gchar* profile_id;
   MorphWebviewLinuxPlugin* plugin;
   FlTextureRegistrar* textures;
@@ -127,6 +184,15 @@ struct MorphView {
   gchar* cursor_shape;
   MorphImeContext* ime;
   guint pending_move_source;
+  // Restores the page's white default after a navigation's dark backdrop.
+  guint backdrop_timer;
+  // Flutter has drawn the last frame handed to it (copy_pixels/populate ran).
+  // A hidden tab's texture is never drawn, so it stops copying frames.
+  gint frame_consumed;
+  // The offscreen window reported damage at least once, and since the last
+  // present. Live presents then follow damage instead of every tick.
+  gboolean damage_seen;
+  gboolean damaged;
   gchar* pending_phase;
   double pending_x;
   double pending_y;
@@ -178,6 +244,7 @@ static gboolean morph_pixel_buffer_texture_copy_pixels(FlPixelBufferTexture* tex
   *buffer = view->front;
   *width = view->tex_width;
   *height = view->tex_height;
+  g_atomic_int_set(&view->frame_consumed, 1);
   g_mutex_unlock(&view->lock);
   return TRUE;
 }
@@ -509,6 +576,7 @@ static gboolean morph_gl_texture_populate(FlTextureGL* texture,
   *name = self->texture_id;
   *width = view->tex_width;
   *height = view->tex_height;
+  g_atomic_int_set(&view->frame_consumed, 1);
   g_mutex_unlock(&view->lock);
   return TRUE;
 }
@@ -618,14 +686,24 @@ static void apply_snapshot_surface(MorphView* view, cairo_surface_t* surface) {
   }
   g_mutex_lock(&view->lock);
   ensure_buffers(view, static_cast<uint32_t>(width), static_cast<uint32_t>(height));
+  uint8_t* back = view->back;
+  const uint32_t tex_width = view->tex_width;
+  const uint32_t tex_height = view->tex_height;
+  g_mutex_unlock(&view->lock);
+  // Only this (main) thread touches the back buffer, so the copy runs
+  // without the lock: the raster thread's upload of the front buffer no
+  // longer stalls the main loop for a whole frame copy.
   if (view->use_gl) {
-    morph_copy_cairo_to_bgra(surface, view->back, view->tex_width, view->tex_height);
+    morph_copy_cairo_to_bgra(surface, back, tex_width, tex_height);
   } else {
-    morph_copy_cairo_to_rgba(surface, view->back, view->tex_width, view->tex_height);
+    morph_copy_cairo_to_rgba(surface, back, tex_width, tex_height);
   }
-  uint8_t* tmp = view->front;
-  view->front = view->back;
-  view->back = tmp;
+  g_mutex_lock(&view->lock);
+  if (view->back == back && view->tex_width == tex_width && view->tex_height == tex_height) {
+    view->back = view->front;
+    view->front = back;
+  }
+  g_atomic_int_set(&view->frame_consumed, 0);
   g_mutex_unlock(&view->lock);
   if (view->textures != nullptr && view->texture != nullptr) {
     fl_texture_registrar_mark_texture_frame_available(view->textures, FL_TEXTURE(view->texture));
@@ -779,6 +857,13 @@ static gboolean on_web_view_draw(GtkWidget*, cairo_t*, gpointer user_data) {
   return FALSE;
 }
 
+static gboolean on_offscreen_damage(GtkWidget*, GdkEventExpose*, gpointer user_data) {
+  MorphView* view = static_cast<MorphView*>(user_data);
+  view->damage_seen = TRUE;
+  view->damaged = TRUE;
+  return FALSE;
+}
+
 static gboolean on_frame_tick(GtkWidget*, GdkFrameClock*, gpointer user_data) {
   MorphView* view = static_cast<MorphView*>(user_data);
   if (view->web_view == nullptr) {
@@ -792,6 +877,12 @@ static gboolean on_frame_tick(GtkWidget*, GdkFrameClock*, gpointer user_data) {
   if (!view->frame_dirty && !view->live_present) {
     return G_SOURCE_CONTINUE;
   }
+  if (!morph_frame_should_present(view->frame_dirty, view->live_present, view->damage_seen,
+                                  view->damaged,
+                                  g_atomic_int_get(&view->frame_consumed) != 0)) {
+    return G_SOURCE_CONTINUE;
+  }
+  view->damaged = FALSE;
   if (try_present_offscreen(view)) {
     view->frame_dirty = FALSE;
     view->live_present = TRUE;
@@ -804,9 +895,161 @@ static gboolean on_frame_tick(GtkWidget*, GdkFrameClock*, gpointer user_data) {
   return G_SOURCE_CONTINUE;
 }
 
+// MORPH_WEBVIEW_DEBUG=1 logs navigation decisions, load events and failures
+// with timings. Only scheme and host are printed, never paths or queries.
+static gboolean morph_debug_enabled() {
+  static int enabled = -1;
+  if (enabled < 0) {
+    const gchar* value = g_getenv("MORPH_WEBVIEW_DEBUG");
+    enabled = value != nullptr && value[0] != '\0' && g_strcmp0(value, "0") != 0;
+  }
+  return enabled;
+}
+
+static gchar* morph_debug_origin(const gchar* uri) {
+  if (uri == nullptr) {
+    return g_strdup("(none)");
+  }
+  g_autoptr(GUri) parsed = g_uri_parse(uri, G_URI_FLAGS_NONE, nullptr);
+  if (parsed == nullptr) {
+    return g_strdup("(unparsed)");
+  }
+  return g_strdup_printf("%s://%s", g_uri_get_scheme(parsed),
+                         g_uri_get_host(parsed) != nullptr ? g_uri_get_host(parsed) : "");
+}
+
+static void morph_debug(MorphView* view, const gchar* what, const gchar* uri, const gchar* extra) {
+  if (!morph_debug_enabled()) {
+    return;
+  }
+  g_autofree gchar* origin = morph_debug_origin(uri);
+  g_message("morph_webview[%" G_GINT64_FORMAT "] +%.3fs %s %s %s", view->view_id,
+            (g_get_monotonic_time() - view->created_us) / 1e6, what, origin,
+            extra != nullptr ? extra : "");
+}
+
+static gboolean on_decide_policy(WebKitWebView* web_view,
+                                 WebKitPolicyDecision* decision,
+                                 WebKitPolicyDecisionType type,
+                                 gpointer user_data) {
+  MorphView* view = static_cast<MorphView*>(user_data);
+  if (!morph_debug_enabled()) {
+    return FALSE;
+  }
+  if (type == WEBKIT_POLICY_DECISION_TYPE_RESPONSE) {
+    WebKitResponsePolicyDecision* response = WEBKIT_RESPONSE_POLICY_DECISION(decision);
+    WebKitURIResponse* res = webkit_response_policy_decision_get_response(response);
+    g_autofree gchar* extra = g_strdup_printf(
+        "status=%u mime=%s supported=%d main=%d", webkit_uri_response_get_status_code(res),
+        webkit_uri_response_get_mime_type(res),
+        webkit_response_policy_decision_is_mime_type_supported(response),
+        webkit_response_policy_decision_is_main_frame_main_resource(response));
+    morph_debug(view, "policy:response", webkit_uri_response_get_uri(res), extra);
+  } else {
+    WebKitNavigationPolicyDecision* nav = WEBKIT_NAVIGATION_POLICY_DECISION(decision);
+    WebKitNavigationAction* action = webkit_navigation_policy_decision_get_navigation_action(nav);
+    WebKitURIRequest* request = webkit_navigation_action_get_request(action);
+    g_autofree gchar* extra =
+        g_strdup_printf("kind=%d redirect=%d user=%d", webkit_navigation_action_get_navigation_type(action),
+                        webkit_navigation_action_is_redirect(action),
+                        webkit_navigation_action_is_user_gesture(action));
+    morph_debug(view,
+                type == WEBKIT_POLICY_DECISION_TYPE_NEW_WINDOW_ACTION ? "policy:new-window"
+                                                                       : "policy:navigation",
+                webkit_uri_request_get_uri(request), extra);
+  }
+  (void)web_view;
+  return FALSE;  // WebKit's default decision.
+}
+
+static void emit_load_error(MorphView* view, const gchar* uri, const GError* error, gboolean tls) {
+  FlValue* event = fl_value_new_map();
+  fl_value_set_string_take(event, "type", fl_value_new_string("load-error"));
+  fl_value_set_string_take(event, "url", fl_value_new_string(uri != nullptr ? uri : ""));
+  fl_value_set_string_take(event, "domain", fl_value_new_string(g_quark_to_string(error->domain)));
+  fl_value_set_string_take(event, "code", fl_value_new_int(error->code));
+  fl_value_set_string_take(event, "message",
+                           fl_value_new_string(error->message != nullptr ? error->message : ""));
+  fl_value_set_string_take(event, "tls", fl_value_new_bool(tls));
+  emit_event(view, event);
+}
+
+static gboolean on_load_failed(WebKitWebView* web_view,
+                               WebKitLoadEvent load_event,
+                               gchar* failing_uri,
+                               GError* error,
+                               gpointer user_data) {
+  (void)web_view;
+  MorphView* view = static_cast<MorphView*>(user_data);
+  g_autofree gchar* extra =
+      g_strdup_printf("event=%d domain=%s code=%d message=%s", load_event,
+                      g_quark_to_string(error->domain), error->code, error->message);
+  morph_debug(view, "load-failed", failing_uri, extra);
+  if (!morph_session_load_error_shown(g_quark_to_string(error->domain), error->code)) {
+    // A cancelled load (a newer navigation replaced it) or a response turned
+    // into a download: nothing to show, keep the current page.
+    return FALSE;
+  }
+  emit_load_error(view, failing_uri, error, FALSE);
+  return TRUE;  // Dart shows Morph's error page, not WebKit's plain text.
+}
+
+static gboolean on_load_failed_tls(WebKitWebView* web_view,
+                                   gchar* failing_uri,
+                                   GTlsCertificate* certificate,
+                                   GTlsCertificateFlags errors,
+                                   gpointer user_data) {
+  (void)web_view;
+  (void)certificate;
+  MorphView* view = static_cast<MorphView*>(user_data);
+  g_autofree gchar* extra = g_strdup_printf("tls-flags=0x%x", errors);
+  morph_debug(view, "load-failed-tls", failing_uri, extra);
+  g_autoptr(GError) error = g_error_new(G_TLS_ERROR, G_TLS_ERROR_BAD_CERTIFICATE, "%s",
+                                        morph_session_tls_reason(errors));
+  emit_load_error(view, failing_uri, error, TRUE);
+  return TRUE;
+}
+
+// Between a navigation starting and the new page painting, WebKit shows the
+// view's background: white by default, a flash on a dark shell (reload, the
+// Google sign-in hop back to YouTube). Show Morph's dark backdrop instead and
+// return to the web's white default shortly after commit, so pages that set
+// no background of their own still render as authors expect.
+static const GdkRGBA kMorphBackdrop = {0.059, 0.063, 0.078, 1.0};
+static const GdkRGBA kWebDefaultBackground = {1.0, 1.0, 1.0, 1.0};
+
+static gboolean restore_backdrop(gpointer user_data) {
+  MorphView* view = static_cast<MorphView*>(user_data);
+  view->backdrop_timer = 0;
+  webkit_web_view_set_background_color(view->web_view, &kWebDefaultBackground);
+  return G_SOURCE_REMOVE;
+}
+
+static void update_backdrop(MorphView* view, WebKitLoadEvent load_event) {
+  if (load_event == WEBKIT_LOAD_STARTED) {
+    if (view->backdrop_timer != 0) {
+      g_source_remove(view->backdrop_timer);
+      view->backdrop_timer = 0;
+    }
+    webkit_web_view_set_background_color(view->web_view, &kMorphBackdrop);
+  } else if (load_event == WEBKIT_LOAD_COMMITTED && view->backdrop_timer == 0) {
+    view->backdrop_timer = g_timeout_add(MORPH_SESSION_BACKDROP_MS, restore_backdrop, view);
+  } else if (load_event == WEBKIT_LOAD_FINISHED) {
+    if (view->backdrop_timer != 0) {
+      g_source_remove(view->backdrop_timer);
+    }
+    restore_backdrop(view);
+  }
+}
+
 static void on_load_changed(WebKitWebView* web_view, WebKitLoadEvent load_event, gpointer user_data) {
   MorphView* view = static_cast<MorphView*>(user_data);
-  (void)web_view;
+  update_backdrop(view, load_event);
+  if (morph_debug_enabled()) {
+    static const gchar* names[] = {"started", "redirected", "committed", "finished"};
+    morph_debug(view, "load", webkit_web_view_get_uri(web_view),
+                load_event <= WEBKIT_LOAD_FINISHED ? names[load_event] : "?");
+  }
   emit_navigation(view);
   if (load_event == WEBKIT_LOAD_FINISHED) {
     view->loaded_once = TRUE;
@@ -828,6 +1071,11 @@ static void emit_renderer(MorphView* view, const gchar* fault) {
   fl_value_set_string_take(event, "type", fl_value_new_string("renderer"));
   fl_value_set_string_take(event, "fault",
                            fault != nullptr ? fl_value_new_string(fault) : fl_value_new_null());
+  if (fault != nullptr && g_strcmp0(fault, "unresponsive") != 0) {
+    g_autofree gchar* hint = morph_media_crash_hint(morph_media_missing_formats_here(),
+                                                   g_getenv("WEBKIT_DISABLE_DMABUF_RENDERER"));
+    fl_value_set_string_take(event, "detail", fl_value_new_string(hint));
+  }
   emit_event(view, event);
 }
 
@@ -931,6 +1179,10 @@ static gboolean destroy_view_idle(gpointer user_data) {
 static gboolean on_web_view_close(WebKitWebView* web_view, gpointer user_data) {
   (void)web_view;
   MorphView* view = static_cast<MorphView*>(user_data);
+  // window.close(): tell Dart first so the popup layer goes away with it.
+  FlValue* closed = fl_value_new_map();
+  fl_value_set_string_take(closed, "type", fl_value_new_string("closed"));
+  emit_event(view, closed);
   if (view->plugin != nullptr && view->plugin->views != nullptr) {
     view->plugin->views->erase(view->view_id);
   }
@@ -942,6 +1194,16 @@ static GtkWidget* on_web_view_create(WebKitWebView* web_view,
                                      WebKitNavigationAction* navigation_action,
                                      gpointer user_data) {
   MorphView* parent = static_cast<MorphView*>(user_data);
+  int open = 0;
+  for (const auto& entry : *parent->plugin->views) {
+    if (entry.second->opener_id == parent->view_id) {
+      open++;
+    }
+  }
+  if (!morph_session_popup_allowed(open)) {
+    // Same cap as Android: a page cannot stack popups without end.
+    return nullptr;
+  }
   MorphView* popup = morph_view_create(parent->plugin, nullptr, parent->logical_width,
                                        parent->logical_height, parent->dpr, nullptr, web_view,
                                        parent->profile_id);
@@ -954,7 +1216,13 @@ static GtkWidget* on_web_view_create(WebKitWebView* web_view,
       uri = webkit_uri_request_get_uri(request);
     }
   }
+  popup->opener_id = parent->view_id;
   fl_value_set_string_take(event, "url", fl_value_new_string(uri != nullptr ? uri : ""));
+  fl_value_set_string_take(event, "openerViewId", fl_value_new_int(parent->view_id));
+  fl_value_set_string_take(event, "textureId",
+                           fl_value_new_int(fl_texture_get_id(FL_TEXTURE(popup->texture))));
+  fl_value_set_string_take(event, "renderPath", fl_value_new_string(popup->render_path));
+  fl_value_set_string_take(event, "renderReason", fl_value_new_string(popup->render_reason));
   emit_event(popup, fl_value_ref(event));
   return GTK_WIDGET(popup->web_view);
 }
@@ -977,6 +1245,7 @@ static MorphView* morph_view_create(MorphWebviewLinuxPlugin* plugin,
   view->plugin = plugin;
   view->textures = plugin->textures;
   view->view_id = plugin->next_view_id++;
+  view->created_us = g_get_monotonic_time();
   view->profile_id = g_strdup(profile_id != nullptr && profile_id[0] != '\0' ? profile_id : "default");
   gchar* reason = nullptr;
   MorphRenderPath path = morph_detect_render_path(&reason);
@@ -1001,6 +1270,7 @@ static MorphView* morph_view_create(MorphWebviewLinuxPlugin* plugin,
   webkit_user_content_manager_register_script_message_handler(manager, "morphRust");
   add_user_script(manager, kMorphRustShim);
   add_user_script_to(manager, kNoDragShim, WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES);
+  add_user_script_to(manager, kNoWebAuthnShim, WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES);
   add_user_script(manager, user_script);
 
   view->offscreen = gtk_offscreen_window_new();
@@ -1029,12 +1299,18 @@ static MorphView* morph_view_create(MorphWebviewLinuxPlugin* plugin,
   view->live_present = view->use_gl ? TRUE : FALSE;
   view->tick_id = gtk_widget_add_tick_callback(view->offscreen, on_frame_tick, view, nullptr);
   g_signal_connect(view->web_view, "draw", G_CALLBACK(on_web_view_draw), view);
+  g_signal_connect(view->offscreen, "damage-event", G_CALLBACK(on_offscreen_damage), view);
+  view->frame_consumed = 1;
 
   view->ime = morph_ime_context_new();
   webkit_web_view_set_input_method_context(view->web_view, WEBKIT_INPUT_METHOD_CONTEXT(view->ime));
   view->cursor_shape = g_strdup("default");
 
   g_signal_connect(view->web_view, "load-changed", G_CALLBACK(on_load_changed), view);
+  g_signal_connect(view->web_view, "load-failed", G_CALLBACK(on_load_failed), view);
+  g_signal_connect(view->web_view, "load-failed-with-tls-errors", G_CALLBACK(on_load_failed_tls),
+                   view);
+  g_signal_connect(view->web_view, "decide-policy", G_CALLBACK(on_decide_policy), view);
   g_signal_connect(view->web_view, "notify::title", G_CALLBACK(on_notify_nav), view);
   g_signal_connect(view->web_view, "notify::uri", G_CALLBACK(on_notify_nav), view);
   g_signal_connect(view->web_view, "notify::estimated-load-progress", G_CALLBACK(on_notify_nav),
@@ -1063,6 +1339,10 @@ static void morph_view_destroy(MorphView* view) {
   if (view->snapshot_timer != 0) {
     g_source_remove(view->snapshot_timer);
     view->snapshot_timer = 0;
+  }
+  if (view->backdrop_timer != 0) {
+    g_source_remove(view->backdrop_timer);
+    view->backdrop_timer = 0;
   }
   if (view->tick_id != 0 && view->offscreen != nullptr) {
     gtk_widget_remove_tick_callback(view->offscreen, view->tick_id);
@@ -1998,7 +2278,23 @@ static void morph_webview_linux_plugin_init(MorphWebviewLinuxPlugin* self) {
   self->control_endpoint = nullptr;
 }
 
+// A crashed web process is only reported once its core dump is written,
+// which took 3-9 s for a 6 GB YouTube renderer. Web processes inherit this
+// limit, so crash pages show at once. MORPH_KEEP_CORE_DUMPS=1 keeps them.
+static void morph_limit_core_dumps() {
+  const gchar* keep = g_getenv("MORPH_KEEP_CORE_DUMPS");
+  if (keep != nullptr && g_strcmp0(keep, "1") == 0) {
+    return;
+  }
+  struct rlimit limit;
+  if (getrlimit(RLIMIT_CORE, &limit) == 0) {
+    limit.rlim_cur = 0;
+    setrlimit(RLIMIT_CORE, &limit);
+  }
+}
+
 void morph_webview_linux_plugin_register_with_registrar(FlPluginRegistrar* registrar) {
+  morph_limit_core_dumps();
   MorphWebviewLinuxPlugin* plugin = MORPH_WEBVIEW_LINUX_PLUGIN(
       g_object_new(morph_webview_linux_plugin_get_type(), nullptr));
   plugin->registrar = registrar;
