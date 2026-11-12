@@ -168,6 +168,32 @@ backend per platform.
     `setDataDirectorySuffix` is not a fallback: it is once per process. On a
     WebView without `MULTI_PROFILE`, non-default profiles show an
     update-your-WebView page and never load sites, rather than share storage.
+- _(new 2026-11-12)_ **Tab crash isolation.** A tab's renderer crashing,
+  being killed or hanging must never take down the shell or other tabs; the
+  tab shows its own "page crashed" panel (Reload, plus Wait for a hang). The
+  session reports `MorphRendererEvent`s, the controller keeps a per-tab
+  `rendererFault` and stops auto-healing a faulted tab (no crash loops), and
+  `recoverFromFault` ends a hung renderer first, then brings the page back.
+  What each engine gives us:
+  - **Linux (webkit2gtk):** WebKit already runs every view in its own web
+    process (no shared process model to opt out of). We forward
+    `web-process-terminated` and `is-web-process-responsive` per view and use
+    `webkit_web_view_terminate_web_process`. Checked in CI by aborting one
+    tab's real web process in `session_check`.
+  - **macOS/iOS (WKWebView):** one web content process per view already;
+    `WKProcessPool` per tab changes nothing on current systems.
+    `webContentProcessDidTerminate` marks only that tab.
+  - **Android (system WebView):** an app gets one renderer process for its
+    WebViews, so a renderer crash or terminate reaches every tab at once.
+    `onRenderProcessGone` keeps the app alive, and the shell survives; the
+    visible tab shows the panel and background tabs reload when opened.
+    Real per-tab processes would need each tab in its own Android process,
+    which a Flutter platform view cannot do. Hangs come from
+    `onRenderProcessUnresponsive`; Reload answers TERMINATE.
+  - **Windows (WebView2):** Chromium already isolates sites per process.
+    flutter_inappwebview 6.1 exposes no `ProcessFailed` event, so Morph shows
+    WebView2's own error page there for now; wiring `ProcessFailed` needs a
+    plugin patch or a Morph-owned Windows backend.
 - **Page bridge:** a script injected at document start (`morph-bridge.js`) exposes a
   narrow message channel. DOM queries, injection and page events go through it as JSON.
   Rust never touches the DOM. The bridge contract is identical on every backend and is
