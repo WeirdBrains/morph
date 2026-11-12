@@ -74,6 +74,63 @@ static void check_copies() {
   cairo_surface_destroy(surface);
 }
 
+static void check_gl_upload_choice() {
+  // Flutter's Linux embedder hands populate() an OpenGL ES context. GLES must
+  // never get the desktop GL_RGBA8 + GL_BGRA pairing (GL_INVALID_OPERATION
+  // on NVIDIA, which left the texture black).
+  expect_true(morph_choose_gl_upload(TRUE, FALSE) == MORPH_GL_UPLOAD_BGRA_DESKTOP,
+              "desktop GL should upload BGRA into RGBA8");
+  expect_true(morph_choose_gl_upload(FALSE, TRUE) == MORPH_GL_UPLOAD_BGRA_EXT,
+              "GLES with BGRA8888 should use GL_BGRA_EXT for both formats");
+  expect_true(morph_choose_gl_upload(FALSE, FALSE) == MORPH_GL_UPLOAD_RGBA_SWIZZLE,
+              "GLES without BGRA8888 should swizzle to RGBA");
+  MorphGlUploadMode next = MORPH_GL_UPLOAD_BGRA_DESKTOP;
+  expect_true(morph_next_gl_upload(MORPH_GL_UPLOAD_BGRA_EXT, &next) &&
+                  next == MORPH_GL_UPLOAD_RGBA_SWIZZLE,
+              "a failed BGRA upload should fall back to the RGBA swizzle");
+  expect_true(morph_next_gl_upload(MORPH_GL_UPLOAD_BGRA_DESKTOP, &next) &&
+                  next == MORPH_GL_UPLOAD_RGBA_SWIZZLE,
+              "a failed desktop upload should fall back to the RGBA swizzle");
+  expect_true(!morph_next_gl_upload(MORPH_GL_UPLOAD_RGBA_SWIZZLE, &next),
+              "the RGBA swizzle is the last fallback");
+}
+
+static void check_blank_and_readback_helpers() {
+  const uint32_t width = 200;
+  const uint32_t height = 100;
+  std::vector<uint8_t> frame(static_cast<size_t>(width) * height * 4, 0);
+  expect_true(morph_frame_is_blank(frame.data(), width, height, width * 4),
+              "an all-zero frame is blank");
+  for (size_t i = 3; i < frame.size(); i += 4) {
+    frame[i] = 255;
+  }
+  expect_true(morph_frame_is_blank(frame.data(), width, height, width * 4),
+              "an opaque black frame is blank");
+  // Content in the middle of the page is found by the sample grid.
+  for (uint32_t y = 40; y < 60; y++) {
+    for (uint32_t x = 80; x < 120; x++) {
+      frame[(static_cast<size_t>(y) * width + x) * 4 + 1] = 200;
+    }
+  }
+  expect_true(!morph_frame_is_blank(frame.data(), width, height, width * 4),
+              "a frame with a coloured block is not blank");
+  expect_true(morph_frame_is_blank(nullptr, width, height, width * 4),
+              "a missing frame counts as blank");
+
+  const uint8_t bgra[4] = {0x10, 0x80, 0xF0, 0xFF};
+  uint8_t rgba[4] = {0, 0, 0, 0};
+  morph_swizzle_bgra_to_rgba(bgra, rgba, 1);
+  expect_true(rgba[0] == 0xF0 && rgba[1] == 0x80 && rgba[2] == 0x10 && rgba[3] == 0xFF,
+              "BGRA to RGBA swizzle swaps R and B");
+  expect_true(morph_rgba_matches_bgra(rgba, bgra, 0), "a correct read-back matches its source");
+  const uint8_t black[4] = {0, 0, 0, 0};
+  expect_true(!morph_rgba_matches_bgra(black, bgra, 2),
+              "an empty read-back does not match coloured source");
+  const uint8_t unswizzled[4] = {0x10, 0x80, 0xF0, 0xFF};
+  expect_true(!morph_rgba_matches_bgra(unswizzled, bgra, 2),
+              "a read-back with R and B swapped does not match");
+}
+
 static double now_ms() {
   return static_cast<double>(g_get_monotonic_time()) / 1000.0;
 }
@@ -222,6 +279,8 @@ int main(int argc, char** argv) {
     g_setenv("MORPH_HOME", temp_home, TRUE);
   }
   check_copies();
+  check_gl_upload_choice();
+  check_blank_and_readback_helpers();
   bench_copies();
   bench_snapshot_vs_offscreen();
   if (temp_home != nullptr) {
