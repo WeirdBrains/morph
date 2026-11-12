@@ -76,9 +76,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so a page cannot swallow new-tab, close-tab, or the other chrome keys.
 - When desktop tabs overflow the strip or a left/right list, Morph keeps
   the tabs that fit at their minimum size and puts the rest in a dropdown
-  after the last visible tab, before the + group. Choosing an entry
-  activates that tab and brings it into the visible set. Each entry has
-  a close control.
+  after the last visible tab, before the + group. Horizontal tabs share
+  the strip evenly between 50 and 150 px and only move into the dropdown
+  once every visible tab is at 50 px; the title hides first, then the
+  close control (it stays on the active tab or on hover) so the favicon
+  can stay centered. Side lists still use the sidebar width. Choosing an
+  entry activates that tab and brings it into the visible set. Each
+  entry has a close control.
+- Favicon, title, and close sit on the vertical center of each desktop
+  tab's visible body, including flipped bottom tabs, left/right list
+  tiles, and overflow dropdown entries.
+- The selected desktop tab is marked with a 2 px Glitch cyan (#00E5FF)
+  border and a short magenta (#FF2BD6) offset: the outer top edge (and
+  corners) of top tabs, the outer bottom edge of flipped bottom tabs,
+  and the inner edge of a side list (right edge of the left rail, left
+  edge of the right rail). Inactive tabs have no border.
 - The expanded left and right tab lists have a draggable inner edge
   (resize cursor, 160–480 px, and never wider than the window).
   Double-click resets to 220 px. The width is stored in settings.json
