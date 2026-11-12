@@ -1029,8 +1029,9 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
     MorphIdentity? identity;
     try {
       identity = await widget.api.profileIdentity(profileId, home: _home);
-    } catch (_) {
+    } catch (e) {
       // No readable profile store yet: nothing to onboard into.
+      debugPrint('Morph: identity check for $profileId failed: $e');
       return;
     }
     if (!mounted || profileId != _profileId) {
