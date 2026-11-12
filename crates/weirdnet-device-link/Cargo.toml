@@ -1,0 +1,22 @@
+[package]
+name = "weirdnet-device-link"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository = "https://github.com/WeirdBrains/weirdnet-device-link"
+description = "weirdnet-device-link/v1: move a Weirdnet user identity to another device over a QR offer, SAS check and sealed transfer."
+# Built inside Morph until WeirdBrains/weirdnet-device-link exists; it moves
+# there unchanged and is published from that repo.
+publish = false
+
+[dependencies]
+base64 = "0.22"
+cbor4ii = { version = "1.2", features = ["serde1", "use_std"] }
+serde = { version = "1", features = ["derive"] }
+sha2.workspace = true
+thiserror.workspace = true
+weirdnet-keys.workspace = true
+weirdnet-net.workspace = true
+zeroize.workspace = true

@@ -4981,6 +4981,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "weirdnet-device-link"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "cbor4ii",
+ "serde",
+ "sha2 0.10.9",
+ "thiserror 2.0.21",
+ "weirdnet-keys",
+ "weirdnet-net",
+ "zeroize",
+]
+
+[[package]]
 name = "weirdnet-keys"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
