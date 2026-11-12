@@ -18,8 +18,27 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 ///
 /// [desktopSite] is null at creation so each platform keeps its recommended
 /// content mode; the desktop-site toggle passes true or false.
-InAppWebViewSettings morphInAppWebViewSettings({bool? desktopSite}) {
+///
+/// Scrolling (Android): a visible tab pre-rasters the page beyond the
+/// viewport (`setOffscreenPreRaster`), so a fast fling over a long page lands
+/// on painted tiles instead of blank ones that fill in a frame or more late,
+/// and asks for an IMPORTANT renderer that is never waived. With texture-layer
+/// composition the WebView always counts as attached and visible to Android,
+/// so the system cannot lower a hidden tab on its own: [idle] (a tab hidden
+/// for a while) drops the pre-raster and waives its renderer priority so its
+/// memory can go. The shell pairs idle with `WebView.onPause`.
+InAppWebViewSettings morphInAppWebViewSettings({
+  bool? desktopSite,
+  bool idle = false,
+}) {
   return InAppWebViewSettings(
+    offscreenPreRaster: !idle,
+    rendererPriorityPolicy: RendererPriorityPolicy(
+      rendererRequestedPriority: idle
+          ? RendererPriority.RENDERER_PRIORITY_WAIVED
+          : RendererPriority.RENDERER_PRIORITY_IMPORTANT,
+      waivedWhenNotVisible: idle,
+    ),
     javaScriptEnabled: true,
     isInspectable: true,
     mediaPlaybackRequiresUserGesture: false,
