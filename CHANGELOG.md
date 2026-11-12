@@ -93,6 +93,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   DMA-BUF import remains the WPE path on Mesa when WPE is built.
   Override with `MORPH_WEBVIEW_RENDER=gl|snapshot|dmabuf`. Log fps and
   input lag with `MORPH_WEBVIEW_STATS=1`.
+- Fix Linux web views rendering black on NVIDIA. Flutter populates GL
+  textures in an OpenGL ES context, which rejects the `GL_RGBA8` + `GL_BGRA`
+  upload (Mesa tolerated it). Uploads now use `GL_BGRA_EXT` on GLES (or an
+  RGBA swizzle), and a self-check reads the first frames back: a GL error or
+  mismatch drops to the RGBA upload, and an offscreen surface that stays
+  blank while a WebKit snapshot has content switches the view to snapshots.
+  Fallbacks are logged; `MORPH_WEBVIEW_STATS=1` adds read-back stats.
 - Linux web views turn on MediaSource, encrypted media, WebGL, and always-on
   hardware acceleration so sites can play video. YouTube and Instagram still
   need the usual GStreamer codec plugins (`gst-plugins-good`,
