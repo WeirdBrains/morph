@@ -768,6 +768,91 @@ void main() {
     }
   });
 
+  testWidgets('a crashed tab shows its own crash state and reloads', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    final view = tester.view;
+    view.physicalSize = const Size(1280, 800);
+    view.devicePixelRatio = 1.0;
+    addTearDown(view.reset);
+    try {
+      await tester.pumpWidget(
+        MorphApp(
+          api: FakeMorphApi(),
+          home: '/tmp/morph-does-not-exist',
+          subscribeToTicks: false,
+          loadPageBridgeAsset: false,
+        ),
+      );
+      await _pumpUntilIdentity(tester);
+      await tester.enterText(
+        find.byKey(const Key('address-bar')),
+        'one.example',
+      );
+      await tester.tap(find.byKey(const Key('address-go')));
+      await tester.pump();
+      await _pumpUntilWebViewAttached(tester, fakeWebView);
+      final first = fakeWebView.lastSession!;
+
+      await tester.tap(find.byKey(const Key('tab-new')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('address-bar')),
+        'two.example',
+      );
+      await tester.tap(find.byKey(const Key('address-go')));
+      await tester.pump();
+      await tester.pumpAndSettle();
+      expect(fakeWebView.sessions, hasLength(2));
+      final second = fakeWebView.sessions.last;
+
+      // The visible tab's renderer crashes: only it shows the crash state.
+      second.emitRenderer(MorphRendererFault.crashed);
+      await tester.pump();
+      await tester.pump();
+      expect(find.byKey(const Key('page-crashed')), findsOneWidget);
+      expect(find.text('This page crashed'), findsOneWidget);
+      // The shell keeps working: switch to the other tab, which is fine.
+      await tester.tap(find.byKey(const Key('tab-1')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('page-crashed')), findsNothing);
+      await tester.tap(find.byKey(const Key('tab-2')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('page-crashed')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('page-crashed-reload')));
+      await tester.pump();
+      await tester.pump();
+      expect(second.rendererRecoveries, 1);
+      expect(first.rendererRecoveries, 0);
+      expect(find.byKey(const Key('page-crashed')), findsNothing);
+
+      // A hang offers Wait; waiting hides it, answering again clears it.
+      second.emitRenderer(MorphRendererFault.unresponsive);
+      await tester.pump();
+      await tester.pump();
+      expect(find.text("This page isn't responding"), findsOneWidget);
+      await tester.tap(find.byKey(const Key('page-crashed-wait')));
+      await tester.pump();
+      expect(find.byKey(const Key('page-crashed')), findsNothing);
+      second.emitRenderer(null);
+      await tester.pump();
+
+      // A background tab whose renderer died reloads when it is shown.
+      first.emitRenderer(MorphRendererFault.killed);
+      await tester.pump();
+      await tester.pump();
+      expect(find.byKey(const Key('page-crashed')), findsNothing);
+      await tester.tap(find.byKey(const Key('tab-1')));
+      await tester.pumpAndSettle();
+      expect(first.rendererRecoveries, 1);
+      expect(find.byKey(const Key('page-crashed')), findsNothing);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
   testWidgets(
     'desktop profile button sits at the right of the nav row under the window buttons',
     (tester) async {
