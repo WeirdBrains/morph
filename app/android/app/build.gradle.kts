@@ -42,6 +42,14 @@ android {
         versionName = flutter.versionName
     }
 
+    // Native libraries are compressed inside the APK (and extracted on
+    // install). Stored uncompressed they were 18 MB of a 25 MB budget.
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+
     buildTypes {
         release {
             // TODO: Add your own signing config for the release build.
