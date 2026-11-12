@@ -1,3 +1,4 @@
+pub mod control;
 pub mod events;
 pub mod identity;
 pub mod info;
