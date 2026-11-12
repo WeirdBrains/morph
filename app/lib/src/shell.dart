@@ -16,6 +16,7 @@ import 'widgets/address_sheet.dart';
 import 'widgets/brand.dart';
 import 'widgets/desktop_chrome.dart';
 import 'widgets/mobile_gestures.dart';
+import 'widgets/profile_menu.dart';
 import 'widgets/start_page.dart';
 import 'widgets/tab_switcher.dart';
 import 'widgets/window_chrome.dart';
@@ -66,6 +67,11 @@ class MorphShellState extends State<MorphShell> {
   final _visited = <int, bool>{};
   MorphTabPosition _tabPosition = MorphTabPosition.top;
   bool _sidebarCollapsed = false;
+  ProfileCatalog _catalog = const ProfileCatalog(
+    current: 'default',
+    profiles: [ProfileInfo(id: 'default', name: 'Default')],
+  );
+  String _profileId = 'default';
   bool _showSwitcher = false;
   final _previews = <int, Uint8List?>{};
   late bool _debugOpen;
@@ -194,6 +200,28 @@ class MorphShellState extends State<MorphShell> {
         }
       } catch (_) {
         // A missing or unreadable preference stays at the defaults.
+      }
+      try {
+        final catalog = await widget.api.listProfiles(home: _home);
+        final snapshot = await widget.api.loadProfileTabs(
+          home: _home,
+          profileId: catalog.current,
+        );
+        if (mounted) {
+          tabs.applySnapshot(snapshot);
+          _catalog = catalog;
+          _profileId = catalog.current;
+          for (final tab in tabs.tabs) {
+            if (tab.url.isNotEmpty && tab.url != 'about:blank') {
+              _visited[tab.id] = true;
+            }
+          }
+          _controllerFor(tabs.activeId);
+          _syncAddressFromActive();
+          setState(() {});
+        }
+      } catch (_) {
+        // A missing catalog leaves the default profile and a start tab.
       }
       if (!mounted) {
         return;
@@ -336,10 +364,12 @@ class MorphShellState extends State<MorphShell> {
     tabs.update(tabs.activeId, url: url);
     setState(() => _visited[tabs.activeId] = true);
     await webView.loadUrl(url);
+    unawaited(_saveCurrentTabs());
   }
 
   @override
   void dispose() {
+    unawaited(_saveCurrentTabs());
     unawaited(_ticks?.cancel());
     for (final sub in _navSubs.values) {
       unawaited(sub.cancel());
@@ -422,6 +452,7 @@ class MorphShellState extends State<MorphShell> {
     address.clear();
     _showSwitcher = false;
     setState(() {});
+    unawaited(_saveCurrentTabs());
   }
 
   void _closeTab(int id) {
@@ -436,6 +467,7 @@ class MorphShellState extends State<MorphShell> {
     _controllerFor(tabs.activeId);
     _syncAddressFromActive();
     setState(() {});
+    unawaited(_saveCurrentTabs());
   }
 
   void _switchTab(int id) {
@@ -471,6 +503,156 @@ class MorphShellState extends State<MorphShell> {
         text: text,
         selection: TextSelection.collapsed(offset: text.length),
       );
+    }
+  }
+
+  Widget _profileButton() {
+    return MorphProfileButton(
+      catalog: _catalog,
+      onSwitch: (id) => unawaited(_switchProfile(id)),
+      onAdd: _addProfile,
+      onRename: _renameProfile,
+      onDelete: _deleteProfile,
+    );
+  }
+
+  MorphProfileSheetSection _profileSheetSection() {
+    return MorphProfileSheetSection(
+      catalog: _catalog,
+      onSwitch: (id) {
+        if (Navigator.of(context).canPop()) {
+          Navigator.of(context).pop();
+        }
+        unawaited(_switchProfile(id));
+      },
+      onAdd: _addProfile,
+      onRename: _renameProfile,
+      onDelete: _deleteProfile,
+    );
+  }
+
+  Future<void> _saveCurrentTabs() async {
+    try {
+      await widget.api.saveProfileTabs(
+        tabs.snapshot(),
+        home: _home,
+        profileId: _profileId,
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _disposeAllViews() async {
+    for (final sub in _navSubs.values) {
+      unawaited(sub.cancel());
+    }
+    _navSubs.clear();
+    for (final sub in _pageSubs.values) {
+      unawaited(sub.cancel());
+    }
+    _pageSubs.clear();
+    for (final controller in _controllers.values) {
+      unawaited(controller.dispose());
+    }
+    _controllers.clear();
+    _navEvents.clear();
+    _visited.clear();
+    _previews.clear();
+  }
+
+  Future<void> _applyCatalog(ProfileCatalog catalog) async {
+    await _disposeAllViews();
+    if (!mounted) {
+      return;
+    }
+    _catalog = catalog;
+    _profileId = catalog.current;
+    try {
+      tabs.applySnapshot(
+        await widget.api.loadProfileTabs(home: _home, profileId: _profileId),
+      );
+    } catch (_) {
+      tabs.applySnapshot(ProfileTabSnapshot.empty);
+    }
+    try {
+      _tabPosition = MorphTabPosition.fromKey(
+        await widget.api.loadTabPosition(home: _home),
+      );
+      _sidebarCollapsed = await widget.api.loadSidebarCollapsed(home: _home);
+    } catch (_) {}
+    for (final tab in tabs.tabs) {
+      if (tab.url.isNotEmpty && tab.url != 'about:blank') {
+        _visited[tab.id] = true;
+      }
+    }
+    _controllerFor(tabs.activeId);
+    _syncAddressFromActive();
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  Future<void> _switchProfile(String id) async {
+    if (id == _profileId) {
+      return;
+    }
+    await _saveCurrentTabs();
+    try {
+      final catalog = await widget.api.setCurrentProfile(id, home: _home);
+      await _applyCatalog(catalog);
+    } catch (e) {
+      if (mounted) {
+        setState(() => error = e);
+      }
+    }
+  }
+
+  Future<void> _addProfile(String name, String color) async {
+    await _saveCurrentTabs();
+    try {
+      final catalog = await widget.api.createProfile(
+        name,
+        home: _home,
+        color: color,
+      );
+      await _applyCatalog(catalog);
+    } catch (e) {
+      if (mounted) {
+        setState(() => error = e);
+      }
+    }
+  }
+
+  Future<void> _renameProfile(String id, String name) async {
+    try {
+      final catalog = await widget.api.renameProfile(id, name, home: _home);
+      if (mounted) {
+        setState(() => _catalog = catalog);
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => error = e);
+      }
+    }
+  }
+
+  Future<void> _deleteProfile(String id) async {
+    if (_catalog.profiles.length <= 1) {
+      return;
+    }
+    if (id == _profileId) {
+      await _saveCurrentTabs();
+    }
+    try {
+      final catalog = await widget.api.deleteProfile(id, home: _home);
+      if (id == _profileId) {
+        await _applyCatalog(catalog);
+      } else if (mounted) {
+        setState(() => _catalog = catalog);
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => error = e);
+      }
     }
   }
 
@@ -519,6 +701,7 @@ class MorphShellState extends State<MorphShell> {
           onDesktopSiteChanged: (value) =>
               unawaited(webView.setDesktopSite(value)),
           onShare: _shareUrl,
+          profiles: _profileSheetSection(),
         );
       },
     );
@@ -821,6 +1004,7 @@ class MorphShellState extends State<MorphShell> {
                     icon: const Icon(Icons.add),
                   ),
                 ],
+                if (!_isMobile) _profileButton(),
                 if (includeChrome && MorphDesktopWindow.isDesktop)
                   const MorphWindowCloseButton(),
               ],
@@ -842,8 +1026,9 @@ class MorphShellState extends State<MorphShell> {
               child: TickerMode(
                 enabled: tab.id == tabs.activeId,
                 child: MorphWebView(
-                  key: Key('web-view-${tab.id}'),
+                  key: Key('web-view-$_profileId-${tab.id}'),
                   controller: _controllerFor(tab.id),
+                  profileId: _profileId,
                   userScript: userScript,
                   placeholder: Center(
                     child: CircularProgressIndicator(color: colors.primary),

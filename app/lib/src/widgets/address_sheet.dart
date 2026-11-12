@@ -22,6 +22,7 @@ class MorphAddressSheet extends StatefulWidget {
     this.onReload,
     this.onDesktopSiteChanged,
     this.identityLabel,
+    this.profiles,
   });
 
   final String initialUrl;
@@ -35,6 +36,9 @@ class MorphAddressSheet extends StatefulWidget {
   final VoidCallback? onReload;
   final ValueChanged<bool>? onDesktopSiteChanged;
   final String? identityLabel;
+
+  /// Optional profiles section (mobile). Desktop uses the nav-row button.
+  final Widget? profiles;
 
   @override
   State<MorphAddressSheet> createState() => _MorphAddressSheetState();
@@ -260,6 +264,11 @@ class _MorphAddressSheetState extends State<MorphAddressSheet> {
                   ],
                 ),
                 const SizedBox(height: 8),
+                if (widget.profiles != null) ...[
+                  const SizedBox(height: 8),
+                  widget.profiles!,
+                  const SizedBox(height: 8),
+                ],
                 _RowTile(
                   key: const Key('sheet-identity'),
                   icon: Icons.person_outline,
