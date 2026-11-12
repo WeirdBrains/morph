@@ -7,6 +7,10 @@ class AppDelegate: FlutterAppDelegate {
     return true
   }
 
+  override func application(_ application: NSApplication, open urls: [URL]) {
+    IncomingLinks.open(urls)
+  }
+
   override func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
     return true
   }
