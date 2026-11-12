@@ -59,8 +59,20 @@ struct _MorphGlTexture {
   FlTextureGL parent_instance;
   MorphView* view;
   GLuint texture_id;
+  GLuint verify_fbo;
   uint32_t uploaded_width;
   uint32_t uploaded_height;
+  // Upload format for the GL context Flutter calls populate() with. Chosen on
+  // first use, lowered if the self-check fails. Read by stats on the main
+  // thread, so it is accessed with g_atomic_int_*.
+  gint mode;
+  gboolean mode_chosen;
+  gboolean failed;
+  // Frames whose read-back matched non-blank source pixels in this mode.
+  guint verified;
+  guint verify_attempts;
+  uint8_t* scratch;
+  size_t scratch_bytes;
 };
 
 struct MorphView {
@@ -91,6 +103,13 @@ struct MorphView {
   GMutex lock;
   gboolean snapshot_in_flight;
   gboolean snapshot_dirty;
+  // Frame source self-check: the offscreen surface came out blank while a
+  // WebKit snapshot of the same page had content, so present snapshots.
+  gboolean offscreen_blank_fallback;
+  gboolean blank_probe_in_flight;
+  gboolean loaded_once;
+  guint offscreen_blank_frames;
+  gint64 blank_probe_after_us;
   guint snapshot_timer;
   gchar* render_path;
   gchar* render_reason;
@@ -167,6 +186,217 @@ static MorphPixelBufferTexture* morph_pixel_buffer_texture_new(MorphView* view) 
   return texture;
 }
 
+static gboolean morph_stats_enabled(void) {
+  static gint enabled = -1;
+  if (enabled < 0) {
+    enabled = g_getenv("MORPH_WEBVIEW_STATS") != nullptr ? 1 : 0;
+  }
+  return enabled == 1;
+}
+
+// Saves and restores the GL state populate() touches, so Flutter's renderer
+// (Skia or Impeller) finds its context as it left it.
+struct GlStateGuard {
+  GLint texture = 0;
+  GLint framebuffer = 0;
+  GLint unpack_alignment = 4;
+  GLint pack_alignment = 4;
+  GLint unpack_buffer = 0;
+  GLint pack_buffer = 0;
+  GLint unpack_row_length = 0;
+  GLint unpack_skip_rows = 0;
+  GLint unpack_skip_pixels = 0;
+  GLint pack_row_length = 0;
+  bool es3_or_desktop = false;
+
+  GlStateGuard() {
+    es3_or_desktop = epoxy_is_desktop_gl() || epoxy_gl_version() >= 30;
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &texture);
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &framebuffer);
+    glGetIntegerv(GL_UNPACK_ALIGNMENT, &unpack_alignment);
+    glGetIntegerv(GL_PACK_ALIGNMENT, &pack_alignment);
+    if (es3_or_desktop) {
+      glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &unpack_buffer);
+      glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pack_buffer);
+      glGetIntegerv(GL_UNPACK_ROW_LENGTH, &unpack_row_length);
+      glGetIntegerv(GL_UNPACK_SKIP_ROWS, &unpack_skip_rows);
+      glGetIntegerv(GL_UNPACK_SKIP_PIXELS, &unpack_skip_pixels);
+      glGetIntegerv(GL_PACK_ROW_LENGTH, &pack_row_length);
+      glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+      glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+      glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+      glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+      glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+      glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+    }
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    glPixelStorei(GL_PACK_ALIGNMENT, 4);
+  }
+
+  ~GlStateGuard() {
+    if (es3_or_desktop) {
+      glBindBuffer(GL_PIXEL_UNPACK_BUFFER, unpack_buffer);
+      glBindBuffer(GL_PIXEL_PACK_BUFFER, pack_buffer);
+      glPixelStorei(GL_UNPACK_ROW_LENGTH, unpack_row_length);
+      glPixelStorei(GL_UNPACK_SKIP_ROWS, unpack_skip_rows);
+      glPixelStorei(GL_UNPACK_SKIP_PIXELS, unpack_skip_pixels);
+      glPixelStorei(GL_PACK_ROW_LENGTH, pack_row_length);
+    }
+    glPixelStorei(GL_UNPACK_ALIGNMENT, unpack_alignment);
+    glPixelStorei(GL_PACK_ALIGNMENT, pack_alignment);
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+    glBindTexture(GL_TEXTURE_2D, texture);
+  }
+};
+
+static void gl_clear_errors(void) {
+  for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; i++) {
+  }
+}
+
+// Uploads view->front (BGRA) into the bound texture in the current mode.
+// Returns the GL error, GL_NO_ERROR on success.
+static GLenum gl_upload_front(MorphGlTexture* self, MorphView* view, gboolean allocate) {
+  const uint8_t* pixels = view->front;
+  GLenum internal_format = GL_RGBA8;
+  GLenum format = GL_BGRA;
+  switch (static_cast<MorphGlUploadMode>(g_atomic_int_get(&self->mode))) {
+    case MORPH_GL_UPLOAD_BGRA_DESKTOP:
+      internal_format = GL_RGBA8;
+      format = GL_BGRA;
+      break;
+    case MORPH_GL_UPLOAD_BGRA_EXT:
+      internal_format = GL_BGRA_EXT;
+      format = GL_BGRA_EXT;
+      break;
+    case MORPH_GL_UPLOAD_RGBA_SWIZZLE:
+    default: {
+      const size_t count = static_cast<size_t>(view->tex_width) * view->tex_height;
+      if (self->scratch_bytes < count * 4) {
+        g_free(self->scratch);
+        self->scratch = static_cast<uint8_t*>(g_malloc(count * 4));
+        self->scratch_bytes = count * 4;
+      }
+      morph_swizzle_bgra_to_rgba(view->front, self->scratch, count);
+      pixels = self->scratch;
+      internal_format = GL_RGBA;
+      format = GL_RGBA;
+      break;
+    }
+  }
+  gl_clear_errors();
+  if (allocate) {
+    glTexImage2D(GL_TEXTURE_2D, 0, internal_format, view->tex_width, view->tex_height, 0, format,
+                 GL_UNSIGNED_BYTE, pixels);
+  } else {
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, view->tex_width, view->tex_height, format,
+                    GL_UNSIGNED_BYTE, pixels);
+  }
+  return glGetError();
+}
+
+// Optional evidence dump of a read-back frame (MORPH_WEBVIEW_GL_DUMP=prefix).
+static void gl_dump_readback(const uint8_t* rgba, uint32_t width, uint32_t height, guint index) {
+  const gchar* prefix = g_getenv("MORPH_WEBVIEW_GL_DUMP");
+  if (prefix == nullptr || *prefix == '\0') {
+    return;
+  }
+  cairo_surface_t* surface =
+      cairo_image_surface_create(CAIRO_FORMAT_ARGB32, static_cast<int>(width), static_cast<int>(height));
+  unsigned char* data = cairo_image_surface_get_data(surface);
+  const int stride = cairo_image_surface_get_stride(surface);
+  for (uint32_t y = 0; y < height; y++) {
+    morph_swizzle_bgra_to_rgba(rgba + static_cast<size_t>(y) * width * 4,
+                               data + static_cast<size_t>(y) * stride, width);
+  }
+  cairo_surface_mark_dirty(surface);
+  g_autofree gchar* path = g_strdup_printf("%s-%u.png", prefix, index);
+  cairo_surface_write_to_png(surface, path);
+  cairo_surface_destroy(surface);
+}
+
+// Reads the uploaded texture back through a framebuffer and compares it with
+// the BGRA source. Returns 1 when it matches, 0 when it does not, and -1 when
+// the read-back is not possible here (the GL error check still applies).
+static int gl_verify_upload(MorphGlTexture* self, MorphView* view) {
+  const uint32_t width = view->tex_width;
+  const uint32_t height = view->tex_height;
+  if (self->verify_fbo == 0) {
+    glGenFramebuffers(1, &self->verify_fbo);
+  }
+  glBindFramebuffer(GL_FRAMEBUFFER, self->verify_fbo);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, self->texture_id, 0);
+  int result = -1;
+  if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
+    const size_t bytes = static_cast<size_t>(width) * height * 4;
+    auto* readback = static_cast<uint8_t*>(g_malloc(bytes));
+    gl_clear_errors();
+    glReadPixels(0, 0, static_cast<GLsizei>(width), static_cast<GLsizei>(height), GL_RGBA,
+                 GL_UNSIGNED_BYTE, readback);
+    if (glGetError() == GL_NO_ERROR) {
+      size_t sampled = 0;
+      size_t mismatched = 0;
+      double gl_sum[4] = {0, 0, 0, 0};
+      double src_sum[4] = {0, 0, 0, 0};
+      const uint32_t step_x = width > 64 ? width / 64 : 1;
+      const uint32_t step_y = height > 64 ? height / 64 : 1;
+      for (uint32_t y = step_y / 2; y < height; y += step_y) {
+        for (uint32_t x = step_x / 2; x < width; x += step_x) {
+          const size_t i = (static_cast<size_t>(y) * width + x) * 4;
+          const uint8_t* gl_px = readback + i;
+          const uint8_t* src_px = view->front + i;
+          sampled++;
+          if (!morph_rgba_matches_bgra(gl_px, src_px, 2)) {
+            mismatched++;
+          }
+          gl_sum[0] += gl_px[0];
+          gl_sum[1] += gl_px[1];
+          gl_sum[2] += gl_px[2];
+          gl_sum[3] += gl_px[3];
+          src_sum[0] += src_px[2];
+          src_sum[1] += src_px[1];
+          src_sum[2] += src_px[0];
+          src_sum[3] += src_px[3];
+        }
+      }
+      result = mismatched * 100 <= sampled ? 1 : 0;
+      if (morph_stats_enabled() && sampled > 0) {
+        g_printerr(
+            "morph_webview: gl-check mode=%s %ux%u sampled=%zu mismatched=%zu "
+            "gl_mean_rgba=%.1f,%.1f,%.1f,%.1f source_mean_rgba=%.1f,%.1f,%.1f,%.1f result=%s\n",
+            morph_gl_upload_name(static_cast<MorphGlUploadMode>(g_atomic_int_get(&self->mode))),
+            width, height, sampled, mismatched, gl_sum[0] / sampled, gl_sum[1] / sampled,
+            gl_sum[2] / sampled, gl_sum[3] / sampled, src_sum[0] / sampled, src_sum[1] / sampled,
+            src_sum[2] / sampled, src_sum[3] / sampled, result == 1 ? "ok" : "mismatch");
+      }
+      gl_dump_readback(readback, width, height, self->verify_attempts);
+    }
+    g_free(readback);
+  }
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+  gl_clear_errors();
+  return result;
+}
+
+// Lowers the upload mode after a failed self-check. FALSE when none is left.
+static gboolean gl_fall_back(MorphGlTexture* self, const char* why, GLenum error) {
+  const MorphGlUploadMode mode = static_cast<MorphGlUploadMode>(g_atomic_int_get(&self->mode));
+  MorphGlUploadMode next = mode;
+  if (!morph_next_gl_upload(mode, &next)) {
+    self->failed = TRUE;
+    g_warning("morph_webview: GL upload %s failed (%s, GL error 0x%x); no fallback left",
+              morph_gl_upload_name(mode), why, error);
+    return FALSE;
+  }
+  g_warning("morph_webview: GL upload %s failed (%s, GL error 0x%x); falling back to %s",
+            morph_gl_upload_name(mode), why, error, morph_gl_upload_name(next));
+  g_atomic_int_set(&self->mode, next);
+  self->verified = 0;
+  self->uploaded_width = 0;
+  self->uploaded_height = 0;
+  return TRUE;
+}
+
 static gboolean morph_gl_texture_populate(FlTextureGL* texture,
                                           uint32_t* target,
                                           uint32_t* name,
@@ -179,31 +409,90 @@ static gboolean morph_gl_texture_populate(FlTextureGL* texture,
     g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED, "view disposed");
     return FALSE;
   }
+  if (self->failed) {
+    g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED, "GL upload unavailable");
+    return FALSE;
+  }
   g_mutex_lock(&view->lock);
   if (view->front == nullptr || view->tex_width == 0 || view->tex_height == 0) {
     g_mutex_unlock(&view->lock);
     g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED, "no frame yet");
     return FALSE;
   }
-  if (self->texture_id == 0) {
-    glGenTextures(1, &self->texture_id);
-    glBindTexture(GL_TEXTURE_2D, self->texture_id);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-  } else {
-    glBindTexture(GL_TEXTURE_2D, self->texture_id);
+  if (!self->mode_chosen) {
+    // populate() runs with Flutter's raster context current, which is an
+    // OpenGL ES context on the Linux embedder.
+    const gboolean desktop = epoxy_is_desktop_gl();
+    const gboolean bgra = epoxy_has_gl_extension("GL_EXT_texture_format_BGRA8888");
+    MorphGlUploadMode mode = morph_choose_gl_upload(desktop, bgra);
+    // Debug override to exercise the self-check: MORPH_WEBVIEW_GL_UPLOAD=
+    // desktop|bgra-ext|rgba. "desktop" on GLES reproduces the black frame.
+    const gchar* forced = g_getenv("MORPH_WEBVIEW_GL_UPLOAD");
+    if (g_strcmp0(forced, "desktop") == 0) {
+      mode = MORPH_GL_UPLOAD_BGRA_DESKTOP;
+    } else if (g_strcmp0(forced, "bgra-ext") == 0) {
+      mode = MORPH_GL_UPLOAD_BGRA_EXT;
+    } else if (g_strcmp0(forced, "rgba") == 0) {
+      mode = MORPH_GL_UPLOAD_RGBA_SWIZZLE;
+    }
+    g_atomic_int_set(&self->mode, mode);
+    self->mode_chosen = TRUE;
+    if (morph_stats_enabled()) {
+      g_printerr("morph_webview: gl context %s (%s) es=%d bgra8888=%d upload=%s\n",
+                 reinterpret_cast<const char*>(glGetString(GL_VERSION)),
+                 reinterpret_cast<const char*>(glGetString(GL_RENDERER)), desktop ? 0 : 1,
+                 bgra ? 1 : 0,
+                 morph_gl_upload_name(static_cast<MorphGlUploadMode>(self->mode)));
+    }
   }
-  glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-  if (self->uploaded_width != view->tex_width || self->uploaded_height != view->tex_height) {
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, view->tex_width, view->tex_height, 0, GL_BGRA,
-                 GL_UNSIGNED_BYTE, view->front);
-    self->uploaded_width = view->tex_width;
-    self->uploaded_height = view->tex_height;
-  } else {
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, view->tex_width, view->tex_height, GL_BGRA,
-                    GL_UNSIGNED_BYTE, view->front);
+  gboolean ok = FALSE;
+  {
+    GlStateGuard guard;
+    if (self->texture_id == 0) {
+      glGenTextures(1, &self->texture_id);
+      glBindTexture(GL_TEXTURE_2D, self->texture_id);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    } else {
+      glBindTexture(GL_TEXTURE_2D, self->texture_id);
+    }
+    for (;;) {
+      const gboolean allocate =
+          self->uploaded_width != view->tex_width || self->uploaded_height != view->tex_height;
+      GLenum gl_error = gl_upload_front(self, view, allocate);
+      if (gl_error != GL_NO_ERROR) {
+        if (gl_fall_back(self, allocate ? "glTexImage2D" : "glTexSubImage2D", gl_error)) {
+          continue;
+        }
+        break;
+      }
+      self->uploaded_width = view->tex_width;
+      self->uploaded_height = view->tex_height;
+      // Read the first real frames back once per mode: a texture can upload
+      // without a GL error and still sample as black.
+      if (self->verified < 2 && self->verify_attempts < 12 &&
+          !morph_frame_is_blank(view->front, view->tex_width, view->tex_height,
+                                static_cast<size_t>(view->tex_width) * 4)) {
+        self->verify_attempts++;
+        const int check = gl_verify_upload(self, view);
+        if (check == 0) {
+          if (gl_fall_back(self, "read-back mismatch", GL_NO_ERROR)) {
+            continue;
+          }
+          break;
+        }
+        self->verified++;
+      }
+      ok = TRUE;
+      break;
+    }
+  }
+  if (!ok) {
+    g_mutex_unlock(&view->lock);
+    g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED, "GL upload failed");
+    return FALSE;
   }
   *target = GL_TEXTURE_2D;
   *name = self->texture_id;
@@ -219,6 +508,12 @@ static void morph_gl_texture_dispose(GObject* object) {
     glDeleteTextures(1, &self->texture_id);
     self->texture_id = 0;
   }
+  if (self->verify_fbo != 0) {
+    glDeleteFramebuffers(1, &self->verify_fbo);
+    self->verify_fbo = 0;
+  }
+  g_clear_pointer(&self->scratch, g_free);
+  self->scratch_bytes = 0;
   G_OBJECT_CLASS(morph_gl_texture_parent_class)->dispose(object);
 }
 
@@ -232,6 +527,14 @@ static void morph_gl_texture_init(MorphGlTexture* self) {
   self->texture_id = 0;
   self->uploaded_width = 0;
   self->uploaded_height = 0;
+  self->verify_fbo = 0;
+  self->mode = MORPH_GL_UPLOAD_BGRA_DESKTOP;
+  self->mode_chosen = FALSE;
+  self->failed = FALSE;
+  self->verified = 0;
+  self->verify_attempts = 0;
+  self->scratch = nullptr;
+  self->scratch_bytes = 0;
 }
 
 static MorphGlTexture* morph_gl_texture_new(MorphView* view) {
@@ -325,7 +628,7 @@ static void record_present(MorphView* view, gint64 started_us) {
   if (now > started_us) {
     view->present_us_accum += static_cast<guint>(now - started_us);
   }
-  if (g_getenv("MORPH_WEBVIEW_STATS") == nullptr) {
+  if (!morph_stats_enabled()) {
     return;
   }
   if (view->presents % 60 == 0 || now - view->last_input_us < 200000) {
@@ -334,14 +637,59 @@ static void record_present(MorphView* view, gint64 started_us) {
                            : 0;
     const double lag_ms =
         view->last_input_us > 0 ? static_cast<double>(now - view->last_input_us) / 1000.0 : 0;
-    g_printerr("morph_webview: path=%s presents=%u avg_present=%.2fms input_lag=%.2fms %ux%u\n",
-               view->render_path != nullptr ? view->render_path : "?", view->presents, avg_ms,
-               lag_ms, view->tex_width, view->tex_height);
+    const char* upload =
+        view->gl_texture != nullptr
+            ? morph_gl_upload_name(
+                  static_cast<MorphGlUploadMode>(g_atomic_int_get(&view->gl_texture->mode)))
+            : "pixel-buffer";
+    g_printerr(
+        "morph_webview: path=%s upload=%s source=%s presents=%u avg_present=%.2fms "
+        "input_lag=%.2fms %ux%u\n",
+        view->render_path != nullptr ? view->render_path : "?", upload,
+        view->offscreen_blank_fallback ? "snapshot" : "offscreen", view->presents, avg_ms, lag_ms,
+        view->tex_width, view->tex_height);
   }
 }
 
+static void on_blank_probe_ready(GObject* source, GAsyncResult* result, gpointer user_data) {
+  MorphView* view = static_cast<MorphView*>(user_data);
+  view->blank_probe_in_flight = FALSE;
+  cairo_surface_t* surface =
+      webkit_web_view_get_snapshot_finish(WEBKIT_WEB_VIEW(source), result, nullptr);
+  if (surface == nullptr) {
+    return;
+  }
+  cairo_surface_flush(surface);
+  const gboolean snapshot_blank =
+      cairo_surface_get_type(surface) != CAIRO_SURFACE_TYPE_IMAGE ||
+      morph_frame_is_blank(cairo_image_surface_get_data(surface),
+                           static_cast<uint32_t>(cairo_image_surface_get_width(surface)),
+                           static_cast<uint32_t>(cairo_image_surface_get_height(surface)),
+                           static_cast<size_t>(cairo_image_surface_get_stride(surface)));
+  if (snapshot_blank) {
+    // The page really is black; check again later in case that changes.
+    view->offscreen_blank_frames = 0;
+    view->blank_probe_after_us = g_get_monotonic_time() + 2 * G_USEC_PER_SEC;
+  } else {
+    view->offscreen_blank_fallback = TRUE;
+    g_warning("morph_webview: offscreen surface is blank but the WebKit snapshot is not; "
+              "presenting snapshots for view %" G_GINT64_FORMAT,
+              view->view_id);
+    if (morph_stats_enabled()) {
+      g_printerr("morph_webview: frame-source fallback view=%" G_GINT64_FORMAT
+                 " offscreen=blank snapshot=content -> source=snapshot\n",
+                 view->view_id);
+    }
+    apply_snapshot_surface(view, surface);
+  }
+  cairo_surface_destroy(surface);
+}
+
+// TRUE when the offscreen surface was presented. A surface that stays blank
+// after the page has loaded is checked against a WebKit snapshot once; if the
+// snapshot has content the view switches to snapshot presents for good.
 static gboolean try_present_offscreen(MorphView* view) {
-  if (view->offscreen == nullptr) {
+  if (view->offscreen == nullptr || view->offscreen_blank_fallback) {
     return FALSE;
   }
   cairo_surface_t* surface = gtk_offscreen_window_get_surface(GTK_OFFSCREEN_WINDOW(view->offscreen));
@@ -350,6 +698,23 @@ static gboolean try_present_offscreen(MorphView* view) {
   }
   if (cairo_image_surface_get_width(surface) <= 0 || cairo_image_surface_get_height(surface) <= 0) {
     return FALSE;
+  }
+  if (view->loaded_once && !view->blank_probe_in_flight) {
+    cairo_surface_flush(surface);
+    const gboolean blank =
+        morph_frame_is_blank(cairo_image_surface_get_data(surface),
+                             static_cast<uint32_t>(cairo_image_surface_get_width(surface)),
+                             static_cast<uint32_t>(cairo_image_surface_get_height(surface)),
+                             static_cast<size_t>(cairo_image_surface_get_stride(surface)));
+    if (!blank) {
+      view->offscreen_blank_frames = 0;
+    } else if (++view->offscreen_blank_frames >= 3 &&
+               g_get_monotonic_time() >= view->blank_probe_after_us) {
+      view->blank_probe_in_flight = TRUE;
+      webkit_web_view_get_snapshot(view->web_view, WEBKIT_SNAPSHOT_REGION_VISIBLE,
+                                   WEBKIT_SNAPSHOT_OPTIONS_NONE, nullptr, on_blank_probe_ready,
+                                   view);
+    }
   }
   gint64 started = g_get_monotonic_time();
   apply_snapshot_surface(view, surface);
@@ -432,6 +797,9 @@ static void on_load_changed(WebKitWebView* web_view, WebKitLoadEvent load_event,
   MorphView* view = static_cast<MorphView*>(user_data);
   (void)web_view;
   emit_navigation(view);
+  if (load_event == WEBKIT_LOAD_FINISHED) {
+    view->loaded_once = TRUE;
+  }
   if (load_event == WEBKIT_LOAD_STARTED || load_event == WEBKIT_LOAD_COMMITTED ||
       load_event == WEBKIT_LOAD_FINISHED) {
     schedule_present(view);
