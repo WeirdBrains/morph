@@ -9,6 +9,8 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:morph_webview/control.dart';
 import 'package:morph_webview/morph_webview.dart';
 
+import 'profile_store.dart';
+
 /// macOS (WKWebView), Windows (WebView2), and Android WebView implementation of [MorphWebViewPlatform].
 class MorphWebViewInApp extends MorphWebViewPlatform {
   MorphWebViewInApp();
@@ -63,6 +65,8 @@ class MorphWebViewInApp extends MorphWebViewPlatform {
     final bindings = await MorphWebViewControl.ensureStarted();
     final client = await _ensureClient();
     final viewId = _nextViewId++;
+    await morphProfileStore.prepareMacos(profileId);
+    final environment = await morphProfileStore.windowsEnvironment(profileId);
     final session = _InAppSession(
       viewId: viewId,
       initialUrl: initialUrl,
@@ -73,6 +77,7 @@ class MorphWebViewInApp extends MorphWebViewPlatform {
       client: client,
       bindings: bindings,
       onDispose: () => _forget(viewId),
+      webViewEnvironment: environment,
     );
     _sessions[viewId] = session;
     return session;
@@ -99,6 +104,16 @@ String _renderPathForHost() {
   return 'wkwebview';
 }
 
+String _renderReasonForHost(String profileId) {
+  if (Platform.isWindows) {
+    return 'webview2 userDataFolder profiles/$profileId/webview2';
+  }
+  if (Platform.isAndroid) {
+    return 'android WebView is process-global; androidx.webkit Profile is not wired';
+  }
+  return 'wkwebview; per-profile WKWebsiteDataStore on macOS 14+';
+}
+
 class _InAppSession extends MorphWebViewSession {
   _InAppSession({
     required this.viewId,
@@ -110,21 +125,24 @@ class _InAppSession extends MorphWebViewSession {
     required this._client,
     required this._bindings,
     required this._onDispose,
-  })  : assert(profileId.isNotEmpty),
-        renderPath = MorphRenderPathInfo(
+    this.webViewEnvironment,
+  }) : assert(profileId.isNotEmpty),
+       renderPath = MorphRenderPathInfo(
          path: _renderPathForHost(),
-         reason: 'flutter_inappwebview',
+         reason: _renderReasonForHost(profileId),
        ) {
     _view = InAppWebView(
       initialUrlRequest: URLRequest(url: WebUri(initialUrl)),
+      webViewEnvironment: webViewEnvironment,
       initialSettings: InAppWebViewSettings(
         javaScriptEnabled: true,
         isInspectable: true,
         mediaPlaybackRequiresUserGesture: false,
         allowsBackForwardNavigationGestures: true,
-        // WKWebView, WebView2, and Android WebView persist cookies in the
-        // app's default profile. Keep every tab on that shared store so
-        // logins survive view recreation and app restarts.
+        // Persist cookies in the profile's store, not an incognito session.
+        // Windows tabs in the same profile share a WebView2 userDataFolder;
+        // macOS 14+ uses a per-profile WKWebsiteDataStore when the hook is
+        // installed. Android still uses the process-wide default store.
         incognito: false,
         cacheEnabled: true,
         sharedCookiesEnabled: true,
@@ -201,6 +219,7 @@ class _InAppSession extends MorphWebViewSession {
   final MorphControlClient _client;
   final MorphControlBindings _bindings;
   final Future<void> Function() _onDispose;
+  final WebViewEnvironment? webViewEnvironment;
   late final InAppWebView _view;
   InAppWebViewController? _controller;
   final _pending = <MorphControlCommand>[];
