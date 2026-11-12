@@ -7,6 +7,7 @@ import 'api/control.dart';
 import 'api/events.dart';
 import 'api/identity.dart';
 import 'api/info.dart';
+import 'api/library.dart';
 import 'api/page.dart';
 import 'api/profiles.dart';
 import 'api/settings.dart';
@@ -73,7 +74,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.13.0';
 
   @override
-  int get rustContentHash => -423637608;
+  int get rustContentHash => 323963957;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -85,6 +86,18 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
 }
 
 abstract class RustLibApi extends BaseApi {
+  Future<List<BookmarkView>> crateApiLibraryAddBookmark({
+    String? home,
+    required String profileId,
+    required String url,
+    required String title,
+  });
+
+  Future<void> crateApiLibraryClearHistory({
+    String? home,
+    required String profileId,
+  });
+
   Stream<ControlBackendEvent> crateApiControlControlBackendEvents();
 
   Future<void> crateApiControlControlCompleteEvaluateJs({
@@ -116,6 +129,12 @@ abstract class RustLibApi extends BaseApi {
     required String name,
   });
 
+  Future<void> crateApiLibraryDeleteHistoryUrl({
+    String? home,
+    required String profileId,
+    required String url,
+  });
+
   Future<CatalogView> crateApiProfilesDeleteProfile({
     String? home,
     required String id,
@@ -127,6 +146,18 @@ abstract class RustLibApi extends BaseApi {
 
   Future<IdentityStatusView> crateApiIdentityIdentityDirInfo({String? home});
 
+  Future<List<BookmarkView>> crateApiLibraryListBookmarks({
+    String? home,
+    required String profileId,
+  });
+
+  Future<List<HistoryEntryView>> crateApiLibraryListHistory({
+    String? home,
+    required String profileId,
+    required String query,
+    required int limit,
+  });
+
   Future<CatalogView> crateApiProfilesListProfiles({String? home});
 
   Future<SettingsView> crateApiSettingsLoadSettings({String? home});
@@ -136,6 +167,19 @@ abstract class RustLibApi extends BaseApi {
   Future<ProfilePathsView> crateApiProfilesProfilePaths({
     String? home,
     required String id,
+  });
+
+  Future<void> crateApiLibraryRecordVisit({
+    String? home,
+    required String profileId,
+    required String url,
+    required String title,
+  });
+
+  Future<List<BookmarkView>> crateApiLibraryRemoveBookmark({
+    String? home,
+    required String profileId,
+    required String url,
   });
 
   Future<CatalogView> crateApiProfilesRenameProfile({
@@ -180,6 +224,79 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   });
 
   @override
+  Future<List<BookmarkView>> crateApiLibraryAddBookmark({
+    String? home,
+    required String profileId,
+    required String url,
+    required String title,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_opt_String(home, serializer);
+          sse_encode_String(profileId, serializer);
+          sse_encode_String(url, serializer);
+          sse_encode_String(title, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 1,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_bookmark_view,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiLibraryAddBookmarkConstMeta,
+        argValues: [home, profileId, url, title],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiLibraryAddBookmarkConstMeta => const TaskConstMeta(
+    debugName: "add_bookmark",
+    argNames: ["home", "profileId", "url", "title"],
+  );
+
+  @override
+  Future<void> crateApiLibraryClearHistory({
+    String? home,
+    required String profileId,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_opt_String(home, serializer);
+          sse_encode_String(profileId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 2,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiLibraryClearHistoryConstMeta,
+        argValues: [home, profileId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiLibraryClearHistoryConstMeta =>
+      const TaskConstMeta(
+        debugName: "clear_history",
+        argNames: ["home", "profileId"],
+      );
+
+  @override
   Stream<ControlBackendEvent> crateApiControlControlBackendEvents() {
     final sink = RustStreamSink<ControlBackendEvent>();
     unawaited(
@@ -191,7 +308,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 1,
+              funcId: 3,
               port: port_,
             );
           },
@@ -232,7 +349,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 2,
+            funcId: 4,
             port: port_,
           );
         },
@@ -277,7 +394,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 3,
+            funcId: 5,
             port: port_,
           );
         },
@@ -328,7 +445,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 4,
+            funcId: 6,
             port: port_,
           );
         },
@@ -355,7 +472,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 5)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 7)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -385,7 +502,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 6,
+            funcId: 8,
             port: port_,
           );
         },
@@ -407,6 +524,43 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<void> crateApiLibraryDeleteHistoryUrl({
+    String? home,
+    required String profileId,
+    required String url,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_opt_String(home, serializer);
+          sse_encode_String(profileId, serializer);
+          sse_encode_String(url, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 9,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiLibraryDeleteHistoryUrlConstMeta,
+        argValues: [home, profileId, url],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiLibraryDeleteHistoryUrlConstMeta =>
+      const TaskConstMeta(
+        debugName: "delete_history_url",
+        argNames: ["home", "profileId", "url"],
+      );
+
+  @override
   Future<CatalogView> crateApiProfilesDeleteProfile({
     String? home,
     required String id,
@@ -420,7 +574,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 7,
+            funcId: 10,
             port: port_,
           );
         },
@@ -453,7 +607,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 8,
+              funcId: 11,
               port: port_,
             );
           },
@@ -483,7 +637,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 9,
+            funcId: 12,
             port: port_,
           );
         },
@@ -511,7 +665,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 10,
+            funcId: 13,
             port: port_,
           );
         },
@@ -530,6 +684,79 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "identity_dir_info", argNames: ["home"]);
 
   @override
+  Future<List<BookmarkView>> crateApiLibraryListBookmarks({
+    String? home,
+    required String profileId,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_opt_String(home, serializer);
+          sse_encode_String(profileId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 14,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_bookmark_view,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiLibraryListBookmarksConstMeta,
+        argValues: [home, profileId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiLibraryListBookmarksConstMeta =>
+      const TaskConstMeta(
+        debugName: "list_bookmarks",
+        argNames: ["home", "profileId"],
+      );
+
+  @override
+  Future<List<HistoryEntryView>> crateApiLibraryListHistory({
+    String? home,
+    required String profileId,
+    required String query,
+    required int limit,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_opt_String(home, serializer);
+          sse_encode_String(profileId, serializer);
+          sse_encode_String(query, serializer);
+          sse_encode_u_32(limit, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 15,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_history_entry_view,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiLibraryListHistoryConstMeta,
+        argValues: [home, profileId, query, limit],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiLibraryListHistoryConstMeta => const TaskConstMeta(
+    debugName: "list_history",
+    argNames: ["home", "profileId", "query", "limit"],
+  );
+
+  @override
   Future<CatalogView> crateApiProfilesListProfiles({String? home}) {
     return handler.executeNormal(
       NormalTask(
@@ -539,7 +766,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 11,
+            funcId: 16,
             port: port_,
           );
         },
@@ -567,7 +794,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 12,
+            funcId: 17,
             port: port_,
           );
         },
@@ -594,7 +821,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 13,
+            funcId: 18,
             port: port_,
           );
         },
@@ -626,7 +853,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 14,
+            funcId: 19,
             port: port_,
           );
         },
@@ -645,6 +872,81 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "profile_paths", argNames: ["home", "id"]);
 
   @override
+  Future<void> crateApiLibraryRecordVisit({
+    String? home,
+    required String profileId,
+    required String url,
+    required String title,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_opt_String(home, serializer);
+          sse_encode_String(profileId, serializer);
+          sse_encode_String(url, serializer);
+          sse_encode_String(title, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 20,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiLibraryRecordVisitConstMeta,
+        argValues: [home, profileId, url, title],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiLibraryRecordVisitConstMeta => const TaskConstMeta(
+    debugName: "record_visit",
+    argNames: ["home", "profileId", "url", "title"],
+  );
+
+  @override
+  Future<List<BookmarkView>> crateApiLibraryRemoveBookmark({
+    String? home,
+    required String profileId,
+    required String url,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_opt_String(home, serializer);
+          sse_encode_String(profileId, serializer);
+          sse_encode_String(url, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 21,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_bookmark_view,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiLibraryRemoveBookmarkConstMeta,
+        argValues: [home, profileId, url],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiLibraryRemoveBookmarkConstMeta =>
+      const TaskConstMeta(
+        debugName: "remove_bookmark",
+        argNames: ["home", "profileId", "url"],
+      );
+
+  @override
   Future<CatalogView> crateApiProfilesRenameProfile({
     String? home,
     required String id,
@@ -660,7 +962,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 15,
+            funcId: 22,
             port: port_,
           );
         },
@@ -695,7 +997,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 16,
+            funcId: 23,
             port: port_,
           );
         },
@@ -730,7 +1032,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 17,
+            funcId: 24,
             port: port_,
           );
         },
@@ -765,7 +1067,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 18,
+            funcId: 25,
             port: port_,
           );
         },
@@ -800,7 +1102,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 19,
+            funcId: 26,
             port: port_,
           );
         },
@@ -830,7 +1132,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 20,
+            funcId: 27,
             port: port_,
           );
         },
@@ -857,7 +1159,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 21,
+            funcId: 28,
             port: port_,
           );
         },
@@ -887,7 +1189,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 22,
+            funcId: 29,
             port: port_,
           );
         },
@@ -928,6 +1230,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   String dco_decode_String(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as String;
+  }
+
+  @protected
+  BookmarkView dco_decode_bookmark_view(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 3)
+      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    return BookmarkView(
+      url: dco_decode_String(arr[0]),
+      title: dco_decode_String(arr[1]),
+      addedMs: dco_decode_i_64(arr[2]),
+    );
   }
 
   @protected
@@ -995,6 +1310,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  HistoryEntryView dco_decode_history_entry_view(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 3)
+      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    return HistoryEntryView(
+      url: dco_decode_String(arr[0]),
+      title: dco_decode_String(arr[1]),
+      visitedMs: dco_decode_i_64(arr[2]),
+    );
+  }
+
+  @protected
   int dco_decode_i_32(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as int;
@@ -1017,6 +1345,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       homeExists: dco_decode_bool(arr[1]),
       profile: dco_decode_String(arr[2]),
     );
+  }
+
+  @protected
+  List<BookmarkView> dco_decode_list_bookmark_view(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_bookmark_view).toList();
+  }
+
+  @protected
+  List<HistoryEntryView> dco_decode_list_history_entry_view(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_history_entry_view).toList();
   }
 
   @protected
@@ -1136,6 +1476,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  BookmarkView sse_decode_bookmark_view(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_url = sse_decode_String(deserializer);
+    var var_title = sse_decode_String(deserializer);
+    var var_addedMs = sse_decode_i_64(deserializer);
+    return BookmarkView(url: var_url, title: var_title, addedMs: var_addedMs);
+  }
+
+  @protected
   bool sse_decode_bool(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getUint8() != 0;
@@ -1209,6 +1558,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  HistoryEntryView sse_decode_history_entry_view(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_url = sse_decode_String(deserializer);
+    var var_title = sse_decode_String(deserializer);
+    var var_visitedMs = sse_decode_i_64(deserializer);
+    return HistoryEntryView(
+      url: var_url,
+      title: var_title,
+      visitedMs: var_visitedMs,
+    );
+  }
+
+  @protected
   int sse_decode_i_32(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getInt32();
@@ -1233,6 +1595,34 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       homeExists: var_homeExists,
       profile: var_profile,
     );
+  }
+
+  @protected
+  List<BookmarkView> sse_decode_list_bookmark_view(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <BookmarkView>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_bookmark_view(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<HistoryEntryView> sse_decode_list_history_entry_view(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <HistoryEntryView>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_history_entry_view(deserializer));
+    }
+    return ans_;
   }
 
   @protected
@@ -1382,6 +1772,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_bookmark_view(BookmarkView self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.url, serializer);
+    sse_encode_String(self.title, serializer);
+    sse_encode_i_64(self.addedMs, serializer);
+  }
+
+  @protected
   void sse_encode_bool(bool self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putUint8(self ? 1 : 0);
@@ -1434,6 +1832,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_history_entry_view(
+    HistoryEntryView self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.url, serializer);
+    sse_encode_String(self.title, serializer);
+    sse_encode_i_64(self.visitedMs, serializer);
+  }
+
+  @protected
   void sse_encode_i_32(int self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putInt32(self);
@@ -1454,6 +1863,30 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_String(self.home, serializer);
     sse_encode_bool(self.homeExists, serializer);
     sse_encode_String(self.profile, serializer);
+  }
+
+  @protected
+  void sse_encode_list_bookmark_view(
+    List<BookmarkView> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_bookmark_view(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_history_entry_view(
+    List<HistoryEntryView> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_history_entry_view(item, serializer);
+    }
   }
 
   @protected

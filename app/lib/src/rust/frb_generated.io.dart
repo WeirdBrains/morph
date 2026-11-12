@@ -7,6 +7,7 @@ import 'api/control.dart';
 import 'api/events.dart';
 import 'api/identity.dart';
 import 'api/info.dart';
+import 'api/library.dart';
 import 'api/page.dart';
 import 'api/profiles.dart';
 import 'api/settings.dart';
@@ -41,6 +42,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   String dco_decode_String(dynamic raw);
 
   @protected
+  BookmarkView dco_decode_bookmark_view(dynamic raw);
+
+  @protected
   bool dco_decode_bool(dynamic raw);
 
   @protected
@@ -56,6 +60,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   double dco_decode_f_64(dynamic raw);
 
   @protected
+  HistoryEntryView dco_decode_history_entry_view(dynamic raw);
+
+  @protected
   int dco_decode_i_32(dynamic raw);
 
   @protected
@@ -63,6 +70,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   IdentityStatusView dco_decode_identity_status_view(dynamic raw);
+
+  @protected
+  List<BookmarkView> dco_decode_list_bookmark_view(dynamic raw);
+
+  @protected
+  List<HistoryEntryView> dco_decode_list_history_entry_view(dynamic raw);
 
   @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
@@ -110,6 +123,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   String sse_decode_String(SseDeserializer deserializer);
 
   @protected
+  BookmarkView sse_decode_bookmark_view(SseDeserializer deserializer);
+
+  @protected
   bool sse_decode_bool(SseDeserializer deserializer);
 
   @protected
@@ -127,6 +143,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   double sse_decode_f_64(SseDeserializer deserializer);
 
   @protected
+  HistoryEntryView sse_decode_history_entry_view(SseDeserializer deserializer);
+
+  @protected
   int sse_decode_i_32(SseDeserializer deserializer);
 
   @protected
@@ -134,6 +153,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   IdentityStatusView sse_decode_identity_status_view(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<BookmarkView> sse_decode_list_bookmark_view(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<HistoryEntryView> sse_decode_list_history_entry_view(
     SseDeserializer deserializer,
   );
 
@@ -189,6 +218,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_String(String self, SseSerializer serializer);
 
   @protected
+  void sse_encode_bookmark_view(BookmarkView self, SseSerializer serializer);
+
+  @protected
   void sse_encode_bool(bool self, SseSerializer serializer);
 
   @protected
@@ -207,6 +239,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_f_64(double self, SseSerializer serializer);
 
   @protected
+  void sse_encode_history_entry_view(
+    HistoryEntryView self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_i_32(int self, SseSerializer serializer);
 
   @protected
@@ -215,6 +253,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_identity_status_view(
     IdentityStatusView self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_bookmark_view(
+    List<BookmarkView> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_history_entry_view(
+    List<HistoryEntryView> self,
     SseSerializer serializer,
   );
 
