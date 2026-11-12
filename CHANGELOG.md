@@ -22,6 +22,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   use flutter_inappwebview 6.x behind the Morph web-view interface and talk
   to the in-process control server. Dart's gRPC client falls back to loopback
   TCP on Windows because package:grpc cannot open a named pipe.
+- Desktop tab chrome can sit on the top, bottom, left, or right of the web
+  view. The address and back/forward/reload row always stays at the top.
+  Left and right use a vertical list (favicon, truncated title, close) that
+  can collapse to favicons; bottom tab decorations flip downward so they
+  attach to the content above. The last position is stored in
+  `settings.json` under the Morph home.
+- Desktop window buttons: Windows and Linux draw minimize, maximize, and
+  close (close-only on tiling compositors such as Hyprland, Sway, i3, niri,
+  and river). Override with `MORPH_WINDOW_BUTTONS=close` or
+  `MORPH_WINDOW_BUTTONS=all`. macOS keeps the native traffic lights visible
+  on the left of a hidden title bar; the tab strip pads to clear them.
 - Android uses the same in-app backend and control layer, with the system
   WebView in a Flutter platform view. The main manifest grants INTERNET, and
   the shell can submit a typed URL before the view has finished attaching.
