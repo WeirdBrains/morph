@@ -12,6 +12,7 @@ class MainActivity : FlutterActivity() {
         ShareSheet.register(this, flutterEngine.dartExecutor.binaryMessenger)
         TextFileSaver.register(this, flutterEngine.dartExecutor.binaryMessenger)
         DefaultBrowser.register(this, flutterEngine.dartExecutor.binaryMessenger)
+        QrScanner.register(this, flutterEngine.dartExecutor.binaryMessenger)
         IncomingLinks.register(flutterEngine.dartExecutor.binaryMessenger, intent)
     }
 
@@ -23,7 +24,8 @@ class MainActivity : FlutterActivity() {
     @Deprecated("FlutterActivity still routes results through onActivityResult")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         if (!TextFileSaver.onActivityResult(this, requestCode, resultCode, data) &&
-            !DefaultBrowser.onActivityResult(this, requestCode)
+            !DefaultBrowser.onActivityResult(this, requestCode) &&
+            !QrScanner.onActivityResult(requestCode, resultCode, data)
         ) {
             super.onActivityResult(requestCode, resultCode, data)
         }
