@@ -265,6 +265,32 @@ class _NativeViewProbeState extends State<_NativeViewProbe> {
       const ColoredBox(key: Key('native-view-probe'), color: Color(0xFF123456));
 }
 
+/// Lets the shell's debounced surface check fire and finish.
+Future<void> _settleSurface(WidgetTester tester) async {
+  await tester.pumpAndSettle();
+  await tester.pump(const Duration(seconds: 1));
+  await tester.pump(const Duration(seconds: 1));
+}
+
+/// Runs [action] and expects it to make the shell check the visible web view
+/// surface at least once.
+Future<void> _expectSurfaceCheck(
+  WidgetTester tester,
+  String view,
+  Future<void> Function() action,
+) async {
+  final state = tester.state<MorphShellState>(find.byType(MorphShell));
+  await _settleSurface(tester);
+  final before = state.surfaceCheckRequests;
+  await action();
+  await _settleSurface(tester);
+  expect(
+    state.surfaceCheckRequests,
+    greaterThan(before),
+    reason: 'no surface check after $view',
+  );
+}
+
 void main() {
   late FakeMorphWebViewPlatform fakeWebView;
 
@@ -993,6 +1019,247 @@ void main() {
     } finally {
       debugDefaultTargetPlatformOverride = null;
       view.reset();
+    }
+  });
+
+  testWidgets('phone web view surface is checked after every view change', (
+    tester,
+  ) async {
+    final view = tester.view;
+    view.physicalSize = const Size(412, 915);
+    view.devicePixelRatio = 1.0;
+    addTearDown(view.reset);
+    _NativeViewProbe.reset();
+    fakeWebView = FakeMorphWebViewPlatform(
+      renderPath: const MorphRenderPathInfo(
+        path: 'android-webview',
+        reason: 'fake',
+      ),
+      platformView: const _NativeViewProbe(),
+    );
+    MorphWebViewPlatform.instance = fakeWebView;
+
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      await tester.pumpWidget(
+        MorphApp(
+          api: FakeMorphApi(),
+          home: '/tmp/morph-does-not-exist',
+          subscribeToTicks: false,
+          loadPageBridgeAsset: false,
+        ),
+      );
+      await _pumpUntilIdentity(tester);
+      final state = tester.state<MorphShellState>(find.byType(MorphShell));
+
+      // Michael's report: start page -> address sheet with keyboard -> enter.
+      await _expectSurfaceCheck(tester, 'address sheet submit', () async {
+        await _enterAndSubmitUrl(tester, 'linkedin.com');
+        await _pumpUntilWebViewAttached(tester, fakeWebView);
+      });
+      final session = fakeWebView.lastSession!;
+      expect(state.navigation.url, contains('linkedin.com'));
+
+      await _expectSurfaceCheck(tester, 'address sheet dismissed', () async {
+        await tester.tap(find.byKey(const Key('address-bar')));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('address-sheet')), findsOneWidget);
+        await tester.binding.handlePopRoute();
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('address-sheet')), findsNothing);
+      });
+
+      await _expectSurfaceCheck(tester, 'keyboard shown and hidden', () async {
+        view.viewInsets = const FakeViewPadding(bottom: 320);
+        await tester.pump();
+        view.resetViewInsets();
+        await tester.pump();
+      });
+
+      await _expectSurfaceCheck(tester, 'rotation', () async {
+        view.physicalSize = const Size(915, 412);
+        await tester.pump();
+        view.physicalSize = const Size(412, 915);
+        await tester.pump();
+      });
+
+      await _expectSurfaceCheck(tester, 'app resumed', () async {
+        tester.binding.handleAppLifecycleStateChanged(
+          AppLifecycleState.inactive,
+        );
+        tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+        tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+        await tester.pump();
+        tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+        tester.binding.handleAppLifecycleStateChanged(
+          AppLifecycleState.inactive,
+        );
+        tester.binding.handleAppLifecycleStateChanged(
+          AppLifecycleState.resumed,
+        );
+        await tester.pump();
+      });
+
+      await _expectSurfaceCheck(tester, 'reload', () async {
+        await state.webView.reload();
+        await tester.pump();
+      });
+
+      await _expectSurfaceCheck(tester, 'second navigation', () async {
+        await _enterAndSubmitUrl(tester, 'two.example');
+      });
+
+      await _expectSurfaceCheck(tester, 'back', () async {
+        await state.webView.goBack();
+        await tester.pump();
+      });
+
+      await _expectSurfaceCheck(tester, 'forward', () async {
+        await state.webView.goForward();
+        await tester.pump();
+      });
+
+      await _expectSurfaceCheck(tester, 'tab grid closed', () async {
+        await tester.tap(find.byKey(const Key('tab-count')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byType(MorphTabCard).first);
+        await tester.pumpAndSettle();
+      });
+
+      await _expectSurfaceCheck(
+        tester,
+        'Android back out of the grid',
+        () async {
+          await tester.tap(find.byKey(const Key('tab-count')));
+          await tester.pumpAndSettle();
+          await tester.binding.handlePopRoute();
+          await tester.pumpAndSettle();
+        },
+      );
+
+      // New tab from the grid, load it, then switch back to the first tab.
+      await tester.tap(find.byKey(const Key('tab-count')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('tab-switcher-new')));
+      await tester.pumpAndSettle();
+      await _expectSurfaceCheck(tester, 'new tab first load', () async {
+        await _enterAndSubmitUrl(tester, 'three.example');
+        for (var i = 0; i < 10 && fakeWebView.sessions.length < 2; i++) {
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 20)),
+          );
+          await tester.pump();
+        }
+      });
+      await _expectSurfaceCheck(tester, 'tab switch', () async {
+        await tester.tap(find.byKey(const Key('tab-count')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byType(MorphTabCard).first);
+        await tester.pumpAndSettle();
+      });
+      // The first tab went linkedin -> two.example, back, then forward.
+      expect(state.navigation.url, contains('two.example'));
+
+      // A blank surface with content behind it is rebuilt on the same page.
+      session.surfaceVerdicts.addAll([
+        MorphSurfaceVerdict.blank,
+        MorphSurfaceVerdict.healthy,
+      ]);
+      await _expectSurfaceCheck(tester, 'blank surface', () async {
+        tester.binding.handleAppLifecycleStateChanged(
+          AppLifecycleState.resumed,
+        );
+        await tester.pump();
+      });
+      expect(session.surfaceRebuilds, 1);
+      expect(state.navigation.url, contains('two.example'));
+
+      // A dead renderer is rebuilt without waiting for a view change (after
+      // the real-clock two-second guard against crash loops).
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 2100)),
+      );
+      session.emitSurfaceLost();
+      await tester.pump();
+      await tester.pump();
+      expect(session.surfaceRebuilds, 2);
+
+      // The page web views were never torn down by any of this.
+      expect(_NativeViewProbe.disposals, 0);
+      expect(_NativeViewProbe.mounts, 2);
+      expect(fakeWebView.sessions, hasLength(2));
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('phone profile switch checks the restored page surface', (
+    tester,
+  ) async {
+    final view = tester.view;
+    view.physicalSize = const Size(412, 915);
+    view.devicePixelRatio = 1.0;
+    addTearDown(view.reset);
+    fakeWebView = FakeMorphWebViewPlatform(
+      renderPath: const MorphRenderPathInfo(
+        path: 'android-webview',
+        reason: 'fake',
+      ),
+      platformView: const _NativeViewProbe(),
+    );
+    MorphWebViewPlatform.instance = fakeWebView;
+    final api = FakeMorphApi();
+
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      await tester.pumpWidget(
+        MorphApp(
+          api: api,
+          home: '/tmp/morph-does-not-exist',
+          subscribeToTicks: false,
+          loadPageBridgeAsset: false,
+        ),
+      );
+      await _pumpUntilIdentity(tester);
+      await _enterAndSubmitUrl(tester, 'one.example');
+      await _pumpUntilWebViewAttached(tester, fakeWebView);
+      await _settleSurface(tester);
+
+      // Add a second profile from the phone address sheet (start page there).
+      await tester.tap(find.byKey(const Key('address-bar')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('profile-add')));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const Key('profile-add-name')), 'Work');
+      await tester.tap(find.byKey(const Key('profile-add-confirm')));
+      await tester.pumpAndSettle();
+      if (find.byKey(const Key('address-sheet')).evaluate().isNotEmpty) {
+        await tester.binding.handlePopRoute();
+        await tester.pumpAndSettle();
+      }
+      expect(api.profiles, hasLength(2));
+      expect(find.byKey(const Key('start-page')), findsOneWidget);
+
+      await _expectSurfaceCheck(tester, 'profile switch', () async {
+        await tester.tap(find.byKey(const Key('address-bar')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('profile-item-default')));
+        await tester.pumpAndSettle();
+        if (find.byKey(const Key('address-sheet')).evaluate().isNotEmpty) {
+          await tester.binding.handlePopRoute();
+          await tester.pumpAndSettle();
+        }
+        final before = fakeWebView.sessions.length;
+        for (var i = 0; i < 20 && fakeWebView.sessions.length == before; i++) {
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 20)),
+          );
+          await tester.pump();
+        }
+      });
+      expect(find.byKey(const Key('start-page')), findsNothing);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
     }
   });
 
