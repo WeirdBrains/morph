@@ -28,6 +28,7 @@ class MorphWebViewController {
   final DateTime Function() _clock;
   Future<void>? _creating;
   Future<MorphSurfaceVerdict>? _healing;
+  Future<MorphSurfaceVerdict>? _healQueued;
   DateTime? _lastRebuild;
   int _surfaceRebuilds = 0;
 
@@ -226,9 +227,25 @@ class MorphWebViewController {
   /// returning from the tab grid, a tab or profile switch, a finished load.
   Future<MorphSurfaceVerdict> ensureSurfaceHealthy() {
     final running = _healing;
-    if (running != null) {
-      return running;
+    if (running == null) {
+      return _startHeal();
     }
+    // A check asked for while one is running (say, the load that a sheet's
+    // close check raced with just finished) must still look at the page as
+    // it is now; the running check may have probed it mid-navigation. Queue
+    // one follow-up that every later caller shares.
+    return _healQueued ??= running.then(
+      (_) => _runQueuedHeal(),
+      onError: (Object _) => _runQueuedHeal(),
+    );
+  }
+
+  Future<MorphSurfaceVerdict> _runQueuedHeal() {
+    _healQueued = null;
+    return _startHeal();
+  }
+
+  Future<MorphSurfaceVerdict> _startHeal() {
     final heal = _heal();
     _healing = heal;
     return heal.whenComplete(() {

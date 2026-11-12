@@ -241,16 +241,48 @@ void main() {
       await controller.dispose();
     });
 
-    test('concurrent heals share one check', () async {
+    test('heals asked for during a check share one follow-up', () async {
       final controller = MorphWebViewController(initialUrl: 'about:blank');
       await controller.attach(width: 412, height: 800, devicePixelRatio: 2);
       final session = fake.lastSession!;
-      await Future.wait([
-        controller.ensureSurfaceHealthy(),
-        controller.ensureSurfaceHealthy(),
-        controller.ensureSurfaceHealthy(),
-      ]);
+      final gate = Completer<void>();
+      session.checkGate = gate;
+      final first = controller.ensureSurfaceHealthy();
+      await Future<void>.delayed(Duration.zero);
       expect(session.surfaceChecks, 1);
+      final later = [
+        controller.ensureSurfaceHealthy(),
+        controller.ensureSurfaceHealthy(),
+      ];
+      session.checkGate = null;
+      gate.complete();
+      await Future.wait([first, ...later]);
+      // The running check plus exactly one follow-up for the late callers.
+      expect(session.surfaceChecks, 2);
+      await controller.dispose();
+    });
+
+    test('a check asked for mid-load still sees the finished page', () async {
+      // The bookmark white page: closing the library sheet starts a check
+      // while the bookmark is still loading (no content yet), and the
+      // finished load's check used to join it and never look again.
+      final controller = MorphWebViewController(initialUrl: 'about:blank');
+      await controller.attach(width: 412, height: 800, devicePixelRatio: 2);
+      final session = fake.lastSession!;
+      session.surfaceVerdicts.addAll([
+        MorphSurfaceVerdict.unknown,
+        MorphSurfaceVerdict.blank,
+      ]);
+      final gate = Completer<void>();
+      session.checkGate = gate;
+      final sheetClosed = controller.ensureSurfaceHealthy();
+      await Future<void>.delayed(Duration.zero);
+      final loadFinished = controller.ensureSurfaceHealthy();
+      session.checkGate = null;
+      gate.complete();
+      expect(await sheetClosed, MorphSurfaceVerdict.unknown);
+      await loadFinished;
+      expect(session.surfaceRebuilds, 1);
       await controller.dispose();
     });
 

@@ -299,6 +299,9 @@ class FakeMorphWebViewSession extends MorphWebViewSession {
   /// means [MorphSurfaceVerdict.healthy].
   final List<MorphSurfaceVerdict> surfaceVerdicts = [];
   int surfaceChecks = 0;
+
+  /// When set, `checkSurface` waits for it, so tests can hold a check open.
+  Completer<void>? checkGate;
   int surfaceRepaints = 0;
   int surfaceRebuilds = 0;
   final _surfaceLost = StreamController<void>.broadcast();
@@ -337,6 +340,10 @@ class FakeMorphWebViewSession extends MorphWebViewSession {
   @override
   Future<MorphSurfaceVerdict> checkSurface() async {
     surfaceChecks++;
+    final gate = checkGate;
+    if (gate != null) {
+      await gate.future;
+    }
     if (surfaceVerdicts.isEmpty) {
       return MorphSurfaceVerdict.healthy;
     }
