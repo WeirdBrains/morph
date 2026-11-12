@@ -40,6 +40,8 @@ abstract final class MorphColors {
 
 /// Material 3 [ThemeData] for Morph. Dark is the product default.
 abstract final class MorphTheme {
+  static const String mono = 'monospace';
+
   static const ColorScheme darkScheme = ColorScheme(
     brightness: Brightness.dark,
     primary: MorphColors.cyan,
@@ -110,6 +112,20 @@ abstract final class MorphTheme {
     border: MorphColors.borderLight,
   );
 
+  static TextStyle monoStyle({
+    required Color color,
+    double size = 13,
+    FontWeight weight = FontWeight.w400,
+  }) {
+    return TextStyle(
+      fontFamily: mono,
+      fontSize: size,
+      fontWeight: weight,
+      color: color,
+      height: 1.3,
+    );
+  }
+
   static ThemeData _theme({
     required ColorScheme scheme,
     required Color background,
@@ -117,6 +133,16 @@ abstract final class MorphTheme {
     required Color cursor,
     required Color border,
   }) {
+    final radius = BorderRadius.circular(8);
+    final enabledBorder = OutlineInputBorder(
+      borderRadius: radius,
+      borderSide: BorderSide(color: border),
+    );
+    final focusedBorder = OutlineInputBorder(
+      borderRadius: radius,
+      borderSide: BorderSide(color: cursor, width: 2),
+    );
+
     return ThemeData(
       useMaterial3: true,
       brightness: scheme.brightness,
@@ -135,6 +161,51 @@ abstract final class MorphTheme {
         cursorColor: cursor,
         selectionHandleColor: cursor,
       ),
+      inputDecorationTheme: InputDecorationTheme(
+        isDense: true,
+        filled: true,
+        fillColor: scheme.surfaceContainerHighest,
+        hintStyle: monoStyle(color: scheme.onSurfaceVariant, size: 14),
+        labelStyle: TextStyle(color: scheme.onSurfaceVariant),
+        border: enabledBorder,
+        enabledBorder: enabledBorder,
+        focusedBorder: focusedBorder,
+        errorBorder: OutlineInputBorder(
+          borderRadius: radius,
+          borderSide: BorderSide(color: scheme.error),
+        ),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 12,
+          vertical: 10,
+        ),
+      ),
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+          backgroundColor: scheme.primary,
+          foregroundColor: scheme.onPrimary,
+          shape: RoundedRectangleBorder(borderRadius: radius),
+        ),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: OutlinedButton.styleFrom(
+          foregroundColor: scheme.primary,
+          side: BorderSide(color: border),
+          shape: RoundedRectangleBorder(borderRadius: radius),
+        ),
+      ),
+      iconButtonTheme: IconButtonThemeData(
+        style: IconButton.styleFrom(foregroundColor: scheme.onSurface),
+      ),
+      progressIndicatorTheme: ProgressIndicatorThemeData(color: scheme.primary),
+      tooltipTheme: TooltipThemeData(
+        decoration: BoxDecoration(
+          color: scheme.surfaceContainerHighest,
+          borderRadius: radius,
+          border: Border.all(color: border),
+        ),
+        textStyle: TextStyle(color: scheme.onSurface, fontSize: 12),
+      ),
+      dividerTheme: DividerThemeData(color: border, space: 1, thickness: 1),
       focusColor: cursor.withValues(alpha: 0.24),
       highlightColor: cursor.withValues(alpha: 0.16),
       splashColor: cursor.withValues(alpha: 0.16),
