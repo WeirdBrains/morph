@@ -2,7 +2,7 @@ use morph_webview_control::endpoint::ControlEndpoint;
 use morph_webview_control::proto::client_message::Body as ClientBody;
 use morph_webview_control::proto::server_message::Body as ServerBody;
 use morph_webview_control::proto::{
-    ClientMessage, EvaluateJavaScript, KeyEvent, Navigate, PointerEvent, web_view_control_client::WebViewControlClient,
+    ClientMessage, EvaluateJavaScript, ImeEvent, KeyEvent, Navigate, PointerEvent, web_view_control_client::WebViewControlClient,
 };
 use morph_webview_control::server::{ControlBackend, ControlServer, connect};
 use std::sync::{Arc, Mutex};
@@ -14,8 +14,9 @@ use tokio_stream::wrappers::ReceiverStream;
 #[derive(Default)]
 struct Recording {
     navigates: Mutex<Vec<(i64, String)>>,
-    pointers: Mutex<Vec<(i64, String)>>,
-    keys: Mutex<Vec<(i64, String)>>,
+    pointers: Mutex<Vec<(i64, PointerEvent)>>,
+    keys: Mutex<Vec<(i64, KeyEvent)>>,
+    imes: Mutex<Vec<(i64, String)>>,
     scripts: Mutex<Vec<(i64, u64, String)>>,
 }
 
@@ -27,12 +28,14 @@ impl ControlBackend for Recording {
     fn go_forward(&self, _view_id: i64) {}
     fn reload(&self, _view_id: i64) {}
     fn pointer(&self, view_id: i64, event: morph_webview_control::proto::PointerEvent) {
-        self.pointers.lock().unwrap().push((view_id, event.phase));
+        self.pointers.lock().unwrap().push((view_id, event));
     }
     fn key(&self, view_id: i64, event: morph_webview_control::proto::KeyEvent) {
-        self.keys.lock().unwrap().push((view_id, format!("{}:{}", event.phase, event.key)));
+        self.keys.lock().unwrap().push((view_id, event));
     }
-    fn ime(&self, _view_id: i64, _event: morph_webview_control::proto::ImeEvent) {}
+    fn ime(&self, view_id: i64, event: morph_webview_control::proto::ImeEvent) {
+        self.imes.lock().unwrap().push((view_id, format!("{}:{}", event.phase, event.text)));
+    }
     fn evaluate_js(&self, view_id: i64, request_id: u64, script: String) {
         self.scripts.lock().unwrap().push((view_id, request_id, script));
     }
@@ -85,7 +88,7 @@ fn session_orders_navigation_and_input_and_handles_page_bridge() {
         tx.send(client_msg(
             2,
             7,
-            ClientBody::Pointer(PointerEvent { phase: "down".into(), x: 10.0, y: 20.0, button: 1, scroll_delta_x: 0.0, scroll_delta_y: 0.0 }),
+            ClientBody::Pointer(PointerEvent { phase: "down".into(), x: 10.0, y: 20.0, button: 1, buttons: 1, ..Default::default() }),
         ))
         .await
         .unwrap();
@@ -95,11 +98,13 @@ fn session_orders_navigation_and_input_and_handles_page_bridge() {
             ClientBody::Key(KeyEvent {
                 phase: "down".into(),
                 key: "A".into(),
+                text: "a".into(),
                 hardware_keycode: 0,
                 ctrl: false,
                 alt: false,
                 shift: false,
                 meta: false,
+                repeat: false,
             }),
         ))
         .await
@@ -158,8 +163,22 @@ fn session_orders_navigation_and_input_and_handles_page_bridge() {
     });
 
     assert_eq!(*backend.navigates.lock().unwrap(), vec![(7, "https://example.com/".into())]);
-    assert_eq!(*backend.pointers.lock().unwrap(), vec![(7, "down".into())]);
-    assert_eq!(*backend.keys.lock().unwrap(), vec![(7, "down:A".into())]);
+    {
+        let pointers = backend.pointers.lock().unwrap();
+        assert_eq!(pointers.len(), 1);
+        assert_eq!(pointers[0].0, 7);
+        assert_eq!(pointers[0].1.phase, "down");
+        assert_eq!(pointers[0].1.button, 1);
+        assert_eq!(pointers[0].1.buttons, 1);
+    }
+    {
+        let keys = backend.keys.lock().unwrap();
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].0, 7);
+        assert_eq!(keys[0].1.phase, "down");
+        assert_eq!(keys[0].1.key, "A");
+        assert_eq!(keys[0].1.text, "a");
+    }
     let scripts = backend.scripts.lock().unwrap();
     assert!(scripts.iter().any(|(_, _, s)| s.contains("MorphBridge.deliver") && s.contains("pong")), "{scripts:?}");
 
@@ -228,5 +247,116 @@ fn named_pipe_endpoint_accepts_a_session() {
     rt.block_on(async {
         timeout(Duration::from_secs(5), connect(server.endpoint())).await.expect("connect named pipe timeout").expect("connect named pipe");
     });
+    server.shutdown();
+}
+
+#[test]
+fn pointer_hover_leave_cursor_and_keyboard_roundtrip() {
+    let backend = Arc::new(Recording::default());
+    let endpoint = temp_endpoint();
+    let server = ControlServer::start(Some(endpoint.clone()), backend.clone()).expect("start server");
+
+    let rt = test_runtime();
+    rt.block_on(async {
+        let mut client: WebViewControlClient<_> =
+            timeout(Duration::from_secs(3), connect(server.endpoint())).await.expect("connect timeout").expect("connect");
+        let (tx, rx) = mpsc::channel(32);
+        let mut outbound = client.session(ReceiverStream::new(rx)).await.expect("session").into_inner();
+
+        tx.send(client_msg(1, 3, ClientBody::Pointer(PointerEvent { phase: "enter".into(), x: 12.0, y: 24.0, ..Default::default() }))).await.unwrap();
+        tx.send(client_msg(2, 3, ClientBody::Pointer(PointerEvent { phase: "hover".into(), x: 40.0, y: 50.0, ctrl: true, ..Default::default() })))
+            .await
+            .unwrap();
+        tx.send(client_msg(3, 3, ClientBody::Pointer(PointerEvent { phase: "leave".into(), x: 40.0, y: 50.0, ..Default::default() }))).await.unwrap();
+        tx.send(client_msg(
+            4,
+            3,
+            ClientBody::Pointer(PointerEvent { phase: "scroll".into(), x: 10.0, y: 10.0, scroll_delta_y: 80.0, ..Default::default() }),
+        ))
+        .await
+        .unwrap();
+        tx.send(client_msg(
+            5,
+            3,
+            ClientBody::Pointer(PointerEvent { phase: "down".into(), x: 8.0, y: 9.0, button: 1, buttons: 1, shift: true, ..Default::default() }),
+        ))
+        .await
+        .unwrap();
+        tx.send(client_msg(
+            6,
+            3,
+            ClientBody::Pointer(PointerEvent { phase: "move".into(), x: 18.0, y: 19.0, buttons: 1, shift: true, ..Default::default() }),
+        ))
+        .await
+        .unwrap();
+        tx.send(client_msg(
+            7,
+            3,
+            ClientBody::Pointer(PointerEvent { phase: "up".into(), x: 18.0, y: 19.0, button: 1, shift: true, ..Default::default() }),
+        ))
+        .await
+        .unwrap();
+        tx.send(client_msg(
+            8,
+            3,
+            ClientBody::Key(KeyEvent { phase: "down".into(), key: "A".into(), text: "A".into(), shift: true, ..Default::default() }),
+        ))
+        .await
+        .unwrap();
+        tx.send(client_msg(9, 3, ClientBody::Key(KeyEvent { phase: "up".into(), key: "A".into(), shift: true, ..Default::default() })))
+            .await
+            .unwrap();
+        tx.send(client_msg(
+            10,
+            3,
+            ClientBody::Key(KeyEvent { phase: "down".into(), key: "V".into(), text: "v".into(), ctrl: true, ..Default::default() }),
+        ))
+        .await
+        .unwrap();
+        tx.send(client_msg(11, 3, ClientBody::Ime(ImeEvent { phase: "compose_update".into(), text: "´".into() }))).await.unwrap();
+        tx.send(client_msg(12, 3, ClientBody::Ime(ImeEvent { phase: "commit".into(), text: "é".into() }))).await.unwrap();
+
+        let mut acks = 0_u32;
+        while acks < 12 {
+            let msg = outbound.next().await.expect("server message").expect("ok");
+            if matches!(msg.body, Some(ServerBody::Ack(_))) {
+                acks += 1;
+            }
+        }
+
+        server.emit_cursor(3, "pointer");
+        let cursor = loop {
+            let msg = outbound.next().await.expect("cursor").expect("ok");
+            if let Some(ServerBody::Cursor(c)) = msg.body {
+                break c;
+            }
+        };
+        assert_eq!(cursor.shape, "pointer");
+        drop(tx);
+    });
+
+    let phases: Vec<String> = backend.pointers.lock().unwrap().iter().map(|(_, e)| e.phase.clone()).collect();
+    assert_eq!(phases, vec!["enter", "hover", "leave", "scroll", "down", "move", "up"]);
+    let pointers = backend.pointers.lock().unwrap();
+    assert_eq!(pointers[1].1.x, 40.0);
+    assert!(pointers[1].1.ctrl);
+    assert_eq!(pointers[1].1.buttons, 0);
+    assert_eq!(pointers[3].1.scroll_delta_y, 80.0);
+    assert_eq!(pointers[4].1.button, 1);
+    assert_eq!(pointers[4].1.buttons, 1);
+    assert!(pointers[4].1.shift);
+    assert_eq!(pointers[5].1.phase, "move");
+    assert_eq!(pointers[5].1.buttons, 1);
+
+    let keys = backend.keys.lock().unwrap();
+    assert_eq!(keys[0].1.key, "A");
+    assert_eq!(keys[0].1.text, "A");
+    assert!(keys[0].1.shift);
+    assert!(!keys[0].1.repeat);
+    assert_eq!(keys[2].1.key, "V");
+    assert!(keys[2].1.ctrl);
+
+    assert_eq!(*backend.imes.lock().unwrap(), vec![(3, "compose_update:´".into()), (3, "commit:é".into())]);
+
     server.shutdown();
 }

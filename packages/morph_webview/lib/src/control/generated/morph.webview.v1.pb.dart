@@ -278,6 +278,7 @@ enum ServerMessage_Body {
   evaluateJavascriptResult,
   ack,
   error,
+  cursor,
   notSet
 }
 
@@ -290,6 +291,7 @@ class ServerMessage extends $pb.GeneratedMessage {
     EvaluateJavaScriptResult? evaluateJavascriptResult,
     Ack? ack,
     Error? error,
+    CursorEvent? cursor,
   }) {
     final result = ServerMessage._();
     if (seq != null) result.seq = seq;
@@ -300,6 +302,7 @@ class ServerMessage extends $pb.GeneratedMessage {
       result.evaluateJavascriptResult = evaluateJavascriptResult;
     if (ack != null) result.ack = ack;
     if (error != null) result.error = error;
+    if (cursor != null) result.cursor = cursor;
     return result;
   }
 
@@ -319,6 +322,7 @@ class ServerMessage extends $pb.GeneratedMessage {
     5: ServerMessage_Body.evaluateJavascriptResult,
     6: ServerMessage_Body.ack,
     7: ServerMessage_Body.error,
+    8: ServerMessage_Body.cursor,
     0: ServerMessage_Body.notSet
   };
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
@@ -326,7 +330,7 @@ class ServerMessage extends $pb.GeneratedMessage {
       package:
           const $pb.PackageName(_omitMessageNames ? '' : 'morph.webview.v1'),
       createEmptyInstance: ServerMessage.$_createMessage)
-    ..oo(0, [3, 4, 5, 6, 7])
+    ..oo(0, [3, 4, 5, 6, 7, 8])
     ..a<$fixnum.Int64>(1, _omitFieldNames ? '' : 'seq', $pb.PbFieldType.OU6,
         defaultOrMaker: $fixnum.Int64.ZERO)
     ..aInt64(2, _omitFieldNames ? '' : 'viewId')
@@ -340,6 +344,8 @@ class ServerMessage extends $pb.GeneratedMessage {
     ..aOM<Ack>(6, _omitFieldNames ? '' : 'ack', subBuilder: Ack.$_createMessage)
     ..aOM<Error>(7, _omitFieldNames ? '' : 'error',
         subBuilder: Error.$_createMessage)
+    ..aOM<CursorEvent>(8, _omitFieldNames ? '' : 'cursor',
+        subBuilder: CursorEvent.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -369,12 +375,14 @@ class ServerMessage extends $pb.GeneratedMessage {
   @$pb.TagNumber(5)
   @$pb.TagNumber(6)
   @$pb.TagNumber(7)
+  @$pb.TagNumber(8)
   ServerMessage_Body whichBody() => _ServerMessage_BodyByTag[$_whichOneof(0)]!;
   @$pb.TagNumber(3)
   @$pb.TagNumber(4)
   @$pb.TagNumber(5)
   @$pb.TagNumber(6)
   @$pb.TagNumber(7)
+  @$pb.TagNumber(8)
   void clearBody() => $_clearField($_whichOneof(0));
 
   @$pb.TagNumber(1)
@@ -450,6 +458,17 @@ class ServerMessage extends $pb.GeneratedMessage {
   void clearError() => $_clearField(7);
   @$pb.TagNumber(7)
   Error ensureError() => $_ensure(6);
+
+  @$pb.TagNumber(8)
+  CursorEvent get cursor => $_getN(7);
+  @$pb.TagNumber(8)
+  set cursor(CursorEvent value) => $_setField(8, value);
+  @$pb.TagNumber(8)
+  $core.bool hasCursor() => $_has(7);
+  @$pb.TagNumber(8)
+  void clearCursor() => $_clearField(8);
+  @$pb.TagNumber(8)
+  CursorEvent ensureCursor() => $_ensure(7);
 }
 
 class Navigate extends $pb.GeneratedMessage {
@@ -628,6 +647,14 @@ class Reload extends $pb.GeneratedMessage {
   static Reload? _defaultInstance;
 }
 
+/// Pointer or wheel event in view-logical coordinates. The backend multiplies
+/// x/y by the view's device pixel ratio. Phases: down, move, up, cancel,
+/// scroll, enter, leave, hover.
+///
+/// `button` is the button that changed for down/up (1=left, 2=middle, 3=right,
+/// 4=back, 5=forward); 0 otherwise.
+/// `buttons` is the mask of buttons currently held: bit 0 (1)=left, bit 1 (2)=
+/// middle, bit 2 (4)=right, bit 3 (8)=back, bit 4 (16)=forward.
 class PointerEvent extends $pb.GeneratedMessage {
   factory PointerEvent({
     $core.String? phase,
@@ -636,6 +663,11 @@ class PointerEvent extends $pb.GeneratedMessage {
     $core.int? button,
     $core.double? scrollDeltaX,
     $core.double? scrollDeltaY,
+    $core.int? buttons,
+    $core.bool? ctrl,
+    $core.bool? alt,
+    $core.bool? shift,
+    $core.bool? meta,
   }) {
     final result = PointerEvent._();
     if (phase != null) result.phase = phase;
@@ -644,6 +676,11 @@ class PointerEvent extends $pb.GeneratedMessage {
     if (button != null) result.button = button;
     if (scrollDeltaX != null) result.scrollDeltaX = scrollDeltaX;
     if (scrollDeltaY != null) result.scrollDeltaY = scrollDeltaY;
+    if (buttons != null) result.buttons = buttons;
+    if (ctrl != null) result.ctrl = ctrl;
+    if (alt != null) result.alt = alt;
+    if (shift != null) result.shift = shift;
+    if (meta != null) result.meta = meta;
     return result;
   }
 
@@ -667,6 +704,11 @@ class PointerEvent extends $pb.GeneratedMessage {
     ..aI(4, _omitFieldNames ? '' : 'button')
     ..aD(5, _omitFieldNames ? '' : 'scrollDeltaX')
     ..aD(6, _omitFieldNames ? '' : 'scrollDeltaY')
+    ..aI(7, _omitFieldNames ? '' : 'buttons')
+    ..aOB(8, _omitFieldNames ? '' : 'ctrl')
+    ..aOB(9, _omitFieldNames ? '' : 'alt')
+    ..aOB(10, _omitFieldNames ? '' : 'shift')
+    ..aOB(11, _omitFieldNames ? '' : 'meta')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -691,7 +733,6 @@ class PointerEvent extends $pb.GeneratedMessage {
           PointerEvent.$_createMessage);
   static PointerEvent? _defaultInstance;
 
-  /// down, move, up, cancel, scroll
   @$pb.TagNumber(1)
   $core.String get phase => $_getSZ(0);
   @$pb.TagNumber(1)
@@ -745,8 +786,57 @@ class PointerEvent extends $pb.GeneratedMessage {
   $core.bool hasScrollDeltaY() => $_has(5);
   @$pb.TagNumber(6)
   void clearScrollDeltaY() => $_clearField(6);
+
+  @$pb.TagNumber(7)
+  $core.int get buttons => $_getIZ(6);
+  @$pb.TagNumber(7)
+  set buttons($core.int value) => $_setSignedInt32(6, value);
+  @$pb.TagNumber(7)
+  $core.bool hasButtons() => $_has(6);
+  @$pb.TagNumber(7)
+  void clearButtons() => $_clearField(7);
+
+  @$pb.TagNumber(8)
+  $core.bool get ctrl => $_getBF(7);
+  @$pb.TagNumber(8)
+  set ctrl($core.bool value) => $_setBool(7, value);
+  @$pb.TagNumber(8)
+  $core.bool hasCtrl() => $_has(7);
+  @$pb.TagNumber(8)
+  void clearCtrl() => $_clearField(8);
+
+  @$pb.TagNumber(9)
+  $core.bool get alt => $_getBF(8);
+  @$pb.TagNumber(9)
+  set alt($core.bool value) => $_setBool(8, value);
+  @$pb.TagNumber(9)
+  $core.bool hasAlt() => $_has(8);
+  @$pb.TagNumber(9)
+  void clearAlt() => $_clearField(9);
+
+  @$pb.TagNumber(10)
+  $core.bool get shift => $_getBF(9);
+  @$pb.TagNumber(10)
+  set shift($core.bool value) => $_setBool(9, value);
+  @$pb.TagNumber(10)
+  $core.bool hasShift() => $_has(9);
+  @$pb.TagNumber(10)
+  void clearShift() => $_clearField(10);
+
+  @$pb.TagNumber(11)
+  $core.bool get meta => $_getBF(10);
+  @$pb.TagNumber(11)
+  set meta($core.bool value) => $_setBool(10, value);
+  @$pb.TagNumber(11)
+  $core.bool hasMeta() => $_has(10);
+  @$pb.TagNumber(11)
+  void clearMeta() => $_clearField(11);
 }
 
+/// Key down or up. `key` is a Flutter-style label ("A", "Enter", "Arrow Left").
+/// `text` is the produced character when there is one ("a", "A", "@").
+/// `hardware_keycode` is the platform scan code when known (X11/GDK keycode on
+/// Linux); 0 means the backend should derive it from the keyval.
 class KeyEvent extends $pb.GeneratedMessage {
   factory KeyEvent({
     $core.String? phase,
@@ -756,6 +846,8 @@ class KeyEvent extends $pb.GeneratedMessage {
     $core.bool? alt,
     $core.bool? shift,
     $core.bool? meta,
+    $core.String? text,
+    $core.bool? repeat,
   }) {
     final result = KeyEvent._();
     if (phase != null) result.phase = phase;
@@ -765,6 +857,8 @@ class KeyEvent extends $pb.GeneratedMessage {
     if (alt != null) result.alt = alt;
     if (shift != null) result.shift = shift;
     if (meta != null) result.meta = meta;
+    if (text != null) result.text = text;
+    if (repeat != null) result.repeat = repeat;
     return result;
   }
 
@@ -790,6 +884,8 @@ class KeyEvent extends $pb.GeneratedMessage {
     ..aOB(5, _omitFieldNames ? '' : 'alt')
     ..aOB(6, _omitFieldNames ? '' : 'shift')
     ..aOB(7, _omitFieldNames ? '' : 'meta')
+    ..aOS(8, _omitFieldNames ? '' : 'text')
+    ..aOB(9, _omitFieldNames ? '' : 'repeat')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -812,7 +908,6 @@ class KeyEvent extends $pb.GeneratedMessage {
       $pb.GeneratedMessage.$_defaultFor<KeyEvent>(KeyEvent.$_createMessage);
   static KeyEvent? _defaultInstance;
 
-  /// down or up
   @$pb.TagNumber(1)
   $core.String get phase => $_getSZ(0);
   @$pb.TagNumber(1)
@@ -875,8 +970,27 @@ class KeyEvent extends $pb.GeneratedMessage {
   $core.bool hasMeta() => $_has(6);
   @$pb.TagNumber(7)
   void clearMeta() => $_clearField(7);
+
+  @$pb.TagNumber(8)
+  $core.String get text => $_getSZ(7);
+  @$pb.TagNumber(8)
+  set text($core.String value) => $_setString(7, value);
+  @$pb.TagNumber(8)
+  $core.bool hasText() => $_has(7);
+  @$pb.TagNumber(8)
+  void clearText() => $_clearField(8);
+
+  @$pb.TagNumber(9)
+  $core.bool get repeat => $_getBF(8);
+  @$pb.TagNumber(9)
+  set repeat($core.bool value) => $_setBool(8, value);
+  @$pb.TagNumber(9)
+  $core.bool hasRepeat() => $_has(8);
+  @$pb.TagNumber(9)
+  void clearRepeat() => $_clearField(9);
 }
 
+/// IME / compose: compose_start, compose_update, compose_end, commit, focus, blur.
 class ImeEvent extends $pb.GeneratedMessage {
   factory ImeEvent({
     $core.String? phase,
@@ -926,7 +1040,6 @@ class ImeEvent extends $pb.GeneratedMessage {
       $pb.GeneratedMessage.$_defaultFor<ImeEvent>(ImeEvent.$_createMessage);
   static ImeEvent? _defaultInstance;
 
-  /// compose_start, compose_update, compose_end, commit
   @$pb.TagNumber(1)
   $core.String get phase => $_getSZ(0);
   @$pb.TagNumber(1)
@@ -944,6 +1057,67 @@ class ImeEvent extends $pb.GeneratedMessage {
   $core.bool hasText() => $_has(1);
   @$pb.TagNumber(2)
   void clearText() => $_clearField(2);
+}
+
+/// CSS cursor keyword reported by the web view (default, pointer, text, wait, …).
+/// macOS and Windows backends must emit this whenever the page cursor changes
+/// so the Flutter shell can apply SystemMouseCursors over a texture-hosted view.
+class CursorEvent extends $pb.GeneratedMessage {
+  factory CursorEvent({
+    $core.String? shape,
+  }) {
+    final result = CursorEvent._();
+    if (shape != null) result.shape = shape;
+    return result;
+  }
+
+  CursorEvent._();
+
+  factory CursorEvent.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      CursorEvent()..mergeFromBuffer(data, registry);
+  factory CursorEvent.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      CursorEvent()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'CursorEvent',
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'morph.webview.v1'),
+      createEmptyInstance: CursorEvent.$_createMessage)
+    ..aOS(1, _omitFieldNames ? '' : 'shape')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  CursorEvent clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  CursorEvent copyWith(void Function(CursorEvent) updates) =>
+      super.copyWith((message) => updates(message as CursorEvent))
+          as CursorEvent;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use CursorEvent() / CursorEvent.new instead')
+  static CursorEvent create() => CursorEvent._();
+  static $pb.GeneratedMessage $_createMessage() => CursorEvent._();
+  @$core.override
+  CursorEvent createEmptyInstance() => CursorEvent._();
+  @$core.pragma('dart2js:noInline')
+  static CursorEvent getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<CursorEvent>(
+          CursorEvent.$_createMessage);
+  static CursorEvent? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get shape => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set shape($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasShape() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearShape() => $_clearField(1);
 }
 
 class EvaluateJavaScript extends $pb.GeneratedMessage {

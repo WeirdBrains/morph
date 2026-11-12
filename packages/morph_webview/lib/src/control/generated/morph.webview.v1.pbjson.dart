@@ -173,6 +173,15 @@ const ServerMessage$json = {
       '9': 0,
       '10': 'error'
     },
+    {
+      '1': 'cursor',
+      '3': 8,
+      '4': 1,
+      '5': 11,
+      '6': '.morph.webview.v1.CursorEvent',
+      '9': 0,
+      '10': 'cursor'
+    },
   ],
   '8': [
     {'1': 'body'},
@@ -188,7 +197,8 @@ final $typed_data.Uint8List serverMessageDescriptor = $convert.base64Decode(
     'dWx0GAUgASgLMioubW9ycGgud2Vidmlldy52MS5FdmFsdWF0ZUphdmFTY3JpcHRSZXN1bHRIAF'
     'IYZXZhbHVhdGVKYXZhc2NyaXB0UmVzdWx0EikKA2FjaxgGIAEoCzIVLm1vcnBoLndlYnZpZXcu'
     'djEuQWNrSABSA2FjaxIvCgVlcnJvchgHIAEoCzIXLm1vcnBoLndlYnZpZXcudjEuRXJyb3JIAF'
-    'IFZXJyb3JCBgoEYm9keQ==');
+    'IFZXJyb3ISNwoGY3Vyc29yGAggASgLMh0ubW9ycGgud2Vidmlldy52MS5DdXJzb3JFdmVudEgA'
+    'UgZjdXJzb3JCBgoEYm9keQ==');
 
 @$core.Deprecated('Use navigateDescriptor instead')
 const Navigate$json = {
@@ -239,6 +249,11 @@ const PointerEvent$json = {
     {'1': 'button', '3': 4, '4': 1, '5': 5, '10': 'button'},
     {'1': 'scroll_delta_x', '3': 5, '4': 1, '5': 1, '10': 'scrollDeltaX'},
     {'1': 'scroll_delta_y', '3': 6, '4': 1, '5': 1, '10': 'scrollDeltaY'},
+    {'1': 'buttons', '3': 7, '4': 1, '5': 5, '10': 'buttons'},
+    {'1': 'ctrl', '3': 8, '4': 1, '5': 8, '10': 'ctrl'},
+    {'1': 'alt', '3': 9, '4': 1, '5': 8, '10': 'alt'},
+    {'1': 'shift', '3': 10, '4': 1, '5': 8, '10': 'shift'},
+    {'1': 'meta', '3': 11, '4': 1, '5': 8, '10': 'meta'},
   ],
 };
 
@@ -246,7 +261,9 @@ const PointerEvent$json = {
 final $typed_data.Uint8List pointerEventDescriptor = $convert.base64Decode(
     'CgxQb2ludGVyRXZlbnQSFAoFcGhhc2UYASABKAlSBXBoYXNlEgwKAXgYAiABKAFSAXgSDAoBeR'
     'gDIAEoAVIBeRIWCgZidXR0b24YBCABKAVSBmJ1dHRvbhIkCg5zY3JvbGxfZGVsdGFfeBgFIAEo'
-    'AVIMc2Nyb2xsRGVsdGFYEiQKDnNjcm9sbF9kZWx0YV95GAYgASgBUgxzY3JvbGxEZWx0YVk=');
+    'AVIMc2Nyb2xsRGVsdGFYEiQKDnNjcm9sbF9kZWx0YV95GAYgASgBUgxzY3JvbGxEZWx0YVkSGA'
+    'oHYnV0dG9ucxgHIAEoBVIHYnV0dG9ucxISCgRjdHJsGAggASgIUgRjdHJsEhAKA2FsdBgJIAEo'
+    'CFIDYWx0EhQKBXNoaWZ0GAogASgIUgVzaGlmdBISCgRtZXRhGAsgASgIUgRtZXRh');
 
 @$core.Deprecated('Use keyEventDescriptor instead')
 const KeyEvent$json = {
@@ -259,6 +276,8 @@ const KeyEvent$json = {
     {'1': 'alt', '3': 5, '4': 1, '5': 8, '10': 'alt'},
     {'1': 'shift', '3': 6, '4': 1, '5': 8, '10': 'shift'},
     {'1': 'meta', '3': 7, '4': 1, '5': 8, '10': 'meta'},
+    {'1': 'text', '3': 8, '4': 1, '5': 9, '10': 'text'},
+    {'1': 'repeat', '3': 9, '4': 1, '5': 8, '10': 'repeat'},
   ],
 };
 
@@ -267,7 +286,7 @@ final $typed_data.Uint8List keyEventDescriptor = $convert.base64Decode(
     'CghLZXlFdmVudBIUCgVwaGFzZRgBIAEoCVIFcGhhc2USEAoDa2V5GAIgASgJUgNrZXkSKQoQaG'
     'FyZHdhcmVfa2V5Y29kZRgDIAEoDVIPaGFyZHdhcmVLZXljb2RlEhIKBGN0cmwYBCABKAhSBGN0'
     'cmwSEAoDYWx0GAUgASgIUgNhbHQSFAoFc2hpZnQYBiABKAhSBXNoaWZ0EhIKBG1ldGEYByABKA'
-    'hSBG1ldGE=');
+    'hSBG1ldGESEgoEdGV4dBgIIAEoCVIEdGV4dBIWCgZyZXBlYXQYCSABKAhSBnJlcGVhdA==');
 
 @$core.Deprecated('Use imeEventDescriptor instead')
 const ImeEvent$json = {
@@ -281,6 +300,18 @@ const ImeEvent$json = {
 /// Descriptor for `ImeEvent`. Decode as a `google.protobuf.DescriptorProto`.
 final $typed_data.Uint8List imeEventDescriptor = $convert.base64Decode(
     'CghJbWVFdmVudBIUCgVwaGFzZRgBIAEoCVIFcGhhc2USEgoEdGV4dBgCIAEoCVIEdGV4dA==');
+
+@$core.Deprecated('Use cursorEventDescriptor instead')
+const CursorEvent$json = {
+  '1': 'CursorEvent',
+  '2': [
+    {'1': 'shape', '3': 1, '4': 1, '5': 9, '10': 'shape'},
+  ],
+};
+
+/// Descriptor for `CursorEvent`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List cursorEventDescriptor =
+    $convert.base64Decode('CgtDdXJzb3JFdmVudBIUCgVzaGFwZRgBIAEoCVIFc2hhcGU=');
 
 @$core.Deprecated('Use evaluateJavaScriptDescriptor instead')
 const EvaluateJavaScript$json = {
