@@ -3,6 +3,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:morph/src/api.dart';
 import 'package:morph/src/app.dart';
 import 'package:morph/src/shell.dart';
+import 'package:morph/src/theme/morph_theme.dart';
+import 'package:morph/src/widgets/start_page.dart';
 import 'package:morph_webview/morph_webview.dart';
 
 class FakeMorphApi implements MorphApi {
@@ -35,6 +37,19 @@ class FakeMorphApi implements MorphApi {
   }
 }
 
+/// Wait until identity info is on screen. Do not wait for `ready`: that flag
+/// also covers the page-bridge asset, which can stall in the fake async zone.
+Future<void> _pumpUntilIdentity(WidgetTester tester) async {
+  await tester.pump();
+  await tester.pump();
+  final state = tester.state<MorphShellState>(find.byType(MorphShell));
+  expect(
+    state.coreVersionLabel,
+    isNotNull,
+    reason: 'shell failed to load identity: ${state.error}',
+  );
+}
+
 void main() {
   late FakeMorphWebViewPlatform fakeWebView;
 
@@ -48,13 +63,16 @@ void main() {
     final api = FakeMorphApi();
     await tester.pumpWidget(
       MaterialApp(
+        theme: MorphTheme.dark,
         home: MorphShell(api: api, home: missingHome, subscribeToTicks: false),
       ),
     );
-    await tester.pump();
-    await tester.pump();
+    await _pumpUntilIdentity(tester);
 
     expect(find.byKey(const Key('address-bar')), findsOneWidget);
+    expect(find.byKey(const Key('start-page')), findsOneWidget);
+    expect(find.byType(MorphStartPage), findsOneWidget);
+    expect(find.byKey(const Key('morph-wordmark')), findsOneWidget);
     expect(find.textContaining('morph-core 0.1.0'), findsOneWidget);
     expect(find.textContaining('Home exists false'), findsOneWidget);
 
@@ -71,12 +89,19 @@ void main() {
     );
   });
 
-  testWidgets('MorphApp builds', (tester) async {
+  testWidgets('MorphApp hides the debug banner and shows branded chrome', (
+    tester,
+  ) async {
+    const missingHome = '/tmp/morph-does-not-exist';
     await tester.pumpWidget(
-      MorphApp(api: FakeMorphApi(), subscribeToTicks: false),
+      MorphApp(api: FakeMorphApi(), home: missingHome, subscribeToTicks: false),
     );
-    await tester.pump();
-    await tester.pump();
-    expect(find.text('Morph'), findsOneWidget);
+    await _pumpUntilIdentity(tester);
+    expect(find.byType(CheckedModeBanner), findsNothing);
+    expect(find.byType(Banner), findsNothing);
+    expect(find.byKey(const Key('morph-mark')), findsOneWidget);
+    expect(find.byKey(const Key('morph-wordmark')), findsOneWidget);
+    expect(find.byKey(const Key('start-page')), findsOneWidget);
+    expect(find.byKey(const Key('address-bar')), findsOneWidget);
   });
 }
