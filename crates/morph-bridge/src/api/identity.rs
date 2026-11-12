@@ -38,15 +38,18 @@ pub struct ProfileIdentityView {
     pub fingerprint: String,
     pub created_ms: i64,
     pub imported: bool,
+    /// Moved here from another device over a QR link.
+    pub linked: bool,
 }
 
 impl ProfileIdentityView {
-    fn from(identity: ProfileIdentity) -> Self {
+    pub(crate) fn from(identity: ProfileIdentity) -> Self {
         Self {
             user_id: identity.user_id,
             fingerprint: identity.fingerprint,
             created_ms: identity.created_ms,
             imported: identity.source == Source::Imported,
+            linked: identity.source == Source::Linked,
         }
     }
 }
@@ -57,14 +60,14 @@ pub struct CreatedIdentityView {
     pub words: String,
 }
 
-fn profile_dir(home: Option<String>, profile_id: &str) -> Result<PathBuf, String> {
+pub(crate) fn profile_dir(home: Option<String>, profile_id: &str) -> Result<PathBuf, String> {
     let explicit = home.filter(|h| !h.is_empty()).map(PathBuf::from);
     let home = Paths::resolve(explicit).map_err(|e| e.to_string())?.home;
     morph_core::profiles::require(&home, profile_id).map_err(|e| e.to_string())?;
     Ok(morph_core::profiles::profile_dir(&home, profile_id))
 }
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 

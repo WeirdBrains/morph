@@ -4,6 +4,7 @@
 // ignore_for_file: unused_import, unused_element, unnecessary_import, duplicate_ignore, invalid_use_of_internal_member, annotate_overrides, non_constant_identifier_names, curly_braces_in_flow_control_structures, prefer_const_literals_to_create_immutables, unused_field
 
 import 'api/control.dart';
+import 'api/device_link.dart';
 import 'api/events.dart';
 import 'api/identity.dart';
 import 'api/info.dart';
@@ -85,6 +86,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   IdentityStatusView dco_decode_identity_status_view(dynamic raw);
+
+  @protected
+  LinkOfferView dco_decode_link_offer_view(dynamic raw);
+
+  @protected
+  LinkPairingView dco_decode_link_pairing_view(dynamic raw);
+
+  @protected
+  LinkStatusView dco_decode_link_status_view(dynamic raw);
 
   @protected
   List<String> dco_decode_list_String(dynamic raw);
@@ -211,6 +221,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   IdentityStatusView sse_decode_identity_status_view(
     SseDeserializer deserializer,
   );
+
+  @protected
+  LinkOfferView sse_decode_link_offer_view(SseDeserializer deserializer);
+
+  @protected
+  LinkPairingView sse_decode_link_pairing_view(SseDeserializer deserializer);
+
+  @protected
+  LinkStatusView sse_decode_link_status_view(SseDeserializer deserializer);
 
   @protected
   List<String> sse_decode_list_String(SseDeserializer deserializer);
@@ -365,6 +384,21 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_identity_status_view(
     IdentityStatusView self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_link_offer_view(LinkOfferView self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_link_pairing_view(
+    LinkPairingView self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_link_status_view(
+    LinkStatusView self,
     SseSerializer serializer,
   );
 

@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'api.dart';
 import 'rust/api/events.dart' as rust_events;
+import 'rust/api/device_link.dart' as rust_link;
 import 'rust/api/identity.dart' as rust_identity;
 import 'rust/api/info.dart' as rust_info;
 import 'rust/api/library.dart' as rust_library;
@@ -493,6 +494,7 @@ class FfiMorphApi implements MorphApi {
         fingerprint: v.fingerprint,
         created: DateTime.fromMillisecondsSinceEpoch(v.createdMs.toInt()),
         imported: v.imported,
+        linked: v.linked,
       );
 
   @override
@@ -553,4 +555,79 @@ class FfiMorphApi implements MorphApi {
   @override
   Future<void> clearHistory(String profileId, {String? home}) =>
       rust_library.clearHistory(home: home, profileId: profileId);
+
+  @override
+  Future<MorphLinkOffer> linkNewDeviceStart(String deviceName) async {
+    final v = await rust_link.linkNewDeviceStart(deviceName: deviceName);
+    return MorphLinkOffer(
+      session: v.session.toInt(),
+      link: v.link,
+      expires: DateTime.fromMillisecondsSinceEpoch(v.expiresMs.toInt()),
+    );
+  }
+
+  @override
+  Future<MorphLinkStatus> linkNewDeviceStatus(int session) async {
+    final v = await rust_link.linkNewDeviceStatus(
+      session: BigInt.from(session),
+    );
+    final state = MorphLinkState.values.firstWhere(
+      (s) => s.name == v.state,
+      orElse: () => MorphLinkState.failed,
+    );
+    return MorphLinkStatus(state, sas: v.sas, reason: v.reason);
+  }
+
+  @override
+  Future<void> linkNewDeviceConfirm(int session) =>
+      rust_link.linkNewDeviceConfirm(session: BigInt.from(session));
+
+  @override
+  Future<MorphIdentity> linkNewDeviceFinish(
+    String profileId,
+    int session,
+    String password, {
+    String? home,
+  }) async => _identity(
+    await rust_link.linkNewDeviceFinish(
+      home: home,
+      profileId: profileId,
+      session: BigInt.from(session),
+      password: password,
+    ),
+  );
+
+  @override
+  Future<void> linkNewDeviceCancel(int session) =>
+      rust_link.linkNewDeviceCancel(session: BigInt.from(session));
+
+  @override
+  Future<MorphLinkPairing> linkAddDeviceStart(
+    String profileId,
+    String profileName,
+    String password,
+    String link, {
+    String? home,
+  }) async {
+    final v = await rust_link.linkAddDeviceStart(
+      home: home,
+      profileId: profileId,
+      profileName: profileName,
+      password: password,
+      link: link,
+    );
+    return MorphLinkPairing(
+      session: v.session.toInt(),
+      sas: v.sas,
+      device: v.device,
+    );
+  }
+
+  @override
+  Future<void> linkAddDeviceSend(int session) =>
+      rust_link.linkAddDeviceSend(session: BigInt.from(session));
+
+  @override
+  Future<void> linkAddDeviceCancel(int session) =>
+      rust_link.linkAddDeviceCancel(session: BigInt.from(session));
 }
