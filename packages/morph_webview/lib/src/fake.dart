@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/widgets.dart';
 
@@ -186,6 +187,95 @@ class FakeMorphWebViewSession extends MorphWebViewSession {
       return '';
     }
     return '';
+  }
+
+  bool _desktopSite = false;
+  Uint8List? screenshotBytes;
+
+  @override
+  bool get desktopSite => _desktopSite;
+
+  @override
+  Future<void> setDesktopSite(bool enabled) async {
+    _desktopSite = enabled;
+  }
+
+  @override
+  Future<Uint8List?> takeScreenshot() async {
+    // A 1x1 PNG so tab-switcher tests have a preview to render.
+    return screenshotBytes ??
+        Uint8List.fromList(const [
+          0x89,
+          0x50,
+          0x4E,
+          0x47,
+          0x0D,
+          0x0A,
+          0x1A,
+          0x0A,
+          0x00,
+          0x00,
+          0x00,
+          0x0D,
+          0x49,
+          0x48,
+          0x44,
+          0x52,
+          0x00,
+          0x00,
+          0x00,
+          0x01,
+          0x00,
+          0x00,
+          0x00,
+          0x01,
+          0x08,
+          0x02,
+          0x00,
+          0x00,
+          0x00,
+          0x90,
+          0x77,
+          0x53,
+          0xDE,
+          0x00,
+          0x00,
+          0x00,
+          0x0C,
+          0x49,
+          0x44,
+          0x41,
+          0x54,
+          0x08,
+          0xD7,
+          0x63,
+          0xF8,
+          0xCF,
+          0xC0,
+          0x00,
+          0x00,
+          0x00,
+          0x03,
+          0x00,
+          0x01,
+          0x00,
+          0x05,
+          0xFE,
+          0xD4,
+          0xEF,
+          0x00,
+          0x00,
+          0x00,
+          0x00,
+          0x49,
+          0x45,
+          0x4E,
+          0x44,
+          0xAE,
+          0x42,
+          0x60,
+          0x82,
+        ]);
   }
 
   @override

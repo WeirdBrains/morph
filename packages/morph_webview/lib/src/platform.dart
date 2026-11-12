@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter/widgets.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
@@ -56,6 +58,15 @@ abstract class MorphWebViewSession {
   Future<void> sendKey(MorphKeyEvent event);
   Future<void> sendIme(MorphImeEvent event) async {}
   Future<String?> evaluateJavaScript(String script);
+
+  /// A PNG of the current page, or null when the backend cannot capture one.
+  Future<Uint8List?> takeScreenshot() async => null;
+
+  /// Request a desktop or mobile user-agent / content mode.
+  Future<void> setDesktopSite(bool enabled) async {}
+
+  bool get desktopSite => false;
+
   Future<void> dispose();
 }
 

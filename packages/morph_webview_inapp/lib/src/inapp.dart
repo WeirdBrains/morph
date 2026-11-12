@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 import 'dart:collection';
 import 'dart:io';
 
@@ -340,6 +341,35 @@ class _InAppSession extends MorphWebViewSession {
   @override
   Future<String?> evaluateJavaScript(String script) {
     return _client.evaluateJavaScript(viewId, script);
+  }
+
+  bool _desktopSite = false;
+
+  @override
+  bool get desktopSite => _desktopSite;
+
+  @override
+  Future<void> setDesktopSite(bool enabled) async {
+    _desktopSite = enabled;
+    final controller = _controller;
+    if (controller == null) {
+      return;
+    }
+    await controller.setSettings(
+      settings: InAppWebViewSettings(
+        preferredContentMode: enabled
+            ? UserPreferredContentMode.DESKTOP
+            : UserPreferredContentMode.MOBILE,
+        useWideViewPort: enabled,
+        loadWithOverviewMode: enabled,
+      ),
+    );
+    await controller.reload();
+  }
+
+  @override
+  Future<Uint8List?> takeScreenshot() async {
+    return _controller?.takeScreenshot();
   }
 
   @override
