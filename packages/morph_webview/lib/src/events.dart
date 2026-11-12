@@ -27,11 +27,12 @@ class MorphNavigationEvent {
 class MorphRenderPathInfo {
   const MorphRenderPathInfo({required this.path, required this.reason});
 
-  /// `wpe-dmabuf` or `webkitgtk-snapshot`.
+  /// `wpe-dmabuf`, `flutter-gl`, or `webkitgtk-snapshot`.
   final String path;
   final String reason;
 
   bool get isDmaBuf => path == 'wpe-dmabuf';
+  bool get isGlTexture => path == 'flutter-gl';
   bool get isSnapshot => path == 'webkitgtk-snapshot';
 
   @override
