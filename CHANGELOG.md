@@ -47,6 +47,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   restarts and tab recreation. `window.open` / new-window requests open a
   related view instead of being dropped. macOS, Windows, and Android keep
   the shared, non-incognito cookie store used by flutter_inappwebview.
+- A session check covers a cross-host OAuth-style redirect (client state
+  cookie set, hop to a different-host IdP, return with `code=`) so the
+  callback still receives the client cookie after a simulated restart.
 - Chrome-style user profiles are unlimited. Each profile keeps an isolated
   WebKit session under `<morph home>/profiles/<id>/webkit/` (cookies,
   localStorage, IndexedDB, cache). Tabs in the same profile share that
