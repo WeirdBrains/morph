@@ -39,7 +39,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.13.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 615648368;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -430847686;
 
 // Section: executor
 
@@ -70,6 +70,60 @@ fn wire__crate__api__library__add_bookmark_impl(
             move |context| {
                 transform_result_sse::<_, String>((move || {
                     let output_ok = crate::api::library::add_bookmark(api_home, api_profile_id, api_url, api_title)?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__library__bookmark_tags_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "bookmark_tags",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe { flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(ptr_, rust_vec_len_, data_len_) };
+            let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_home = <Option<String>>::sse_decode(&mut deserializer);
+            let api_profile_id = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::library::bookmark_tags(api_home, api_profile_id)?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__library__bookmark_tree_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "bookmark_tree",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe { flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(ptr_, rust_vec_len_, data_len_) };
+            let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_home = <Option<String>>::sse_decode(&mut deserializer);
+            let api_profile_id = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::library::bookmark_tree(api_home, api_profile_id)?;
                     std::result::Result::Ok(output_ok)
                 })())
             }
@@ -250,6 +304,35 @@ fn wire__crate__api__info__core_version_impl(
         },
     )
 }
+fn wire__crate__api__library__create_bookmark_folder_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "create_bookmark_folder",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe { flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(ptr_, rust_vec_len_, data_len_) };
+            let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_home = <Option<String>>::sse_decode(&mut deserializer);
+            let api_profile_id = <String>::sse_decode(&mut deserializer);
+            let api_name = <String>::sse_decode(&mut deserializer);
+            let api_parent_id = <Option<String>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::library::create_bookmark_folder(api_home, api_profile_id, api_name, api_parent_id)?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__profiles__create_profile_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -299,6 +382,62 @@ fn wire__crate__api__identity__create_profile_identity_impl(
             move |context| {
                 transform_result_sse::<_, String>((move || {
                     let output_ok = crate::api::identity::create_profile_identity(api_home, api_profile_id, api_password)?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__library__delete_bookmark_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "delete_bookmark",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe { flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(ptr_, rust_vec_len_, data_len_) };
+            let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_home = <Option<String>>::sse_decode(&mut deserializer);
+            let api_profile_id = <String>::sse_decode(&mut deserializer);
+            let api_bookmark_id = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::library::delete_bookmark(api_home, api_profile_id, api_bookmark_id)?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__library__delete_bookmark_folder_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "delete_bookmark_folder",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe { flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(ptr_, rust_vec_len_, data_len_) };
+            let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_home = <Option<String>>::sse_decode(&mut deserializer);
+            let api_profile_id = <String>::sse_decode(&mut deserializer);
+            let api_folder_id = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::library::delete_bookmark_folder(api_home, api_profile_id, api_folder_id)?;
                     std::result::Result::Ok(output_ok)
                 })())
             }
@@ -577,6 +716,36 @@ fn wire__crate__api__settings__load_settings_impl(
         },
     )
 }
+fn wire__crate__api__library__move_bookmark_item_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "move_bookmark_item",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe { flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(ptr_, rust_vec_len_, data_len_) };
+            let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_home = <Option<String>>::sse_decode(&mut deserializer);
+            let api_profile_id = <String>::sse_decode(&mut deserializer);
+            let api_item_id = <String>::sse_decode(&mut deserializer);
+            let api_parent_id = <Option<String>>::sse_decode(&mut deserializer);
+            let api_index = <u32>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::library::move_bookmark_item(api_home, api_profile_id, api_item_id, api_parent_id, api_index)?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__identity__new_ephemeral_user_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -741,6 +910,35 @@ fn wire__crate__api__library__remove_bookmark_impl(
         },
     )
 }
+fn wire__crate__api__library__rename_bookmark_folder_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "rename_bookmark_folder",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe { flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(ptr_, rust_vec_len_, data_len_) };
+            let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_home = <Option<String>>::sse_decode(&mut deserializer);
+            let api_profile_id = <String>::sse_decode(&mut deserializer);
+            let api_folder_id = <String>::sse_decode(&mut deserializer);
+            let api_name = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::library::rename_bookmark_folder(api_home, api_profile_id, api_folder_id, api_name)?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__profiles__rename_profile_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -763,6 +961,35 @@ fn wire__crate__api__profiles__rename_profile_impl(
             move |context| {
                 transform_result_sse::<_, String>((move || {
                     let output_ok = crate::api::profiles::rename_profile(api_home, api_id, api_name)?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__library__search_bookmarks_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "search_bookmarks",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe { flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(ptr_, rust_vec_len_, data_len_) };
+            let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_home = <Option<String>>::sse_decode(&mut deserializer);
+            let api_profile_id = <String>::sse_decode(&mut deserializer);
+            let api_query = <String>::sse_decode(&mut deserializer);
+            let api_tag = <Option<String>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::library::search_bookmarks(api_home, api_profile_id, api_query, api_tag)?;
                     std::result::Result::Ok(output_ok)
                 })())
             }
@@ -954,6 +1181,37 @@ fn wire__crate__api__control__stop_webview_control_impl(
         },
     )
 }
+fn wire__crate__api__library__update_bookmark_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "update_bookmark",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe { flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(ptr_, rust_vec_len_, data_len_) };
+            let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_home = <Option<String>>::sse_decode(&mut deserializer);
+            let api_profile_id = <String>::sse_decode(&mut deserializer);
+            let api_bookmark_id = <String>::sse_decode(&mut deserializer);
+            let api_title = <Option<String>>::sse_decode(&mut deserializer);
+            let api_url = <Option<String>>::sse_decode(&mut deserializer);
+            let api_tags = <Option<Vec<String>>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::library::update_bookmark(api_home, api_profile_id, api_bookmark_id, api_title, api_url, api_tags)?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 
 // Section: dart2rust
 
@@ -989,13 +1247,65 @@ impl SseDecode for String {
     }
 }
 
+impl SseDecode for crate::api::library::BookmarkFolderView {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_id = <String>::sse_decode(deserializer);
+        let mut var_name = <String>::sse_decode(deserializer);
+        let mut var_parentId = <Option<String>>::sse_decode(deserializer);
+        let mut var_order = <String>::sse_decode(deserializer);
+        let mut var_createdMs = <i64>::sse_decode(deserializer);
+        let mut var_updatedMs = <i64>::sse_decode(deserializer);
+        return crate::api::library::BookmarkFolderView {
+            id: var_id,
+            name: var_name,
+            parent_id: var_parentId,
+            order: var_order,
+            created_ms: var_createdMs,
+            updated_ms: var_updatedMs,
+        };
+    }
+}
+
+impl SseDecode for crate::api::library::BookmarkTagView {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_name = <String>::sse_decode(deserializer);
+        let mut var_count = <u32>::sse_decode(deserializer);
+        return crate::api::library::BookmarkTagView { name: var_name, count: var_count };
+    }
+}
+
+impl SseDecode for crate::api::library::BookmarkTreeView {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_folders = <Vec<crate::api::library::BookmarkFolderView>>::sse_decode(deserializer);
+        let mut var_bookmarks = <Vec<crate::api::library::BookmarkView>>::sse_decode(deserializer);
+        return crate::api::library::BookmarkTreeView { folders: var_folders, bookmarks: var_bookmarks };
+    }
+}
+
 impl SseDecode for crate::api::library::BookmarkView {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_id = <String>::sse_decode(deserializer);
         let mut var_url = <String>::sse_decode(deserializer);
         let mut var_title = <String>::sse_decode(deserializer);
         let mut var_addedMs = <i64>::sse_decode(deserializer);
-        return crate::api::library::BookmarkView { url: var_url, title: var_title, added_ms: var_addedMs };
+        let mut var_updatedMs = <i64>::sse_decode(deserializer);
+        let mut var_folderId = <Option<String>>::sse_decode(deserializer);
+        let mut var_order = <String>::sse_decode(deserializer);
+        let mut var_tags = <Vec<String>>::sse_decode(deserializer);
+        return crate::api::library::BookmarkView {
+            id: var_id,
+            url: var_url,
+            title: var_title,
+            added_ms: var_addedMs,
+            updated_ms: var_updatedMs,
+            folder_id: var_folderId,
+            order: var_order,
+            tags: var_tags,
+        };
     }
 }
 
@@ -1118,6 +1428,42 @@ impl SseDecode for crate::api::identity::IdentityStatusView {
     }
 }
 
+impl SseDecode for Vec<String> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<String>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
+impl SseDecode for Vec<crate::api::library::BookmarkFolderView> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::library::BookmarkFolderView>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
+impl SseDecode for Vec<crate::api::library::BookmarkTagView> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::library::BookmarkTagView>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
 impl SseDecode for Vec<crate::api::library::BookmarkView> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -1182,6 +1528,17 @@ impl SseDecode for Option<crate::api::identity::ProfileIdentityView> {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         if (<bool>::sse_decode(deserializer)) {
             return Some(<crate::api::identity::ProfileIdentityView>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
+impl SseDecode for Option<Vec<String>> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<Vec<String>>::sse_decode(deserializer));
         } else {
             return None;
         }
@@ -1287,37 +1644,46 @@ fn pde_ffi_dispatcher_primary_impl(
     // Codec=Pde (Serialization + dispatch), see doc to use other codecs
     match func_id {
         1 => wire__crate__api__library__add_bookmark_impl(port, ptr, rust_vec_len, data_len),
-        2 => wire__crate__api__library__clear_history_impl(port, ptr, rust_vec_len, data_len),
-        3 => wire__crate__api__control__control_backend_events_impl(port, ptr, rust_vec_len, data_len),
-        4 => wire__crate__api__control__control_complete_evaluate_js_impl(port, ptr, rust_vec_len, data_len),
-        5 => wire__crate__api__control__control_emit_navigation_impl(port, ptr, rust_vec_len, data_len),
-        6 => wire__crate__api__control__control_emit_page_message_impl(port, ptr, rust_vec_len, data_len),
-        8 => wire__crate__api__profiles__create_profile_impl(port, ptr, rust_vec_len, data_len),
-        9 => wire__crate__api__identity__create_profile_identity_impl(port, ptr, rust_vec_len, data_len),
-        10 => wire__crate__api__library__delete_history_url_impl(port, ptr, rust_vec_len, data_len),
-        11 => wire__crate__api__profiles__delete_profile_impl(port, ptr, rust_vec_len, data_len),
-        12 => wire__crate__api__events__event_ticks_impl(port, ptr, rust_vec_len, data_len),
-        13 => wire__crate__api__page__handle_page_message_impl(port, ptr, rust_vec_len, data_len),
-        14 => wire__crate__api__identity__identity_dir_info_impl(port, ptr, rust_vec_len, data_len),
-        15 => wire__crate__api__identity__import_profile_identity_impl(port, ptr, rust_vec_len, data_len),
-        16 => wire__crate__api__library__list_bookmarks_impl(port, ptr, rust_vec_len, data_len),
-        17 => wire__crate__api__library__list_history_impl(port, ptr, rust_vec_len, data_len),
-        18 => wire__crate__api__profiles__list_profiles_impl(port, ptr, rust_vec_len, data_len),
-        19 => wire__crate__api__settings__load_settings_impl(port, ptr, rust_vec_len, data_len),
-        20 => wire__crate__api__identity__new_ephemeral_user_impl(port, ptr, rust_vec_len, data_len),
-        21 => wire__crate__api__identity__profile_identity_impl(port, ptr, rust_vec_len, data_len),
-        22 => wire__crate__api__profiles__profile_paths_impl(port, ptr, rust_vec_len, data_len),
-        23 => wire__crate__api__identity__profile_recovery_words_impl(port, ptr, rust_vec_len, data_len),
-        24 => wire__crate__api__library__record_visit_impl(port, ptr, rust_vec_len, data_len),
-        25 => wire__crate__api__library__remove_bookmark_impl(port, ptr, rust_vec_len, data_len),
-        26 => wire__crate__api__profiles__rename_profile_impl(port, ptr, rust_vec_len, data_len),
-        27 => wire__crate__api__profiles__set_current_profile_impl(port, ptr, rust_vec_len, data_len),
-        28 => wire__crate__api__settings__set_sidebar_collapsed_impl(port, ptr, rust_vec_len, data_len),
-        29 => wire__crate__api__settings__set_sidebar_width_impl(port, ptr, rust_vec_len, data_len),
-        30 => wire__crate__api__settings__set_tab_position_impl(port, ptr, rust_vec_len, data_len),
-        31 => wire__crate__api__control__start_webview_control_impl(port, ptr, rust_vec_len, data_len),
-        32 => wire__crate__api__control__start_webview_control_loopback_impl(port, ptr, rust_vec_len, data_len),
-        33 => wire__crate__api__control__stop_webview_control_impl(port, ptr, rust_vec_len, data_len),
+        2 => wire__crate__api__library__bookmark_tags_impl(port, ptr, rust_vec_len, data_len),
+        3 => wire__crate__api__library__bookmark_tree_impl(port, ptr, rust_vec_len, data_len),
+        4 => wire__crate__api__library__clear_history_impl(port, ptr, rust_vec_len, data_len),
+        5 => wire__crate__api__control__control_backend_events_impl(port, ptr, rust_vec_len, data_len),
+        6 => wire__crate__api__control__control_complete_evaluate_js_impl(port, ptr, rust_vec_len, data_len),
+        7 => wire__crate__api__control__control_emit_navigation_impl(port, ptr, rust_vec_len, data_len),
+        8 => wire__crate__api__control__control_emit_page_message_impl(port, ptr, rust_vec_len, data_len),
+        10 => wire__crate__api__library__create_bookmark_folder_impl(port, ptr, rust_vec_len, data_len),
+        11 => wire__crate__api__profiles__create_profile_impl(port, ptr, rust_vec_len, data_len),
+        12 => wire__crate__api__identity__create_profile_identity_impl(port, ptr, rust_vec_len, data_len),
+        13 => wire__crate__api__library__delete_bookmark_impl(port, ptr, rust_vec_len, data_len),
+        14 => wire__crate__api__library__delete_bookmark_folder_impl(port, ptr, rust_vec_len, data_len),
+        15 => wire__crate__api__library__delete_history_url_impl(port, ptr, rust_vec_len, data_len),
+        16 => wire__crate__api__profiles__delete_profile_impl(port, ptr, rust_vec_len, data_len),
+        17 => wire__crate__api__events__event_ticks_impl(port, ptr, rust_vec_len, data_len),
+        18 => wire__crate__api__page__handle_page_message_impl(port, ptr, rust_vec_len, data_len),
+        19 => wire__crate__api__identity__identity_dir_info_impl(port, ptr, rust_vec_len, data_len),
+        20 => wire__crate__api__identity__import_profile_identity_impl(port, ptr, rust_vec_len, data_len),
+        21 => wire__crate__api__library__list_bookmarks_impl(port, ptr, rust_vec_len, data_len),
+        22 => wire__crate__api__library__list_history_impl(port, ptr, rust_vec_len, data_len),
+        23 => wire__crate__api__profiles__list_profiles_impl(port, ptr, rust_vec_len, data_len),
+        24 => wire__crate__api__settings__load_settings_impl(port, ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__library__move_bookmark_item_impl(port, ptr, rust_vec_len, data_len),
+        26 => wire__crate__api__identity__new_ephemeral_user_impl(port, ptr, rust_vec_len, data_len),
+        27 => wire__crate__api__identity__profile_identity_impl(port, ptr, rust_vec_len, data_len),
+        28 => wire__crate__api__profiles__profile_paths_impl(port, ptr, rust_vec_len, data_len),
+        29 => wire__crate__api__identity__profile_recovery_words_impl(port, ptr, rust_vec_len, data_len),
+        30 => wire__crate__api__library__record_visit_impl(port, ptr, rust_vec_len, data_len),
+        31 => wire__crate__api__library__remove_bookmark_impl(port, ptr, rust_vec_len, data_len),
+        32 => wire__crate__api__library__rename_bookmark_folder_impl(port, ptr, rust_vec_len, data_len),
+        33 => wire__crate__api__profiles__rename_profile_impl(port, ptr, rust_vec_len, data_len),
+        34 => wire__crate__api__library__search_bookmarks_impl(port, ptr, rust_vec_len, data_len),
+        35 => wire__crate__api__profiles__set_current_profile_impl(port, ptr, rust_vec_len, data_len),
+        36 => wire__crate__api__settings__set_sidebar_collapsed_impl(port, ptr, rust_vec_len, data_len),
+        37 => wire__crate__api__settings__set_sidebar_width_impl(port, ptr, rust_vec_len, data_len),
+        38 => wire__crate__api__settings__set_tab_position_impl(port, ptr, rust_vec_len, data_len),
+        39 => wire__crate__api__control__start_webview_control_impl(port, ptr, rust_vec_len, data_len),
+        40 => wire__crate__api__control__start_webview_control_loopback_impl(port, ptr, rust_vec_len, data_len),
+        41 => wire__crate__api__control__stop_webview_control_impl(port, ptr, rust_vec_len, data_len),
+        42 => wire__crate__api__library__update_bookmark_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -1330,7 +1696,7 @@ fn pde_ffi_dispatcher_sync_impl(
 ) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
     // Codec=Pde (Serialization + dispatch), see doc to use other codecs
     match func_id {
-        7 => wire__crate__api__info__core_version_impl(ptr, rust_vec_len, data_len),
+        9 => wire__crate__api__info__core_version_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -1338,9 +1704,63 @@ fn pde_ffi_dispatcher_sync_impl(
 // Section: rust2dart
 
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::library::BookmarkFolderView {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.id.into_into_dart().into_dart(),
+            self.name.into_into_dart().into_dart(),
+            self.parent_id.into_into_dart().into_dart(),
+            self.order.into_into_dart().into_dart(),
+            self.created_ms.into_into_dart().into_dart(),
+            self.updated_ms.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::library::BookmarkFolderView {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::library::BookmarkFolderView> for crate::api::library::BookmarkFolderView {
+    fn into_into_dart(self) -> crate::api::library::BookmarkFolderView {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::library::BookmarkTagView {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [self.name.into_into_dart().into_dart(), self.count.into_into_dart().into_dart()].into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::library::BookmarkTagView {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::library::BookmarkTagView> for crate::api::library::BookmarkTagView {
+    fn into_into_dart(self) -> crate::api::library::BookmarkTagView {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::library::BookmarkTreeView {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [self.folders.into_into_dart().into_dart(), self.bookmarks.into_into_dart().into_dart()].into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::library::BookmarkTreeView {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::library::BookmarkTreeView> for crate::api::library::BookmarkTreeView {
+    fn into_into_dart(self) -> crate::api::library::BookmarkTreeView {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::library::BookmarkView {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
-        [self.url.into_into_dart().into_dart(), self.title.into_into_dart().into_dart(), self.added_ms.into_into_dart().into_dart()].into_dart()
+        [
+            self.id.into_into_dart().into_dart(),
+            self.url.into_into_dart().into_dart(),
+            self.title.into_into_dart().into_dart(),
+            self.added_ms.into_into_dart().into_dart(),
+            self.updated_ms.into_into_dart().into_dart(),
+            self.folder_id.into_into_dart().into_dart(),
+            self.order.into_into_dart().into_dart(),
+            self.tags.into_into_dart().into_dart(),
+        ]
+        .into_dart()
     }
 }
 impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::library::BookmarkView {}
@@ -1539,12 +1959,45 @@ impl SseEncode for String {
     }
 }
 
+impl SseEncode for crate::api::library::BookmarkFolderView {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.id, serializer);
+        <String>::sse_encode(self.name, serializer);
+        <Option<String>>::sse_encode(self.parent_id, serializer);
+        <String>::sse_encode(self.order, serializer);
+        <i64>::sse_encode(self.created_ms, serializer);
+        <i64>::sse_encode(self.updated_ms, serializer);
+    }
+}
+
+impl SseEncode for crate::api::library::BookmarkTagView {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.name, serializer);
+        <u32>::sse_encode(self.count, serializer);
+    }
+}
+
+impl SseEncode for crate::api::library::BookmarkTreeView {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <Vec<crate::api::library::BookmarkFolderView>>::sse_encode(self.folders, serializer);
+        <Vec<crate::api::library::BookmarkView>>::sse_encode(self.bookmarks, serializer);
+    }
+}
+
 impl SseEncode for crate::api::library::BookmarkView {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.id, serializer);
         <String>::sse_encode(self.url, serializer);
         <String>::sse_encode(self.title, serializer);
         <i64>::sse_encode(self.added_ms, serializer);
+        <i64>::sse_encode(self.updated_ms, serializer);
+        <Option<String>>::sse_encode(self.folder_id, serializer);
+        <String>::sse_encode(self.order, serializer);
+        <Vec<String>>::sse_encode(self.tags, serializer);
     }
 }
 
@@ -1642,6 +2095,36 @@ impl SseEncode for crate::api::identity::IdentityStatusView {
     }
 }
 
+impl SseEncode for Vec<String> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <String>::sse_encode(item, serializer);
+        }
+    }
+}
+
+impl SseEncode for Vec<crate::api::library::BookmarkFolderView> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::library::BookmarkFolderView>::sse_encode(item, serializer);
+        }
+    }
+}
+
+impl SseEncode for Vec<crate::api::library::BookmarkTagView> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::library::BookmarkTagView>::sse_encode(item, serializer);
+        }
+    }
+}
+
 impl SseEncode for Vec<crate::api::library::BookmarkView> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -1698,6 +2181,16 @@ impl SseEncode for Option<crate::api::identity::ProfileIdentityView> {
         <bool>::sse_encode(self.is_some(), serializer);
         if let Some(value) = self {
             <crate::api::identity::ProfileIdentityView>::sse_encode(value, serializer);
+        }
+    }
+}
+
+impl SseEncode for Option<Vec<String>> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <Vec<String>>::sse_encode(value, serializer);
         }
     }
 }

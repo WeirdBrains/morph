@@ -42,6 +42,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   String dco_decode_String(dynamic raw);
 
   @protected
+  BookmarkFolderView dco_decode_bookmark_folder_view(dynamic raw);
+
+  @protected
+  BookmarkTagView dco_decode_bookmark_tag_view(dynamic raw);
+
+  @protected
+  BookmarkTreeView dco_decode_bookmark_tree_view(dynamic raw);
+
+  @protected
   BookmarkView dco_decode_bookmark_view(dynamic raw);
 
   @protected
@@ -78,6 +87,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   IdentityStatusView dco_decode_identity_status_view(dynamic raw);
 
   @protected
+  List<String> dco_decode_list_String(dynamic raw);
+
+  @protected
+  List<BookmarkFolderView> dco_decode_list_bookmark_folder_view(dynamic raw);
+
+  @protected
+  List<BookmarkTagView> dco_decode_list_bookmark_tag_view(dynamic raw);
+
+  @protected
   List<BookmarkView> dco_decode_list_bookmark_view(dynamic raw);
 
   @protected
@@ -96,6 +114,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ProfileIdentityView? dco_decode_opt_box_autoadd_profile_identity_view(
     dynamic raw,
   );
+
+  @protected
+  List<String>? dco_decode_opt_list_String(dynamic raw);
 
   @protected
   ProfileIdentityView dco_decode_profile_identity_view(dynamic raw);
@@ -135,6 +156,17 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   String sse_decode_String(SseDeserializer deserializer);
+
+  @protected
+  BookmarkFolderView sse_decode_bookmark_folder_view(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  BookmarkTagView sse_decode_bookmark_tag_view(SseDeserializer deserializer);
+
+  @protected
+  BookmarkTreeView sse_decode_bookmark_tree_view(SseDeserializer deserializer);
 
   @protected
   BookmarkView sse_decode_bookmark_view(SseDeserializer deserializer);
@@ -181,6 +213,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  List<String> sse_decode_list_String(SseDeserializer deserializer);
+
+  @protected
+  List<BookmarkFolderView> sse_decode_list_bookmark_folder_view(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<BookmarkTagView> sse_decode_list_bookmark_tag_view(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   List<BookmarkView> sse_decode_list_bookmark_view(
     SseDeserializer deserializer,
   );
@@ -203,6 +248,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ProfileIdentityView? sse_decode_opt_box_autoadd_profile_identity_view(
     SseDeserializer deserializer,
   );
+
+  @protected
+  List<String>? sse_decode_opt_list_String(SseDeserializer deserializer);
 
   @protected
   ProfileIdentityView sse_decode_profile_identity_view(
@@ -250,6 +298,24 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_String(String self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_bookmark_folder_view(
+    BookmarkFolderView self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_bookmark_tag_view(
+    BookmarkTagView self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_bookmark_tree_view(
+    BookmarkTreeView self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_bookmark_view(BookmarkView self, SseSerializer serializer);
@@ -303,6 +369,21 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_String(List<String> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_bookmark_folder_view(
+    List<BookmarkFolderView> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_bookmark_tag_view(
+    List<BookmarkTagView> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_bookmark_view(
     List<BookmarkView> self,
     SseSerializer serializer,
@@ -334,6 +415,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     ProfileIdentityView? self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_opt_list_String(List<String>? self, SseSerializer serializer);
 
   @protected
   void sse_encode_profile_identity_view(

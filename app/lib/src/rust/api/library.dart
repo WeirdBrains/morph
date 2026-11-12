@@ -7,7 +7,118 @@ import '../frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `now_ms`, `resolve_home`, `views`
+// These functions are ignored because they are not marked as `pub`: `now_ms`, `resolve_home`, `tree_view`, `view`, `views`
+
+/// The profile's bookmark tree.
+Future<BookmarkTreeView> bookmarkTree({
+  String? home,
+  required String profileId,
+}) => RustLib.instance.api.crateApiLibraryBookmarkTree(
+  home: home,
+  profileId: profileId,
+);
+
+/// Make a folder at the end of `parent_id` (`None` = top level).
+Future<BookmarkTreeView> createBookmarkFolder({
+  String? home,
+  required String profileId,
+  required String name,
+  String? parentId,
+}) => RustLib.instance.api.crateApiLibraryCreateBookmarkFolder(
+  home: home,
+  profileId: profileId,
+  name: name,
+  parentId: parentId,
+);
+
+/// Rename a folder.
+Future<BookmarkTreeView> renameBookmarkFolder({
+  String? home,
+  required String profileId,
+  required String folderId,
+  required String name,
+}) => RustLib.instance.api.crateApiLibraryRenameBookmarkFolder(
+  home: home,
+  profileId: profileId,
+  folderId: folderId,
+  name: name,
+);
+
+/// Delete a folder and everything in it.
+Future<BookmarkTreeView> deleteBookmarkFolder({
+  String? home,
+  required String profileId,
+  required String folderId,
+}) => RustLib.instance.api.crateApiLibraryDeleteBookmarkFolder(
+  home: home,
+  profileId: profileId,
+  folderId: folderId,
+);
+
+/// Move a bookmark or folder into `parent_id` at slot `index`.
+Future<BookmarkTreeView> moveBookmarkItem({
+  String? home,
+  required String profileId,
+  required String itemId,
+  String? parentId,
+  required int index,
+}) => RustLib.instance.api.crateApiLibraryMoveBookmarkItem(
+  home: home,
+  profileId: profileId,
+  itemId: itemId,
+  parentId: parentId,
+  index: index,
+);
+
+/// Edit a bookmark; `None` leaves a field as it is.
+Future<BookmarkTreeView> updateBookmark({
+  String? home,
+  required String profileId,
+  required String bookmarkId,
+  String? title,
+  String? url,
+  List<String>? tags,
+}) => RustLib.instance.api.crateApiLibraryUpdateBookmark(
+  home: home,
+  profileId: profileId,
+  bookmarkId: bookmarkId,
+  title: title,
+  url: url,
+  tags: tags,
+);
+
+/// Delete one bookmark by id.
+Future<BookmarkTreeView> deleteBookmark({
+  String? home,
+  required String profileId,
+  required String bookmarkId,
+}) => RustLib.instance.api.crateApiLibraryDeleteBookmark(
+  home: home,
+  profileId: profileId,
+  bookmarkId: bookmarkId,
+);
+
+/// Bookmarks matching every word of `query` in title, URL or tags, and `tag`.
+Future<List<BookmarkView>> searchBookmarks({
+  String? home,
+  required String profileId,
+  required String query,
+  String? tag,
+}) => RustLib.instance.api.crateApiLibrarySearchBookmarks(
+  home: home,
+  profileId: profileId,
+  query: query,
+  tag: tag,
+);
+
+/// Every tag in use, by name.
+Future<List<BookmarkTagView>> bookmarkTags({
+  String? home,
+  required String profileId,
+}) => RustLib.instance.api.crateApiLibraryBookmarkTags(
+  home: home,
+  profileId: profileId,
+);
 
 /// Bookmarks for `profile_id`, newest first.
 Future<List<BookmarkView>> listBookmarks({
@@ -85,29 +196,134 @@ Future<void> clearHistory({String? home, required String profileId}) => RustLib
     .api
     .crateApiLibraryClearHistory(home: home, profileId: profileId);
 
-/// A saved page.
-class BookmarkView {
-  final String url;
-  final String title;
-  final PlatformInt64 addedMs;
+/// A bookmark folder.
+class BookmarkFolderView {
+  final String id;
+  final String name;
+  final String? parentId;
+  final String order;
+  final PlatformInt64 createdMs;
+  final PlatformInt64 updatedMs;
 
-  const BookmarkView({
-    required this.url,
-    required this.title,
-    required this.addedMs,
+  const BookmarkFolderView({
+    required this.id,
+    required this.name,
+    this.parentId,
+    required this.order,
+    required this.createdMs,
+    required this.updatedMs,
   });
 
   @override
-  int get hashCode => url.hashCode ^ title.hashCode ^ addedMs.hashCode;
+  int get hashCode =>
+      id.hashCode ^
+      name.hashCode ^
+      parentId.hashCode ^
+      order.hashCode ^
+      createdMs.hashCode ^
+      updatedMs.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is BookmarkFolderView &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          name == other.name &&
+          parentId == other.parentId &&
+          order == other.order &&
+          createdMs == other.createdMs &&
+          updatedMs == other.updatedMs;
+}
+
+/// A tag and how many bookmarks carry it.
+class BookmarkTagView {
+  final String name;
+  final int count;
+
+  const BookmarkTagView({required this.name, required this.count});
+
+  @override
+  int get hashCode => name.hashCode ^ count.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is BookmarkTagView &&
+          runtimeType == other.runtimeType &&
+          name == other.name &&
+          count == other.count;
+}
+
+/// Every folder and bookmark of a profile, sorted by parent then order.
+class BookmarkTreeView {
+  final List<BookmarkFolderView> folders;
+  final List<BookmarkView> bookmarks;
+
+  const BookmarkTreeView({required this.folders, required this.bookmarks});
+
+  @override
+  int get hashCode => folders.hashCode ^ bookmarks.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is BookmarkTreeView &&
+          runtimeType == other.runtimeType &&
+          folders == other.folders &&
+          bookmarks == other.bookmarks;
+}
+
+/// A saved page.
+class BookmarkView {
+  final String id;
+  final String url;
+  final String title;
+  final PlatformInt64 addedMs;
+  final PlatformInt64 updatedMs;
+
+  /// Containing folder; `None` is the root.
+  final String? folderId;
+
+  /// Sort key among the folder's items (folders and bookmarks together).
+  final String order;
+  final List<String> tags;
+
+  const BookmarkView({
+    required this.id,
+    required this.url,
+    required this.title,
+    required this.addedMs,
+    required this.updatedMs,
+    this.folderId,
+    required this.order,
+    required this.tags,
+  });
+
+  @override
+  int get hashCode =>
+      id.hashCode ^
+      url.hashCode ^
+      title.hashCode ^
+      addedMs.hashCode ^
+      updatedMs.hashCode ^
+      folderId.hashCode ^
+      order.hashCode ^
+      tags.hashCode;
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       other is BookmarkView &&
           runtimeType == other.runtimeType &&
+          id == other.id &&
           url == other.url &&
           title == other.title &&
-          addedMs == other.addedMs;
+          addedMs == other.addedMs &&
+          updatedMs == other.updatedMs &&
+          folderId == other.folderId &&
+          order == other.order &&
+          tags == other.tags;
 }
 
 /// One visit to a page.
