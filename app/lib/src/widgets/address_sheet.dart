@@ -96,7 +96,9 @@ class _MorphAddressSheetState extends State<MorphAddressSheet> {
       return () => _comingSoon(feature);
     }
     return () {
-      Navigator.of(context).maybePop();
+      // pop, not maybePop: maybePop resolves later and would close whatever
+      // the action opens instead of this sheet.
+      Navigator.of(context).pop();
       action();
     };
   }
