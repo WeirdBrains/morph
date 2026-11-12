@@ -234,6 +234,7 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
           _syncAddressFromActive();
           setState(() {});
         }
+        unawaited(_pruneProfileData(catalog));
       } catch (_) {
         // A missing catalog leaves the default profile and a start tab.
       }
@@ -722,10 +723,23 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
       } else if (mounted) {
         setState(() => _catalog = catalog);
       }
+      // Engine storage outside the Morph home (Android WebView profiles).
+      // A profile still in use is swept on the next start.
+      unawaited(_pruneProfileData(catalog));
     } catch (e) {
       if (mounted) {
         setState(() => error = e);
       }
+    }
+  }
+
+  Future<void> _pruneProfileData(ProfileCatalog catalog) async {
+    try {
+      await MorphWebViewPlatform.instance.pruneProfileData(
+        catalog.profiles.map((p) => p.id),
+      );
+    } catch (_) {
+      // Leftover engine data is retried on the next start.
     }
   }
 
