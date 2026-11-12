@@ -66,10 +66,12 @@ class FakeMorphWebViewSession extends MorphWebViewSession {
   MorphNavigationEvent _nav;
   final _navController = StreamController<MorphNavigationEvent>.broadcast();
   final _pageController = StreamController<String>.broadcast();
+  final _cursorController = StreamController<MorphCursorEvent>.broadcast();
   final List<String> history = [];
   int historyIndex = -1;
   final List<MorphPointerEvent> pointers = [];
   final List<MorphKeyEvent> keys = [];
+  final List<MorphImeEvent> imes = [];
   final List<String> evaluated = [];
 
   @override
@@ -78,7 +80,13 @@ class FakeMorphWebViewSession extends MorphWebViewSession {
   @override
   Stream<String> get pageMessages => _pageController.stream;
 
+  @override
+  Stream<MorphCursorEvent> get cursor => _cursorController.stream;
+
   void emitPageMessage(String json) => _pageController.add(json);
+
+  void emitCursor(String shape) =>
+      _cursorController.add(MorphCursorEvent(shape: shape));
 
   void _push(String url, {String title = 'Fake'}) {
     if (historyIndex < history.length - 1) {
@@ -155,6 +163,9 @@ class FakeMorphWebViewSession extends MorphWebViewSession {
   Future<void> sendKey(MorphKeyEvent event) async => keys.add(event);
 
   @override
+  Future<void> sendIme(MorphImeEvent event) async => imes.add(event);
+
+  @override
   Future<String?> evaluateJavaScript(String script) async {
     evaluated.add(script);
     if (script.contains('MorphBridge.ping')) {
@@ -168,5 +179,6 @@ class FakeMorphWebViewSession extends MorphWebViewSession {
   Future<void> dispose() async {
     await _navController.close();
     await _pageController.close();
+    await _cursorController.close();
   }
 }

@@ -1,3 +1,7 @@
+import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
+import 'package:flutter/services.dart';
+
 /// Navigation and load state reported by a backend.
 class MorphNavigationEvent {
   const MorphNavigationEvent({
@@ -34,35 +38,105 @@ class MorphRenderPathInfo {
   String toString() => '$path ($reason)';
 }
 
-/// A pointer or scroll event in view-logical coordinates (device-pixel-ratio applied by the backend).
+/// A pointer, hover, or scroll event in view-logical coordinates
+/// (device-pixel-ratio applied by the backend).
 class MorphPointerEvent {
   const MorphPointerEvent({
     required this.phase,
     required this.x,
     required this.y,
     this.button = 0,
+    this.buttons = 0,
     this.scrollDeltaX = 0,
     this.scrollDeltaY = 0,
+    this.ctrl = false,
+    this.alt = false,
+    this.shift = false,
+    this.meta = false,
   });
 
-  /// down, move, up, cancel, scroll
+  /// down, move, up, cancel, scroll, enter, leave, hover
   final String phase;
   final double x;
   final double y;
 
-  /// 1 = left, 2 = middle, 3 = right; 0 for move/scroll.
+  /// The button that changed for down/up: 1=left, 2=middle, 3=right, 4=back,
+  /// 5=forward; 0 otherwise.
   final int button;
+
+  /// Mask of buttons currently held: 1=left, 2=middle, 4=right, 8=back,
+  /// 16=forward.
+  final int buttons;
   final double scrollDeltaX;
   final double scrollDeltaY;
+  final bool ctrl;
+  final bool alt;
+  final bool shift;
+  final bool meta;
 
   Map<String, Object?> toMap() => {
     'phase': phase,
     'x': x,
     'y': y,
     'button': button,
+    'buttons': buttons,
     'scrollDeltaX': scrollDeltaX,
     'scrollDeltaY': scrollDeltaY,
+    'ctrl': ctrl,
+    'alt': alt,
+    'shift': shift,
+    'meta': meta,
   };
+}
+
+/// Convert a Flutter button mask ([kPrimaryMouseButton], etc.) to Morph's
+/// `buttons` bitfield.
+int morphButtonsFromFlutter(int flutterButtons) {
+  var mask = 0;
+  if (flutterButtons & kPrimaryMouseButton != 0) {
+    mask |= 1;
+  }
+  if (flutterButtons & kMiddleMouseButton != 0) {
+    mask |= 2;
+  }
+  if (flutterButtons & kSecondaryMouseButton != 0) {
+    mask |= 4;
+  }
+  if (flutterButtons & kBackMouseButton != 0) {
+    mask |= 8;
+  }
+  if (flutterButtons & kForwardMouseButton != 0) {
+    mask |= 16;
+  }
+  return mask;
+}
+
+/// The first Morph `button` id set in a Morph buttons mask, or 0.
+int morphButtonFromMask(int mask) {
+  if (mask & 1 != 0) {
+    return 1;
+  }
+  if (mask & 2 != 0) {
+    return 2;
+  }
+  if (mask & 4 != 0) {
+    return 3;
+  }
+  if (mask & 8 != 0) {
+    return 4;
+  }
+  if (mask & 16 != 0) {
+    return 5;
+  }
+  return 0;
+}
+
+bool morphModifierPressed({
+  required LogicalKeyboardKey left,
+  required LogicalKeyboardKey right,
+}) {
+  return HardwareKeyboard.instance.logicalKeysPressed.contains(left) ||
+      HardwareKeyboard.instance.logicalKeysPressed.contains(right);
 }
 
 class MorphKeyEvent {
@@ -74,6 +148,8 @@ class MorphKeyEvent {
     this.alt = false,
     this.shift = false,
     this.meta = false,
+    this.text = '',
+    this.repeat = false,
   });
 
   /// down or up
@@ -85,6 +161,10 @@ class MorphKeyEvent {
   final bool shift;
   final bool meta;
 
+  /// Produced character when there is one (e.g. `a`, `A`).
+  final String text;
+  final bool repeat;
+
   Map<String, Object?> toMap() => {
     'phase': phase,
     'key': key,
@@ -93,5 +173,137 @@ class MorphKeyEvent {
     'alt': alt,
     'shift': shift,
     'meta': meta,
+    'text': text,
+    'repeat': repeat,
   };
+}
+
+class MorphImeEvent {
+  const MorphImeEvent({required this.phase, this.text = ''});
+
+  /// compose_start, compose_update, compose_end, commit, focus, blur
+  final String phase;
+  final String text;
+}
+
+/// A CSS cursor keyword reported by the web view.
+class MorphCursorEvent {
+  const MorphCursorEvent({required this.shape});
+
+  final String shape;
+}
+
+/// Map a CSS (or GDK) cursor name onto a Flutter [MouseCursor].
+MouseCursor morphCursorForShape(String shape) {
+  switch (shape) {
+    case 'pointer':
+    case 'hand':
+    case 'hand1':
+    case 'hand2':
+      return SystemMouseCursors.click;
+    case 'text':
+    case 'xterm':
+    case 'ibeam':
+      return SystemMouseCursors.text;
+    case 'vertical-text':
+      return SystemMouseCursors.verticalText;
+    case 'wait':
+    case 'watch':
+      return SystemMouseCursors.wait;
+    case 'progress':
+    case 'left_ptr_watch':
+      return SystemMouseCursors.progress;
+    case 'crosshair':
+    case 'cross':
+    case 'tcross':
+      return SystemMouseCursors.precise;
+    case 'move':
+    case 'fleur':
+    case 'all-scroll':
+      return SystemMouseCursors.move;
+    case 'not-allowed':
+    case 'no-drop':
+    case 'crossed_circle':
+      return SystemMouseCursors.forbidden;
+    case 'grab':
+    case 'openhand':
+    case 'grabbing':
+    case 'closedhand':
+      return shape == 'grabbing' || shape == 'closedhand'
+          ? SystemMouseCursors.grabbing
+          : SystemMouseCursors.grab;
+    case 'help':
+    case 'question_arrow':
+      return SystemMouseCursors.help;
+    case 'none':
+      return SystemMouseCursors.none;
+    case 'cell':
+    case 'plus':
+      return SystemMouseCursors.cell;
+    case 'context-menu':
+      return SystemMouseCursors.contextMenu;
+    case 'alias':
+    case 'dnd-link':
+      return SystemMouseCursors.alias;
+    case 'copy':
+    case 'dnd-copy':
+      return SystemMouseCursors.copy;
+    case 'zoom-in':
+      return SystemMouseCursors.zoomIn;
+    case 'zoom-out':
+      return SystemMouseCursors.zoomOut;
+    case 'col-resize':
+    case 'sb_h_double_arrow':
+      return SystemMouseCursors.resizeColumn;
+    case 'row-resize':
+    case 'sb_v_double_arrow':
+      return SystemMouseCursors.resizeRow;
+    case 'n-resize':
+    case 'top_side':
+      return SystemMouseCursors.resizeUp;
+    case 's-resize':
+    case 'bottom_side':
+      return SystemMouseCursors.resizeDown;
+    case 'e-resize':
+    case 'right_side':
+      return SystemMouseCursors.resizeRight;
+    case 'w-resize':
+    case 'left_side':
+      return SystemMouseCursors.resizeLeft;
+    case 'ne-resize':
+    case 'top_right_corner':
+      return SystemMouseCursors.resizeUpRight;
+    case 'nw-resize':
+    case 'top_left_corner':
+      return SystemMouseCursors.resizeUpLeft;
+    case 'se-resize':
+    case 'bottom_right_corner':
+      return SystemMouseCursors.resizeDownRight;
+    case 'sw-resize':
+    case 'bottom_left_corner':
+      return SystemMouseCursors.resizeDownLeft;
+    case 'ew-resize':
+    case 'sb_h_double_arrow_ew':
+      return SystemMouseCursors.resizeLeftRight;
+    case 'ns-resize':
+      return SystemMouseCursors.resizeUpDown;
+    case 'nesw-resize':
+      return SystemMouseCursors.resizeUpRightDownLeft;
+    case 'nwse-resize':
+      return SystemMouseCursors.resizeUpLeftDownRight;
+    case 'default':
+    case 'auto':
+    case 'left_ptr':
+    case 'arrow':
+    default:
+      return SystemMouseCursors.basic;
+  }
+}
+
+/// Pretty-print a pointer event in debug builds.
+String debugFormatPointer(MorphPointerEvent event) {
+  if (kDebugMode) {
+    return '${event.phase} (${event.x}, ${event.y}) btn=${event.button} mask=${event.buttons}';
+  }
+  return event.phase;
 }
