@@ -1588,6 +1588,115 @@ void main() {
     }
   });
 
+  for (final source in ['bookmarks', 'history']) {
+    testWidgets('phone opens a page from $source after the sheet closes', (
+      tester,
+    ) async {
+      final view = tester.view;
+      view.physicalSize = const Size(412, 915);
+      view.devicePixelRatio = 1.0;
+      addTearDown(view.reset);
+      fakeWebView = FakeMorphWebViewPlatform(
+        renderPath: const MorphRenderPathInfo(
+          path: 'android-webview',
+          reason: 'fake',
+        ),
+        platformView: const _NativeViewProbe(),
+      );
+      MorphWebViewPlatform.instance = fakeWebView;
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      try {
+        final api = FakeMorphApi();
+        await api.addBookmark('default', 'https://saved.example', 'Saved');
+        await api.recordVisit('default', 'https://saved.example', 'Saved');
+        await tester.pumpWidget(
+          MorphApp(
+            api: api,
+            home: '/tmp/morph-does-not-exist',
+            subscribeToTicks: false,
+            loadPageBridgeAsset: false,
+          ),
+        );
+        await _pumpUntilIdentity(tester);
+        await _enterAndSubmitUrl(tester, 'first.example');
+        await _pumpUntilWebViewAttached(tester, fakeWebView);
+        await tester.pumpAndSettle();
+        final session = fakeWebView.lastSession!;
+        final state = tester.state<MorphShellState>(find.byType(MorphShell));
+
+        await tester.tap(find.byKey(const Key('address-bar')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(Key('sheet-$source')));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('library-page')), findsOneWidget);
+        final entry = find.byKey(
+          Key(
+            source == 'bookmarks'
+                ? 'bookmark-https://saved.example'
+                : 'history-https://saved.example',
+          ),
+        );
+        expect(entry, findsOneWidget);
+        await _expectSurfaceCheck(tester, 'open from $source', () async {
+          final loadsBefore = session.history.length;
+          await tester.tap(entry);
+          // Nothing loads while the sheet still covers the page.
+          expect(session.history.length, loadsBefore);
+          await tester.pumpAndSettle();
+        });
+        expect(find.byKey(const Key('library-page')), findsNothing);
+        expect(session.history.last, 'https://saved.example');
+        expect(state.navigation.url, 'https://saved.example');
+        expect(find.byKey(const Key('native-view-probe')), findsOneWidget);
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    });
+  }
+
+  testWidgets('desktop menu opens a bookmark and a history entry', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    final view = tester.view;
+    view.physicalSize = const Size(1280, 800);
+    view.devicePixelRatio = 1.0;
+    addTearDown(view.reset);
+    try {
+      final api = FakeMorphApi();
+      await api.addBookmark('default', 'https://b.example', 'B');
+      await api.recordVisit('default', 'https://h.example', 'H');
+      await tester.pumpWidget(
+        MorphApp(
+          api: api,
+          home: '/tmp/morph-does-not-exist',
+          subscribeToTicks: false,
+          loadPageBridgeAsset: false,
+        ),
+      );
+      await _pumpUntilIdentity(tester);
+      await _enterAndSubmitUrl(tester, 'first.example');
+      await _pumpUntilWebViewAttached(tester, fakeWebView);
+      await tester.pumpAndSettle();
+      final session = fakeWebView.lastSession!;
+      for (final (item, key, url) in [
+        ('bookmarks', 'bookmark-https://b.example', 'https://b.example'),
+        ('history', 'history-https://h.example', 'https://h.example'),
+      ]) {
+        await tester.tap(find.byKey(const Key('nav-menu')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(Key('menu-$item')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(Key(key)));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('library-page')), findsNothing);
+        expect(session.history.last, url, reason: 'from $item');
+      }
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
   testWidgets('desktop menu settings clear only the active profile history', (
     tester,
   ) async {
