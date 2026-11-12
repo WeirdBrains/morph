@@ -1,0 +1,26 @@
+name: morph
+description: Morph, a distributed web browser with local AI.
+publish_to: "none"
+version: 0.1.0+1
+homepage: https://github.com/WeirdBrains/morph
+repository: https://github.com/WeirdBrains/morph
+
+environment:
+  sdk: ^3.13.7
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  flutter_rust_bridge: 2.13.0
+  flutter_rust_bridge_hooks: 2.13.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/morph-bridge.js
