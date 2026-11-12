@@ -1,16 +1,23 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:morph_webview/morph_webview.dart';
 
 import 'api.dart';
+import 'host_friendly_url.dart';
+export 'host_friendly_url.dart';
 import 'theme/morph_theme.dart';
+import 'tabs/tab_position.dart';
+import 'tabs/tab_set.dart';
 import 'widgets/brand.dart';
+import 'widgets/desktop_chrome.dart';
 import 'widgets/start_page.dart';
 import 'widgets/window_chrome.dart';
 import 'window/morph_desktop_window.dart';
+import 'window/window_buttons.dart';
 
 /// Morph shell: address-bar chrome, Linux web-view texture, and Rust wiring.
 class MorphShell extends StatefulWidget {
@@ -20,6 +27,7 @@ class MorphShell extends StatefulWidget {
     this.home,
     this.subscribeToTicks = true,
     this.loadPageBridgeAsset = true,
+    this.showDebugPanel = false,
   });
 
   final MorphApi api;
@@ -32,6 +40,10 @@ class MorphShell extends StatefulWidget {
   /// need the page-bridge script to accept a typed URL.
   final bool loadPageBridgeAsset;
 
+  /// When true, the bottom identity/debug panel starts expanded.
+  /// Production leaves this off; long-press the mark to toggle it.
+  final bool showDebugPanel;
+
   /// Override for tests and `MORPH_HOME`. Null falls back to the environment,
   /// then to Rust's default (`~/.morph`) without creating it.
   final String? home;
@@ -42,7 +54,17 @@ class MorphShell extends StatefulWidget {
 
 class MorphShellState extends State<MorphShell> {
   final TextEditingController address = TextEditingController();
-  late final MorphWebViewController webView;
+  final addressFocus = FocusNode();
+  final MorphTabSet tabs = MorphTabSet();
+  final _controllers = <int, MorphWebViewController>{};
+  final _navSubs = <int, StreamSubscription<MorphNavigationEvent>>{};
+  final _pageSubs = <int, StreamSubscription<String>>{};
+  final _navEvents = <int, MorphNavigationEvent>{};
+  final _visited = <int, bool>{};
+  MorphTabPosition _tabPosition = MorphTabPosition.top;
+  bool _sidebarCollapsed = false;
+  late bool _debugOpen;
+  String _canonicalAddress = '';
   String? coreVersionLabel;
   String? identityHome;
   bool? homeExists;
@@ -51,36 +73,74 @@ class MorphShellState extends State<MorphShell> {
   String? pageReply;
   int? tick;
   StreamSubscription<int>? _ticks;
-  StreamSubscription<MorphNavigationEvent>? _navSub;
-  StreamSubscription<String>? _pageSub;
   MorphNavigationEvent navigation = const MorphNavigationEvent(url: '');
   String userScript = '';
   bool ready = false;
   Object? error;
-  bool _visitedPage = false;
+
+  MorphWebViewController get webView => _controllerFor(tabs.activeId);
+
+  MorphWebViewController _controllerFor(int id) {
+    return _controllers.putIfAbsent(id, () {
+      final tab = tabs.tab(id);
+      final initial = (tab != null && tab.url.isNotEmpty)
+          ? tab.url
+          : 'about:blank';
+      final controller = MorphWebViewController(initialUrl: initial);
+      _navSubs[id] = controller.navigation.listen(
+        (event) => _onTabNav(id, event),
+      );
+      _pageSubs[id] = controller.pageMessages.listen(_onPageMessage);
+      return controller;
+    });
+  }
+
+  void _onTabNav(int id, MorphNavigationEvent event) {
+    if (!mounted) {
+      return;
+    }
+    _navEvents[id] = event;
+    if (event.url.isNotEmpty && event.url != 'about:blank') {
+      tabs.update(id, url: event.url, title: event.title);
+      _visited[id] = true;
+    } else if (event.title.isNotEmpty) {
+      tabs.update(id, title: event.title);
+    }
+    if (id != tabs.activeId) {
+      setState(() {});
+      return;
+    }
+    setState(() {
+      navigation = event;
+      if (event.url.isNotEmpty && event.url != 'about:blank') {
+        _canonicalAddress = event.url;
+        _applyAddressDisplay();
+      }
+    });
+  }
 
   @override
   void initState() {
     super.initState();
-    webView = MorphWebViewController(initialUrl: 'about:blank');
-    _navSub = webView.navigation.listen((event) {
+    _debugOpen = widget.showDebugPanel;
+    _controllerFor(tabs.activeId);
+    addressFocus.addListener(() {
       if (!mounted) {
         return;
       }
-      final previousUrl = navigation.url;
-      setState(() {
-        navigation = event;
-        if (event.url.isNotEmpty &&
-            event.url != previousUrl &&
-            event.url != 'about:blank') {
-          address.value = address.value.copyWith(
-            text: event.url,
-            selection: TextSelection.collapsed(offset: event.url.length),
-          );
-        }
-      });
+      if (addressFocus.hasFocus) {
+        final full = _canonicalAddress == 'about:blank'
+            ? ''
+            : _canonicalAddress;
+        final text = full.isEmpty ? address.text : full;
+        address.value = TextEditingValue(
+          text: text,
+          selection: TextSelection(baseOffset: 0, extentOffset: text.length),
+        );
+      } else {
+        _applyAddressDisplay();
+      }
     });
-    _pageSub = webView.pageMessages.listen(_onPageMessage);
     unawaited(_load());
   }
 
@@ -111,6 +171,19 @@ class MorphShellState extends State<MorphShell> {
         homeExists = info.homeExists;
         error = null;
       });
+      try {
+        final position = MorphTabPosition.fromKey(
+          await widget.api.loadTabPosition(home: _home),
+        );
+        if (mounted) {
+          setState(() => _tabPosition = position);
+        }
+      } catch (_) {
+        // A missing or unreadable preference stays at the default (top).
+      }
+      if (!mounted) {
+        return;
+      }
       var script = '';
       if (widget.loadPageBridgeAsset) {
         try {
@@ -214,7 +287,7 @@ class MorphShellState extends State<MorphShell> {
   }
 
   bool get _onStartPage {
-    if (!_visitedPage) {
+    if (!(_visited[tabs.activeId] ?? false)) {
       return true;
     }
     final url = navigation.url.isEmpty ? address.text : navigation.url;
@@ -228,184 +301,412 @@ class MorphShellState extends State<MorphShell> {
     }
     if (!url.contains('://')) {
       url = 'https://$url';
-      address.text = url;
     }
-    setState(() => _visitedPage = true);
+    _canonicalAddress = url;
+    _applyAddressDisplay();
+    tabs.update(tabs.activeId, url: url);
+    setState(() => _visited[tabs.activeId] = true);
     await webView.loadUrl(url);
   }
 
   @override
   void dispose() {
     unawaited(_ticks?.cancel());
-    unawaited(_navSub?.cancel());
-    unawaited(_pageSub?.cancel());
-    unawaited(webView.dispose());
+    for (final sub in _navSubs.values) {
+      unawaited(sub.cancel());
+    }
+    for (final sub in _pageSubs.values) {
+      unawaited(sub.cancel());
+    }
+    for (final controller in _controllers.values) {
+      unawaited(controller.dispose());
+    }
+    addressFocus.dispose();
     address.dispose();
     super.dispose();
+  }
+
+  bool get _isMobile {
+    switch (defaultTargetPlatform) {
+      case TargetPlatform.android:
+      case TargetPlatform.iOS:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  bool _isCompact(BuildContext context) {
+    return _isMobile || MediaQuery.sizeOf(context).width < 700;
+  }
+
+  void _toggleDebugPanel() {
+    setState(() => _debugOpen = !_debugOpen);
+  }
+
+  void _openTab() {
+    final id = tabs.open();
+    _controllerFor(id);
+    _visited[id] = false;
+    navigation = const MorphNavigationEvent(url: '');
+    _canonicalAddress = '';
+    address.clear();
+    setState(() {});
+  }
+
+  void _closeTab(int id) {
+    final controller = _controllers.remove(id);
+    unawaited(_navSubs.remove(id)?.cancel());
+    unawaited(_pageSubs.remove(id)?.cancel());
+    unawaited(controller?.dispose());
+    _visited.remove(id);
+    _navEvents.remove(id);
+    tabs.close(id);
+    _controllerFor(tabs.activeId);
+    _syncAddressFromActive();
+    setState(() {});
+  }
+
+  void _switchTab(int id) {
+    if (id == tabs.activeId) {
+      return;
+    }
+    tabs.switchTo(id);
+    _controllerFor(id);
+    _syncAddressFromActive();
+    setState(() {});
+  }
+
+  void _syncAddressFromActive() {
+    final tab = tabs.active;
+    navigation = _navEvents[tab.id] ?? MorphNavigationEvent(url: tab.url);
+    _canonicalAddress = tab.url;
+    _applyAddressDisplay();
+  }
+
+  Future<void> _setTabPosition(MorphTabPosition position) async {
+    setState(() => _tabPosition = position);
+    try {
+      await widget.api.saveTabPosition(position.key, home: _home);
+    } catch (_) {
+      // The in-memory choice still applies if persistence fails.
+    }
+  }
+
+  void _selectAllAddress() {
+    address.selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: address.text.length,
+    );
+  }
+
+  void _applyAddressDisplay() {
+    if (addressFocus.hasFocus) {
+      return;
+    }
+    final full = _canonicalAddress == 'about:blank' ? '' : _canonicalAddress;
+    if (full.isEmpty) {
+      // Keep a typed draft until the user submits it.
+      return;
+    }
+    final text = hostFriendlyUrl(full);
+    if (address.text != text) {
+      address.value = address.value.copyWith(
+        text: text,
+        selection: TextSelection.collapsed(offset: text.length),
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
-    final mono = MorphTheme.monoStyle(color: colors.onSurfaceVariant, size: 12);
+    final compact = _isCompact(context);
+    final iconStyle = IconButton.styleFrom(
+      visualDensity: compact ? VisualDensity.compact : VisualDensity.standard,
+      minimumSize: compact ? const Size(40, 40) : const Size(48, 48),
+      tapTargetSize: compact
+          ? MaterialTapTargetSize.shrinkWrap
+          : MaterialTapTargetSize.padded,
+      padding: compact ? const EdgeInsets.all(8) : null,
+    );
 
-    return Scaffold(
-      body: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Material(
-            color: theme.scaffoldBackgroundColor,
-            child: SafeArea(
-              bottom: false,
-              child: SizedBox(
-                height: 52,
-                child: Stack(
-                  children: [
-                    const MorphWindowDragArea(child: SizedBox.expand()),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(8, 8, 4, 8),
-                      child: Row(
-                        children: [
-                          const MorphWindowDragArea(
-                            child: Padding(
-                              padding: EdgeInsets.symmetric(horizontal: 4),
-                              child: MorphMark(size: 28),
-                            ),
-                          ),
-                          IconButton(
-                            onPressed: navigation.canGoBack
-                                ? webView.goBack
-                                : null,
-                            tooltip: 'Back',
-                            icon: const Icon(Icons.arrow_back),
-                          ),
-                          IconButton(
-                            onPressed: navigation.canGoForward
-                                ? webView.goForward
-                                : null,
-                            tooltip: 'Forward',
-                            icon: const Icon(Icons.arrow_forward),
-                          ),
-                          IconButton(
-                            onPressed: webView.isAttached && !_onStartPage
-                                ? webView.reload
-                                : null,
-                            tooltip: 'Reload',
-                            icon: const Icon(Icons.refresh),
-                          ),
-                          Expanded(
-                            child: TextField(
-                              key: const Key('address-bar'),
-                              controller: address,
-                              style: MorphTheme.monoStyle(
-                                color: colors.onSurface,
-                                size: 14,
-                              ),
-                              decoration: const InputDecoration(
-                                hintText: 'Enter an address',
-                              ),
-                              keyboardType: TextInputType.url,
-                              textInputAction: TextInputAction.go,
-                              onSubmitted: _submitUrl,
-                            ),
-                          ),
-                          IconButton(
-                            key: const Key('address-go'),
-                            onPressed: () =>
-                                unawaited(_submitUrl(address.text)),
-                            tooltip: 'Go',
-                            icon: const Icon(Icons.arrow_outward),
-                          ),
-                          const MorphWindowDragArea(
-                            child: SizedBox(width: 8, height: double.infinity),
-                          ),
-                          if (MorphDesktopWindow.isDesktop)
-                            const MorphWindowCloseButton(),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+    final content = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (error != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: Text(
+              'Error: $error',
+              style: MorphTheme.monoStyle(color: colors.error, size: 12),
             ),
           ),
-          const MorphGlitchRule(),
-          if (error != null)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-              child: Text(
-                'Error: $error',
-                style: MorphTheme.monoStyle(color: colors.error, size: 12),
-              ),
-            ),
-          Expanded(
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                if (ready)
-                  MorphWebView(
-                    key: const Key('web-view'),
-                    controller: webView,
-                    userScript: userScript,
-                    placeholder: Center(
-                      child: CircularProgressIndicator(color: colors.primary),
-                    ),
-                  )
-                else if (!_onStartPage)
-                  Center(
-                    child: CircularProgressIndicator(color: colors.primary),
+        Expanded(child: _webStack(colors)),
+      ],
+    );
+
+    final body = MorphDesktopWindow.isDesktop
+        ? Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: MorphDesktopChrome(
+                  tabs: tabs.tabs,
+                  activeId: tabs.activeId,
+                  position: _tabPosition,
+                  sidebarCollapsed: _sidebarCollapsed,
+                  buttonMode: MorphWindowChrome.mode(),
+                  useNativeMacButtons:
+                      MorphDesktopWindow.usesNativeMacTrafficLights,
+                  leadingInset: MorphDesktopWindow.leadingInset(),
+                  isMaximized: MorphDesktopWindow.isMaximized,
+                  navigation: _navRow(
+                    context,
+                    iconStyle: iconStyle,
+                    compact: compact,
+                    includeChrome: false,
                   ),
-                if (_onStartPage) const MorphStartPage(),
+                  content: content,
+                  onSelectTab: _switchTab,
+                  onCloseTab: _closeTab,
+                  onNewTab: _openTab,
+                  onPositionChanged: _setTabPosition,
+                  onToggleSidebar: () {
+                    setState(() => _sidebarCollapsed = !_sidebarCollapsed);
+                  },
+                  onDebugLongPress: _toggleDebugPanel,
+                ),
+              ),
+              if (_debugOpen) _debugPanel(colors),
+            ],
+          )
+        : Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _navRow(
+                context,
+                iconStyle: iconStyle,
+                compact: compact,
+                includeChrome: true,
+              ),
+              const MorphGlitchRule(),
+              Expanded(child: content),
+              if (_debugOpen) _debugPanel(colors),
+            ],
+          );
+
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.keyT, control: true): _openTab,
+        const SingleActivator(LogicalKeyboardKey.keyT, meta: true): _openTab,
+        const SingleActivator(LogicalKeyboardKey.keyW, control: true): () {
+          _closeTab(tabs.activeId);
+        },
+        const SingleActivator(LogicalKeyboardKey.keyW, meta: true): () {
+          _closeTab(tabs.activeId);
+        },
+        const SingleActivator(LogicalKeyboardKey.tab, control: true): () {
+          _controllerFor(tabs.cycleNext());
+          _syncAddressFromActive();
+          setState(() {});
+        },
+        const SingleActivator(
+          LogicalKeyboardKey.tab,
+          control: true,
+          shift: true,
+        ): () {
+          _controllerFor(tabs.cyclePrev());
+          _syncAddressFromActive();
+          setState(() {});
+        },
+      },
+      child: Focus(
+        autofocus: true,
+        child: Scaffold(
+          resizeToAvoidBottomInset: true,
+          body: SafeArea(top: false, bottom: false, child: body),
+        ),
+      ),
+    );
+  }
+
+  Widget _navRow(
+    BuildContext context, {
+    required ButtonStyle iconStyle,
+    required bool compact,
+    required bool includeChrome,
+  }) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    return Material(
+      color: theme.scaffoldBackgroundColor,
+      child: SafeArea(
+        bottom: false,
+        top: includeChrome,
+        child: SizedBox(
+          height: compact ? 48 : 52,
+          key: const Key('nav-row'),
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+              compact ? 4 : 8,
+              compact ? 4 : 8,
+              compact ? 4 : 4,
+              compact ? 4 : 8,
+            ),
+            child: Row(
+              children: [
+                if (includeChrome)
+                  MorphWindowDragArea(
+                    child: GestureDetector(
+                      key: const Key('debug-toggle'),
+                      onLongPress: _toggleDebugPanel,
+                      child: const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 4),
+                        child: MorphMark(size: 28),
+                      ),
+                    ),
+                  ),
+                IconButton(
+                  key: const Key('nav-back'),
+                  style: iconStyle,
+                  onPressed: navigation.canGoBack ? webView.goBack : null,
+                  tooltip: 'Back',
+                  icon: const Icon(Icons.arrow_back),
+                ),
+                if (!compact || navigation.canGoForward)
+                  IconButton(
+                    key: const Key('nav-forward'),
+                    style: iconStyle,
+                    onPressed: navigation.canGoForward
+                        ? webView.goForward
+                        : null,
+                    tooltip: 'Forward',
+                    icon: const Icon(Icons.arrow_forward),
+                  ),
+                IconButton(
+                  key: const Key('nav-reload'),
+                  style: iconStyle,
+                  onPressed: webView.isAttached && !_onStartPage
+                      ? webView.reload
+                      : null,
+                  tooltip: 'Reload',
+                  icon: const Icon(Icons.refresh),
+                ),
+                Expanded(
+                  child: TextField(
+                    key: const Key('address-bar'),
+                    controller: address,
+                    focusNode: addressFocus,
+                    style: MorphTheme.monoStyle(
+                      color: colors.onSurface,
+                      size: compact ? 13 : 14,
+                    ),
+                    decoration: InputDecoration(
+                      hintText: 'Enter an address',
+                      isDense: compact,
+                      contentPadding: EdgeInsets.symmetric(
+                        horizontal: compact ? 10 : 12,
+                        vertical: compact ? 8 : 10,
+                      ),
+                    ),
+                    keyboardType: TextInputType.url,
+                    textInputAction: TextInputAction.go,
+                    onTap: _selectAllAddress,
+                    onSubmitted: _submitUrl,
+                  ),
+                ),
+                if (!_isMobile)
+                  IconButton(
+                    key: const Key('address-go'),
+                    style: iconStyle,
+                    onPressed: () => unawaited(_submitUrl(address.text)),
+                    tooltip: 'Go',
+                    icon: const Icon(Icons.arrow_outward),
+                  ),
+                if (includeChrome && MorphDesktopWindow.isDesktop)
+                  const MorphWindowCloseButton(),
               ],
             ),
           ),
-          Material(
-            color: colors.surface,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Wrap(
-                    spacing: 16,
-                    runSpacing: 4,
-                    children: [
-                      Text(
-                        'morph-core ${coreVersionLabel ?? "…"}',
-                        style: mono,
-                      ),
-                      Text('Tick ${tick ?? "…"}', style: mono),
-                      Text('Home ${identityHome ?? "…"}', style: mono),
-                      if (homeExists != null)
-                        Text('Home exists $homeExists', style: mono),
-                      Text('Render ${webView.renderPath}', style: mono),
-                      if (userId != null) Text('User $userId', style: mono),
-                      if (fingerprint != null)
-                        Text('Fingerprint $fingerprint', style: mono),
-                      if (pageReply != null)
-                        Text('Page $pageReply', style: mono),
-                    ],
+        ),
+      ),
+    );
+  }
+
+  Widget _webStack(ColorScheme colors) {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        if (ready)
+          for (final tab in tabs.tabs)
+            Offstage(
+              offstage: tab.id != tabs.activeId,
+              child: TickerMode(
+                enabled: tab.id == tabs.activeId,
+                child: MorphWebView(
+                  key: Key('web-view-${tab.id}'),
+                  controller: _controllerFor(tab.id),
+                  userScript: userScript,
+                  placeholder: Center(
+                    child: CircularProgressIndicator(color: colors.primary),
                   ),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    children: [
-                      FilledButton(
-                        onPressed: _newUser,
-                        child: const Text('New ephemeral user'),
-                      ),
-                      OutlinedButton(
-                        onPressed: _pingPage,
-                        child: const Text('Ping page bridge'),
-                      ),
-                    ],
+                ),
+              ),
+            )
+        else if (!_onStartPage)
+          Center(child: CircularProgressIndicator(color: colors.primary)),
+        if (_onStartPage) const MorphStartPage(),
+      ],
+    );
+  }
+
+  Widget _debugPanel(ColorScheme colors) {
+    final mono = MorphTheme.monoStyle(color: colors.onSurfaceVariant, size: 12);
+    return SafeArea(
+      top: false,
+      child: Material(
+        key: const Key('debug-panel'),
+        color: colors.surface,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Wrap(
+                spacing: 16,
+                runSpacing: 4,
+                children: [
+                  Text('morph-core ${coreVersionLabel ?? "…"}', style: mono),
+                  Text('Tick ${tick ?? "…"}', style: mono),
+                  Text('Home ${identityHome ?? "…"}', style: mono),
+                  if (homeExists != null)
+                    Text('Home exists $homeExists', style: mono),
+                  Text('Render ${webView.renderPath}', style: mono),
+                  if (userId != null) Text('User $userId', style: mono),
+                  if (fingerprint != null)
+                    Text('Fingerprint $fingerprint', style: mono),
+                  if (pageReply != null) Text('Page $pageReply', style: mono),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                children: [
+                  FilledButton(
+                    onPressed: _newUser,
+                    child: const Text('New ephemeral user'),
+                  ),
+                  OutlinedButton(
+                    onPressed: _pingPage,
+                    child: const Text('Ping page bridge'),
                   ),
                 ],
               ),
-            ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }

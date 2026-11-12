@@ -3,6 +3,7 @@ import 'rust/api/events.dart' as rust_events;
 import 'rust/api/identity.dart' as rust_identity;
 import 'rust/api/info.dart' as rust_info;
 import 'rust/api/page.dart' as rust_page;
+import 'rust/api/settings.dart' as rust_settings;
 
 /// Production `MorphApi` backed by flutter_rust_bridge.
 class FfiMorphApi implements MorphApi {
@@ -33,4 +34,15 @@ class FfiMorphApi implements MorphApi {
   @override
   Future<String> handlePageMessage({required String json}) =>
       rust_page.handlePageMessage(json: json);
+
+  @override
+  Future<String> loadTabPosition({String? home}) async {
+    final settings = await rust_settings.loadSettings(home: home);
+    return settings.tabPosition;
+  }
+
+  @override
+  Future<void> saveTabPosition(String position, {String? home}) async {
+    await rust_settings.setTabPosition(home: home, position: position);
+  }
 }

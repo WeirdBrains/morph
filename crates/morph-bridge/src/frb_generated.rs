@@ -28,7 +28,7 @@
 // Section: imports
 
 use flutter_rust_bridge::for_generated::byteorder::{NativeEndian, ReadBytesExt, WriteBytesExt};
-use flutter_rust_bridge::for_generated::{Lifetimeable, Lockable, transform_result_dco};
+use flutter_rust_bridge::for_generated::{transform_result_dco, Lifetimeable, Lockable};
 use flutter_rust_bridge::{Handler, IntoIntoDart};
 
 // Section: boilerplate
@@ -39,7 +39,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.13.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -558630746;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -404524694;
 
 // Section: executor
 
@@ -274,6 +274,32 @@ fn wire__crate__api__identity__identity_dir_info_impl(
         },
     )
 }
+fn wire__crate__api__settings__load_settings_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "load_settings",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe { flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(ptr_, rust_vec_len_, data_len_) };
+            let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_home = <Option<String>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::settings::load_settings(api_home)?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__identity__new_ephemeral_user_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -293,6 +319,33 @@ fn wire__crate__api__identity__new_ephemeral_user_impl(
             move |context| {
                 transform_result_sse::<_, String>((move || {
                     let output_ok = crate::api::identity::new_ephemeral_user()?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__settings__set_tab_position_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "set_tab_position",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe { flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(ptr_, rust_vec_len_, data_len_) };
+            let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_home = <Option<String>>::sse_decode(&mut deserializer);
+            let api_position = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::settings::set_tab_position(api_home, api_position)?;
                     std::result::Result::Ok(output_ok)
                 })())
             }
@@ -525,6 +578,14 @@ impl SseDecode for Option<String> {
     }
 }
 
+impl SseDecode for crate::api::settings::SettingsView {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_tabPosition = <String>::sse_decode(deserializer);
+        return crate::api::settings::SettingsView { tab_position: var_tabPosition };
+    }
+}
+
 impl SseDecode for u32 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -567,10 +628,12 @@ fn pde_ffi_dispatcher_primary_impl(
         6 => wire__crate__api__events__event_ticks_impl(port, ptr, rust_vec_len, data_len),
         7 => wire__crate__api__page__handle_page_message_impl(port, ptr, rust_vec_len, data_len),
         8 => wire__crate__api__identity__identity_dir_info_impl(port, ptr, rust_vec_len, data_len),
-        9 => wire__crate__api__identity__new_ephemeral_user_impl(port, ptr, rust_vec_len, data_len),
-        10 => wire__crate__api__control__start_webview_control_impl(port, ptr, rust_vec_len, data_len),
-        11 => wire__crate__api__control__start_webview_control_loopback_impl(port, ptr, rust_vec_len, data_len),
-        12 => wire__crate__api__control__stop_webview_control_impl(port, ptr, rust_vec_len, data_len),
+        9 => wire__crate__api__settings__load_settings_impl(port, ptr, rust_vec_len, data_len),
+        10 => wire__crate__api__identity__new_ephemeral_user_impl(port, ptr, rust_vec_len, data_len),
+        11 => wire__crate__api__settings__set_tab_position_impl(port, ptr, rust_vec_len, data_len),
+        12 => wire__crate__api__control__start_webview_control_impl(port, ptr, rust_vec_len, data_len),
+        13 => wire__crate__api__control__start_webview_control_loopback_impl(port, ptr, rust_vec_len, data_len),
+        14 => wire__crate__api__control__stop_webview_control_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -643,6 +706,18 @@ impl flutter_rust_bridge::IntoDart for crate::api::identity::IdentityStatusView 
 impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::identity::IdentityStatusView {}
 impl flutter_rust_bridge::IntoIntoDart<crate::api::identity::IdentityStatusView> for crate::api::identity::IdentityStatusView {
     fn into_into_dart(self) -> crate::api::identity::IdentityStatusView {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::settings::SettingsView {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [self.tab_position.into_into_dart().into_dart()].into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::settings::SettingsView {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::settings::SettingsView> for crate::api::settings::SettingsView {
+    fn into_into_dart(self) -> crate::api::settings::SettingsView {
         self
     }
 }
@@ -764,6 +839,13 @@ impl SseEncode for Option<String> {
     }
 }
 
+impl SseEncode for crate::api::settings::SettingsView {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.tab_position, serializer);
+    }
+}
+
 impl SseEncode for u32 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -799,7 +881,7 @@ mod io {
 
     use super::*;
     use flutter_rust_bridge::for_generated::byteorder::{NativeEndian, ReadBytesExt, WriteBytesExt};
-    use flutter_rust_bridge::for_generated::{Lifetimeable, Lockable, transform_result_dco};
+    use flutter_rust_bridge::for_generated::{transform_result_dco, Lifetimeable, Lockable};
     use flutter_rust_bridge::{Handler, IntoIntoDart};
 
     // Section: boilerplate
@@ -821,7 +903,7 @@ mod web {
     use flutter_rust_bridge::for_generated::byteorder::{NativeEndian, ReadBytesExt, WriteBytesExt};
     use flutter_rust_bridge::for_generated::wasm_bindgen;
     use flutter_rust_bridge::for_generated::wasm_bindgen::prelude::*;
-    use flutter_rust_bridge::for_generated::{Lifetimeable, Lockable, transform_result_dco};
+    use flutter_rust_bridge::for_generated::{transform_result_dco, Lifetimeable, Lockable};
     use flutter_rust_bridge::{Handler, IntoIntoDart};
 
     // Section: boilerplate

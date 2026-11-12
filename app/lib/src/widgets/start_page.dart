@@ -19,32 +19,34 @@ class MorphStartPage extends StatelessWidget {
         fit: StackFit.expand,
         children: [
           const CustomPaint(painter: _StartGlitchPainter()),
-          Center(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 32),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const MorphWordmark(height: 88),
-                  const SizedBox(height: 28),
-                  Text(
-                    'A distributed web browser with local AI.',
-                    textAlign: TextAlign.center,
-                    style: MorphTheme.monoStyle(
-                      color: colors.onSurfaceVariant,
-                      size: 14,
+          SafeArea(
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 32),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const MorphWordmark(height: 88),
+                    const SizedBox(height: 28),
+                    Text(
+                      'A distributed web browser with local AI.',
+                      textAlign: TextAlign.center,
+                      style: MorphTheme.monoStyle(
+                        color: colors.onSurfaceVariant,
+                        size: 14,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Type an address and press Enter.',
-                    textAlign: TextAlign.center,
-                    style: MorphTheme.monoStyle(
-                      color: colors.onSurfaceVariant.withValues(alpha: 0.8),
-                      size: 13,
+                    const SizedBox(height: 8),
+                    Text(
+                      'Type an address.',
+                      textAlign: TextAlign.center,
+                      style: MorphTheme.monoStyle(
+                        color: colors.onSurfaceVariant.withValues(alpha: 0.8),
+                        size: 13,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),
