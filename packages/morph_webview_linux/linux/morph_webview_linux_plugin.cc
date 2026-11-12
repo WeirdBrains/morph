@@ -1,6 +1,7 @@
 #include "include/morph_webview_linux/morph_webview_linux_plugin.h"
 
 #include "morph_webview_control.h"
+#include "ime_context.h"
 #include "render_path.h"
 
 #include <cairo/cairo.h>
@@ -67,6 +68,20 @@ struct MorphView {
   guint snapshot_timer;
   gchar* render_path;
   gchar* render_reason;
+  gchar* cursor_shape;
+  MorphImeContext* ime;
+  guint pending_move_source;
+  gchar* pending_phase;
+  double pending_x;
+  double pending_y;
+  double pending_sx;
+  double pending_sy;
+  int32_t pending_button;
+  int32_t pending_buttons;
+  int pending_ctrl;
+  int pending_alt;
+  int pending_shift;
+  int pending_meta;
 };
 
 struct _MorphWebviewLinuxPlugin {
@@ -378,12 +393,24 @@ static MorphView* morph_view_create(MorphWebviewLinuxPlugin* plugin,
   view->web_view = WEBKIT_WEB_VIEW(webkit_web_view_new_with_user_content_manager(manager));
   g_object_unref(manager);
   gtk_container_add(GTK_CONTAINER(view->offscreen), GTK_WIDGET(view->web_view));
+  gtk_widget_set_can_focus(GTK_WIDGET(view->web_view), TRUE);
+  gtk_widget_add_events(GTK_WIDGET(view->web_view),
+                        GDK_POINTER_MOTION_MASK | GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK |
+                            GDK_SCROLL_MASK | GDK_SMOOTH_SCROLL_MASK | GDK_ENTER_NOTIFY_MASK |
+                            GDK_LEAVE_NOTIFY_MASK | GDK_KEY_PRESS_MASK | GDK_KEY_RELEASE_MASK |
+                            GDK_FOCUS_CHANGE_MASK);
   gtk_widget_show_all(view->offscreen);
+
+  view->ime = morph_ime_context_new();
+  webkit_web_view_set_input_method_context(view->web_view, WEBKIT_INPUT_METHOD_CONTEXT(view->ime));
+  view->cursor_shape = g_strdup("default");
 
   g_signal_connect(view->web_view, "load-changed", G_CALLBACK(on_load_changed), view);
   g_signal_connect(view->web_view, "notify::title", G_CALLBACK(on_notify_nav), view);
   g_signal_connect(view->web_view, "notify::uri", G_CALLBACK(on_notify_nav), view);
   g_signal_connect(view->web_view, "notify::estimated-load-progress", G_CALLBACK(on_notify_nav),
+                   view);
+  g_signal_connect(view->web_view, "mouse-target-changed", G_CALLBACK(on_mouse_target_changed),
                    view);
 
   apply_size(view, width, height, dpr);
@@ -424,6 +451,16 @@ static void morph_view_destroy(MorphView* view) {
   g_mutex_clear(&view->lock);
   g_free(view->render_path);
   g_free(view->render_reason);
+  g_free(view->cursor_shape);
+  g_free(view->pending_phase);
+  if (view->pending_move_source != 0) {
+    g_source_remove(view->pending_move_source);
+    view->pending_move_source = 0;
+  }
+  if (view->ime != nullptr) {
+    g_object_unref(view->ime);
+    view->ime = nullptr;
+  }
   g_free(view);
 }
 
@@ -440,16 +477,30 @@ static MorphView* lookup_view(MorphWebviewLinuxPlugin* plugin, FlValue* args) {
   return it->second;
 }
 
-static void dispatch_scroll(MorphView* view, double x, double y, double dx, double dy);
-static void dispatch_button(MorphView* view, const gchar* phase, double x, double y, int button);
+static void dispatch_pointer(MorphView* view,
+                             const gchar* phase,
+                             double x,
+                             double y,
+                             int button,
+                             int buttons,
+                             double dx,
+                             double dy,
+                             gboolean ctrl,
+                             gboolean alt,
+                             gboolean shift,
+                             gboolean meta);
 static void dispatch_key(MorphView* view,
                          const gchar* phase,
                          const gchar* key,
+                         const gchar* text,
                          guint hardware_keycode,
                          gboolean ctrl,
                          gboolean alt,
                          gboolean shift,
-                         gboolean meta);
+                         gboolean meta,
+                         gboolean repeat);
+static void dispatch_ime(MorphView* view, const gchar* phase, const gchar* text);
+static void grab_view_focus(MorphView* view);
 
 static MorphView* find_view(MorphWebviewLinuxPlugin* plugin, int64_t view_id) {
   if (plugin == nullptr || plugin->views == nullptr) {
@@ -479,17 +530,20 @@ struct ControlJob {
   ControlJobKind kind;
   gchar* s1;
   gchar* s2;
+  gchar* s3;
   double x;
   double y;
   double sx;
   double sy;
   int32_t button;
+  int32_t buttons;
   uint32_t keycode;
   uint64_t request_id;
   int ctrl;
   int alt;
   int shift;
   int meta;
+  int repeat;
 };
 
 static void free_control_job(ControlJob* job) {
@@ -498,6 +552,7 @@ static void free_control_job(ControlJob* job) {
   }
   g_free(job->s1);
   g_free(job->s2);
+  g_free(job->s3);
   delete job;
 }
 
@@ -541,17 +596,16 @@ static gboolean run_control_job(gpointer data) {
       webkit_web_view_reload(view->web_view);
       break;
     case kControlPointer:
-      if (g_strcmp0(job->s1, "scroll") == 0) {
-        dispatch_scroll(view, job->x, job->y, job->sx, job->sy);
-      } else {
-        dispatch_button(view, job->s1 != nullptr ? job->s1 : "down", job->x, job->y, job->button);
-      }
+      dispatch_pointer(view, job->s1 != nullptr ? job->s1 : "down", job->x, job->y, job->button,
+                       job->buttons, job->sx, job->sy, job->ctrl, job->alt, job->shift, job->meta);
       break;
     case kControlKey:
       dispatch_key(view, job->s1 != nullptr ? job->s1 : "down", job->s2 != nullptr ? job->s2 : "",
-                   job->keycode, job->ctrl, job->alt, job->shift, job->meta);
+                   job->s3 != nullptr ? job->s3 : "", job->keycode, job->ctrl, job->alt, job->shift,
+                   job->meta, job->repeat);
       break;
     case kControlIme:
+      dispatch_ime(view, job->s1 != nullptr ? job->s1 : "", job->s2 != nullptr ? job->s2 : "");
       break;
     case kControlEvaluateJs: {
       const gchar* script = job->s1 != nullptr ? job->s1 : "";
@@ -597,41 +651,56 @@ static void control_pointer(int64_t view_id,
                             double x,
                             double y,
                             int32_t button,
+                            int32_t buttons,
                             double scroll_delta_x,
                             double scroll_delta_y,
+                            int ctrl,
+                            int alt,
+                            int shift,
+                            int meta,
                             void* user_data) {
   ControlJob* job = new_control_job(user_data, view_id, kControlPointer);
   job->s1 = g_strdup(phase);
   job->x = x;
   job->y = y;
   job->button = button;
+  job->buttons = buttons;
   job->sx = scroll_delta_x;
   job->sy = scroll_delta_y;
-  queue_control_job(job);
-}
-static void control_key(int64_t view_id,
-                        const char* phase,
-                        const char* key,
-                        uint32_t hardware_keycode,
-                        int ctrl,
-                        int alt,
-                        int shift,
-                        int meta,
-                        void* user_data) {
-  ControlJob* job = new_control_job(user_data, view_id, kControlKey);
-  job->s1 = g_strdup(phase);
-  job->s2 = g_strdup(key);
-  job->keycode = hardware_keycode;
   job->ctrl = ctrl;
   job->alt = alt;
   job->shift = shift;
   job->meta = meta;
   queue_control_job(job);
 }
+static void control_key(int64_t view_id,
+                        const char* phase,
+                        const char* key,
+                        const char* text,
+                        uint32_t hardware_keycode,
+                        int ctrl,
+                        int alt,
+                        int shift,
+                        int meta,
+                        int repeat,
+                        void* user_data) {
+  ControlJob* job = new_control_job(user_data, view_id, kControlKey);
+  job->s1 = g_strdup(phase);
+  job->s2 = g_strdup(key);
+  job->s3 = g_strdup(text);
+  job->keycode = hardware_keycode;
+  job->ctrl = ctrl;
+  job->alt = alt;
+  job->shift = shift;
+  job->meta = meta;
+  job->repeat = repeat;
+  queue_control_job(job);
+}
 static void control_ime(int64_t view_id, const char* phase, const char* text, void* user_data) {
-  (void)phase;
-  (void)text;
-  queue_control_job(new_control_job(user_data, view_id, kControlIme));
+  ControlJob* job = new_control_job(user_data, view_id, kControlIme);
+  job->s1 = g_strdup(phase);
+  job->s2 = g_strdup(text);
+  queue_control_job(job);
 }
 static void control_evaluate_js(int64_t view_id, uint64_t request_id, const char* script, void* user_data) {
   ControlJob* job = new_control_job(user_data, view_id, kControlEvaluateJs);
@@ -734,22 +803,233 @@ static GdkDevice* default_keyboard_device() {
   return gdk_seat_get_keyboard(seat);
 }
 
-static void dispatch_button(MorphView* view, const gchar* phase, double x, double y, int button) {
+static GdkModifierType pointer_state(int buttons, gboolean ctrl, gboolean alt, gboolean shift, gboolean meta) {
+  GdkModifierType state = static_cast<GdkModifierType>(0);
+  if (buttons & 1) {
+    state = static_cast<GdkModifierType>(state | GDK_BUTTON1_MASK);
+  }
+  if (buttons & 2) {
+    state = static_cast<GdkModifierType>(state | GDK_BUTTON2_MASK);
+  }
+  if (buttons & 4) {
+    state = static_cast<GdkModifierType>(state | GDK_BUTTON3_MASK);
+  }
+  if (buttons & 8) {
+    state = static_cast<GdkModifierType>(state | GDK_BUTTON4_MASK);
+  }
+  if (buttons & 16) {
+    state = static_cast<GdkModifierType>(state | GDK_BUTTON5_MASK);
+  }
+  if (ctrl) {
+    state = static_cast<GdkModifierType>(state | GDK_CONTROL_MASK);
+  }
+  if (alt) {
+    state = static_cast<GdkModifierType>(state | GDK_MOD1_MASK);
+  }
+  if (shift) {
+    state = static_cast<GdkModifierType>(state | GDK_SHIFT_MASK);
+  }
+  if (meta) {
+    state = static_cast<GdkModifierType>(state | GDK_META_MASK | GDK_SUPER_MASK);
+  }
+  return state;
+}
+
+static const gchar* css_cursor_from_gdk(GdkCursor* cursor) {
+  if (cursor == nullptr) {
+    return "default";
+  }
+  const gchar* name = gdk_cursor_get_name(cursor);
+  if (name != nullptr && *name != '\0') {
+    if (g_strcmp0(name, "pointer") == 0 || g_strcmp0(name, "hand") == 0 || g_strcmp0(name, "hand1") == 0 ||
+        g_strcmp0(name, "hand2") == 0) {
+      return "pointer";
+    }
+    if (g_strcmp0(name, "text") == 0 || g_strcmp0(name, "xterm") == 0 || g_strcmp0(name, "ibeam") == 0) {
+      return "text";
+    }
+    if (g_strcmp0(name, "left_ptr") == 0 || g_strcmp0(name, "arrow") == 0 || g_strcmp0(name, "default") == 0) {
+      return "default";
+    }
+    if (g_strcmp0(name, "watch") == 0) {
+      return "wait";
+    }
+    if (g_strcmp0(name, "left_ptr_watch") == 0) {
+      return "progress";
+    }
+    if (g_strcmp0(name, "crosshair") == 0 || g_strcmp0(name, "cross") == 0 || g_strcmp0(name, "tcross") == 0) {
+      return "crosshair";
+    }
+    if (g_strcmp0(name, "fleur") == 0) {
+      return "move";
+    }
+    if (g_strcmp0(name, "sb_h_double_arrow") == 0) {
+      return "ew-resize";
+    }
+    if (g_strcmp0(name, "sb_v_double_arrow") == 0) {
+      return "ns-resize";
+    }
+    if (g_strcmp0(name, "question_arrow") == 0) {
+      return "help";
+    }
+    if (g_strcmp0(name, "crossed_circle") == 0 || g_strcmp0(name, "not-allowed") == 0) {
+      return "not-allowed";
+    }
+    return name;
+  }
+  switch (gdk_cursor_get_cursor_type(cursor)) {
+    case GDK_HAND1:
+    case GDK_HAND2:
+      return "pointer";
+    case GDK_XTERM:
+      return "text";
+    case GDK_WATCH:
+      return "wait";
+    case GDK_CROSSHAIR:
+    case GDK_CROSS:
+    case GDK_TCROSS:
+      return "crosshair";
+    case GDK_FLEUR:
+      return "move";
+    case GDK_SB_H_DOUBLE_ARROW:
+      return "ew-resize";
+    case GDK_SB_V_DOUBLE_ARROW:
+      return "ns-resize";
+    case GDK_QUESTION_ARROW:
+      return "help";
+    case GDK_PIRATE:
+    case GDK_X_CURSOR:
+      return "not-allowed";
+    case GDK_BLANK_CURSOR:
+      return "none";
+    default:
+      return "default";
+  }
+}
+
+static void maybe_emit_cursor(MorphView* view) {
+  GdkWindow* window = gtk_widget_get_window(GTK_WIDGET(view->web_view));
+  const gchar* shape = "default";
+  if (window != nullptr) {
+    shape = css_cursor_from_gdk(gdk_window_get_cursor(window));
+  }
+  if (g_strcmp0(view->cursor_shape, shape) != 0) {
+    g_free(view->cursor_shape);
+    view->cursor_shape = g_strdup(shape);
+    morph_control_emit_cursor(view->view_id, shape);
+  }
+}
+
+static void on_mouse_target_changed(WebKitWebView* web_view,
+                                    WebKitHitTestResult* hit_test_result,
+                                    guint modifiers,
+                                    gpointer user_data) {
+  (void)web_view;
+  (void)hit_test_result;
+  (void)modifiers;
+  maybe_emit_cursor(static_cast<MorphView*>(user_data));
+}
+
+static void grab_view_focus(MorphView* view) {
+  GtkWidget* widget = GTK_WIDGET(view->web_view);
+  gtk_widget_set_can_focus(widget, TRUE);
+  gtk_widget_grab_focus(widget);
+  GdkWindow* window = gtk_widget_get_window(widget);
+  if (window == nullptr) {
+    return;
+  }
+  GdkEvent* event = gdk_event_new(GDK_FOCUS_CHANGE);
+  event->focus_change.window = window;
+  g_object_ref(window);
+  event->focus_change.send_event = TRUE;
+  event->focus_change.in = TRUE;
+  gtk_widget_event(widget, event);
+  gdk_event_free(event);
+}
+
+static void dispatch_crossing(MorphView* view, gboolean enter, double px, double py, GdkModifierType state) {
   GdkWindow* window = gtk_widget_get_window(GTK_WIDGET(view->web_view));
   if (window == nullptr) {
     return;
   }
-  GdkEventType type = GDK_BUTTON_PRESS;
-  if (g_strcmp0(phase, "up") == 0) {
-    type = GDK_BUTTON_RELEASE;
-  } else if (g_strcmp0(phase, "move") == 0) {
-    type = GDK_MOTION_NOTIFY;
-  } else if (g_strcmp0(phase, "cancel") == 0) {
-    type = GDK_BUTTON_RELEASE;
+  GdkEvent* event = gdk_event_new(enter ? GDK_ENTER_NOTIFY : GDK_LEAVE_NOTIFY);
+  event->crossing.window = window;
+  g_object_ref(window);
+  event->crossing.send_event = TRUE;
+  event->crossing.time = GDK_CURRENT_TIME;
+  event->crossing.x = px;
+  event->crossing.y = py;
+  event->crossing.x_root = px;
+  event->crossing.y_root = py;
+  event->crossing.mode = GDK_CROSSING_NORMAL;
+  event->crossing.detail = GDK_NOTIFY_ANCESTOR;
+  event->crossing.focus = TRUE;
+  event->crossing.state = state;
+  gdk_event_set_device(event, default_pointer_device());
+  gtk_widget_event(GTK_WIDGET(view->web_view), event);
+  gdk_event_free(event);
+}
+
+static void dispatch_pointer(MorphView* view,
+                             const gchar* phase,
+                             double x,
+                             double y,
+                             int button,
+                             int buttons,
+                             double dx,
+                             double dy,
+                             gboolean ctrl,
+                             gboolean alt,
+                             gboolean shift,
+                             gboolean meta) {
+  GdkWindow* window = gtk_widget_get_window(GTK_WIDGET(view->web_view));
+  if (window == nullptr) {
+    return;
   }
   double px = x * view->dpr;
   double py = y * view->dpr;
-  if (type == GDK_MOTION_NOTIFY) {
+  GdkModifierType state = pointer_state(buttons, ctrl, alt, shift, meta);
+
+  if (g_strcmp0(phase, "scroll") == 0) {
+    GdkEvent* event = gdk_event_new(GDK_SCROLL);
+    event->scroll.window = window;
+    g_object_ref(window);
+    event->scroll.send_event = TRUE;
+    event->scroll.time = GDK_CURRENT_TIME;
+    event->scroll.x = px;
+    event->scroll.y = py;
+    event->scroll.x_root = px;
+    event->scroll.y_root = py;
+    event->scroll.direction = GDK_SCROLL_SMOOTH;
+    event->scroll.delta_x = dx / 40.0;
+    event->scroll.delta_y = dy / 40.0;
+    event->scroll.state = state;
+    gdk_event_set_device(event, default_pointer_device());
+    gtk_widget_event(GTK_WIDGET(view->web_view), event);
+    gdk_event_free(event);
+    request_snapshot(view);
+    start_snapshot_timer(view);
+    return;
+  }
+
+  if (g_strcmp0(phase, "enter") == 0) {
+    dispatch_crossing(view, TRUE, px, py, state);
+    maybe_emit_cursor(view);
+    request_snapshot(view);
+    return;
+  }
+  if (g_strcmp0(phase, "leave") == 0) {
+    dispatch_crossing(view, FALSE, px, py, state);
+    if (g_strcmp0(view->cursor_shape, "default") != 0) {
+      g_free(view->cursor_shape);
+      view->cursor_shape = g_strdup("default");
+      morph_control_emit_cursor(view->view_id, "default");
+    }
+    request_snapshot(view);
+    return;
+  }
+
+  if (g_strcmp0(phase, "move") == 0 || g_strcmp0(phase, "hover") == 0) {
     GdkEvent* event = gdk_event_new(GDK_MOTION_NOTIFY);
     event->motion.window = window;
     g_object_ref(window);
@@ -759,52 +1039,39 @@ static void dispatch_button(MorphView* view, const gchar* phase, double x, doubl
     event->motion.y = py;
     event->motion.x_root = px;
     event->motion.y_root = py;
-    event->motion.state = button == 3 ? GDK_BUTTON3_MASK : button == 2 ? GDK_BUTTON2_MASK
-                                                                       : GDK_BUTTON1_MASK;
+    event->motion.state = state;
+    event->motion.is_hint = FALSE;
     gdk_event_set_device(event, default_pointer_device());
     gtk_widget_event(GTK_WIDGET(view->web_view), event);
     gdk_event_free(event);
-  } else {
-    GdkEvent* event = gdk_event_new(type);
-    event->button.window = window;
-    g_object_ref(window);
-    event->button.send_event = TRUE;
-    event->button.time = GDK_CURRENT_TIME;
-    event->button.x = px;
-    event->button.y = py;
-    event->button.x_root = px;
-    event->button.y_root = py;
-    event->button.button = button == 0 ? 1 : static_cast<guint>(button);
-    event->button.state = 0;
-    gdk_event_set_device(event, default_pointer_device());
-    gtk_widget_event(GTK_WIDGET(view->web_view), event);
-    gdk_event_free(event);
-  }
-  request_snapshot(view);
-}
-
-static void dispatch_scroll(MorphView* view, double x, double y, double dx, double dy) {
-  GdkWindow* window = gtk_widget_get_window(GTK_WIDGET(view->web_view));
-  if (window == nullptr) {
+    maybe_emit_cursor(view);
+    request_snapshot(view);
     return;
   }
-  GdkEvent* event = gdk_event_new(GDK_SCROLL);
-  event->scroll.window = window;
+
+  if (g_strcmp0(phase, "down") == 0) {
+    grab_view_focus(view);
+  }
+  GdkEventType type = GDK_BUTTON_PRESS;
+  if (g_strcmp0(phase, "up") == 0 || g_strcmp0(phase, "cancel") == 0) {
+    type = GDK_BUTTON_RELEASE;
+  }
+  GdkEvent* event = gdk_event_new(type);
+  event->button.window = window;
   g_object_ref(window);
-  event->scroll.send_event = TRUE;
-  event->scroll.time = GDK_CURRENT_TIME;
-  event->scroll.x = x * view->dpr;
-  event->scroll.y = y * view->dpr;
-  event->scroll.x_root = event->scroll.x;
-  event->scroll.y_root = event->scroll.y;
-  event->scroll.direction = GDK_SCROLL_SMOOTH;
-  event->scroll.delta_x = dx;
-  event->scroll.delta_y = dy;
+  event->button.send_event = TRUE;
+  event->button.time = GDK_CURRENT_TIME;
+  event->button.x = px;
+  event->button.y = py;
+  event->button.x_root = px;
+  event->button.y_root = py;
+  event->button.button = button == 0 ? 1 : static_cast<guint>(button);
+  event->button.state = state;
   gdk_event_set_device(event, default_pointer_device());
   gtk_widget_event(GTK_WIDGET(view->web_view), event);
   gdk_event_free(event);
+  maybe_emit_cursor(view);
   request_snapshot(view);
-  start_snapshot_timer(view);
 }
 
 static guint keyval_from_label(const gchar* key) {
@@ -838,6 +1105,21 @@ static guint keyval_from_label(const gchar* key) {
   if (g_ascii_strcasecmp(key, " ") == 0 || g_ascii_strcasecmp(key, "Space") == 0) {
     return GDK_KEY_space;
   }
+  if (g_ascii_strcasecmp(key, "Delete") == 0) {
+    return GDK_KEY_Delete;
+  }
+  if (g_ascii_strcasecmp(key, "Home") == 0) {
+    return GDK_KEY_Home;
+  }
+  if (g_ascii_strcasecmp(key, "End") == 0) {
+    return GDK_KEY_End;
+  }
+  if (g_ascii_strcasecmp(key, "Page Up") == 0) {
+    return GDK_KEY_Page_Up;
+  }
+  if (g_ascii_strcasecmp(key, "Page Down") == 0) {
+    return GDK_KEY_Page_Down;
+  }
   guint from_name = gdk_keyval_from_name(key);
   if (from_name != GDK_KEY_VoidSymbol) {
     return from_name;
@@ -849,31 +1131,83 @@ static guint keyval_from_label(const gchar* key) {
   return GDK_KEY_VoidSymbol;
 }
 
+static guint keyval_for_event(const gchar* key, const gchar* text) {
+  if (text != nullptr && g_utf8_strlen(text, -1) == 1) {
+    return gdk_unicode_to_keyval(g_utf8_get_char(text));
+  }
+  return keyval_from_label(key);
+}
+
+static guint16 hardware_keycode_for(guint keyval, guint provided) {
+  if (provided >= 8 && provided <= 255) {
+    return static_cast<guint16>(provided);
+  }
+  GdkDisplay* display = gdk_display_get_default();
+  if (display == nullptr) {
+    return 0;
+  }
+  GdkKeymap* keymap = gdk_keymap_get_for_display(display);
+  GdkKeymapKey* keys = nullptr;
+  gint n_keys = 0;
+  if (gdk_keymap_get_entries_for_keyval(keymap, keyval, &keys, &n_keys) && n_keys > 0) {
+    guint16 code = static_cast<guint16>(keys[0].keycode);
+    g_free(keys);
+    return code;
+  }
+  g_free(keys);
+  return 0;
+}
+
 static void dispatch_key(MorphView* view,
                          const gchar* phase,
                          const gchar* key,
+                         const gchar* text,
                          guint hardware_keycode,
                          gboolean ctrl,
                          gboolean alt,
                          gboolean shift,
-                         gboolean meta) {
+                         gboolean meta,
+                         gboolean repeat) {
   GdkWindow* window = gtk_widget_get_window(GTK_WIDGET(view->web_view));
   if (window == nullptr) {
     return;
   }
+  grab_view_focus(view);
   GdkEventType type = g_strcmp0(phase, "up") == 0 ? GDK_KEY_RELEASE : GDK_KEY_PRESS;
+  guint keyval = keyval_for_event(key, text);
   GdkEvent* event = gdk_event_new(type);
   event->key.window = window;
   g_object_ref(window);
   event->key.send_event = TRUE;
   event->key.time = GDK_CURRENT_TIME;
-  event->key.keyval = keyval_from_label(key);
+  event->key.keyval = keyval;
   event->key.state = (ctrl ? GDK_CONTROL_MASK : 0) | (alt ? GDK_MOD1_MASK : 0) |
-                     (shift ? GDK_SHIFT_MASK : 0) | (meta ? GDK_META_MASK : 0);
-  event->key.hardware_keycode = static_cast<guint16>(hardware_keycode);
+                     (shift ? GDK_SHIFT_MASK : 0) | (meta ? GDK_META_MASK | GDK_SUPER_MASK : 0);
+  event->key.hardware_keycode = hardware_keycode_for(keyval, hardware_keycode);
+  event->key.is_modifier = (keyval == GDK_KEY_Shift_L || keyval == GDK_KEY_Shift_R || keyval == GDK_KEY_Control_L ||
+                            keyval == GDK_KEY_Control_R || keyval == GDK_KEY_Alt_L || keyval == GDK_KEY_Alt_R ||
+                            keyval == GDK_KEY_Meta_L || keyval == GDK_KEY_Meta_R || keyval == GDK_KEY_Super_L ||
+                            keyval == GDK_KEY_Super_R)
+                               ? TRUE
+                               : FALSE;
+  if (type == GDK_KEY_PRESS && text != nullptr && text[0] != '\0' && !ctrl && !alt && !meta) {
+    event->key.string = g_strdup(text);
+    event->key.length = static_cast<gint>(strlen(text));
+  }
+  (void)repeat;
   gdk_event_set_device(event, default_keyboard_device());
   gtk_widget_event(GTK_WIDGET(view->web_view), event);
   gdk_event_free(event);
+  request_snapshot(view);
+}
+
+static void dispatch_ime(MorphView* view, const gchar* phase, const gchar* text) {
+  if (g_strcmp0(phase, "focus") == 0) {
+    grab_view_focus(view);
+  }
+  if (view->ime != nullptr) {
+    morph_ime_context_handle(view->ime, phase, text);
+  }
   request_snapshot(view);
 }
 
