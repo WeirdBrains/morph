@@ -40,10 +40,13 @@ class MorphTabOverflowButton extends StatelessWidget {
                 key: Key('tab-overflow-${tab.id}'),
                 value: tab.id,
                 padding: const EdgeInsets.symmetric(horizontal: 8),
+                height: 40,
                 child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     Icon(
                       Icons.public,
+                      key: Key('tab-overflow-favicon-${tab.id}'),
                       size: 16,
                       color: colors.onSurfaceVariant,
                     ),
@@ -51,6 +54,7 @@ class MorphTabOverflowButton extends StatelessWidget {
                     Expanded(
                       child: Text(
                         tab.label,
+                        key: Key('tab-overflow-title-${tab.id}'),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: MorphTheme.monoStyle(

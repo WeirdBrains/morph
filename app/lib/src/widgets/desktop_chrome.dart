@@ -8,6 +8,7 @@ import '../tabs/tab_set.dart';
 import '../theme/morph_theme.dart';
 import '../window/window_buttons.dart';
 import 'brand.dart';
+import 'tab_active_border.dart';
 import 'tab_overflow_menu.dart';
 import 'window_chrome.dart';
 
@@ -303,6 +304,14 @@ class MorphDesktopTabStrip extends StatelessWidget {
                         ...tabs.sublist(0, start),
                         ...tabs.sublist(end),
                       ];
+                      final tabWidth = MorphTabOverflow.tabWidth(
+                        visibleTabCount: visible.length,
+                        available: constraints.maxWidth,
+                        trailingExtent: MorphTabOverflow.trailingGroupExtent(
+                          horizontal: true,
+                        ),
+                        overflow: hidden.isNotEmpty,
+                      );
                       return MorphTrailingAfterChildren(
                         axis: Axis.horizontal,
                         spacing: MorphTabOverflow.spacing,
@@ -327,6 +336,7 @@ class MorphDesktopTabStrip extends StatelessWidget {
                               tab: tab,
                               active: tab.id == activeId,
                               flipped: flipped,
+                              width: tabWidth,
                               onSelect: () => onSelectTab?.call(tab.id),
                               onClose: () => onCloseTab?.call(tab.id),
                             ),
@@ -384,6 +394,16 @@ class _MorphTrailingAfterChildrenState
   bool get _horizontal => widget.axis == Axis.horizontal;
 
   @override
+  void didUpdateWidget(covariant MorphTrailingAfterChildren oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.children.length != widget.children.length) {
+      // Drop the stale cluster width so a tab-count change cannot paint a
+      // RenderFlex stripe while AnimatedContainer widths are still catching up.
+      _childrenExtent = 0;
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -399,7 +419,7 @@ class _MorphTrailingAfterChildrenState
         // push window buttons off the side of the strip. After measuring,
         // treat a near-full strip as overflow so a 1–4px under-measure cannot
         // paint a RenderFlex stripe.
-        final overflow = !measured || needed > max - 4;
+        final overflow = !measured || needed > max + 0.5;
 
         final tabs = _MeasureExtent(
           axis: widget.axis,
@@ -438,6 +458,7 @@ class _MorphTrailingAfterChildrenState
                     child: tabs,
                   ),
                 ),
+                if (gap > 0) SizedBox(width: gap),
                 trailing,
               ],
             );
@@ -445,6 +466,7 @@ class _MorphTrailingAfterChildrenState
           return Column(
             children: [
               Expanded(child: SingleChildScrollView(child: tabs)),
+              if (gap > 0) SizedBox(height: gap),
               trailing,
             ],
           );
@@ -454,7 +476,7 @@ class _MorphTrailingAfterChildrenState
           return Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              tabs,
+              _clipCluster(tabs, max - _trailingExtent - gap),
               if (gap > 0) SizedBox(width: gap),
               trailing,
             ],
@@ -463,13 +485,34 @@ class _MorphTrailingAfterChildrenState
         return Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            tabs,
+            _clipCluster(tabs, max - _trailingExtent - gap),
             if (gap > 0) SizedBox(height: gap),
             trailing,
           ],
         );
       },
     );
+  }
+
+  /// Lets [cluster] lay out at its intrinsic size while clipping any
+  /// leftover pixels, so a 1–2 px under-measure cannot overflow a Flex.
+  Widget _clipCluster(Widget cluster, double maxExtent) {
+    if (maxExtent.isFinite && maxExtent > 0) {
+      return ClipRect(
+        child: ConstrainedBox(
+          constraints: _horizontal
+              ? BoxConstraints(maxWidth: maxExtent)
+              : BoxConstraints(maxHeight: maxExtent),
+          child: UnconstrainedBox(
+            alignment: _horizontal ? Alignment.centerLeft : Alignment.topCenter,
+            constrainedAxis: _horizontal ? Axis.vertical : Axis.horizontal,
+            clipBehavior: Clip.hardEdge,
+            child: cluster,
+          ),
+        ),
+      );
+    }
+    return cluster;
   }
 
   List<Widget> _intersperse(List<Widget> children) {
@@ -639,6 +682,7 @@ class MorphTabList extends StatelessWidget {
                               tab: tab,
                               active: tab.id == activeId,
                               collapsed: collapsed,
+                              side: side,
                               onSelect: () => onSelectTab?.call(tab.id),
                               onClose: () => onCloseTab?.call(tab.id),
                             ),
@@ -754,6 +798,7 @@ class MorphTabChip extends StatefulWidget {
     required this.tab,
     required this.active,
     required this.flipped,
+    this.width = MorphTabOverflow.horizontalMaxExtent,
     this.onSelect,
     this.onClose,
   });
@@ -761,8 +806,18 @@ class MorphTabChip extends StatefulWidget {
   final MorphTab tab;
   final bool active;
   final bool flipped;
+
+  /// Share of the strip, already clamped to 50–150 px.
+  final double width;
   final VoidCallback? onSelect;
   final VoidCallback? onClose;
+
+  /// Width at which the title is hidden so the favicon can stay centered.
+  static const double titleMinWidth = 96;
+
+  /// Width at which the close control leaves the row (it still appears on
+  /// the active tab or on hover, overlaid so the favicon stays centered).
+  static const double closeRowMinWidth = 64;
 
   @override
   State<MorphTabChip> createState() => _MorphTabChipState();
@@ -770,6 +825,8 @@ class MorphTabChip extends StatefulWidget {
 
 class _MorphTabChipState extends State<MorphTabChip> {
   bool _hover = false;
+
+  bool get _showTitle => widget.width >= MorphTabChip.titleMinWidth;
 
   @override
   Widget build(BuildContext context) {
@@ -781,6 +838,7 @@ class _MorphTabChipState extends State<MorphTabChip> {
       bottomLeft: widget.flipped ? radius : Radius.zero,
       bottomRight: widget.flipped ? radius : Radius.zero,
     );
+    final showClose = widget.active || _hover;
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
@@ -796,7 +854,8 @@ class _MorphTabChipState extends State<MorphTabChip> {
           borderRadius: shape,
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 120),
-            width: MorphTabOverflow.horizontalMinExtent,
+            curve: Curves.easeOut,
+            width: widget.width,
             height: 40,
             decoration: BoxDecoration(
               color: widget.active
@@ -808,37 +867,39 @@ class _MorphTabChipState extends State<MorphTabChip> {
             ),
             child: Stack(
               children: [
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.public,
-                        size: 14,
-                        color: colors.onSurfaceVariant,
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          widget.tab.label,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: MorphTheme.monoStyle(
-                            color: colors.onSurface,
-                            size: 12,
+                Positioned.fill(
+                  child: Padding(
+                    padding: EdgeInsets.only(
+                      left: 8,
+                      right: 8,
+                      top: widget.flipped
+                          ? 0
+                          : MorphTabActiveBorder.defaultStrokeWidth,
+                      bottom: widget.flipped
+                          ? MorphTabActiveBorder.defaultStrokeWidth
+                          : 0,
+                    ),
+                    child: _showTitle
+                        ? Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              _favicon(colors.onSurfaceVariant),
+                              const SizedBox(width: 6),
+                              Expanded(child: _title(colors.onSurface)),
+                              if (showClose) _closeButton(),
+                            ],
+                          )
+                        : Stack(
+                            alignment: Alignment.center,
+                            children: [
+                              _favicon(colors.onSurfaceVariant),
+                              if (showClose)
+                                Align(
+                                  alignment: Alignment.centerRight,
+                                  child: _closeButton(),
+                                ),
+                            ],
                           ),
-                        ),
-                      ),
-                      if (widget.active || _hover)
-                        _IconAction(
-                          key: Key('tab-close-${widget.tab.id}'),
-                          tooltip: 'Close tab',
-                          icon: Icons.close,
-                          onPressed: widget.onClose,
-                          size: 28,
-                          iconSize: 14,
-                        ),
-                    ],
                   ),
                 ),
                 if (widget.active)
@@ -846,11 +907,13 @@ class _MorphTabChipState extends State<MorphTabChip> {
                     key: Key('tab-indicator-${widget.tab.id}'),
                     left: 0,
                     right: 0,
-                    top: widget.flipped ? 0 : null,
-                    bottom: widget.flipped ? null : 0,
-                    child: const ColoredBox(
-                      color: MorphColors.cyan,
-                      child: SizedBox(height: 2),
+                    top: widget.flipped ? null : 0,
+                    bottom: widget.flipped ? 0 : null,
+                    height: MorphTabActiveBorder.bandExtent,
+                    child: MorphTabActiveBorder(
+                      edge: widget.flipped
+                          ? MorphTabActiveEdge.bottom
+                          : MorphTabActiveEdge.top,
                     ),
                   ),
               ],
@@ -858,6 +921,36 @@ class _MorphTabChipState extends State<MorphTabChip> {
           ),
         ),
       ),
+    );
+  }
+
+  Widget _favicon(Color color) {
+    return Icon(
+      Icons.public,
+      key: Key('tab-favicon-${widget.tab.id}'),
+      size: 14,
+      color: color,
+    );
+  }
+
+  Widget _title(Color color) {
+    return Text(
+      widget.tab.label,
+      key: Key('tab-title-${widget.tab.id}'),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: MorphTheme.monoStyle(color: color, size: 12),
+    );
+  }
+
+  Widget _closeButton() {
+    return _IconAction(
+      key: Key('tab-close-${widget.tab.id}'),
+      tooltip: 'Close tab',
+      icon: Icons.close,
+      onPressed: widget.onClose,
+      size: 28,
+      iconSize: 14,
     );
   }
 }
@@ -869,6 +962,7 @@ class MorphTabListTile extends StatefulWidget {
     required this.tab,
     required this.active,
     required this.collapsed,
+    required this.side,
     this.onSelect,
     this.onClose,
   });
@@ -876,6 +970,10 @@ class MorphTabListTile extends StatefulWidget {
   final MorphTab tab;
   final bool active;
   final bool collapsed;
+
+  /// [MorphTabPosition.left] or [MorphTabPosition.right]. The active border
+  /// sits on the inner edge facing the page.
+  final MorphTabPosition side;
   final VoidCallback? onSelect;
   final VoidCallback? onClose;
 
@@ -885,6 +983,8 @@ class MorphTabListTile extends StatefulWidget {
 
 class _MorphTabListTileState extends State<MorphTabListTile> {
   bool _hover = false;
+
+  bool get _right => widget.side == MorphTabPosition.right;
 
   @override
   Widget build(BuildContext context) {
@@ -901,48 +1001,70 @@ class _MorphTabListTileState extends State<MorphTabListTile> {
         child: InkWell(
           key: Key('tab-${widget.tab.id}'),
           onTap: widget.onSelect,
-          child: Container(
+          child: SizedBox(
             height: MorphTabOverflow.verticalMinExtent,
-            padding: EdgeInsets.symmetric(horizontal: widget.collapsed ? 0 : 8),
-            decoration: BoxDecoration(
-              color: widget.active
-                  ? colors.surfaceContainerHighest
-                  : Colors.transparent,
-              border: widget.active
-                  ? const Border(
-                      left: BorderSide(color: MorphColors.cyan, width: 2),
-                    )
-                  : null,
-            ),
-            child: Row(
-              mainAxisAlignment: widget.collapsed
-                  ? MainAxisAlignment.center
-                  : MainAxisAlignment.start,
+            child: Stack(
               children: [
-                Icon(Icons.public, size: 16, color: colors.onSurfaceVariant),
-                if (!widget.collapsed) ...[
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      widget.tab.label,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: MorphTheme.monoStyle(
-                        color: colors.onSurface,
-                        size: 12,
-                      ),
+                Positioned.fill(
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(
+                      horizontal: widget.collapsed ? 0 : 8,
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      mainAxisAlignment: widget.collapsed
+                          ? MainAxisAlignment.center
+                          : MainAxisAlignment.start,
+                      children: [
+                        Icon(
+                          Icons.public,
+                          key: Key('tab-favicon-${widget.tab.id}'),
+                          size: 16,
+                          color: colors.onSurfaceVariant,
+                        ),
+                        if (!widget.collapsed) ...[
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              widget.tab.label,
+                              key: Key('tab-title-${widget.tab.id}'),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: MorphTheme.monoStyle(
+                                color: colors.onSurface,
+                                size: 12,
+                              ),
+                            ),
+                          ),
+                          if (widget.active || _hover)
+                            _IconAction(
+                              key: Key('tab-close-${widget.tab.id}'),
+                              tooltip: 'Close tab',
+                              icon: Icons.close,
+                              onPressed: widget.onClose,
+                              size: 28,
+                              iconSize: 14,
+                            ),
+                        ],
+                      ],
                     ),
                   ),
-                  if (widget.active || _hover)
-                    _IconAction(
-                      key: Key('tab-close-${widget.tab.id}'),
-                      tooltip: 'Close tab',
-                      icon: Icons.close,
-                      onPressed: widget.onClose,
-                      size: 28,
-                      iconSize: 14,
+                ),
+                if (widget.active)
+                  Positioned(
+                    key: Key('tab-indicator-${widget.tab.id}'),
+                    top: 0,
+                    bottom: 0,
+                    left: _right ? 0 : null,
+                    right: _right ? null : 0,
+                    width: MorphTabActiveBorder.bandExtent,
+                    child: MorphTabActiveBorder(
+                      edge: _right
+                          ? MorphTabActiveEdge.left
+                          : MorphTabActiveEdge.right,
+                      cornerRadius: 0,
                     ),
-                ],
+                  ),
               ],
             ),
           ),
@@ -964,6 +1086,15 @@ class MorphTabPositionButton extends StatelessWidget {
       key: const Key('tab-position'),
       tooltip: 'Tab position',
       padding: EdgeInsets.zero,
+      splashRadius: 18,
+      style: IconButton.styleFrom(
+        visualDensity: VisualDensity.compact,
+        minimumSize: const Size(36, 36),
+        maximumSize: const Size(36, 36),
+        fixedSize: const Size(36, 36),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        padding: EdgeInsets.zero,
+      ),
       onSelected: onSelected,
       itemBuilder: (context) => [
         for (final position in MorphTabPosition.values)
