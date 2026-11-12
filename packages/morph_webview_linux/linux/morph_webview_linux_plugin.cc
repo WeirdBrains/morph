@@ -4,6 +4,7 @@
 #include "ime_context.h"
 #include "key_map.h"
 #include "render_path.h"
+#include "session.h"
 
 #include <cairo/cairo.h>
 #include <flutter_linux/flutter_linux.h>
@@ -141,7 +142,7 @@ static MorphPixelBufferTexture* morph_pixel_buffer_texture_new(MorphView* view) 
   return texture;
 }
 
-__attribute__((unused)) static void emit_event(MorphView* view, FlValue* event) {
+static void emit_event(MorphView* view, FlValue* event) {
   MorphWebviewLinuxPlugin* plugin = view->plugin;
   if (plugin == nullptr || !plugin->events_listening || plugin->events == nullptr) {
     fl_value_unref(event);
@@ -367,7 +368,52 @@ static MorphView* morph_view_create(MorphWebviewLinuxPlugin* plugin,
                                     uint32_t width,
                                     uint32_t height,
                                     double dpr,
-                                    const gchar* user_script) {
+                                    const gchar* user_script,
+                                    WebKitWebView* related);
+static void morph_view_destroy(MorphView* view);
+
+static gboolean destroy_view_idle(gpointer user_data) {
+  morph_view_destroy(static_cast<MorphView*>(user_data));
+  return G_SOURCE_REMOVE;
+}
+
+static gboolean on_web_view_close(WebKitWebView* web_view, gpointer user_data) {
+  (void)web_view;
+  MorphView* view = static_cast<MorphView*>(user_data);
+  if (view->plugin != nullptr && view->plugin->views != nullptr) {
+    view->plugin->views->erase(view->view_id);
+  }
+  g_idle_add(destroy_view_idle, view);
+  return FALSE;
+}
+
+static GtkWidget* on_web_view_create(WebKitWebView* web_view,
+                                     WebKitNavigationAction* navigation_action,
+                                     gpointer user_data) {
+  MorphView* parent = static_cast<MorphView*>(user_data);
+  MorphView* popup = morph_view_create(parent->plugin, nullptr, parent->logical_width,
+                                       parent->logical_height, parent->dpr, nullptr, web_view);
+  g_autoptr(FlValue) event = fl_value_new_map();
+  fl_value_set_string_take(event, "type", fl_value_new_string("new-window"));
+  const gchar* uri = nullptr;
+  if (navigation_action != nullptr) {
+    WebKitURIRequest* request = webkit_navigation_action_get_request(navigation_action);
+    if (request != nullptr) {
+      uri = webkit_uri_request_get_uri(request);
+    }
+  }
+  fl_value_set_string_take(event, "url", fl_value_new_string(uri != nullptr ? uri : ""));
+  emit_event(popup, fl_value_ref(event));
+  return GTK_WIDGET(popup->web_view);
+}
+
+static MorphView* morph_view_create(MorphWebviewLinuxPlugin* plugin,
+                                    const gchar* initial_url,
+                                    uint32_t width,
+                                    uint32_t height,
+                                    double dpr,
+                                    const gchar* user_script,
+                                    WebKitWebView* related) {
   if (morph_should_disable_webkit_dmabuf_renderer() &&
       g_getenv("WEBKIT_DISABLE_DMABUF_RENDERER") == nullptr) {
     g_setenv("WEBKIT_DISABLE_DMABUF_RENDERER", "1", FALSE);
@@ -396,7 +442,17 @@ static MorphView* morph_view_create(MorphWebviewLinuxPlugin* plugin,
   add_user_script(manager, user_script);
 
   view->offscreen = gtk_offscreen_window_new();
-  view->web_view = WEBKIT_WEB_VIEW(webkit_web_view_new_with_user_content_manager(manager));
+  WebKitSettings* settings = morph_session_create_settings();
+  if (related != nullptr) {
+    view->web_view = WEBKIT_WEB_VIEW(g_object_new(WEBKIT_TYPE_WEB_VIEW, "related-view", related,
+                                                 "user-content-manager", manager, "settings",
+                                                 settings, nullptr));
+  } else {
+    view->web_view = WEBKIT_WEB_VIEW(g_object_new(
+        WEBKIT_TYPE_WEB_VIEW, "web-context", morph_session_shared_context(),
+        "user-content-manager", manager, "settings", settings, nullptr));
+  }
+  g_object_unref(settings);
   g_object_unref(manager);
   gtk_container_add(GTK_CONTAINER(view->offscreen), GTK_WIDGET(view->web_view));
   gtk_widget_set_can_focus(GTK_WIDGET(view->web_view), TRUE);
@@ -418,6 +474,8 @@ static MorphView* morph_view_create(MorphWebviewLinuxPlugin* plugin,
                    view);
   g_signal_connect(view->web_view, "mouse-target-changed", G_CALLBACK(on_mouse_target_changed),
                    view);
+  g_signal_connect(view->web_view, "create", G_CALLBACK(on_web_view_create), view);
+  g_signal_connect(view->web_view, "close", G_CALLBACK(on_web_view_close), view);
 
   apply_size(view, width, height, dpr);
   if (initial_url != nullptr && *initial_url != '\0') {
@@ -1163,7 +1221,7 @@ static FlMethodResponse* handle_create(MorphWebviewLinuxPlugin* plugin, FlValue*
   double dpr = arg_float(args, "devicePixelRatio", 1);
   const gchar* script = arg_string(args, "userScript", "");
   MorphView* view = morph_view_create(plugin, url, static_cast<uint32_t>(width),
-                                      static_cast<uint32_t>(height), dpr, script);
+                                      static_cast<uint32_t>(height), dpr, script, nullptr);
   g_autoptr(FlValue) result = fl_value_new_map();
   fl_value_set_string_take(result, "viewId", fl_value_new_int(view->view_id));
   fl_value_set_string_take(result, "textureId",

@@ -37,6 +37,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stacked so the rail can always be opened again; bottom tab decorations
   flip downward so they attach to the content above. The last position and
   collapsed-rail state are stored in `settings.json` under the Morph home.
+- Linux web views share one persistent WebKit session per Morph profile,
+  with cookies stored in SQLite under the Morph home so logins survive
+  restarts and tab recreation. `window.open` / new-window requests open a
+  related view instead of being dropped. macOS, Windows, and Android keep
+  the shared, non-incognito cookie store used by flutter_inappwebview.
 - Desktop window buttons: Windows and Linux draw minimize, maximize, and
   close (close-only on tiling compositors such as Hyprland, Sway, i3, niri,
   and river). Override with `MORPH_WINDOW_BUTTONS=close` or

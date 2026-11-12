@@ -118,6 +118,13 @@ class _InAppSession extends MorphWebViewSession {
         isInspectable: true,
         mediaPlaybackRequiresUserGesture: false,
         allowsBackForwardNavigationGestures: true,
+        // WKWebView, WebView2, and Android WebView persist cookies in the
+        // app's default profile. Keep every tab on that shared store so
+        // logins survive view recreation and app restarts.
+        incognito: false,
+        cacheEnabled: true,
+        sharedCookiesEnabled: true,
+        thirdPartyCookiesEnabled: true,
       ),
       initialUserScripts: UnmodifiableListView<UserScript>([
         UserScript(

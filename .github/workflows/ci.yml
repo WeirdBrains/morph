@@ -73,8 +73,13 @@ jobs:
       - name: Linux build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libwebkit2gtk-4.1-dev libegl-dev
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libwebkit2gtk-4.1-dev libegl-dev xvfb
         working-directory: .
+      - name: Persistent webview session check
+        working-directory: packages/morph_webview_linux/linux
+        run: |
+          c++ -o /tmp/morph-session-check session_check.cc session.cc $(pkg-config --cflags --libs webkit2gtk-4.1 gtk+-3.0 libsoup-3.0)
+          xvfb-run -a env WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 LIBGL_ALWAYS_SOFTWARE=1 /tmp/morph-session-check
       - run: flutter pub get
       - run: flutter build linux
 
