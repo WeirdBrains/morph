@@ -356,6 +356,11 @@ static void apply_size(MorphView* view, uint32_t logical_width, uint32_t logical
   request_snapshot(view);
 }
 
+static void on_mouse_target_changed(WebKitWebView* web_view,
+                                    WebKitHitTestResult* hit_test_result,
+                                    guint modifiers,
+                                    gpointer user_data);
+
 static MorphView* morph_view_create(MorphWebviewLinuxPlugin* plugin,
                                     const gchar* initial_url,
                                     uint32_t width,
@@ -839,44 +844,9 @@ static const gchar* css_cursor_from_gdk(GdkCursor* cursor) {
   if (cursor == nullptr) {
     return "default";
   }
-  const gchar* name = gdk_cursor_get_name(cursor);
-  if (name != nullptr && *name != '\0') {
-    if (g_strcmp0(name, "pointer") == 0 || g_strcmp0(name, "hand") == 0 || g_strcmp0(name, "hand1") == 0 ||
-        g_strcmp0(name, "hand2") == 0) {
-      return "pointer";
-    }
-    if (g_strcmp0(name, "text") == 0 || g_strcmp0(name, "xterm") == 0 || g_strcmp0(name, "ibeam") == 0) {
-      return "text";
-    }
-    if (g_strcmp0(name, "left_ptr") == 0 || g_strcmp0(name, "arrow") == 0 || g_strcmp0(name, "default") == 0) {
-      return "default";
-    }
-    if (g_strcmp0(name, "watch") == 0) {
-      return "wait";
-    }
-    if (g_strcmp0(name, "left_ptr_watch") == 0) {
-      return "progress";
-    }
-    if (g_strcmp0(name, "crosshair") == 0 || g_strcmp0(name, "cross") == 0 || g_strcmp0(name, "tcross") == 0) {
-      return "crosshair";
-    }
-    if (g_strcmp0(name, "fleur") == 0) {
-      return "move";
-    }
-    if (g_strcmp0(name, "sb_h_double_arrow") == 0) {
-      return "ew-resize";
-    }
-    if (g_strcmp0(name, "sb_v_double_arrow") == 0) {
-      return "ns-resize";
-    }
-    if (g_strcmp0(name, "question_arrow") == 0) {
-      return "help";
-    }
-    if (g_strcmp0(name, "crossed_circle") == 0 || g_strcmp0(name, "not-allowed") == 0) {
-      return "not-allowed";
-    }
-    return name;
-  }
+  // gdk_cursor_get_name() is GTK 4 only. Map GdkCursorType on GTK 3, and treat
+  // GDK_CURSOR_IS_PIXMAP (named/custom cursors) as unknown so the caller can
+  // fall back to the WebKit hit-test result.
   switch (gdk_cursor_get_cursor_type(cursor)) {
     case GDK_HAND1:
     case GDK_HAND2:
@@ -885,6 +855,8 @@ static const gchar* css_cursor_from_gdk(GdkCursor* cursor) {
       return "text";
     case GDK_WATCH:
       return "wait";
+    case GDK_LEFT_PTR_WATCH:
+      return "progress";
     case GDK_CROSSHAIR:
     case GDK_CROSS:
     case GDK_TCROSS:
@@ -902,16 +874,37 @@ static const gchar* css_cursor_from_gdk(GdkCursor* cursor) {
       return "not-allowed";
     case GDK_BLANK_CURSOR:
       return "none";
+    case GDK_CURSOR_IS_PIXMAP:
+      return nullptr;
     default:
       return "default";
   }
 }
 
-static void maybe_emit_cursor(MorphView* view) {
+static const gchar* css_cursor_from_hit_test(WebKitHitTestResult* hit) {
+  if (hit == nullptr) {
+    return nullptr;
+  }
+  if (webkit_hit_test_result_context_is_editable(hit)) {
+    return "text";
+  }
+  if (webkit_hit_test_result_context_is_link(hit)) {
+    return "pointer";
+  }
+  return "default";
+}
+
+static void maybe_emit_cursor(MorphView* view, WebKitHitTestResult* hit = nullptr) {
   GdkWindow* window = gtk_widget_get_window(GTK_WIDGET(view->web_view));
-  const gchar* shape = "default";
+  const gchar* shape = nullptr;
   if (window != nullptr) {
     shape = css_cursor_from_gdk(gdk_window_get_cursor(window));
+  }
+  if (shape == nullptr) {
+    shape = css_cursor_from_hit_test(hit);
+  }
+  if (shape == nullptr) {
+    return;
   }
   if (g_strcmp0(view->cursor_shape, shape) != 0) {
     g_free(view->cursor_shape);
@@ -925,9 +918,8 @@ static void on_mouse_target_changed(WebKitWebView* web_view,
                                     guint modifiers,
                                     gpointer user_data) {
   (void)web_view;
-  (void)hit_test_result;
   (void)modifiers;
-  maybe_emit_cursor(static_cast<MorphView*>(user_data));
+  maybe_emit_cursor(static_cast<MorphView*>(user_data), hit_test_result);
 }
 
 static void grab_view_focus(MorphView* view) {
@@ -1001,6 +993,8 @@ static void dispatch_pointer(MorphView* view,
     event->scroll.x_root = px;
     event->scroll.y_root = py;
     event->scroll.direction = GDK_SCROLL_SMOOTH;
+    // Flutter deltas are logical pixels; GDK_SCROLL_SMOOTH is typically in wheel ticks
+    // (~40 px). Keep fractional values so trackpad motion stays smooth.
     event->scroll.delta_x = dx / 40.0;
     event->scroll.delta_y = dy / 40.0;
     event->scroll.state = state;
