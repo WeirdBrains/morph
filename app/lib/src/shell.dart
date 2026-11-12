@@ -18,6 +18,7 @@ import 'widgets/address_sheet.dart';
 import 'widgets/brand.dart';
 import 'widgets/desktop_chrome.dart';
 import 'widgets/find_bar.dart';
+import 'widgets/library_page.dart';
 import 'widgets/mobile_gestures.dart';
 import 'widgets/profile_menu.dart';
 import 'widgets/start_page.dart';
@@ -79,6 +80,7 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
   String _profileId = 'default';
   final _recorded = <int, String>{};
   bool _findOpen = false;
+  Set<String> _bookmarkUrls = const {};
   Future<void> _libraryWrites = Future.value();
   bool _showSwitcher = false;
   final _previews = <int, Uint8List?>{};
@@ -271,6 +273,7 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
           setState(() {});
         }
         unawaited(_pruneProfileData(catalog));
+        unawaited(_loadBookmarks());
       } catch (_) {
         // A missing catalog leaves the default profile and a start tab.
       }
@@ -615,6 +618,53 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
     }
   }
 
+  Widget _menuButton(ButtonStyle iconStyle) {
+    return PopupMenuButton<String>(
+      key: const Key('nav-menu'),
+      tooltip: 'Menu',
+      icon: const Icon(Icons.more_vert),
+      style: iconStyle,
+      onSelected: (value) {
+        switch (value) {
+          case 'find':
+            _openFind();
+          case 'bookmarks':
+            unawaited(_openLibrary(MorphLibraryTab.bookmarks));
+          case 'history':
+            unawaited(_openLibrary(MorphLibraryTab.history));
+        }
+      },
+      itemBuilder: (context) => const [
+        PopupMenuItem(
+          key: Key('menu-find'),
+          value: 'find',
+          child: ListTile(
+            leading: Icon(Icons.search),
+            title: Text('Find in page'),
+            trailing: Text('Ctrl+F'),
+          ),
+        ),
+        PopupMenuItem(
+          key: Key('menu-bookmarks'),
+          value: 'bookmarks',
+          child: ListTile(
+            leading: Icon(Icons.bookmarks_outlined),
+            title: Text('Bookmarks'),
+          ),
+        ),
+        PopupMenuItem(
+          key: Key('menu-history'),
+          value: 'history',
+          child: ListTile(
+            leading: Icon(Icons.history),
+            title: Text('History'),
+            trailing: Text('Ctrl+H'),
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _profileButton() {
     return MorphProfileButton(
       catalog: _catalog,
@@ -697,6 +747,8 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
     }
     _catalog = catalog;
     _profileId = catalog.current;
+    _bookmarkUrls = const {};
+    unawaited(_loadBookmarks());
     try {
       tabs.applySnapshot(
         await widget.api.loadProfileTabs(home: _home, profileId: _profileId),
@@ -822,6 +874,122 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
     }
   }
 
+  static String _pageKey(String url) =>
+      url.trim().replaceFirst(RegExp(r'/+$'), '');
+
+  bool get _hasPage =>
+      _canonicalAddress.isNotEmpty && _canonicalAddress != 'about:blank';
+
+  bool get _currentBookmarked =>
+      _hasPage && _bookmarkUrls.contains(_pageKey(_canonicalAddress));
+
+  String get _profileName {
+    for (final p in _catalog.profiles) {
+      if (p.id == _profileId) {
+        return p.name;
+      }
+    }
+    return _profileId;
+  }
+
+  void _setBookmarks(String profileId, List<MorphBookmark> list) {
+    if (mounted && profileId == _profileId) {
+      setState(() => _bookmarkUrls = {for (final b in list) _pageKey(b.url)});
+    }
+  }
+
+  Future<void> _loadBookmarks() async {
+    final profileId = _profileId;
+    try {
+      _setBookmarks(
+        profileId,
+        await widget.api.listBookmarks(profileId, home: _home),
+      );
+    } catch (_) {
+      _setBookmarks(profileId, const []);
+    }
+  }
+
+  Future<void> _toggleBookmark() async {
+    if (!_hasPage) {
+      return;
+    }
+    final profileId = _profileId;
+    final url = _canonicalAddress;
+    final title = navigation.title;
+    final remove = _currentBookmarked;
+    try {
+      final list = await _libraryWrite(
+        () => remove
+            ? widget.api.removeBookmark(profileId, url, home: _home)
+            : widget.api.addBookmark(profileId, url, title, home: _home),
+      );
+      _setBookmarks(profileId, list);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              remove ? 'Bookmark removed' : 'Bookmarked in $_profileName',
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => error = e);
+      }
+    }
+  }
+
+  /// Shows a full-height panel without covering the page with an opaque
+  /// route, so platform web views stay composited underneath.
+  Future<void> _showPanel(WidgetBuilder builder) async {
+    if (!mounted) {
+      return;
+    }
+    if (_isMobile) {
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        useSafeArea: true,
+        builder: (context) => FractionallySizedBox(
+          heightFactor: 0.94,
+          child: ClipRRect(
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+            child: builder(context),
+          ),
+        ),
+      );
+    } else {
+      await showDialog<void>(
+        context: context,
+        builder: (context) => Dialog(
+          clipBehavior: Clip.antiAlias,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 720, maxHeight: 680),
+            child: builder(context),
+          ),
+        ),
+      );
+    }
+    _onOverlayClosed();
+  }
+
+  Future<void> _openLibrary(MorphLibraryTab tab) async {
+    await _showPanel(
+      (context) => MorphLibraryPage(
+        api: widget.api,
+        profileId: _profileId,
+        profileName: _profileName,
+        home: _home,
+        initialTab: tab,
+        write: _libraryWrite,
+        onOpen: (url) => unawaited(_submitUrl(url)),
+      ),
+    );
+    await _loadBookmarks();
+  }
+
   void _openFind() {
     if (!_findOpen) {
       setState(() => _findOpen = true);
@@ -910,6 +1078,10 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
         unawaited(webView.reload());
       case MorphShellShortcut.find:
         _openFind();
+      case MorphShellShortcut.bookmark:
+        unawaited(_toggleBookmark());
+      case MorphShellShortcut.history:
+        unawaited(_openLibrary(MorphLibraryTab.history));
       case MorphShellShortcut.selectTab1:
       case MorphShellShortcut.selectTab2:
       case MorphShellShortcut.selectTab3:
@@ -959,6 +1131,12 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
               unawaited(webView.setDesktopSite(value)),
           onShare: _shareUrl,
           onFind: _openFind,
+          bookmarked: _currentBookmarked,
+          onToggleBookmark: _hasPage
+              ? () => unawaited(_toggleBookmark())
+              : null,
+          onHistory: () => unawaited(_openLibrary(MorphLibraryTab.history)),
+          onBookmarks: () => unawaited(_openLibrary(MorphLibraryTab.bookmarks)),
           profiles: _profileSheetSection(),
         );
       },
@@ -1241,6 +1419,23 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
                     tooltip: 'Go',
                     icon: const Icon(Icons.arrow_outward),
                   ),
+                if (!_isMobile) ...[
+                  IconButton(
+                    key: const Key('nav-bookmark'),
+                    style: iconStyle,
+                    onPressed: _hasPage
+                        ? () => unawaited(_toggleBookmark())
+                        : null,
+                    tooltip: _currentBookmarked
+                        ? 'Remove bookmark'
+                        : 'Bookmark this page',
+                    icon: Icon(
+                      _currentBookmarked ? Icons.star : Icons.star_border,
+                      color: _currentBookmarked ? MorphColors.cyan : null,
+                    ),
+                  ),
+                  _menuButton(iconStyle),
+                ],
                 if (_isMobile) ...[
                   IconButton(
                     key: const Key('tab-count'),

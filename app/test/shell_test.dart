@@ -529,9 +529,9 @@ void main() {
       expect(find.byKey(const Key('sheet-desktop')), findsOneWidget);
       expect(find.text('VPN'), findsNothing);
 
-      await tester.tap(find.byKey(const Key('sheet-history')));
+      await tester.tap(find.byKey(const Key('sheet-downloads')));
       await tester.pump();
-      expect(find.text('History is coming soon'), findsOneWidget);
+      expect(find.text('Downloads is coming soon'), findsOneWidget);
     } finally {
       debugDefaultTargetPlatformOverride = null;
     }
@@ -1231,6 +1231,116 @@ void main() {
     } finally {
       debugDefaultTargetPlatformOverride = null;
       view.reset();
+    }
+  });
+
+  testWidgets('desktop star bookmarks the page in the active profile only', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    final view = tester.view;
+    view.physicalSize = const Size(1280, 800);
+    view.devicePixelRatio = 1.0;
+    try {
+      final api = FakeMorphApi();
+      await tester.pumpWidget(
+        MorphApp(
+          api: api,
+          home: '/tmp/morph-does-not-exist',
+          subscribeToTicks: false,
+          loadPageBridgeAsset: false,
+        ),
+      );
+      await _pumpUntilIdentity(tester);
+      await tester.enterText(find.byKey(const Key('address-bar')), 'b.example');
+      await tester.tap(find.byKey(const Key('address-go')));
+      await tester.pump();
+      await _pumpUntilWebViewAttached(tester, fakeWebView);
+      await tester.pumpAndSettle();
+
+      expect(find.byTooltip('Bookmark this page'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('nav-bookmark')));
+      await tester.pumpAndSettle();
+      expect((await api.listBookmarks('default')).map((b) => b.url), [
+        'https://b.example',
+      ]);
+      expect(api.bookmarksByProfile.keys, ['default']);
+      expect(find.byTooltip('Remove bookmark'), findsOneWidget);
+
+      // Ctrl+H opens this profile's history in a panel over the page.
+      await _focusActiveWebView(tester);
+      await _sendChord(
+        tester,
+        LogicalKeyboardKey.controlLeft,
+        LogicalKeyboardKey.keyH,
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('library-page')), findsOneWidget);
+      expect(
+        find.byKey(const Key('history-https://b.example')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const Key('library-tab-bookmarks')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('bookmark-https://b.example')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byTooltip('Remove bookmark').last);
+      await tester.pumpAndSettle();
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('library-page')), findsNothing);
+      expect(find.byTooltip('Bookmark this page'), findsOneWidget);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+      view.reset();
+    }
+  });
+
+  testWidgets('phone sheet bookmarks a page and opens Bookmarks', (
+    tester,
+  ) async {
+    final view = tester.view;
+    view.physicalSize = const Size(412, 915);
+    view.devicePixelRatio = 1.0;
+    addTearDown(view.reset);
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      final api = FakeMorphApi();
+      await tester.pumpWidget(
+        MorphApp(
+          api: api,
+          home: '/tmp/morph-does-not-exist',
+          subscribeToTicks: false,
+          loadPageBridgeAsset: false,
+        ),
+      );
+      await _pumpUntilIdentity(tester);
+      await _enterAndSubmitUrl(tester, 'm.example');
+      await _pumpUntilWebViewAttached(tester, fakeWebView);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('address-bar')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('sheet-bookmark')));
+      await tester.pumpAndSettle();
+      expect((await api.listBookmarks('default')).map((b) => b.url), [
+        'https://m.example',
+      ]);
+
+      await tester.tap(find.byKey(const Key('address-bar')));
+      await tester.pumpAndSettle();
+      expect(find.text('Remove bookmark'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('sheet-bookmarks')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('library-page')), findsOneWidget);
+      expect(
+        find.byKey(const Key('bookmark-https://m.example')),
+        findsOneWidget,
+      );
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
     }
   });
 
