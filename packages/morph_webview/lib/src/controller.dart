@@ -249,7 +249,7 @@ class MorphWebViewController {
       session.navigation.listen((event) {
         _navigation = event;
         final error = loadError.value;
-        if (error != null && event.isLoading && event.url != error.url) {
+        if (error != null && morphNavigationLeavesError(event, error)) {
           loadError.value = null;
         }
         _navController.add(event);
@@ -553,4 +553,26 @@ class MorphWebViewController {
     await _pageController.close();
     await _cursorController.close();
   }
+}
+
+/// Whether [event] starts a page that replaces the error page for [error]:
+/// a real (http/https) page at another address. Internal pages an engine
+/// loads after a failure, such as Android's about:blank once its default
+/// error page is off, keep the error showing.
+bool morphNavigationLeavesError(
+  MorphNavigationEvent event,
+  MorphLoadError error,
+) {
+  if (!event.isLoading) {
+    return false;
+  }
+  final uri = Uri.tryParse(event.url);
+  if (uri == null ||
+      !(uri.scheme == 'http' || uri.scheme == 'https') ||
+      uri.host.isEmpty) {
+    return false;
+  }
+  String plain(String url) =>
+      url.endsWith('/') ? url.substring(0, url.length - 1) : url;
+  return plain(event.url) != plain(error.url);
 }

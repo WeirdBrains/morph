@@ -112,6 +112,26 @@ void main() {
       await controller.dispose();
     });
 
+    test('only a real page elsewhere replaces an error page', () {
+      const error = MorphLoadError(
+        url: 'https://nope.invalid/',
+        kind: MorphLoadErrorKind.notFound,
+      );
+      bool leaves(String url, {bool loading = true}) =>
+          morphNavigationLeavesError(
+            MorphNavigationEvent(url: url, isLoading: loading),
+            error,
+          );
+      // Android loads about:blank after a failure once its own page is off.
+      expect(leaves('about:blank'), isFalse);
+      expect(leaves(''), isFalse);
+      expect(leaves('chrome-error://chromewebdata/'), isFalse);
+      expect(leaves('https://nope.invalid'), isFalse);
+      expect(leaves('https://nope.invalid/'), isFalse);
+      expect(leaves('https://duckduckgo.com/?q=nope', loading: false), isFalse);
+      expect(leaves('https://duckduckgo.com/?q=nope'), isTrue);
+    });
+
     test('engine errors map to kinds', () {
       expect(
         morphLoadErrorKindFor(domain: 'WebKitNetworkError', code: 0, tls: true),
