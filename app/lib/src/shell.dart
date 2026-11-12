@@ -225,6 +225,7 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
           tabs.applySnapshot(snapshot);
           _catalog = catalog;
           _profileId = catalog.current;
+          _dropStaleControllers();
           for (final tab in tabs.tabs) {
             if (tab.url.isNotEmpty && tab.url != 'about:blank') {
               _visited[tab.id] = true;
@@ -610,6 +611,27 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
         profileId: _profileId,
       );
     } catch (_) {}
+  }
+
+  /// initState makes a controller for the placeholder start tab before the
+  /// saved tabs load. When a restored tab reuses that id with a real URL, the
+  /// placeholder would open about:blank instead, so replace any controller
+  /// that has not attached yet and was made for a different URL.
+  void _dropStaleControllers() {
+    for (final id in _controllers.keys.toList()) {
+      final controller = _controllers[id]!;
+      final tab = tabs.tab(id);
+      final want = (tab != null && tab.url.isNotEmpty)
+          ? tab.url
+          : 'about:blank';
+      if (controller.isAttached || controller.initialUrl == want) {
+        continue;
+      }
+      _controllers.remove(id);
+      unawaited(_navSubs.remove(id)?.cancel());
+      unawaited(_pageSubs.remove(id)?.cancel());
+      unawaited(controller.dispose());
+    }
   }
 
   Future<void> _disposeAllViews() async {
