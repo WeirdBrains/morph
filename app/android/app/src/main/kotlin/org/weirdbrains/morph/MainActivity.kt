@@ -8,6 +8,7 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         WebViewProfiles.register(flutterEngine.dartExecutor.binaryMessenger)
+        ShareSheet.register(this, flutterEngine.dartExecutor.binaryMessenger)
     }
 
     // flutter_inappwebview registers each new WebView here from its
