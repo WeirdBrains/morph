@@ -425,6 +425,11 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
     _applyAddressDisplay();
     tabs.update(tabs.activeId, url: url);
     setState(() => _visited[tabs.activeId] = true);
+    if (webView.rendererFault.value != null) {
+      // Typing an address into a crashed tab means "go there": bring the
+      // renderer back first, or the crash screen stays over the new page.
+      await webView.recoverFromFault();
+    }
     await webView.loadUrl(url);
     unawaited(_saveCurrentTabs());
   }
