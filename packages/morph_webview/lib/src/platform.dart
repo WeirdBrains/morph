@@ -29,6 +29,15 @@ abstract class MorphWebViewPlatform extends PlatformInterface {
     String userScript = '',
     String profileId = 'default',
   });
+
+  /// Drop any engine-side storage the backend keeps for [profileId] after
+  /// Morph deletes the profile. Backends that store profiles under the Morph
+  /// home (removed by morph-core) need nothing here.
+  Future<void> deleteProfileData(String profileId) async {}
+
+  /// Drop engine-side storage for any profile not in [liveProfileIds], such
+  /// as one deleted while its pages were still open.
+  Future<void> pruneProfileData(Iterable<String> liveProfileIds) async {}
 }
 
 /// One live view on a platform backend.
