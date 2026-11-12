@@ -6,6 +6,8 @@
 //! SQLCipher unlock and device linking are milestone M3.
 #![forbid(unsafe_code)]
 
+pub mod profile_identity;
+
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
