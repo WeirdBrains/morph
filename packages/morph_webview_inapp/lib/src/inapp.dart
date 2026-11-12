@@ -12,6 +12,7 @@ import 'package:morph_webview/control.dart';
 import 'package:morph_webview/morph_webview.dart';
 
 import 'profile_store.dart';
+import 'renderer_watch.dart';
 import 'settings.dart';
 
 /// macOS (WKWebView), Windows (WebView2), and Android WebView implementation of [MorphWebViewPlatform].
@@ -260,12 +261,25 @@ class _InAppSession extends MorphWebViewSession {
         _rememberUrl(url);
       },
       onRenderProcessGone: (controller, detail) {
-        // The native WebView is unusable once its renderer is gone; the
-        // controller rebuilds it on the last URL.
-        _rendererGone = true;
-        if (!_surfaceLost.isClosed) {
-          _surfaceLost.add(null);
-        }
+        // The native WebView is unusable once its renderer is gone. The tab
+        // shows its crash state; recoverRenderer builds a fresh view. On
+        // Android every WebView in the app shares one renderer, so every
+        // tab gets this at once; the shell itself keeps running.
+        _watch.renderProcessGone(didCrash: detail.didCrash);
+      },
+      onRenderProcessUnresponsive: (controller, url) async {
+        // Asked again every few seconds while hung; ended once the user
+        // chose to reload.
+        return _watch.renderProcessUnresponsive()
+            ? WebViewRenderProcessAction.TERMINATE
+            : null;
+      },
+      onRenderProcessResponsive: (controller, url) async {
+        _watch.renderProcessResponsive();
+        return null;
+      },
+      onWebContentProcessDidTerminate: (controller) {
+        _watch.webContentProcessTerminated();
       },
       onProgressChanged: (controller, progress) {
         unawaited(
@@ -301,7 +315,8 @@ class _InAppSession extends MorphWebViewSession {
   late InAppWebView _view;
   final _generation = ValueNotifier<int>(0);
   String? _lastUrl;
-  bool _rendererGone = false;
+  final _watch = InAppRendererWatch();
+  bool get _rendererGone => _watch.gone;
   final _surfaceLost = StreamController<void>.broadcast();
   InAppWebViewController? _controller;
   final _pending = <MorphControlCommand>[];
@@ -330,6 +345,17 @@ class _InAppSession extends MorphWebViewSession {
 
   @override
   Stream<void> get surfaceLost => _surfaceLost.stream;
+
+  @override
+  Stream<MorphRendererEvent> get renderer => _watch.events;
+
+  @override
+  Future<void> terminateRenderer() => _watch.terminate();
+
+  @override
+  Future<void> recoverRenderer() async {
+    await rebuildSurface();
+  }
 
   @override
   Future<void> repaintSurface() async {
@@ -404,7 +430,7 @@ class _InAppSession extends MorphWebViewSession {
     // Commands wait for the new native view; the old one is disposed when
     // its keyed widget leaves the tree.
     _controller = null;
-    _rendererGone = false;
+    _watch.rebuilt();
     final url = _lastUrl ?? initialUrl;
     final next = _generation.value + 1;
     // A keep-alive view outlives its widget, so give the rebuild its own
@@ -592,6 +618,7 @@ class _InAppSession extends MorphWebViewSession {
   @override
   Future<void> dispose() async {
     await _surfaceLost.close();
+    await _watch.close();
     _generation.dispose();
     await _navSub?.cancel();
     await _pageSub?.cancel();
