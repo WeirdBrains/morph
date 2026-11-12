@@ -88,6 +88,11 @@ class _LinuxWebViewSession extends MorphWebViewSession {
         _pageController.add(entry.$2);
       }
     });
+    _cursorSub = _control.cursor.listen((entry) {
+      if (entry.$1 == viewId) {
+        _cursorController.add(entry.$2);
+      }
+    });
   }
 
   final MethodChannel _channel;
@@ -95,8 +100,10 @@ class _LinuxWebViewSession extends MorphWebViewSession {
   final int viewId;
   late final StreamSubscription<(int, MorphNavigationEvent)> _navSub;
   late final StreamSubscription<(int, String)> _pageSub;
+  late final StreamSubscription<(int, MorphCursorEvent)> _cursorSub;
   final _navController = StreamController<MorphNavigationEvent>.broadcast();
   final _pageController = StreamController<String>.broadcast();
+  final _cursorController = StreamController<MorphCursorEvent>.broadcast();
 
   @override
   final int textureId;
@@ -112,6 +119,9 @@ class _LinuxWebViewSession extends MorphWebViewSession {
 
   @override
   Stream<String> get pageMessages => _pageController.stream;
+
+  @override
+  Stream<MorphCursorEvent> get cursor => _cursorController.stream;
 
   @override
   Future<void> resize({
@@ -159,8 +169,13 @@ class _LinuxWebViewSession extends MorphWebViewSession {
         x: event.x,
         y: event.y,
         button: event.button,
+        buttons: event.buttons,
         scrollDeltaX: event.scrollDeltaX,
         scrollDeltaY: event.scrollDeltaY,
+        ctrl: event.ctrl,
+        alt: event.alt,
+        shift: event.shift,
+        meta: event.meta,
       ),
     );
   }
@@ -177,7 +192,17 @@ class _LinuxWebViewSession extends MorphWebViewSession {
         alt: event.alt,
         shift: event.shift,
         meta: event.meta,
+        text: event.text,
+        repeat: event.repeat,
       ),
+    );
+  }
+
+  @override
+  Future<void> sendIme(MorphImeEvent event) async {
+    _control.send(
+      viewId: viewId,
+      ime: proto.ImeEvent(phase: event.phase, text: event.text),
     );
   }
 
@@ -190,8 +215,10 @@ class _LinuxWebViewSession extends MorphWebViewSession {
   Future<void> dispose() async {
     await _navSub.cancel();
     await _pageSub.cancel();
+    await _cursorSub.cancel();
     await _channel.invokeMethod<void>('dispose', {'viewId': viewId});
     await _navController.close();
     await _pageController.close();
+    await _cursorController.close();
   }
 }

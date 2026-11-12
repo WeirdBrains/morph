@@ -32,10 +32,12 @@ class MorphControlClient {
   Int64 _jsRequest = Int64.ZERO;
   final _nav = StreamController<(int, MorphNavigationEvent)>.broadcast();
   final _page = StreamController<(int, String)>.broadcast();
+  final _cursor = StreamController<(int, MorphCursorEvent)>.broadcast();
   final _pendingJs = <int, Completer<String>>{};
 
   Stream<(int, MorphNavigationEvent)> get navigation => _nav.stream;
   Stream<(int, String)> get pageMessages => _page.stream;
+  Stream<(int, MorphCursorEvent)> get cursor => _cursor.stream;
 
   Future<void> connect() async {
     if (_stub != null) {
@@ -158,6 +160,8 @@ class MorphControlClient {
         ));
       case ServerMessage_Body.pageMessage:
         _page.add((viewId, message.pageMessage.json));
+      case ServerMessage_Body.cursor:
+        _cursor.add((viewId, MorphCursorEvent(shape: message.cursor.shape)));
       case ServerMessage_Body.evaluateJavascriptResult:
         final result = message.evaluateJavascriptResult;
         final pending = _pendingJs.remove(result.requestId.toInt());

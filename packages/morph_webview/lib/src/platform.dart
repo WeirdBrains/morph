@@ -37,6 +37,7 @@ abstract class MorphWebViewSession {
 
   Stream<MorphNavigationEvent> get navigation;
   Stream<String> get pageMessages;
+  Stream<MorphCursorEvent> get cursor => const Stream.empty();
 
   /// When true, the control layer already ran the page-bridge hook and delivered
   /// any reply; the shell should not call `handlePageMessage` again.
@@ -53,6 +54,7 @@ abstract class MorphWebViewSession {
   Future<void> reload();
   Future<void> sendPointer(MorphPointerEvent event);
   Future<void> sendKey(MorphKeyEvent event);
+  Future<void> sendIme(MorphImeEvent event) async {}
   Future<String?> evaluateJavaScript(String script);
   Future<void> dispose();
 }
