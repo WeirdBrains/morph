@@ -1244,6 +1244,17 @@ real.
   per site. It is inspectable as a list with summaries and deletable per item, per site
   or all at once. Deleting it also removes the derived summaries and embeddings.
 - Export: an age-encrypted archive (`weirdnet-keys` `age` feature).
+- _(new 2026-11-12)_ **Browser bookmarks and history** are kept per Morph
+  profile in `profiles/<id>/bookmarks.json` and `history.json`
+  (`morph-core::library`), written atomically, with history capped at 5000
+  visits and repeat visits to the same page folded together. They never leave
+  the device and are deletable per item or all at once from the Library and
+  Settings. This is the ordinary browser back-list that shows in History, not
+  the Student layer's opt-in history above, which stays off by default. The
+  files move into the profile's `weirdnet-storage` database once that lands.
+  Find in page is a page script (`window.find` plus a text match count), so it
+  behaves the same on every backend. Tab position and the sidebar stay
+  app-wide; Settings labels them that way.
 
 ## 9a. Updating the Flutter app over the air _(changed 2026-11-11: decided)_
 
