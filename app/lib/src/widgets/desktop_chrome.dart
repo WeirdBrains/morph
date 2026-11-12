@@ -2,11 +2,13 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../tabs/tab_overflow.dart';
 import '../tabs/tab_position.dart';
 import '../tabs/tab_set.dart';
 import '../theme/morph_theme.dart';
 import '../window/window_buttons.dart';
 import 'brand.dart';
+import 'tab_overflow_menu.dart';
 import 'window_chrome.dart';
 
 /// Desktop chrome: tab strip or list, a top navigation row, window buttons,
@@ -257,32 +259,65 @@ class MorphDesktopTabStrip extends StatelessWidget {
                   const MorphWindowDragArea(child: SizedBox.expand()),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 4),
-                  child: MorphTrailingAfterChildren(
-                    axis: Axis.horizontal,
-                    spacing: 2,
-                    trailing: Row(
-                      key: const Key('tab-strip-actions'),
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        _IconAction(
-                          key: const Key('tab-new'),
-                          tooltip: 'New tab',
-                          icon: Icons.add,
-                          onPressed: onNewTab,
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final visibleCount = MorphTabOverflow.visibleCount(
+                        tabCount: tabs.length,
+                        available: constraints.maxWidth,
+                        minTabExtent: MorphTabOverflow.horizontalMinExtent,
+                        trailingExtent: MorphTabOverflow.trailingGroupExtent(
+                          horizontal: true,
                         ),
-                        MorphTabPositionButton(onSelected: onPositionChanged),
-                      ],
-                    ),
-                    children: [
-                      for (final tab in tabs)
-                        MorphTabChip(
-                          tab: tab,
-                          active: tab.id == activeId,
-                          flipped: flipped,
-                          onSelect: () => onSelectTab?.call(tab.id),
-                          onClose: () => onCloseTab?.call(tab.id),
+                      );
+                      final activeIndex = tabs.indexWhere(
+                        (tab) => tab.id == activeId,
+                      );
+                      final (start, end) = MorphTabOverflow.visibleRange(
+                        tabCount: tabs.length,
+                        visibleCount: visibleCount,
+                        activeIndex: activeIndex < 0 ? 0 : activeIndex,
+                      );
+                      final visible = tabs.sublist(start, end);
+                      final hidden = [
+                        ...tabs.sublist(0, start),
+                        ...tabs.sublist(end),
+                      ];
+                      return MorphTrailingAfterChildren(
+                        axis: Axis.horizontal,
+                        spacing: MorphTabOverflow.spacing,
+                        trailing: Row(
+                          key: const Key('tab-strip-actions'),
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            _IconAction(
+                              key: const Key('tab-new'),
+                              tooltip: 'New tab',
+                              icon: Icons.add,
+                              onPressed: onNewTab,
+                            ),
+                            MorphTabPositionButton(
+                              onSelected: onPositionChanged,
+                            ),
+                          ],
                         ),
-                    ],
+                        children: [
+                          for (final tab in visible)
+                            MorphTabChip(
+                              tab: tab,
+                              active: tab.id == activeId,
+                              flipped: flipped,
+                              onSelect: () => onSelectTab?.call(tab.id),
+                              onClose: () => onCloseTab?.call(tab.id),
+                            ),
+                          if (hidden.isNotEmpty)
+                            MorphTabOverflowButton(
+                              tabs: hidden,
+                              onSelect: onSelectTab,
+                              onClose: onCloseTab,
+                            ),
+                        ],
+                      );
+                    },
                   ),
                 ),
               ],
@@ -334,10 +369,16 @@ class _MorphTrailingAfterChildrenState
         final max = _horizontal ? constraints.maxWidth : constraints.maxHeight;
         final gap = widget.children.isEmpty ? 0.0 : widget.spacing;
         final needed = _childrenExtent + gap + _trailingExtent;
-        final measured = _trailingExtent > 0 || _childrenExtent > 0;
+        // Wait until both clusters are measured. Trailing can report first
+        // and a packed layout with an unknown child extent would overflow.
+        final measured =
+            (_trailingExtent > 0) &&
+            (_childrenExtent > 0 || widget.children.isEmpty);
         // Before the first measure, pin trailing so a wide first frame cannot
-        // push window buttons off the side of the strip.
-        final overflow = !measured || needed > max + 0.5;
+        // push window buttons off the side of the strip. After measuring,
+        // treat a near-full strip as overflow so a 1–4px under-measure cannot
+        // paint a RenderFlex stripe.
+        final overflow = !measured || needed > max - 4;
 
         final tabs = _MeasureExtent(
           axis: widget.axis,
@@ -382,12 +423,7 @@ class _MorphTrailingAfterChildrenState
           }
           return Column(
             children: [
-              Expanded(
-                child: ListView(
-                  padding: EdgeInsets.zero,
-                  children: widget.children,
-                ),
-              ),
+              Expanded(child: SingleChildScrollView(child: tabs)),
               trailing,
             ],
           );
@@ -476,8 +512,8 @@ class MorphTabList extends StatelessWidget {
     this.onToggleSidebar,
   });
 
-  static const double collapsedWidth = 48;
-  static const double expandedWidth = 220;
+  static const double collapsedWidth = MorphTabOverflow.collapsedSidebarWidth;
+  static const double expandedWidth = MorphTabOverflow.defaultSidebarWidth;
 
   final List<MorphTab> tabs;
   final int activeId;
@@ -528,16 +564,6 @@ class MorphTabList extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [newTab, positionButton],
     );
-    final tiles = [
-      for (final tab in tabs)
-        MorphTabListTile(
-          tab: tab,
-          active: tab.id == activeId,
-          collapsed: collapsed,
-          onSelect: () => onSelectTab?.call(tab.id),
-          onClose: () => onCloseTab?.call(tab.id),
-        ),
-    ];
     return Material(
       key: const Key('tab-list'),
       color: colors.surface,
@@ -548,10 +574,51 @@ class MorphTabList extends StatelessWidget {
           children: [
             Align(alignment: Alignment.center, child: toggle),
             Expanded(
-              child: MorphTrailingAfterChildren(
-                axis: Axis.vertical,
-                trailing: actions,
-                children: tiles,
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final visibleCount = MorphTabOverflow.visibleCount(
+                    tabCount: tabs.length,
+                    available: constraints.maxHeight,
+                    minTabExtent: MorphTabOverflow.verticalMinExtent,
+                    trailingExtent: MorphTabOverflow.trailingGroupExtent(
+                      horizontal: false,
+                    ),
+                  );
+                  final activeIndex = tabs.indexWhere(
+                    (tab) => tab.id == activeId,
+                  );
+                  final (start, end) = MorphTabOverflow.visibleRange(
+                    tabCount: tabs.length,
+                    visibleCount: visibleCount,
+                    activeIndex: activeIndex < 0 ? 0 : activeIndex,
+                  );
+                  final visible = tabs.sublist(start, end);
+                  final hidden = [
+                    ...tabs.sublist(0, start),
+                    ...tabs.sublist(end),
+                  ];
+                  return MorphTrailingAfterChildren(
+                    axis: Axis.vertical,
+                    spacing: MorphTabOverflow.spacing,
+                    trailing: actions,
+                    children: [
+                      for (final tab in visible)
+                        MorphTabListTile(
+                          tab: tab,
+                          active: tab.id == activeId,
+                          collapsed: collapsed,
+                          onSelect: () => onSelectTab?.call(tab.id),
+                          onClose: () => onCloseTab?.call(tab.id),
+                        ),
+                      if (hidden.isNotEmpty)
+                        MorphTabOverflowButton(
+                          tabs: hidden,
+                          onSelect: onSelectTab,
+                          onClose: onCloseTab,
+                        ),
+                    ],
+                  );
+                },
               ),
             ),
           ],
@@ -612,7 +679,7 @@ class _MorphTabChipState extends State<MorphTabChip> {
           borderRadius: shape,
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 120),
-            width: 180,
+            width: MorphTabOverflow.horizontalMinExtent,
             height: 40,
             decoration: BoxDecoration(
               color: widget.active
@@ -718,7 +785,7 @@ class _MorphTabListTileState extends State<MorphTabListTile> {
           key: Key('tab-${widget.tab.id}'),
           onTap: widget.onSelect,
           child: Container(
-            height: 36,
+            height: MorphTabOverflow.verticalMinExtent,
             padding: EdgeInsets.symmetric(horizontal: widget.collapsed ? 0 : 8),
             decoration: BoxDecoration(
               color: widget.active
