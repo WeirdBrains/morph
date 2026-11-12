@@ -15,6 +15,8 @@ Widget _harness({
   bool sidebarCollapsed = false,
   ValueChanged<MorphTabPosition>? onPositionChanged,
   VoidCallback? onToggleSidebar,
+  ValueChanged<int>? onSelectTab,
+  ValueChanged<int>? onCloseTab,
 }) {
   return MaterialApp(
     theme: MorphTheme.dark,
@@ -44,6 +46,8 @@ Widget _harness({
         ),
         onPositionChanged: onPositionChanged,
         onToggleSidebar: onToggleSidebar,
+        onSelectTab: onSelectTab,
+        onCloseTab: onCloseTab,
       ),
     ),
   );
@@ -66,20 +70,41 @@ MorphTabSet _nTabs(int count) {
   return tabs;
 }
 
+Rect _railRect(WidgetTester tester, MorphTabPosition position) {
+  final horizontal =
+      position == MorphTabPosition.top || position == MorphTabPosition.bottom;
+  return tester.getRect(find.byKey(Key(horizontal ? 'tab-strip' : 'tab-list')));
+}
+
+List<int> _visibleTabIds(
+  WidgetTester tester,
+  MorphTabSet tabs,
+  MorphTabPosition position,
+) {
+  final rail = _railRect(tester, position).inflate(0.5);
+  final ids = <int>[];
+  for (final tab in tabs.tabs) {
+    final finder = find.byKey(Key('tab-${tab.id}'));
+    if (finder.evaluate().isEmpty) {
+      continue;
+    }
+    if (rail.contains(tester.getRect(finder).center)) {
+      ids.add(tab.id);
+    }
+  }
+  return ids;
+}
+
 void _assertTrailingAfterLastTab(
   WidgetTester tester, {
   required MorphTabSet tabs,
   required MorphTabPosition position,
-  required bool overflow,
 }) {
-  final last = tester.getRect(find.byKey(Key('tab-${tabs.tabs.last.id}')));
   final newBtn = tester.getRect(find.byKey(const Key('tab-new')));
   final posBtn = tester.getRect(find.byKey(const Key('tab-position')));
   final horizontal =
       position == MorphTabPosition.top || position == MorphTabPosition.bottom;
-  final rail = tester.getRect(
-    find.byKey(Key(horizontal ? 'tab-strip' : 'tab-list')),
-  );
+  final rail = _railRect(tester, position);
   expect(
     rail.inflate(0.5).contains(newBtn.center),
     isTrue,
@@ -90,6 +115,21 @@ void _assertTrailingAfterLastTab(
     isTrue,
     reason: '$position',
   );
+  final overflowFinder = find.byKey(const Key('tab-overflow'));
+  final overflow = overflowFinder.evaluate().isNotEmpty;
+  final visibleIds = _visibleTabIds(tester, tabs, position);
+  expect(visibleIds, isNotEmpty, reason: '$position');
+  final lastVisible = tester.getRect(find.byKey(Key('tab-${visibleIds.last}')));
+  if (overflow) {
+    expect(visibleIds.length, lessThan(tabs.length), reason: '$position');
+    expect(
+      find.byKey(Key('tab-${tabs.tabs.last.id}')),
+      findsNothing,
+      reason: '$position last tab belongs in the overflow menu',
+    );
+  } else {
+    expect(visibleIds.length, tabs.length, reason: '$position');
+  }
   if (horizontal) {
     expect(
       posBtn.left,
@@ -97,20 +137,35 @@ void _assertTrailingAfterLastTab(
       reason: '$position',
     );
     if (overflow) {
-      // Pinned at the visible trailing edge; the last tab may be scrolled off.
+      final overflowBtn = tester.getRect(overflowFinder);
       expect(
-        newBtn.right,
-        lessThanOrEqualTo(rail.right + 0.5),
-        reason: '$position',
+        overflowBtn.left,
+        greaterThanOrEqualTo(lastVisible.right - 0.5),
+        reason: '$position overflow after last visible',
       );
+      expect(
+        newBtn.left,
+        greaterThanOrEqualTo(overflowBtn.right - 1.5),
+        reason: '$position + after overflow',
+      );
+      expect(overflowBtn.overlaps(lastVisible), isFalse, reason: '$position');
+      expect(newBtn.overlaps(overflowBtn), isFalse, reason: '$position');
     } else {
       expect(
         newBtn.left,
-        greaterThanOrEqualTo(last.right - 0.5),
+        greaterThanOrEqualTo(lastVisible.right - 0.5),
         reason: '$position trailing',
       );
-      expect(newBtn.overlaps(last), isFalse, reason: '$position overlap');
-      expect(newBtn.left - last.right, lessThan(16), reason: '$position gap');
+      expect(
+        newBtn.overlaps(lastVisible),
+        isFalse,
+        reason: '$position overlap',
+      );
+      expect(
+        newBtn.left - lastVisible.right,
+        lessThan(16),
+        reason: '$position gap',
+      );
     }
   } else {
     expect(
@@ -119,19 +174,33 @@ void _assertTrailingAfterLastTab(
       reason: '$position',
     );
     if (overflow) {
+      final overflowBtn = tester.getRect(overflowFinder);
       expect(
-        newBtn.bottom,
-        lessThanOrEqualTo(rail.bottom + 0.5),
-        reason: '$position',
+        overflowBtn.top,
+        greaterThanOrEqualTo(lastVisible.bottom - 0.5),
+        reason: '$position overflow below last visible',
+      );
+      expect(
+        newBtn.top,
+        greaterThanOrEqualTo(overflowBtn.bottom - 1.5),
+        reason: '$position + below overflow',
       );
     } else {
       expect(
         newBtn.top,
-        greaterThanOrEqualTo(last.bottom - 0.5),
+        greaterThanOrEqualTo(lastVisible.bottom - 0.5),
         reason: '$position',
       );
-      expect(newBtn.overlaps(last), isFalse, reason: '$position overlap');
-      expect(newBtn.top - last.bottom, lessThan(16), reason: '$position gap');
+      expect(
+        newBtn.overlaps(lastVisible),
+        isFalse,
+        reason: '$position overlap',
+      );
+      expect(
+        newBtn.top - lastVisible.bottom,
+        lessThan(16),
+        reason: '$position gap',
+      );
     }
   }
 }
@@ -551,18 +620,13 @@ void main() {
   testWidgets('trailing + and position follow the last tab in every layout', (
     tester,
   ) async {
-    for (final count in [1, 3, 12]) {
+    for (final count in [1, 3, 20]) {
       for (final position in MorphTabPosition.values) {
         _desktopSize(tester);
         final tabs = _nTabs(count);
         await tester.pumpWidget(_harness(tabs: tabs, position: position));
         await tester.pumpAndSettle();
-        _assertTrailingAfterLastTab(
-          tester,
-          tabs: tabs,
-          position: position,
-          overflow: count == 12,
-        );
+        _assertTrailingAfterLastTab(tester, tabs: tabs, position: position);
       }
     }
   });
@@ -604,5 +668,69 @@ void main() {
     }
     expect(tester.takeException(), isNull);
     expect(overflows, isEmpty);
+  });
+  testWidgets('overflow menu lists hidden tabs and swaps the active tab in', (
+    tester,
+  ) async {
+    _desktopSize(tester);
+    for (final position in MorphTabPosition.values) {
+      var tabs = _nTabs(20);
+      late void Function(void Function()) setHarness;
+      await tester.pumpWidget(
+        StatefulBuilder(
+          builder: (context, setState) {
+            setHarness = setState;
+            return _harness(
+              tabs: tabs,
+              position: position,
+              onSelectTab: (id) {
+                setState(() => tabs.switchTo(id));
+              },
+              onCloseTab: (id) {
+                setState(() => tabs.close(id));
+              },
+            );
+          },
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final before = _visibleTabIds(tester, tabs, position);
+      expect(
+        find.byKey(const Key('tab-overflow')),
+        findsOneWidget,
+        reason: '$position',
+      );
+      expect(before, isNot(contains(tabs.tabs.last.id)), reason: '$position');
+      expect(find.byKey(Key('tab-${tabs.tabs.last.id}')), findsNothing);
+
+      await tester.tap(find.byKey(const Key('tab-overflow')));
+      await tester.pumpAndSettle();
+      final hiddenId = tabs.tabs.last.id;
+      expect(find.byKey(Key('tab-overflow-$hiddenId')), findsOneWidget);
+      expect(find.byKey(Key('tab-overflow-close-$hiddenId')), findsOneWidget);
+
+      await tester.tap(find.byKey(Key('tab-overflow-$hiddenId')));
+      await tester.pumpAndSettle();
+      expect(tabs.activeId, hiddenId, reason: '$position');
+      expect(
+        find.byKey(Key('tab-$hiddenId')),
+        findsOneWidget,
+        reason: '$position active tab swapped into the strip',
+      );
+      final after = _visibleTabIds(tester, tabs, position);
+      expect(after, contains(hiddenId), reason: '$position');
+      expect(after, isNot(contains(before.first)), reason: '$position');
+
+      await tester.tap(find.byKey(const Key('tab-overflow')));
+      await tester.pumpAndSettle();
+      final closeId = tabs.tabs.first.id;
+      expect(find.byKey(Key('tab-overflow-close-$closeId')), findsOneWidget);
+      await tester.tap(find.byKey(Key('tab-overflow-close-$closeId')));
+      await tester.pumpAndSettle();
+      expect(tabs.tab(closeId), isNull, reason: '$position');
+      expect(find.byKey(Key('tab-overflow-$closeId')), findsNothing);
+      setHarness(() {});
+    }
   });
 }
