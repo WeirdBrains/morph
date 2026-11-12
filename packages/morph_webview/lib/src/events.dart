@@ -139,6 +139,78 @@ bool morphModifierPressed({
       HardwareKeyboard.instance.logicalKeysPressed.contains(right);
 }
 
+/// Stable control-layer key name for a Flutter logical key.
+String morphKeyName(LogicalKeyboardKey key) {
+  if (key == LogicalKeyboardKey.backspace) {
+    return 'Backspace';
+  }
+  if (key == LogicalKeyboardKey.enter ||
+      key == LogicalKeyboardKey.numpadEnter) {
+    return 'Enter';
+  }
+  if (key == LogicalKeyboardKey.tab) {
+    return 'Tab';
+  }
+  if (key == LogicalKeyboardKey.escape) {
+    return 'Escape';
+  }
+  if (key == LogicalKeyboardKey.arrowLeft) {
+    return 'Arrow Left';
+  }
+  if (key == LogicalKeyboardKey.arrowRight) {
+    return 'Arrow Right';
+  }
+  if (key == LogicalKeyboardKey.arrowUp) {
+    return 'Arrow Up';
+  }
+  if (key == LogicalKeyboardKey.arrowDown) {
+    return 'Arrow Down';
+  }
+  if (key == LogicalKeyboardKey.delete) {
+    return 'Delete';
+  }
+  if (key == LogicalKeyboardKey.home) {
+    return 'Home';
+  }
+  if (key == LogicalKeyboardKey.end) {
+    return 'End';
+  }
+  if (key == LogicalKeyboardKey.pageUp) {
+    return 'Page Up';
+  }
+  if (key == LogicalKeyboardKey.pageDown) {
+    return 'Page Down';
+  }
+  if (key == LogicalKeyboardKey.space) {
+    return 'Space';
+  }
+  if (key == LogicalKeyboardKey.insert) {
+    return 'Insert';
+  }
+  if (key.keyLabel.isNotEmpty) {
+    return key.keyLabel;
+  }
+  return key.debugName ?? key.keyId.toString();
+}
+
+/// Produced character for a key event, or empty for control keys.
+///
+/// Flutter's Linux embedder sets [KeyEvent.character] from
+/// `gdk_keyval_to_unicode()`, so Backspace is U+0008 and Enter is U+000D.
+/// Those must not be forwarded as `text` or a backend may treat them as
+/// Unicode keyvals instead of GDK_KEY_BackSpace / GDK_KEY_Return.
+String morphKeyText(KeyEvent event) {
+  final character = event.character;
+  if (character == null || character.isEmpty) {
+    return '';
+  }
+  final ch = character.runes.first;
+  if (ch < 0x20 || ch == 0x7f) {
+    return '';
+  }
+  return character;
+}
+
 class MorphKeyEvent {
   const MorphKeyEvent({
     required this.phase,

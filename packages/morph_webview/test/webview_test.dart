@@ -213,6 +213,63 @@ void main() {
     );
     expect(vDown.ctrl, isTrue);
 
+    final enterDown = session.keys.firstWhere(
+      (e) => e.phase == 'down' && e.key == 'Enter',
+    );
+    final backspaceDown = session.keys.firstWhere(
+      (e) => e.phase == 'down' && e.key == 'Backspace',
+    );
+    expect(enterDown.text, isEmpty);
+    expect(backspaceDown.text, isEmpty);
+
+    session.keys.clear();
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.sendKeyEvent(LogicalKeyboardKey.home);
+    await tester.sendKeyEvent(LogicalKeyboardKey.end);
+    await tester.sendKeyEvent(LogicalKeyboardKey.delete);
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyA);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyC);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyZ);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.backspace);
+    await tester.sendKeyRepeatEvent(LogicalKeyboardKey.backspace);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.backspace);
+    await tester.pump();
+
+    final later = session.keys.map((e) => '${e.phase}:${e.key}').toList();
+    expect(later, contains('down:Arrow Left'));
+    expect(later, contains('down:Arrow Right'));
+    expect(later, contains('down:Home'));
+    expect(later, contains('down:End'));
+    expect(later, contains('down:Delete'));
+    expect(later, contains('down:Tab'));
+    expect(later, contains('down:Escape'));
+    final shiftLeft = session.keys.firstWhere(
+      (e) => e.phase == 'down' && e.key == 'Arrow Left' && e.shift,
+    );
+    expect(shiftLeft.shift, isTrue);
+    expect(
+      session.keys.where((e) => e.ctrl && e.key == 'A' && e.phase == 'down'),
+      isNotEmpty,
+    );
+    expect(
+      session.keys.where((e) => e.ctrl && e.key == 'C' && e.phase == 'down'),
+      isNotEmpty,
+    );
+    expect(
+      session.keys.where((e) => e.ctrl && e.key == 'Z' && e.phase == 'down'),
+      isNotEmpty,
+    );
+    final repeats = session.keys.where((e) => e.key == 'Backspace' && e.repeat);
+    expect(repeats, isNotEmpty);
+
     expect(session.imes.where((e) => e.phase == 'focus'), isNotEmpty);
   });
 }

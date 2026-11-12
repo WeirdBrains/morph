@@ -26,6 +26,7 @@ list(APPEND PLUGIN_SOURCES
   "morph_webview_linux_plugin.cc"
   "render_path.cc"
   "ime_context.cc"
+  "key_map.cc"
 )
 
 add_library(${PLUGIN_NAME} SHARED
