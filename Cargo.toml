@@ -23,3 +23,10 @@ dirs = "6"
 zeroize = { version = "1", features = ["derive"] }
 flutter_rust_bridge = "=2.13.0"
 tempfile = "3"
+
+# Shipped builds favour size: the Android APK must stay under 25 MB.
+[profile.release]
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
