@@ -5,6 +5,7 @@
 #![forbid(unsafe_code)]
 
 pub mod page_bridge;
+pub mod tabs;
 
 pub use morph_identity::{self, IdentityStatus, MasterBackup, MemoryIdentityStore, Paths, UserIdentity};
 
