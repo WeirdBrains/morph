@@ -56,6 +56,132 @@ void _desktopSize(WidgetTester tester) {
   addTearDown(view.reset);
 }
 
+MorphTabSet _nTabs(int count) {
+  final tabs = MorphTabSet()..update(1, title: 'Tab 1');
+  for (var i = 2; i <= count; i++) {
+    final id = tabs.open();
+    tabs.update(id, title: 'Tab $i');
+  }
+  tabs.switchTo(1);
+  return tabs;
+}
+
+void _assertTrailingAfterLastTab(
+  WidgetTester tester, {
+  required MorphTabSet tabs,
+  required MorphTabPosition position,
+  required bool overflow,
+}) {
+  final last = tester.getRect(find.byKey(Key('tab-${tabs.tabs.last.id}')));
+  final newBtn = tester.getRect(find.byKey(const Key('tab-new')));
+  final posBtn = tester.getRect(find.byKey(const Key('tab-position')));
+  final horizontal =
+      position == MorphTabPosition.top || position == MorphTabPosition.bottom;
+  final rail = tester.getRect(
+    find.byKey(Key(horizontal ? 'tab-strip' : 'tab-list')),
+  );
+  expect(
+    rail.inflate(0.5).contains(newBtn.center),
+    isTrue,
+    reason: '$position',
+  );
+  expect(
+    rail.inflate(0.5).contains(posBtn.center),
+    isTrue,
+    reason: '$position',
+  );
+  if (horizontal) {
+    expect(
+      posBtn.left,
+      greaterThanOrEqualTo(newBtn.right - 0.5),
+      reason: '$position',
+    );
+    if (overflow) {
+      // Pinned at the visible trailing edge; the last tab may be scrolled off.
+      expect(
+        newBtn.right,
+        lessThanOrEqualTo(rail.right + 0.5),
+        reason: '$position',
+      );
+    } else {
+      expect(
+        newBtn.left,
+        greaterThanOrEqualTo(last.right - 0.5),
+        reason: '$position trailing',
+      );
+      expect(newBtn.overlaps(last), isFalse, reason: '$position overlap');
+      expect(newBtn.left - last.right, lessThan(16), reason: '$position gap');
+    }
+  } else {
+    expect(
+      posBtn.top,
+      greaterThanOrEqualTo(newBtn.bottom - 0.5),
+      reason: '$position',
+    );
+    if (overflow) {
+      expect(
+        newBtn.bottom,
+        lessThanOrEqualTo(rail.bottom + 0.5),
+        reason: '$position',
+      );
+    } else {
+      expect(
+        newBtn.top,
+        greaterThanOrEqualTo(last.bottom - 0.5),
+        reason: '$position',
+      );
+      expect(newBtn.overlaps(last), isFalse, reason: '$position overlap');
+      expect(newBtn.top - last.bottom, lessThan(16), reason: '$position gap');
+    }
+  }
+}
+
+void _assertWindowButtonsOnScreen(
+  WidgetTester tester, {
+  required MorphWindowButtonMode mode,
+  required Size size,
+  required MorphTabPosition position,
+}) {
+  final chrome = tester.getRect(find.byKey(const Key('desktop-chrome')));
+  void onScreen(Key key) {
+    expect(
+      find.byKey(key),
+      findsOneWidget,
+      reason: '$key $position $size $mode',
+    );
+    final rect = tester.getRect(find.byKey(key));
+    expect(
+      rect.left,
+      greaterThanOrEqualTo(chrome.left - 0.5),
+      reason: '$key $position $size',
+    );
+    expect(
+      rect.right,
+      lessThanOrEqualTo(chrome.right + 0.5),
+      reason: '$key $position $size',
+    );
+    expect(
+      rect.top,
+      greaterThanOrEqualTo(chrome.top - 0.5),
+      reason: '$key $position $size',
+    );
+    expect(
+      rect.bottom,
+      lessThanOrEqualTo(chrome.bottom + 0.5),
+      reason: '$key $position $size',
+    );
+  }
+
+  onScreen(const Key('window-close'));
+  if (mode == MorphWindowButtonMode.all) {
+    onScreen(const Key('window-minimize'));
+    onScreen(const Key('window-maximize'));
+  } else {
+    expect(find.byKey(const Key('window-minimize')), findsNothing);
+    expect(find.byKey(const Key('window-maximize')), findsNothing);
+  }
+}
+
 void main() {
   testWidgets('top: tab strip above nav, nav above content, tabs not flipped', (
     tester,
@@ -85,6 +211,12 @@ void main() {
     final chip = tester.widget<MorphTabChip>(find.byType(MorphTabChip));
     expect(chip.flipped, isFalse);
     expect(find.text('One'), findsOneWidget);
+    final tab = tester.getRect(find.byType(MorphTabChip));
+    final indicator = tester.getRect(find.byKey(const Key('tab-indicator-1')));
+    expect(indicator.left, closeTo(tab.left, 0.5));
+    expect(indicator.right, closeTo(tab.right, 0.5));
+    expect(indicator.bottom, closeTo(tab.bottom, 0.5));
+    expect(indicator.height, closeTo(2, 0.5));
   });
 
   testWidgets('bottom: nav at top, flipped tabs below content', (tester) async {
@@ -129,8 +261,12 @@ void main() {
         bottomRight: Radius.circular(8),
       ),
     );
-    expect(decoration.border!.top.width, 2);
-    expect(decoration.border!.bottom.width, 0);
+    final tab = tester.getRect(find.byType(MorphTabChip));
+    final indicator = tester.getRect(find.byKey(const Key('tab-indicator-1')));
+    expect(indicator.left, closeTo(tab.left, 0.5));
+    expect(indicator.right, closeTo(tab.right, 0.5));
+    expect(indicator.top, closeTo(tab.top, 0.5));
+    expect(indicator.height, closeTo(2, 0.5));
   });
 
   testWidgets('left: nav full width at top, vertical list beside content', (
@@ -334,17 +470,23 @@ void main() {
         isTrue,
         reason: '$position',
       );
-      // Controls are stacked, not packed into one row.
+      // Expand stays at the top; + and position trail the last tab.
+      final lastTab = tester.getRect(find.byKey(const Key('tab-1')));
+      final newBtn = tester.getRect(find.byKey(const Key('tab-new')));
+      final posBtn = tester.getRect(find.byKey(const Key('tab-position')));
       expect(
-        tester.getRect(find.byKey(const Key('tab-new'))).bottom,
-        lessThanOrEqualTo(toggle.top + 0.5),
+        toggle.bottom,
+        lessThanOrEqualTo(lastTab.top + 0.5),
         reason: '$position',
       );
       expect(
-        toggle.bottom,
-        lessThanOrEqualTo(
-          tester.getRect(find.byKey(const Key('tab-position'))).top + 0.5,
-        ),
+        newBtn.top,
+        greaterThanOrEqualTo(lastTab.bottom - 0.5),
+        reason: '$position',
+      );
+      expect(
+        posBtn.top,
+        greaterThanOrEqualTo(newBtn.bottom - 0.5),
         reason: '$position',
       );
 
@@ -400,6 +542,64 @@ void main() {
           isTrue,
           reason: '$position at ${size.width}',
         );
+      }
+    }
+    expect(tester.takeException(), isNull);
+    expect(overflows, isEmpty);
+  });
+
+  testWidgets('trailing + and position follow the last tab in every layout', (
+    tester,
+  ) async {
+    for (final count in [1, 3, 12]) {
+      for (final position in MorphTabPosition.values) {
+        _desktopSize(tester);
+        final tabs = _nTabs(count);
+        await tester.pumpWidget(_harness(tabs: tabs, position: position));
+        await tester.pumpAndSettle();
+        _assertTrailingAfterLastTab(
+          tester,
+          tabs: tabs,
+          position: position,
+          overflow: count == 12,
+        );
+      }
+    }
+  });
+
+  testWidgets('window buttons stay on screen in every layout and width', (
+    tester,
+  ) async {
+    final overflows = <String>[];
+    final previous = FlutterError.onError;
+    FlutterError.onError = (details) {
+      final text = '${details.exceptionAsString()}\n${details.toString()}';
+      if (text.contains('overflowed') || text.contains('OVERFLOWING')) {
+        overflows.add(text);
+      }
+      previous?.call(details);
+    };
+    addTearDown(() => FlutterError.onError = previous);
+
+    final tabs = _nTabs(3);
+    for (final size in const [Size(1280, 800), Size(580, 800)]) {
+      final view = tester.view;
+      view.physicalSize = size;
+      view.devicePixelRatio = 1.0;
+      addTearDown(view.reset);
+      for (final position in MorphTabPosition.values) {
+        for (final mode in MorphWindowButtonMode.values) {
+          await tester.pumpWidget(
+            _harness(tabs: tabs, position: position, mode: mode),
+          );
+          await tester.pumpAndSettle();
+          _assertWindowButtonsOnScreen(
+            tester,
+            mode: mode,
+            size: size,
+            position: position,
+          );
+        }
       }
     }
     expect(tester.takeException(), isNull);
