@@ -12,6 +12,7 @@ class MorphWebViewController {
   final String initialUrl;
 
   MorphWebViewSession? _session;
+  String? _pendingUrl;
   MorphNavigationEvent _navigation = const MorphNavigationEvent(url: '');
   MorphRenderPathInfo _renderPath = const MorphRenderPathInfo(
     path: 'uninitialized',
@@ -51,8 +52,10 @@ class MorphWebViewController {
       );
       return;
     }
+    final url = _pendingUrl ?? initialUrl;
+    _pendingUrl = null;
     final session = await MorphWebViewPlatform.instance.create(
-      initialUrl: initialUrl,
+      initialUrl: url,
       width: width,
       height: height,
       devicePixelRatio: devicePixelRatio,
@@ -88,7 +91,13 @@ class MorphWebViewController {
   }
 
   Future<void> loadUrl(String url) async {
-    await _session?.loadUrl(url);
+    if (_session == null) {
+      // The shell can submit an address before the first platform view
+      // attaches (common on Android while the system WebView starts).
+      _pendingUrl = url;
+      return;
+    }
+    await _session!.loadUrl(url);
     // After a user-initiated navigation (address-bar submit), focus the page
     // so typing goes to the document, not the URL bar.
     focusNode.requestFocus();

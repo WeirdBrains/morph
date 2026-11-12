@@ -51,6 +51,24 @@ Future<void> _pumpUntilIdentity(WidgetTester tester) async {
   );
 }
 
+Future<void> _pumpUntilWebViewAttached(
+  WidgetTester tester,
+  FakeMorphWebViewPlatform fake,
+) async {
+  for (var i = 0; i < 25; i++) {
+    if (fake.lastSession != null) {
+      await tester.pump();
+      return;
+    }
+    await tester.runAsync(() async {
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    });
+    await tester.pump();
+  }
+  final state = tester.state<MorphShellState>(find.byType(MorphShell));
+  fail('web view did not attach; ready=${state.ready} error=${state.error}');
+}
+
 void main() {
   late FakeMorphWebViewPlatform fakeWebView;
 
@@ -125,5 +143,61 @@ void main() {
     } finally {
       debugDefaultTargetPlatformOverride = null;
     }
+  });
+
+  testWidgets('address bar loads a typed URL on Android', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    const missingHome = '/tmp/morph-does-not-exist';
+    try {
+      await tester.pumpWidget(
+        MorphApp(
+          api: FakeMorphApi(),
+          home: missingHome,
+          subscribeToTicks: false,
+          loadPageBridgeAsset: false,
+        ),
+      );
+      await _pumpUntilIdentity(tester);
+
+      expect(find.byKey(const Key('window-close')), findsNothing);
+      expect(find.byKey(const Key('address-go')), findsOneWidget);
+      expect(find.byKey(const Key('address-bar')), findsOneWidget);
+
+      await tester.enterText(
+        find.byKey(const Key('address-bar')),
+        'example.com',
+      );
+      await tester.testTextInput.receiveAction(TextInputAction.go);
+      await tester.pump();
+      await _pumpUntilWebViewAttached(tester, fakeWebView);
+
+      expect(fakeWebView.lastSession, isNotNull);
+      expect(fakeWebView.lastSession!.history, contains('https://example.com'));
+      expect(find.byKey(const Key('start-page')), findsNothing);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('Go button submits the address bar', (tester) async {
+    const missingHome = '/tmp/morph-does-not-exist';
+    await tester.pumpWidget(
+      MorphApp(
+        api: FakeMorphApi(),
+        home: missingHome,
+        subscribeToTicks: false,
+        loadPageBridgeAsset: false,
+      ),
+    );
+    await _pumpUntilIdentity(tester);
+
+    await tester.enterText(find.byKey(const Key('address-bar')), 'example.org');
+    await tester.tap(find.byKey(const Key('address-go')));
+    await tester.pump();
+    await _pumpUntilWebViewAttached(tester, fakeWebView);
+
+    expect(fakeWebView.lastSession, isNotNull);
+    expect(fakeWebView.lastSession!.history, contains('https://example.org'));
+    expect(find.byKey(const Key('start-page')), findsNothing);
   });
 }

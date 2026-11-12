@@ -12,11 +12,13 @@ class MorphApp extends StatefulWidget {
     required this.api,
     this.home,
     this.subscribeToTicks = true,
+    this.loadPageBridgeAsset = true,
   });
 
   final MorphApi api;
   final String? home;
   final bool subscribeToTicks;
+  final bool loadPageBridgeAsset;
 
   @override
   State<MorphApp> createState() => _MorphAppState();
@@ -47,6 +49,7 @@ class _MorphAppState extends State<MorphApp> {
         api: widget.api,
         home: widget.home,
         subscribeToTicks: widget.subscribeToTicks,
+        loadPageBridgeAsset: widget.loadPageBridgeAsset,
       ),
     );
   }
