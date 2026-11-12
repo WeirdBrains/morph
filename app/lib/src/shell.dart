@@ -12,6 +12,7 @@ export 'host_friendly_url.dart';
 import 'theme/morph_theme.dart';
 import 'tabs/tab_position.dart';
 import 'tabs/tab_set.dart';
+import 'widgets/address_sheet.dart';
 import 'widgets/brand.dart';
 import 'widgets/desktop_chrome.dart';
 import 'widgets/mobile_gestures.dart';
@@ -394,6 +395,41 @@ class MorphShellState extends State<MorphShell> {
     }
   }
 
+  Future<void> _openAddressSheet() async {
+    if (!mounted) {
+      return;
+    }
+    final initial =
+        (_canonicalAddress.isEmpty || _canonicalAddress == 'about:blank')
+        ? address.text
+        : _canonicalAddress;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return MorphAddressSheet(
+          initialUrl: initial,
+          canGoBack: navigation.canGoBack,
+          canGoForward: navigation.canGoForward,
+          desktopSite: webView.desktopSite,
+          identityLabel: userId,
+          onSubmit: _submitUrl,
+          onBack: () => unawaited(webView.goBack()),
+          onForward: () => unawaited(webView.goForward()),
+          onReload: () => unawaited(webView.reload()),
+          onDesktopSiteChanged: (value) =>
+              unawaited(webView.setDesktopSite(value)),
+          onShare: _shareUrl,
+        );
+      },
+    );
+  }
+
+  Future<void> _shareUrl(String url) async {
+    await Clipboard.setData(ClipboardData(text: url));
+  }
+
   void _selectAllAddress() {
     address.selection = TextSelection(
       baseOffset: 0,
@@ -625,7 +661,15 @@ class MorphShellState extends State<MorphShell> {
                     ),
                     keyboardType: TextInputType.url,
                     textInputAction: TextInputAction.go,
-                    onTap: _selectAllAddress,
+                    readOnly: _isMobile,
+                    onTap: () {
+                      if (_isMobile) {
+                        addressFocus.unfocus();
+                        unawaited(_openAddressSheet());
+                      } else {
+                        _selectAllAddress();
+                      }
+                    },
                     onSubmitted: _submitUrl,
                   ),
                 ),
