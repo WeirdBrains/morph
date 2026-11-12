@@ -1,9 +1,10 @@
 [Desktop Entry]
 Name=Morph
 Comment=A distributed web browser with local AI
-Exec=morph
+Exec=morph %u
 Icon=org.weirdbrains.morph
 Terminal=false
 Type=Application
 Categories=Network;WebBrowser;
+MimeType=x-scheme-handler/http;x-scheme-handler/https;text/html;
 StartupWMClass=org.weirdbrains.morph
