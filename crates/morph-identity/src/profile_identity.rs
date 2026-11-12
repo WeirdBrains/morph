@@ -15,12 +15,14 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use weirdnet_keys::words::{from_words, to_words};
-use weirdnet_keys::{ExposeSecret, Key32, PasswordSealed, SecretString, Zeroizing, password_open, password_seal};
+use weirdnet_keys::{ExposeSecret, Key32, PasswordSealed, password_open, password_seal};
 use weirdnet_net::Keypair;
 use weirdnet_net::identity::fingerprint;
 use weirdnet_net::user::user_id;
 
 use crate::{Error, Result, UserIdentity};
+
+pub use weirdnet_keys::{SecretString, Zeroizing};
 
 /// Format tag in `identity.json`.
 pub const FORMAT: &str = "morph-identity/v1";
