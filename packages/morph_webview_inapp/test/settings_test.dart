@@ -53,4 +53,38 @@ void main() {
       expect(settings.javaScriptCanOpenWindowsAutomatically, isTrue);
     }
   });
+
+  test('a visible tab rasters ahead at an important, unwaived priority', () {
+    for (final desktop in [null, true, false]) {
+      final settings = morphInAppWebViewSettings(desktopSite: desktop);
+      expect(settings.offscreenPreRaster, isTrue);
+      final policy = settings.rendererPriorityPolicy!;
+      expect(
+        policy.rendererRequestedPriority,
+        RendererPriority.RENDERER_PRIORITY_IMPORTANT,
+      );
+      expect(policy.waivedWhenNotVisible, isFalse);
+      expect(settings.toMap()['offscreenPreRaster'], isTrue);
+    }
+  });
+
+  test('an idle tab gives up pre-raster and its renderer priority only', () {
+    final full = morphInAppWebViewSettings(desktopSite: true).toMap();
+    final idle = morphInAppWebViewSettings(
+      desktopSite: true,
+      idle: true,
+    ).toMap();
+    expect(idle['offscreenPreRaster'], isFalse);
+    expect(idle['rendererPriorityPolicy'], {
+      'rendererRequestedPriority': RendererPriority.RENDERER_PRIORITY_WAIVED
+          .toNativeValue(),
+      'waivedWhenNotVisible': true,
+    });
+    // Everything else, composition and desktop mode included, is untouched.
+    final changed = {
+      for (final key in full.keys)
+        if ('${full[key]}' != '${idle[key]}') key,
+    };
+    expect(changed, {'offscreenPreRaster', 'rendererPriorityPolicy'});
+  });
 }

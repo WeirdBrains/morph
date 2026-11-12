@@ -223,7 +223,7 @@ class _InAppSession extends MorphWebViewSession {
           ? null
           : InAppWebViewInitialData(data: morphAndroidUnisolatedHtml),
       webViewEnvironment: webViewEnvironment,
-      initialSettings: morphInAppWebViewSettings(),
+      initialSettings: _settings(),
       initialUserScripts: UnmodifiableListView<UserScript>([
         UserScript(
           source: shim,
@@ -244,6 +244,10 @@ class _InAppSession extends MorphWebViewSession {
       ]),
       onWebViewCreated: (controller) {
         _controller = controller;
+        if (_buffering == MorphBuffering.idle && Platform.isAndroid) {
+          // A view rebuilt while its tab is hidden stays paused.
+          unawaited(controller.pause());
+        }
         controller.addJavaScriptHandler(
           handlerName: 'morphRust',
           callback: (args) {
@@ -683,17 +687,56 @@ class _InAppSession extends MorphWebViewSession {
   @override
   bool get desktopSite => _desktopSite;
 
+  /// The desktop-site choice once the user made one (null: platform default).
+  bool? _desktopSiteChoice;
+
+  MorphBuffering _buffering = MorphBuffering.full;
+
+  InAppWebViewSettings _settings() => morphInAppWebViewSettings(
+    desktopSite: _desktopSiteChoice,
+    idle: _buffering == MorphBuffering.idle,
+  );
+
   @override
   Future<void> setDesktopSite(bool enabled) async {
     _desktopSite = enabled;
+    _desktopSiteChoice = enabled;
     final controller = _controller;
     if (controller == null) {
       return;
     }
-    await controller.setSettings(
-      settings: morphInAppWebViewSettings(desktopSite: enabled),
-    );
+    await controller.setSettings(settings: _settings());
     await controller.reload();
+  }
+
+  @override
+  Future<void> setBuffering(MorphBuffering buffering) async {
+    if (_buffering == buffering) {
+      return;
+    }
+    _buffering = buffering;
+    await _applyBuffering();
+  }
+
+  Future<void> _applyBuffering() async {
+    final controller = _controller;
+    if (controller == null || !Platform.isAndroid) {
+      return;
+    }
+    try {
+      await controller.setSettings(settings: _settings());
+      if (_buffering == MorphBuffering.idle) {
+        // WebView.onPause: the page counts as hidden, its compositor lets
+        // go of tiles and animations stop. Timers keep running (only the
+        // process-wide pauseTimers stops those), so background work such as
+        // music players carries on.
+        await controller.pause();
+      } else {
+        await controller.resume();
+      }
+    } on Exception {
+      // The view is going away; the next one starts from _settings().
+    }
   }
 
   @override
