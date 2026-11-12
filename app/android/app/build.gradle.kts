@@ -47,3 +47,9 @@ kotlin {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // Profile API for per-profile WebView storage (see WebViewProfiles.kt).
+    // Same version flutter_inappwebview_android already ships.
+    implementation("androidx.webkit:webkit:1.12.0")
+}
