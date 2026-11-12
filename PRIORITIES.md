@@ -15,7 +15,9 @@ remains for create/dispose/resize and the texture id). macOS (WKWebView) and Win
 control layer through flutter_inappwebview 6.x. The Android in-app
 web view is registered on that same path (system WebView platform
 view, address-bar navigation). Each Android profile now has its own
-androidx.webkit WebView profile, verified on the API 37 emulator. DMA-BUF frame-rate measurements and
+androidx.webkit WebView profile, verified on the API 37 emulator. Bookmarks, history, find in page,
+settings and Android sharing work on desktop and phone, with bookmarks and history kept per
+profile, and each profile is onboarded to its own Weirdnet identity on first use. DMA-BUF frame-rate measurements and
 hidden-text-layer alignment tests are still ahead in M1.
 
 1. Webview _(moved up: everything else plugs into it)_
