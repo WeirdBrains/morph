@@ -6,14 +6,17 @@ use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_uint};
 use std::sync::Arc;
 
+type PointerHandler = extern "C" fn(i64, *const c_char, f64, f64, i32, i32, f64, f64, c_int, c_int, c_int, c_int, *mut std::ffi::c_void);
+type KeyHandler = extern "C" fn(i64, *const c_char, *const c_char, *const c_char, c_uint, c_int, c_int, c_int, c_int, c_int, *mut std::ffi::c_void);
+
 #[repr(C)]
 pub struct MorphControlHandlers {
     pub navigate: Option<extern "C" fn(i64, *const c_char, *mut std::ffi::c_void)>,
     pub go_back: Option<extern "C" fn(i64, *mut std::ffi::c_void)>,
     pub go_forward: Option<extern "C" fn(i64, *mut std::ffi::c_void)>,
     pub reload: Option<extern "C" fn(i64, *mut std::ffi::c_void)>,
-    pub pointer: Option<extern "C" fn(i64, *const c_char, f64, f64, i32, f64, f64, *mut std::ffi::c_void)>,
-    pub key: Option<extern "C" fn(i64, *const c_char, *const c_char, c_uint, c_int, c_int, c_int, c_int, *mut std::ffi::c_void)>,
+    pub pointer: Option<PointerHandler>,
+    pub key: Option<KeyHandler>,
     pub ime: Option<extern "C" fn(i64, *const c_char, *const c_char, *mut std::ffi::c_void)>,
     pub evaluate_js: Option<extern "C" fn(i64, u64, *const c_char, *mut std::ffi::c_void)>,
     pub user_data: *mut std::ffi::c_void,
@@ -57,22 +60,39 @@ impl ControlBackend for FfiBackend {
     fn pointer(&self, view_id: i64, event: crate::proto::PointerEvent) {
         if let Some(f) = self.handlers.pointer {
             let phase = c_string(&event.phase);
-            f(view_id, phase.as_ptr(), event.x, event.y, event.button, event.scroll_delta_x, event.scroll_delta_y, self.handlers.user_data);
+            f(
+                view_id,
+                phase.as_ptr(),
+                event.x,
+                event.y,
+                event.button,
+                event.buttons,
+                event.scroll_delta_x,
+                event.scroll_delta_y,
+                event.ctrl as c_int,
+                event.alt as c_int,
+                event.shift as c_int,
+                event.meta as c_int,
+                self.handlers.user_data,
+            );
         }
     }
     fn key(&self, view_id: i64, event: crate::proto::KeyEvent) {
         if let Some(f) = self.handlers.key {
             let phase = c_string(&event.phase);
             let key = c_string(&event.key);
+            let text = c_string(&event.text);
             f(
                 view_id,
                 phase.as_ptr(),
                 key.as_ptr(),
+                text.as_ptr(),
                 event.hardware_keycode as c_uint,
                 event.ctrl as c_int,
                 event.alt as c_int,
                 event.shift as c_int,
                 event.meta as c_int,
+                event.repeat as c_int,
                 self.handlers.user_data,
             );
         }
@@ -217,6 +237,20 @@ pub unsafe extern "C" fn morph_control_complete_evaluate_js(view_id: i64, reques
     let result = ptr_to_str(result).unwrap_or("");
     let error = ptr_to_str(error).unwrap_or("");
     match with_global(|server| server.complete_evaluate_js(view_id, request_id, result, error)) {
+        Some(()) => 0,
+        None => -1,
+    }
+}
+
+/// Emits a cursor-shape change on the process-wide control server.
+///
+/// # Safety
+///
+/// `shape` must be null or a valid C string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn morph_control_emit_cursor(view_id: i64, shape: *const c_char) -> c_int {
+    let shape = ptr_to_str(shape).unwrap_or("default");
+    match with_global(|server| server.emit_cursor(view_id, shape)) {
         Some(()) => 0,
         None => -1,
     }

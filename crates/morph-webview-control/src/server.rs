@@ -1,8 +1,8 @@
 use crate::endpoint::{self, ControlEndpoint};
 use crate::proto::web_view_control_server::{WebViewControl, WebViewControlServer};
 use crate::proto::{
-    Ack, ClientMessage, Error as ProtoError, EvaluateJavaScriptResult, ImeEvent, KeyEvent, NavigationEvent, PageMessage, PointerEvent, ServerMessage,
-    client_message, server_message,
+    Ack, ClientMessage, CursorEvent, Error as ProtoError, EvaluateJavaScriptResult, ImeEvent, KeyEvent, NavigationEvent, PageMessage, PointerEvent,
+    ServerMessage, client_message, server_message,
 };
 use std::pin::Pin;
 use std::sync::Arc;
@@ -232,6 +232,10 @@ impl ControlServer {
                 error: error.to_string(),
             }),
         );
+    }
+
+    pub fn emit_cursor(&self, view_id: i64, shape: &str) {
+        self.state.emit(view_id, server_message::Body::Cursor(CursorEvent { shape: shape.to_string() }));
     }
 
     pub fn shutdown(mut self) {

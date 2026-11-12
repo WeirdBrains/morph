@@ -17,17 +17,24 @@ typedef void (*morph_control_pointer_fn)(int64_t view_id,
                                          double x,
                                          double y,
                                          int32_t button,
+                                         int32_t buttons,
                                          double scroll_delta_x,
                                          double scroll_delta_y,
+                                         int ctrl,
+                                         int alt,
+                                         int shift,
+                                         int meta,
                                          void* user_data);
 typedef void (*morph_control_key_fn)(int64_t view_id,
                                      const char* phase,
                                      const char* key,
+                                     const char* text,
                                      uint32_t hardware_keycode,
                                      int ctrl,
                                      int alt,
                                      int shift,
                                      int meta,
+                                     int repeat,
                                      void* user_data);
 typedef void (*morph_control_ime_fn)(int64_t view_id, const char* phase, const char* text, void* user_data);
 typedef void (*morph_control_evaluate_js_fn)(int64_t view_id,
@@ -72,6 +79,8 @@ int morph_control_complete_evaluate_js(int64_t view_id,
                                        uint64_t request_id,
                                        const char* result,
                                        const char* error);
+
+int morph_control_emit_cursor(int64_t view_id, const char* shape);
 
 #ifdef __cplusplus
 }

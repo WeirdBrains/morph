@@ -36,6 +36,7 @@ message ServerMessage {
     EvaluateJavaScriptResult evaluate_javascript_result = 5;
     Ack ack = 6;
     Error error = 7;
+    CursorEvent cursor = 8;
   }
 }
 
@@ -49,18 +50,33 @@ message GoForward {}
 
 message Reload {}
 
+// Pointer or wheel event in view-logical coordinates. The backend multiplies
+// x/y by the view's device pixel ratio. Phases: down, move, up, cancel,
+// scroll, enter, leave, hover.
+//
+// `button` is the button that changed for down/up (1=left, 2=middle, 3=right,
+// 4=back, 5=forward); 0 otherwise.
+// `buttons` is the mask of buttons currently held: bit 0 (1)=left, bit 1 (2)=
+// middle, bit 2 (4)=right, bit 3 (8)=back, bit 4 (16)=forward.
 message PointerEvent {
-  // down, move, up, cancel, scroll
   string phase = 1;
   double x = 2;
   double y = 3;
   int32 button = 4;
   double scroll_delta_x = 5;
   double scroll_delta_y = 6;
+  int32 buttons = 7;
+  bool ctrl = 8;
+  bool alt = 9;
+  bool shift = 10;
+  bool meta = 11;
 }
 
+// Key down or up. `key` is a Flutter-style label ("A", "Enter", "Arrow Left").
+// `text` is the produced character when there is one ("a", "A", "@").
+// `hardware_keycode` is the platform scan code when known (X11/GDK keycode on
+// Linux); 0 means the backend should derive it from the keyval.
 message KeyEvent {
-  // down or up
   string phase = 1;
   string key = 2;
   uint32 hardware_keycode = 3;
@@ -68,12 +84,21 @@ message KeyEvent {
   bool alt = 5;
   bool shift = 6;
   bool meta = 7;
+  string text = 8;
+  bool repeat = 9;
 }
 
+// IME / compose: compose_start, compose_update, compose_end, commit, focus, blur.
 message ImeEvent {
-  // compose_start, compose_update, compose_end, commit
   string phase = 1;
   string text = 2;
+}
+
+// CSS cursor keyword reported by the web view (default, pointer, text, wait, …).
+// macOS and Windows backends must emit this whenever the page cursor changes
+// so the Flutter shell can apply SystemMouseCursors over a texture-hosted view.
+message CursorEvent {
+  string shape = 1;
 }
 
 message EvaluateJavaScript {
