@@ -10,6 +10,7 @@ import 'package:morph_webview/control.dart';
 import 'package:morph_webview/morph_webview.dart';
 
 import 'profile_store.dart';
+import 'settings.dart';
 
 /// macOS (WKWebView), Windows (WebView2), and Android WebView implementation of [MorphWebViewPlatform].
 class MorphWebViewInApp extends MorphWebViewPlatform {
@@ -134,20 +135,7 @@ class _InAppSession extends MorphWebViewSession {
     _view = InAppWebView(
       initialUrlRequest: URLRequest(url: WebUri(initialUrl)),
       webViewEnvironment: webViewEnvironment,
-      initialSettings: InAppWebViewSettings(
-        javaScriptEnabled: true,
-        isInspectable: true,
-        mediaPlaybackRequiresUserGesture: false,
-        allowsBackForwardNavigationGestures: true,
-        // Persist cookies in the profile's store, not an incognito session.
-        // Windows tabs in the same profile share a WebView2 userDataFolder;
-        // macOS 14+ uses a per-profile WKWebsiteDataStore when the hook is
-        // installed. Android still uses the process-wide default store.
-        incognito: false,
-        cacheEnabled: true,
-        sharedCookiesEnabled: true,
-        thirdPartyCookiesEnabled: true,
-      ),
+      initialSettings: morphInAppWebViewSettings(),
       initialUserScripts: UnmodifiableListView<UserScript>([
         UserScript(
           source: shim,
@@ -387,13 +375,7 @@ class _InAppSession extends MorphWebViewSession {
       return;
     }
     await controller.setSettings(
-      settings: InAppWebViewSettings(
-        preferredContentMode: enabled
-            ? UserPreferredContentMode.DESKTOP
-            : UserPreferredContentMode.MOBILE,
-        useWideViewPort: enabled,
-        loadWithOverviewMode: enabled,
-      ),
+      settings: morphInAppWebViewSettings(desktopSite: enabled),
     );
     await controller.reload();
   }
