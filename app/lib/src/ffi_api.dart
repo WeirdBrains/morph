@@ -260,15 +260,159 @@ class FfiMorphApi implements MorphApi {
     );
   }
 
+  static MorphBookmark _bookmark(rust_library.BookmarkView b) => MorphBookmark(
+    id: b.id,
+    url: b.url,
+    title: b.title,
+    added: DateTime.fromMillisecondsSinceEpoch(b.addedMs.toInt()),
+    updated: DateTime.fromMillisecondsSinceEpoch(b.updatedMs.toInt()),
+    folderId: b.folderId,
+    order: b.order,
+    tags: b.tags,
+  );
+
   static List<MorphBookmark> _bookmarks(List<rust_library.BookmarkView> list) =>
-      [
-        for (final b in list)
-          MorphBookmark(
-            url: b.url,
-            title: b.title,
-            added: DateTime.fromMillisecondsSinceEpoch(b.addedMs.toInt()),
-          ),
-      ];
+      [for (final b in list) _bookmark(b)];
+
+  static MorphBookmarkTree _tree(rust_library.BookmarkTreeView tree) =>
+      MorphBookmarkTree(
+        folders: [
+          for (final f in tree.folders)
+            MorphBookmarkFolder(
+              id: f.id,
+              name: f.name,
+              parentId: f.parentId,
+              order: f.order,
+            ),
+        ],
+        bookmarks: _bookmarks(tree.bookmarks),
+      );
+
+  @override
+  Future<MorphBookmarkTree> bookmarkTree(
+    String profileId, {
+    String? home,
+  }) async =>
+      _tree(await rust_library.bookmarkTree(home: home, profileId: profileId));
+
+  @override
+  Future<MorphBookmarkTree> createBookmarkFolder(
+    String profileId,
+    String name, {
+    String? parentId,
+    String? home,
+  }) async => _tree(
+    await rust_library.createBookmarkFolder(
+      home: home,
+      profileId: profileId,
+      name: name,
+      parentId: parentId,
+    ),
+  );
+
+  @override
+  Future<MorphBookmarkTree> renameBookmarkFolder(
+    String profileId,
+    String folderId,
+    String name, {
+    String? home,
+  }) async => _tree(
+    await rust_library.renameBookmarkFolder(
+      home: home,
+      profileId: profileId,
+      folderId: folderId,
+      name: name,
+    ),
+  );
+
+  @override
+  Future<MorphBookmarkTree> deleteBookmarkFolder(
+    String profileId,
+    String folderId, {
+    String? home,
+  }) async => _tree(
+    await rust_library.deleteBookmarkFolder(
+      home: home,
+      profileId: profileId,
+      folderId: folderId,
+    ),
+  );
+
+  @override
+  Future<MorphBookmarkTree> moveBookmarkItem(
+    String profileId,
+    String itemId, {
+    String? parentId,
+    required int index,
+    String? home,
+  }) async => _tree(
+    await rust_library.moveBookmarkItem(
+      home: home,
+      profileId: profileId,
+      itemId: itemId,
+      parentId: parentId,
+      index: index,
+    ),
+  );
+
+  @override
+  Future<MorphBookmarkTree> updateBookmark(
+    String profileId,
+    String bookmarkId, {
+    String? title,
+    String? url,
+    List<String>? tags,
+    String? home,
+  }) async => _tree(
+    await rust_library.updateBookmark(
+      home: home,
+      profileId: profileId,
+      bookmarkId: bookmarkId,
+      title: title,
+      url: url,
+      tags: tags,
+    ),
+  );
+
+  @override
+  Future<MorphBookmarkTree> deleteBookmark(
+    String profileId,
+    String bookmarkId, {
+    String? home,
+  }) async => _tree(
+    await rust_library.deleteBookmark(
+      home: home,
+      profileId: profileId,
+      bookmarkId: bookmarkId,
+    ),
+  );
+
+  @override
+  Future<List<MorphBookmark>> searchBookmarks(
+    String profileId, {
+    String query = '',
+    String? tag,
+    String? home,
+  }) async => _bookmarks(
+    await rust_library.searchBookmarks(
+      home: home,
+      profileId: profileId,
+      query: query,
+      tag: tag,
+    ),
+  );
+
+  @override
+  Future<List<MorphBookmarkTag>> bookmarkTags(
+    String profileId, {
+    String? home,
+  }) async => [
+    for (final t in await rust_library.bookmarkTags(
+      home: home,
+      profileId: profileId,
+    ))
+      MorphBookmarkTag(name: t.name, count: t.count),
+  ];
 
   @override
   Future<List<MorphBookmark>> listBookmarks(
