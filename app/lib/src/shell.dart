@@ -21,6 +21,7 @@ import 'widgets/find_bar.dart';
 import 'widgets/library_page.dart';
 import 'widgets/mobile_gestures.dart';
 import 'widgets/profile_menu.dart';
+import 'widgets/settings_page.dart';
 import 'widgets/start_page.dart';
 import 'widgets/tab_switcher.dart';
 import 'widgets/window_chrome.dart';
@@ -632,6 +633,8 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
             unawaited(_openLibrary(MorphLibraryTab.bookmarks));
           case 'history':
             unawaited(_openLibrary(MorphLibraryTab.history));
+          case 'settings':
+            unawaited(_openSettings());
         }
       },
       itemBuilder: (context) => const [
@@ -659,6 +662,15 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
             leading: Icon(Icons.history),
             title: Text('History'),
             trailing: Text('Ctrl+H'),
+          ),
+        ),
+        PopupMenuDivider(),
+        PopupMenuItem(
+          key: Key('menu-settings'),
+          value: 'settings',
+          child: ListTile(
+            leading: Icon(Icons.settings_outlined),
+            title: Text('Settings'),
           ),
         ),
       ],
@@ -990,6 +1002,35 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
     await _loadBookmarks();
   }
 
+  Future<void> _openSettings() async {
+    final desktop = !_isMobile;
+    await _showPanel(
+      (panel) => MorphSettingsPage(
+        profileName: _profileName,
+        coreVersion: coreVersionLabel ?? '…',
+        renderPath: '${webView.renderPath}',
+        tabPosition: desktop ? _tabPosition : null,
+        sidebarCollapsed: desktop ? _sidebarCollapsed : null,
+        onTabPositionChanged: (p) => unawaited(_setTabPosition(p)),
+        onSidebarCollapsedChanged: (value) {
+          if (value != _sidebarCollapsed) {
+            unawaited(_toggleSidebar());
+          }
+        },
+        onClearHistory: () {
+          final profileId = _profileId;
+          return _libraryWrite(
+            () => widget.api.clearHistory(profileId, home: _home),
+          );
+        },
+        onOpenLibrary: (tab) {
+          Navigator.of(panel).pop();
+          unawaited(_openLibrary(tab));
+        },
+      ),
+    );
+  }
+
   void _openFind() {
     if (!_findOpen) {
       setState(() => _findOpen = true);
@@ -1137,6 +1178,7 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
               : null,
           onHistory: () => unawaited(_openLibrary(MorphLibraryTab.history)),
           onBookmarks: () => unawaited(_openLibrary(MorphLibraryTab.bookmarks)),
+          onSettings: () => unawaited(_openSettings()),
           profiles: _profileSheetSection(),
         );
       },

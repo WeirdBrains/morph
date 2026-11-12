@@ -26,6 +26,7 @@ class MorphAddressSheet extends StatefulWidget {
     this.onToggleBookmark,
     this.onHistory,
     this.onBookmarks,
+    this.onSettings,
     this.identityLabel,
     this.profiles,
   });
@@ -45,6 +46,7 @@ class MorphAddressSheet extends StatefulWidget {
   final VoidCallback? onToggleBookmark;
   final VoidCallback? onHistory;
   final VoidCallback? onBookmarks;
+  final VoidCallback? onSettings;
   final String? identityLabel;
 
   /// Optional profiles section (mobile). Desktop uses the nav-row button.
@@ -306,7 +308,7 @@ class _MorphAddressSheetState extends State<MorphAddressSheet> {
                   key: const Key('sheet-settings'),
                   icon: Icons.settings_outlined,
                   label: 'Settings',
-                  onTap: () => _comingSoon('Settings'),
+                  onTap: _closeThen(widget.onSettings, 'Settings'),
                 ),
               ],
             ),

@@ -1344,6 +1344,90 @@ void main() {
     }
   });
 
+  testWidgets('desktop menu settings clear only the active profile history', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    final view = tester.view;
+    view.physicalSize = const Size(1280, 800);
+    view.devicePixelRatio = 1.0;
+    try {
+      final api = FakeMorphApi();
+      await api.recordVisit('other', 'https://keep.test/', 'Keep');
+      await tester.pumpWidget(
+        MorphApp(
+          api: api,
+          home: '/tmp/morph-does-not-exist',
+          subscribeToTicks: false,
+          loadPageBridgeAsset: false,
+        ),
+      );
+      await _pumpUntilIdentity(tester);
+      await tester.enterText(find.byKey(const Key('address-bar')), 's.example');
+      await tester.tap(find.byKey(const Key('address-go')));
+      await tester.pump();
+      await _pumpUntilWebViewAttached(tester, fakeWebView);
+      await tester.pumpAndSettle();
+      expect(await api.listHistory('default'), isNotEmpty);
+
+      await tester.tap(find.byKey(const Key('nav-menu')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('menu-settings')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('settings-page')), findsOneWidget);
+      expect(find.byKey(const Key('settings-tab-position')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('settings-clear-history')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('clear-history-confirm')));
+      await tester.pumpAndSettle();
+      expect(await api.listHistory('default'), isEmpty);
+      expect(await api.listHistory('other'), isNotEmpty);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+      view.reset();
+    }
+  });
+
+  testWidgets('phone sheet opens settings without desktop layout', (
+    tester,
+  ) async {
+    final view = tester.view;
+    view.physicalSize = const Size(412, 915);
+    view.devicePixelRatio = 1.0;
+    addTearDown(view.reset);
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      await tester.pumpWidget(
+        MorphApp(
+          api: FakeMorphApi(),
+          home: '/tmp/morph-does-not-exist',
+          subscribeToTicks: false,
+          loadPageBridgeAsset: false,
+        ),
+      );
+      await _pumpUntilIdentity(tester);
+      await tester.tap(find.byKey(const Key('address-bar')));
+      await tester.pumpAndSettle();
+      await tester.scrollUntilVisible(
+        find.byKey(const Key('sheet-settings')),
+        200,
+        scrollable: find
+            .descendant(
+              of: find.byKey(const Key('address-sheet')),
+              matching: find.byType(Scrollable),
+            )
+            .first,
+      );
+      await tester.tap(find.byKey(const Key('sheet-settings')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('settings-page')), findsOneWidget);
+      expect(find.byKey(const Key('settings-tab-position')), findsNothing);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
   testWidgets('phone address sheet opens find in page', (tester) async {
     final view = tester.view;
     view.physicalSize = const Size(412, 915);
