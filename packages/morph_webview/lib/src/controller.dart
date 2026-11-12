@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/widgets.dart';
 
@@ -112,6 +113,13 @@ class MorphWebViewController {
   Future<void> sendIme(MorphImeEvent event) async => _session?.sendIme(event);
   Future<String?> evaluateJavaScript(String script) async =>
       _session?.evaluateJavaScript(script);
+
+  Future<Uint8List?> takeScreenshot() async => _session?.takeScreenshot();
+
+  Future<void> setDesktopSite(bool enabled) async =>
+      _session?.setDesktopSite(enabled);
+
+  bool get desktopSite => _session?.desktopSite ?? false;
 
   Future<void> dispose() async {
     for (final sub in _subs) {
