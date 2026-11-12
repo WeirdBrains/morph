@@ -4,6 +4,7 @@ import 'package:flutter/widgets.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
 import 'events.dart';
+import 'surface_health.dart';
 
 /// Backend contract implemented by `morph_webview_linux` (and later other platforms).
 abstract class MorphWebViewPlatform extends PlatformInterface {
@@ -67,6 +68,23 @@ abstract class MorphWebViewSession {
   Future<void> setDesktopSite(bool enabled) async {}
 
   bool get desktopSite => false;
+
+  /// Whether the native surface is painting the page. Backends that cannot
+  /// tell return [MorphSurfaceVerdict.unknown].
+  Future<MorphSurfaceVerdict> checkSurface() async =>
+      MorphSurfaceVerdict.unknown;
+
+  /// Cheap nudge that makes the native view repaint without touching the
+  /// page. Safe to call often.
+  Future<void> repaintSurface() async {}
+
+  /// Replaces the native view with a fresh one on the current URL. Returns
+  /// false when the backend cannot rebuild its view.
+  Future<bool> rebuildSurface() async => false;
+
+  /// Fires when the backend learns its surface is gone for good (for example
+  /// the Android renderer process died) and must be rebuilt.
+  Stream<void> get surfaceLost => const Stream.empty();
 
   Future<void> dispose();
 }

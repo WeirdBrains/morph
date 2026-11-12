@@ -5,6 +5,7 @@ import 'package:flutter/widgets.dart';
 
 import 'events.dart';
 import 'platform.dart';
+import 'surface_health.dart';
 
 /// In-memory backend for widget tests. Never loads Native Assets or WebKit.
 class FakeMorphWebViewPlatform extends MorphWebViewPlatform {
@@ -22,6 +23,13 @@ class FakeMorphWebViewPlatform extends MorphWebViewPlatform {
   final List<String> evaluated = [];
   FakeMorphWebViewSession? lastSession;
 
+  /// When set, `create` waits for this before returning, so tests can hold a
+  /// create in flight.
+  Completer<void>? createGate;
+
+  /// Every session this backend created, oldest first.
+  final List<FakeMorphWebViewSession> sessions = [];
+
   @override
   Future<MorphWebViewSession> create({
     required String initialUrl,
@@ -32,6 +40,10 @@ class FakeMorphWebViewPlatform extends MorphWebViewPlatform {
     String profileId = 'default',
   }) async {
     loadedUrls.add(initialUrl);
+    final gate = createGate;
+    if (gate != null) {
+      await gate.future;
+    }
     final session = FakeMorphWebViewSession(
       renderPath: renderPath,
       url: initialUrl,
@@ -39,6 +51,7 @@ class FakeMorphWebViewPlatform extends MorphWebViewPlatform {
       platformView: platformView,
     );
     lastSession = session;
+    sessions.add(session);
     return session;
   }
 }
@@ -282,8 +295,45 @@ class FakeMorphWebViewSession extends MorphWebViewSession {
         ]);
   }
 
+  /// Verdicts `checkSurface` returns in order; the last one repeats. Empty
+  /// means [MorphSurfaceVerdict.healthy].
+  final List<MorphSurfaceVerdict> surfaceVerdicts = [];
+  int surfaceChecks = 0;
+  int surfaceRepaints = 0;
+  int surfaceRebuilds = 0;
+  final _surfaceLost = StreamController<void>.broadcast();
+
+  /// Simulates the renderer process dying.
+  void emitSurfaceLost() => _surfaceLost.add(null);
+
+  @override
+  Stream<void> get surfaceLost => _surfaceLost.stream;
+
+  @override
+  Future<MorphSurfaceVerdict> checkSurface() async {
+    surfaceChecks++;
+    if (surfaceVerdicts.isEmpty) {
+      return MorphSurfaceVerdict.healthy;
+    }
+    return surfaceVerdicts.length == 1
+        ? surfaceVerdicts.first
+        : surfaceVerdicts.removeAt(0);
+  }
+
+  @override
+  Future<void> repaintSurface() async {
+    surfaceRepaints++;
+  }
+
+  @override
+  Future<bool> rebuildSurface() async {
+    surfaceRebuilds++;
+    return true;
+  }
+
   @override
   Future<void> dispose() async {
+    await _surfaceLost.close();
     await _navController.close();
     await _pageController.close();
     await _cursorController.close();
