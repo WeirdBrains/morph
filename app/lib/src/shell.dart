@@ -24,6 +24,7 @@ import 'widgets/tab_switcher.dart';
 import 'widgets/window_chrome.dart';
 import 'window/morph_desktop_window.dart';
 import 'window/window_buttons.dart';
+import 'surface_watch.dart';
 
 /// Morph shell: address-bar chrome, Linux web-view texture, and Rust wiring.
 class MorphShell extends StatefulWidget {
@@ -58,7 +59,7 @@ class MorphShell extends StatefulWidget {
   State<MorphShell> createState() => MorphShellState();
 }
 
-class MorphShellState extends State<MorphShell> {
+class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
   final TextEditingController address = TextEditingController();
   final addressFocus = FocusNode();
   final MorphTabSet tabs = MorphTabSet();
@@ -125,6 +126,11 @@ class MorphShellState extends State<MorphShell> {
       setState(() {});
       return;
     }
+    if (hasUrl && !event.isLoading && event.progress >= 1) {
+      // A finished load (including back, forward and reload) is the moment a
+      // stale surface shows up as a white page.
+      _scheduleSurfaceCheck(const Duration(milliseconds: 800));
+    }
     setState(() {
       if (hasUrl) {
         navigation = event;
@@ -141,6 +147,8 @@ class MorphShellState extends State<MorphShell> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    morphSurfaceWatch.addListener(_onOverlayClosed);
     _debugOpen = widget.showDebugPanel;
     _controllerFor(tabs.activeId);
     addressFocus.addListener(() {
@@ -373,8 +381,60 @@ class MorphShellState extends State<MorphShell> {
     unawaited(_saveCurrentTabs());
   }
 
+  // --- Surface self-heal -------------------------------------------------
+  //
+  // Android web views can stop painting (a white page that ignores swipes)
+  // after anything that hides, covers or resizes them. After each of those
+  // the shell asks the visible tab's controller to nudge a repaint and, if
+  // the page has content but the surface is still flat, rebuild the native
+  // view on the same URL.
+
+  Timer? _surfaceTimer;
+
+  /// How many surface checks the shell has requested. Tests read this.
+  @visibleForTesting
+  int surfaceCheckRequests = 0;
+
+  void _scheduleSurfaceCheck([
+    Duration delay = const Duration(milliseconds: 400),
+  ]) {
+    if (!_isMobile || !mounted) {
+      return;
+    }
+    _surfaceTimer?.cancel();
+    _surfaceTimer = Timer(delay, () {
+      if (!mounted || _showSwitcher || _onStartPage) {
+        return;
+      }
+      final controller = _controllers[tabs.activeId];
+      if (controller == null || !controller.isAttached) {
+        return;
+      }
+      surfaceCheckRequests++;
+      unawaited(controller.ensureSurfaceHealthy());
+    });
+  }
+
+  void _onOverlayClosed() => _scheduleSurfaceCheck();
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _scheduleSurfaceCheck(const Duration(milliseconds: 600));
+    }
+  }
+
+  @override
+  void didChangeMetrics() {
+    // Keyboard shown or hidden, rotation, split-screen resize.
+    _scheduleSurfaceCheck(const Duration(milliseconds: 500));
+  }
+
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    morphSurfaceWatch.removeListener(_onOverlayClosed);
+    _surfaceTimer?.cancel();
     FocusManager.instance.removeEarlyKeyEventHandler(_onShellKey);
     unawaited(_saveCurrentTabs());
     unawaited(_ticks?.cancel());
@@ -431,6 +491,7 @@ class MorphShellState extends State<MorphShell> {
 
   void _closeSwitcher() {
     setState(() => _showSwitcher = false);
+    _scheduleSurfaceCheck();
   }
 
   void _closeAllTabs() {
@@ -474,6 +535,7 @@ class MorphShellState extends State<MorphShell> {
     _controllerFor(tabs.activeId);
     _syncAddressFromActive();
     setState(() {});
+    _scheduleSurfaceCheck();
     unawaited(_saveCurrentTabs());
   }
 
@@ -486,6 +548,7 @@ class MorphShellState extends State<MorphShell> {
     }
     _showSwitcher = false;
     setState(() {});
+    _scheduleSurfaceCheck();
   }
 
   void _syncAddressFromActive() {
@@ -597,6 +660,7 @@ class MorphShellState extends State<MorphShell> {
     _syncAddressFromActive();
     if (mounted) {
       setState(() {});
+      _scheduleSurfaceCheck(const Duration(milliseconds: 800));
     }
   }
 

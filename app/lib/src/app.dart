@@ -5,6 +5,7 @@ import 'shell.dart';
 import 'theme/morph_theme.dart';
 import 'widgets/window_chrome.dart';
 import 'window/morph_desktop_window.dart';
+import 'surface_watch.dart';
 
 class MorphApp extends StatefulWidget {
   const MorphApp({
@@ -44,6 +45,7 @@ class _MorphAppState extends State<MorphApp> {
       theme: MorphTheme.light,
       darkTheme: MorphTheme.dark,
       themeMode: ThemeMode.dark,
+      navigatorObservers: [morphSurfaceWatch],
       builder: (context, child) {
         return MorphDesktopFrame(child: child ?? const SizedBox.shrink());
       },
