@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../api.dart';
 import '../theme/morph_theme.dart';
+import 'bookmark_manager.dart';
 
 /// Which list [MorphLibraryPage] opens on.
 enum MorphLibraryTab { bookmarks, history }
@@ -47,7 +48,6 @@ class _MorphLibraryPageState extends State<MorphLibraryPage>
     initialIndex: widget.initialTab.index,
   );
   final _query = TextEditingController();
-  List<MorphBookmark>? _bookmarks;
   List<MorphHistoryEntry>? _history;
   Object? _error;
 
@@ -67,10 +67,6 @@ class _MorphLibraryPageState extends State<MorphLibraryPage>
 
   Future<void> _reload() async {
     try {
-      final bookmarks = await widget.api.listBookmarks(
-        widget.profileId,
-        home: widget.home,
-      );
       final history = await widget.api.listHistory(
         widget.profileId,
         query: _query.text.trim(),
@@ -78,7 +74,6 @@ class _MorphLibraryPageState extends State<MorphLibraryPage>
       );
       if (mounted) {
         setState(() {
-          _bookmarks = bookmarks;
           _history = history;
           _error = null;
         });
@@ -93,19 +88,6 @@ class _MorphLibraryPageState extends State<MorphLibraryPage>
   void _open(String url) {
     Navigator.of(context).maybePop();
     widget.onOpen(url);
-  }
-
-  Future<void> _removeBookmark(MorphBookmark bookmark) async {
-    final list = await widget.write(
-      () => widget.api.removeBookmark(
-        widget.profileId,
-        bookmark.url,
-        home: widget.home,
-      ),
-    );
-    if (mounted) {
-      setState(() => _bookmarks = list);
-    }
   }
 
   Future<void> _deleteVisit(MorphHistoryEntry entry) async {
@@ -167,34 +149,13 @@ class _MorphLibraryPageState extends State<MorphLibraryPage>
     );
   }
 
-  Widget _bookmarkList() {
-    final list = _bookmarks;
-    if (list == null) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    if (list.isEmpty) {
-      return const _Empty(
-        icon: Icons.bookmark_border,
-        text: 'No bookmarks in this profile yet.',
-      );
-    }
-    return ListView.builder(
-      key: const Key('library-bookmarks'),
-      itemCount: list.length,
-      itemBuilder: (context, i) {
-        final b = list[i];
-        return _Row(
-          key: Key('bookmark-${b.url}'),
-          icon: Icons.bookmark,
-          title: b.title,
-          url: b.url,
-          onTap: () => _open(b.url),
-          onDelete: () => _removeBookmark(b),
-          deleteTooltip: 'Remove bookmark',
-        );
-      },
-    );
-  }
+  Widget _bookmarkList() => MorphBookmarkManager(
+    api: widget.api,
+    profileId: widget.profileId,
+    home: widget.home,
+    write: widget.write,
+    onOpen: _open,
+  );
 
   Widget _historyList() {
     final list = _history;
