@@ -4,6 +4,7 @@
 //! in `morph-bridge`.
 #![forbid(unsafe_code)]
 
+pub mod library;
 pub mod page_bridge;
 pub mod profiles;
 pub mod settings;
