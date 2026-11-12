@@ -31,4 +31,21 @@ void main() {
       expect(home, isNull, reason: '$platform');
     }
   });
+
+  test('control socket goes in the app home only on Android', () {
+    const home = '/data/user/0/org.weirdbrains.morph/files';
+    expect(
+      controlSocketDir(home, platform: TargetPlatform.android),
+      '$home/run',
+    );
+    for (final platform in [
+      TargetPlatform.iOS,
+      TargetPlatform.linux,
+      TargetPlatform.macOS,
+      TargetPlatform.windows,
+    ]) {
+      expect(controlSocketDir(home, platform: platform), isNull);
+    }
+    expect(controlSocketDir(null, platform: TargetPlatform.android), isNull);
+  });
 }
