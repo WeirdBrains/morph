@@ -372,6 +372,34 @@ void main() {
     }
   });
 
+  testWidgets('a restored tab opens its saved URL on a cold start', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      final api = FakeMorphApi();
+      api.tabsByProfile['default'] = const ProfileTabSnapshot(
+        activeId: 1,
+        nextId: 2,
+        tabs: [ProfileTab(id: 1, url: 'https://restored.test/', title: 'R')],
+      );
+      await tester.pumpWidget(
+        MorphApp(
+          api: api,
+          home: '/tmp/morph-cold-start',
+          subscribeToTicks: false,
+          loadPageBridgeAsset: false,
+        ),
+      );
+      await _pumpUntilIdentity(tester);
+      await _pumpUntilWebViewAttached(tester, fakeWebView);
+      expect(fakeWebView.loadedUrls, ['https://restored.test/']);
+      expect(fakeWebView.lastSession!.history.last, 'https://restored.test/');
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
   testWidgets('address bar loads a typed URL on Android', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
     const missingHome = '/tmp/morph-does-not-exist';
