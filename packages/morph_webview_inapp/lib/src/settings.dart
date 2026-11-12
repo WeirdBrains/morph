@@ -6,15 +6,20 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 /// [InAppWebViewSettings] carries the plugin defaults and would silently undo
 /// the Android composition choices below.
 ///
-/// Android composition: the plugin default is hybrid composition with the
-/// WebView on a `LAYER_TYPE_HARDWARE` layer. On Flutter 3.47 that hardware
-/// layer stops being repainted after the view is resized (keyboard shown and
-/// hidden by the address sheet), after a second page load, or after the app
-/// comes back from the background, so the page is loaded and live but the
-/// screen shows a flat white rectangle that ignores swipes. See
-/// pichillilorenzo/flutter_inappwebview#2889 and #2950. Texture-layer hybrid
-/// composition with no forced hardware layer (the plain Android WebView
-/// default) keeps painting in all of those cases.
+/// Android composition: hybrid composition (the native WebView sits in the
+/// Android view hierarchy and SurfaceFlinger composites it) with no forced
+/// hardware layer. Texture-layer composition, used before, has the WebView
+/// draw into a SurfaceTexture that Flutter's raster thread samples on its own
+/// clock, so during a fling the page repeats a frame and then jumps two to
+/// five frames ahead whenever the two clocks drift (Pixel 9 Pro XL: 44% of
+/// fast-fling frames out of step, single-frame jumps of 4-5 frames' worth).
+/// The plugin default pairs hybrid composition with `LAYER_TYPE_HARDWARE`,
+/// and on Flutter 3.47 that hardware layer stops being repainted after the
+/// view is resized (keyboard shown and hidden by the address sheet), after a
+/// second page load, or after the app comes back from the background: a flat
+/// white rectangle that ignores swipes (pichillilorenzo/flutter_inappwebview
+/// #2889, #2950). Without the forced layer (`LAYER_TYPE_NONE`, the plain
+/// Android WebView default) it keeps painting in all of those cases.
 ///
 /// [desktopSite] is null at creation so each platform keeps its recommended
 /// content mode; the desktop-site toggle passes true or false.
@@ -22,10 +27,9 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 /// Scrolling (Android): a visible tab pre-rasters the page beyond the
 /// viewport (`setOffscreenPreRaster`), so a fast fling over a long page lands
 /// on painted tiles instead of blank ones that fill in a frame or more late,
-/// and asks for an IMPORTANT renderer that is never waived. With texture-layer
-/// composition the WebView always counts as attached and visible to Android,
-/// so the system cannot lower a hidden tab on its own: [idle] (a tab hidden
-/// for a while) drops the pre-raster and waives its renderer priority so its
+/// and asks for an IMPORTANT renderer that is never waived. Hidden tabs stay
+/// mounted (Offstage), so Morph lowers them itself: [idle] (a tab hidden for
+/// a while) drops the pre-raster and waives its renderer priority so its
 /// memory can go. The shell pairs idle with `WebView.onPause`.
 InAppWebViewSettings morphInAppWebViewSettings({
   bool? desktopSite,
@@ -51,8 +55,8 @@ InAppWebViewSettings morphInAppWebViewSettings({
     cacheEnabled: true,
     sharedCookiesEnabled: true,
     thirdPartyCookiesEnabled: true,
-    // Android: texture-layer hybrid composition, no forced hardware layer.
-    useHybridComposition: false,
+    // Android: hybrid composition, no forced hardware layer (see above).
+    useHybridComposition: true,
     hardwareAcceleration: false,
     // Android: report a dead renderer so the tab shows its crash state and
     // can be rebuilt, instead of the whole app being killed.

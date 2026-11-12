@@ -3,11 +3,13 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:morph_webview_inapp/src/settings.dart';
 
 void main() {
-  test('Android uses texture-layer composition without a hardware layer', () {
+  test('Android uses hybrid composition without a hardware layer', () {
     final settings = morphInAppWebViewSettings();
-    // Hybrid composition plus LAYER_TYPE_HARDWARE leaves a white, frozen
-    // surface after the keyboard or a second page load on Flutter 3.47.
-    expect(settings.useHybridComposition, isFalse);
+    // Texture-layer composition samples the page on Flutter's clock, so
+    // flings repeat a frame and then jump. Hybrid composition plus
+    // LAYER_TYPE_HARDWARE leaves a white, frozen surface after the keyboard
+    // or a second page load on Flutter 3.47, so no hardware layer.
+    expect(settings.useHybridComposition, isTrue);
     expect(settings.hardwareAcceleration, isFalse);
     expect(settings.useOnRenderProcessGone, isTrue);
   });
@@ -15,7 +17,7 @@ void main() {
   test('desktop-site toggles keep the composition settings', () {
     for (final desktop in [true, false]) {
       final settings = morphInAppWebViewSettings(desktopSite: desktop);
-      expect(settings.useHybridComposition, isFalse);
+      expect(settings.useHybridComposition, isTrue);
       expect(settings.hardwareAcceleration, isFalse);
       expect(settings.useOnRenderProcessGone, isTrue);
       expect(settings.useWideViewPort, desktop);
@@ -27,7 +29,7 @@ void main() {
             : UserPreferredContentMode.MOBILE,
       );
       final map = settings.toMap();
-      expect(map['useHybridComposition'], isFalse);
+      expect(map['useHybridComposition'], isTrue);
       expect(map['hardwareAcceleration'], isFalse);
     }
   });
