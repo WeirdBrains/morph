@@ -62,6 +62,17 @@ class FfiMorphApi implements MorphApi {
   }
 
   @override
+  Future<int> loadSidebarWidth({String? home}) async {
+    final settings = await rust_settings.loadSettings(home: home);
+    return settings.sidebarWidth;
+  }
+
+  @override
+  Future<void> saveSidebarWidth(int width, {String? home}) async {
+    await rust_settings.setSidebarWidth(home: home, width: width);
+  }
+
+  @override
   Future<ProfileCatalog> listProfiles({String? home}) async {
     return _mergeColors(
       home,

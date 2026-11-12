@@ -10,6 +10,8 @@ abstract class MorphApi {
   Future<void> saveTabPosition(String position, {String? home});
   Future<bool> loadSidebarCollapsed({String? home});
   Future<void> saveSidebarCollapsed(bool collapsed, {String? home});
+  Future<int> loadSidebarWidth({String? home});
+  Future<void> saveSidebarWidth(int width, {String? home});
   Future<ProfileCatalog> listProfiles({String? home});
   Future<ProfileCatalog> createProfile(
     String name, {
