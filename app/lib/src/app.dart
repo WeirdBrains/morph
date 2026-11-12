@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'api.dart';
 import 'shell.dart';
+import 'theme/morph_theme.dart';
 
 class MorphApp extends StatelessWidget {
   const MorphApp({
@@ -19,10 +20,9 @@ class MorphApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Morph',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF1A1B26)),
-        useMaterial3: true,
-      ),
+      theme: MorphTheme.dark,
+      lightTheme: MorphTheme.light,
+      themeMode: ThemeMode.dark,
       home: MorphShell(
         api: api,
         home: home,
