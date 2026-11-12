@@ -322,17 +322,15 @@ class _MorphWebViewState extends State<MorphWebView>
     final repeat = event is KeyRepeatEvent;
     // While IME preedit is active, printable keys are delivered as compose
     // updates. Still forward non-character keys (Backspace, arrows, Enter).
-    final character = event.character ?? '';
-    final isPrintable = character.isNotEmpty && character != '\n';
+    final character = morphKeyText(event);
+    final isPrintable = character.isNotEmpty;
     if (_composing && isPrintable && event is! KeyUpEvent) {
       return KeyEventResult.handled;
     }
     widget.controller.sendKey(
       MorphKeyEvent(
         phase: phase,
-        key: event.logicalKey.keyLabel.isNotEmpty
-            ? event.logicalKey.keyLabel
-            : event.logicalKey.debugName ?? event.logicalKey.keyId.toString(),
+        key: morphKeyName(event.logicalKey),
         hardwareKeycode: event.physicalKey.usbHidUsage,
         ctrl: morphModifierPressed(
           left: LogicalKeyboardKey.controlLeft,
@@ -446,7 +444,7 @@ class _MorphWebViewState extends State<MorphWebView>
   void performAction(TextInputAction action) {
     if (action == TextInputAction.newline || action == TextInputAction.done) {
       widget.controller.sendKey(
-        const MorphKeyEvent(phase: 'down', key: 'Enter', text: '\n'),
+        const MorphKeyEvent(phase: 'down', key: 'Enter'),
       );
       widget.controller.sendKey(const MorphKeyEvent(phase: 'up', key: 'Enter'));
     }

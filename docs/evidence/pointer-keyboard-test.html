@@ -21,7 +21,48 @@
   <h1>Morph input test</h1>
   <div id="hover" class="hover-box">Hover me — I should change color</div>
   <p><a id="link" href="#ok">A cursor:pointer link</a></p>
-  <label>Input <input id="field" type="text" placeholder="type here"></label>
-  <label>Textarea <textarea id="area" rows="4" placeholder="type here too"></textarea></label>
+  <form id="form" action="#">
+    <label>Input <input id="field" name="q" type="text" placeholder="type here"></label>
+    <label>Textarea <textarea id="area" name="body" rows="4" placeholder="type here too"></textarea></label>
+    <button id="submit" type="submit">Submit</button>
+  </form>
+  <pre id="log"></pre>
+  <script>
+    window.__morph = {
+      submitted: false,
+      keys: [],
+      field: '',
+      area: '',
+      active: ''
+    };
+    const form = document.getElementById('form');
+    const field = document.getElementById('field');
+    const area = document.getElementById('area');
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      window.__morph.submitted = true;
+    });
+    document.addEventListener('keydown', function (e) {
+      window.__morph.keys.push({
+        key: e.key,
+        code: e.code,
+        repeat: e.repeat,
+        shift: e.shiftKey,
+        ctrl: e.ctrlKey,
+        alt: e.altKey,
+        meta: e.metaKey,
+        target: e.target && e.target.id
+      });
+      window.__morph.field = field.value;
+      window.__morph.area = area.value;
+      window.__morph.active = document.activeElement ? document.activeElement.id : '';
+    });
+    window.__morphSnapshot = function () {
+      window.__morph.field = field.value;
+      window.__morph.area = area.value;
+      window.__morph.active = document.activeElement ? document.activeElement.id : '';
+      return JSON.stringify(window.__morph);
+    };
+  </script>
 </body>
 </html>

@@ -2,6 +2,7 @@
 
 #include "morph_webview_control.h"
 #include "ime_context.h"
+#include "key_map.h"
 #include "render_path.h"
 
 #include <cairo/cairo.h>
@@ -1068,87 +1069,28 @@ static void dispatch_pointer(MorphView* view,
   request_snapshot(view);
 }
 
-static guint keyval_from_label(const gchar* key) {
-  if (key == nullptr || *key == '\0') {
-    return GDK_KEY_VoidSymbol;
+static guint16 hardware_keycode_for(guint keyval, guint provided, guint8* group) {
+  if (group != nullptr) {
+    *group = 0;
   }
-  if (g_ascii_strcasecmp(key, "Enter") == 0 || g_ascii_strcasecmp(key, "Return") == 0) {
-    return GDK_KEY_Return;
+  GdkDisplay* display = gdk_display_get_default();
+  if (display != nullptr) {
+    GdkKeymap* keymap = gdk_keymap_get_for_display(display);
+    GdkKeymapKey* keys = nullptr;
+    gint n_keys = 0;
+    if (gdk_keymap_get_entries_for_keyval(keymap, keyval, &keys, &n_keys) && n_keys > 0) {
+      guint16 code = static_cast<guint16>(keys[0].keycode);
+      if (group != nullptr) {
+        *group = static_cast<guint8>(keys[0].group);
+      }
+      g_free(keys);
+      return code;
+    }
+    g_free(keys);
   }
-  if (g_ascii_strcasecmp(key, "Backspace") == 0) {
-    return GDK_KEY_BackSpace;
-  }
-  if (g_ascii_strcasecmp(key, "Tab") == 0) {
-    return GDK_KEY_Tab;
-  }
-  if (g_ascii_strcasecmp(key, "Escape") == 0) {
-    return GDK_KEY_Escape;
-  }
-  if (g_ascii_strcasecmp(key, "Arrow Left") == 0) {
-    return GDK_KEY_Left;
-  }
-  if (g_ascii_strcasecmp(key, "Arrow Right") == 0) {
-    return GDK_KEY_Right;
-  }
-  if (g_ascii_strcasecmp(key, "Arrow Up") == 0) {
-    return GDK_KEY_Up;
-  }
-  if (g_ascii_strcasecmp(key, "Arrow Down") == 0) {
-    return GDK_KEY_Down;
-  }
-  if (g_ascii_strcasecmp(key, " ") == 0 || g_ascii_strcasecmp(key, "Space") == 0) {
-    return GDK_KEY_space;
-  }
-  if (g_ascii_strcasecmp(key, "Delete") == 0) {
-    return GDK_KEY_Delete;
-  }
-  if (g_ascii_strcasecmp(key, "Home") == 0) {
-    return GDK_KEY_Home;
-  }
-  if (g_ascii_strcasecmp(key, "End") == 0) {
-    return GDK_KEY_End;
-  }
-  if (g_ascii_strcasecmp(key, "Page Up") == 0) {
-    return GDK_KEY_Page_Up;
-  }
-  if (g_ascii_strcasecmp(key, "Page Down") == 0) {
-    return GDK_KEY_Page_Down;
-  }
-  guint from_name = gdk_keyval_from_name(key);
-  if (from_name != GDK_KEY_VoidSymbol) {
-    return from_name;
-  }
-  if (g_utf8_strlen(key, -1) == 1) {
-    gunichar c = g_utf8_get_char(key);
-    return gdk_unicode_to_keyval(c);
-  }
-  return GDK_KEY_VoidSymbol;
-}
-
-static guint keyval_for_event(const gchar* key, const gchar* text) {
-  if (text != nullptr && g_utf8_strlen(text, -1) == 1) {
-    return gdk_unicode_to_keyval(g_utf8_get_char(text));
-  }
-  return keyval_from_label(key);
-}
-
-static guint16 hardware_keycode_for(guint keyval, guint provided) {
   if (provided >= 8 && provided <= 255) {
     return static_cast<guint16>(provided);
   }
-  GdkDisplay* display = gdk_display_get_default();
-  if (display == nullptr) {
-    return 0;
-  }
-  GdkKeymap* keymap = gdk_keymap_get_for_display(display);
-  GdkKeymapKey* keys = nullptr;
-  gint n_keys = 0;
-  if (gdk_keymap_get_entries_for_keyval(keymap, keyval, &keys, &n_keys) && n_keys > 0) {
-    guint16 code = static_cast<guint16>(keys[0].keycode);
-    g_free(keys);
-    return code;
-  }
-  g_free(keys);
   return 0;
 }
 
@@ -1168,7 +1110,13 @@ static void dispatch_key(MorphView* view,
   }
   grab_view_focus(view);
   GdkEventType type = g_strcmp0(phase, "up") == 0 ? GDK_KEY_RELEASE : GDK_KEY_PRESS;
-  guint keyval = keyval_for_event(key, text);
+  guint keyval = morph_keyval_for_event(key, text);
+  if (keyval == GDK_KEY_Tab && shift && !ctrl && !alt && !meta) {
+    keyval = GDK_KEY_ISO_Left_Tab;
+  }
+  if (keyval == GDK_KEY_VoidSymbol) {
+    return;
+  }
   GdkEvent* event = gdk_event_new(type);
   event->key.window = window;
   g_object_ref(window);
@@ -1177,7 +1125,9 @@ static void dispatch_key(MorphView* view,
   event->key.keyval = keyval;
   event->key.state = (ctrl ? GDK_CONTROL_MASK : 0) | (alt ? GDK_MOD1_MASK : 0) |
                      (shift ? GDK_SHIFT_MASK : 0) | (meta ? GDK_META_MASK | GDK_SUPER_MASK : 0);
-  event->key.hardware_keycode = hardware_keycode_for(keyval, hardware_keycode);
+  guint8 group = 0;
+  event->key.hardware_keycode = hardware_keycode_for(keyval, hardware_keycode, &group);
+  event->key.group = group;
   event->key.is_modifier = (keyval == GDK_KEY_Shift_L || keyval == GDK_KEY_Shift_R || keyval == GDK_KEY_Control_L ||
                             keyval == GDK_KEY_Control_R || keyval == GDK_KEY_Alt_L || keyval == GDK_KEY_Alt_R ||
                             keyval == GDK_KEY_Meta_L || keyval == GDK_KEY_Meta_R || keyval == GDK_KEY_Super_L ||
@@ -1185,8 +1135,11 @@ static void dispatch_key(MorphView* view,
                                ? TRUE
                                : FALSE;
   if (type == GDK_KEY_PRESS && text != nullptr && text[0] != '\0' && !ctrl && !alt && !meta) {
-    event->key.string = g_strdup(text);
-    event->key.length = static_cast<gint>(strlen(text));
+    gunichar c = g_utf8_get_char(text);
+    if (c >= 0x20 && c != 0x7f) {
+      event->key.string = g_strdup(text);
+      event->key.length = static_cast<gint>(strlen(text));
+    }
   }
   (void)repeat;
   gdk_event_set_device(event, default_keyboard_device());
