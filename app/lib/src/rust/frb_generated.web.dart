@@ -50,10 +50,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   bool dco_decode_bool(dynamic raw);
 
   @protected
+  ProfileIdentityView dco_decode_box_autoadd_profile_identity_view(dynamic raw);
+
+  @protected
   CatalogView dco_decode_catalog_view(dynamic raw);
 
   @protected
   ControlBackendEvent dco_decode_control_backend_event(dynamic raw);
+
+  @protected
+  CreatedIdentityView dco_decode_created_identity_view(dynamic raw);
 
   @protected
   EphemeralUser dco_decode_ephemeral_user(dynamic raw);
@@ -87,6 +93,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   String? dco_decode_opt_String(dynamic raw);
+
+  @protected
+  ProfileIdentityView? dco_decode_opt_box_autoadd_profile_identity_view(
+    dynamic raw,
+  );
+
+  @protected
+  ProfileIdentityView dco_decode_profile_identity_view(dynamic raw);
 
   @protected
   ProfilePathsView dco_decode_profile_paths_view(dynamic raw);
@@ -131,10 +145,20 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   bool sse_decode_bool(SseDeserializer deserializer);
 
   @protected
+  ProfileIdentityView sse_decode_box_autoadd_profile_identity_view(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   CatalogView sse_decode_catalog_view(SseDeserializer deserializer);
 
   @protected
   ControlBackendEvent sse_decode_control_backend_event(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  CreatedIdentityView sse_decode_created_identity_view(
     SseDeserializer deserializer,
   );
 
@@ -176,6 +200,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
+
+  @protected
+  ProfileIdentityView? sse_decode_opt_box_autoadd_profile_identity_view(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  ProfileIdentityView sse_decode_profile_identity_view(
+    SseDeserializer deserializer,
+  );
 
   @protected
   ProfilePathsView sse_decode_profile_paths_view(SseDeserializer deserializer);
@@ -226,11 +260,23 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_bool(bool self, SseSerializer serializer);
 
   @protected
+  void sse_encode_box_autoadd_profile_identity_view(
+    ProfileIdentityView self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_catalog_view(CatalogView self, SseSerializer serializer);
 
   @protected
   void sse_encode_control_backend_event(
     ControlBackendEvent self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_created_identity_view(
+    CreatedIdentityView self,
     SseSerializer serializer,
   );
 
@@ -284,6 +330,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_box_autoadd_profile_identity_view(
+    ProfileIdentityView? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_profile_identity_view(
+    ProfileIdentityView self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_profile_paths_view(

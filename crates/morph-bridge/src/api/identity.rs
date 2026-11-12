@@ -1,6 +1,9 @@
 //! Identity facts that are safe to show in the UI. Secrets never cross this boundary.
 
-use morph_identity::{UserIdentity, identity_status};
+use morph_identity::profile_identity::{self, ProfileIdentity, SecretString, Source};
+use morph_identity::{Paths, UserIdentity, identity_status};
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Public identity status for a Morph home. Never creates the directory.
 pub struct IdentityStatusView {
@@ -29,6 +32,71 @@ pub fn new_ephemeral_user() -> Result<EphemeralUser, String> {
     Ok(EphemeralUser { user_id: user.user_id, fingerprint })
 }
 
+/// A profile's Weirdnet identity, public facts only.
+pub struct ProfileIdentityView {
+    pub user_id: String,
+    pub fingerprint: String,
+    pub created_ms: i64,
+    pub imported: bool,
+}
+
+impl ProfileIdentityView {
+    fn from(identity: ProfileIdentity) -> Self {
+        Self {
+            user_id: identity.user_id,
+            fingerprint: identity.fingerprint,
+            created_ms: identity.created_ms,
+            imported: identity.source == Source::Imported,
+        }
+    }
+}
+
+/// A new identity and the 24 recovery words to show the user once.
+pub struct CreatedIdentityView {
+    pub identity: ProfileIdentityView,
+    pub words: String,
+}
+
+fn profile_dir(home: Option<String>, profile_id: &str) -> Result<PathBuf, String> {
+    let explicit = home.filter(|h| !h.is_empty()).map(PathBuf::from);
+    let home = Paths::resolve(explicit).map_err(|e| e.to_string())?.home;
+    morph_core::profiles::require(&home, profile_id).map_err(|e| e.to_string())?;
+    Ok(morph_core::profiles::profile_dir(&home, profile_id))
+}
+
+fn now_ms() -> i64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+}
+
+/// The identity of `profile_id`, or `None` before its onboarding.
+pub fn profile_identity(home: Option<String>, profile_id: String) -> Result<Option<ProfileIdentityView>, String> {
+    let dir = profile_dir(home, &profile_id)?;
+    Ok(profile_identity::load(&dir).map_err(|e| e.to_string())?.map(ProfileIdentityView::from))
+}
+
+/// Create `profile_id`'s identity, sealed under `password`.
+pub fn create_profile_identity(home: Option<String>, profile_id: String, password: String) -> Result<CreatedIdentityView, String> {
+    let dir = profile_dir(home, &profile_id)?;
+    let password = SecretString::from(password);
+    let created = profile_identity::create(&dir, &password, now_ms()).map_err(|e| e.to_string())?;
+    Ok(CreatedIdentityView { identity: ProfileIdentityView::from(created.identity), words: created.words.to_string() })
+}
+
+/// Restore an identity from its recovery words into `profile_id`.
+pub fn import_profile_identity(home: Option<String>, profile_id: String, words: String, password: String) -> Result<ProfileIdentityView, String> {
+    let dir = profile_dir(home, &profile_id)?;
+    let words = morph_identity::profile_identity::Zeroizing::new(words);
+    let password = SecretString::from(password);
+    profile_identity::import(&dir, &words, &password, now_ms()).map(ProfileIdentityView::from).map_err(|e| e.to_string())
+}
+
+/// The recovery words of `profile_id`'s identity, after checking its password.
+pub fn profile_recovery_words(home: Option<String>, profile_id: String, password: String) -> Result<String, String> {
+    let dir = profile_dir(home, &profile_id)?;
+    let password = SecretString::from(password);
+    profile_identity::recovery_words(&dir, &password).map(|w| w.to_string()).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -47,5 +115,38 @@ mod tests {
         let b = super::new_ephemeral_user().unwrap();
         assert_eq!(a.user_id.len(), 32);
         assert_ne!(a.user_id, b.user_id);
+    }
+
+    fn home_with_profile() -> (tempfile::TempDir, String, String) {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().display().to_string();
+        let catalog = super::super::profiles::create_profile(Some(home.clone()), "Work".into()).unwrap();
+        (tmp, home, catalog.current)
+    }
+
+    #[test]
+    fn profile_identity_onboarding_round_trip() {
+        let (_tmp, home, work) = home_with_profile();
+        assert!(super::profile_identity(Some(home.clone()), work.clone()).unwrap().is_none());
+        let made = super::create_profile_identity(Some(home.clone()), work.clone(), "long enough".into()).unwrap();
+        assert_eq!(made.words.split_whitespace().count(), 24);
+        assert!(!made.identity.imported);
+        let loaded = super::profile_identity(Some(home.clone()), work.clone()).unwrap().unwrap();
+        assert_eq!(loaded.user_id, made.identity.user_id);
+        assert!(super::profile_identity(Some(home.clone()), "default".into()).unwrap().is_none());
+        let words = super::profile_recovery_words(Some(home.clone()), work.clone(), "long enough".into()).unwrap();
+        assert_eq!(words, made.words);
+        assert!(super::profile_recovery_words(Some(home.clone()), work, "wrong one".into()).is_err());
+
+        let imported = super::import_profile_identity(Some(home.clone()), "default".into(), made.words, "other pass".into()).unwrap();
+        assert!(imported.imported);
+        assert_eq!(imported.user_id, made.identity.user_id);
+    }
+
+    #[test]
+    fn unknown_profiles_are_refused() {
+        let (_tmp, home, _) = home_with_profile();
+        assert!(super::profile_identity(Some(home.clone()), "nope".into()).is_err());
+        assert!(super::create_profile_identity(Some(home), "nope".into(), "long enough".into()).is_err());
     }
 }

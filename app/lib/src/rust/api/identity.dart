@@ -7,6 +7,8 @@ import '../frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
+// These functions are ignored because they are not marked as `pub`: `from`, `now_ms`, `profile_dir`
+
 /// Resolve the data dir (`home`, else `MORPH_HOME`, else `~/.morph`) without creating it.
 Future<IdentityStatusView> identityDirInfo({String? home}) =>
     RustLib.instance.api.crateApiIdentityIdentityDirInfo(home: home);
@@ -14,6 +16,69 @@ Future<IdentityStatusView> identityDirInfo({String? home}) =>
 /// Generate a new user key in memory and return only its public id and fingerprint.
 Future<EphemeralUser> newEphemeralUser() =>
     RustLib.instance.api.crateApiIdentityNewEphemeralUser();
+
+/// The identity of `profile_id`, or `None` before its onboarding.
+Future<ProfileIdentityView?> profileIdentity({
+  String? home,
+  required String profileId,
+}) => RustLib.instance.api.crateApiIdentityProfileIdentity(
+  home: home,
+  profileId: profileId,
+);
+
+/// Create `profile_id`'s identity, sealed under `password`.
+Future<CreatedIdentityView> createProfileIdentity({
+  String? home,
+  required String profileId,
+  required String password,
+}) => RustLib.instance.api.crateApiIdentityCreateProfileIdentity(
+  home: home,
+  profileId: profileId,
+  password: password,
+);
+
+/// Restore an identity from its recovery words into `profile_id`.
+Future<ProfileIdentityView> importProfileIdentity({
+  String? home,
+  required String profileId,
+  required String words,
+  required String password,
+}) => RustLib.instance.api.crateApiIdentityImportProfileIdentity(
+  home: home,
+  profileId: profileId,
+  words: words,
+  password: password,
+);
+
+/// The recovery words of `profile_id`'s identity, after checking its password.
+Future<String> profileRecoveryWords({
+  String? home,
+  required String profileId,
+  required String password,
+}) => RustLib.instance.api.crateApiIdentityProfileRecoveryWords(
+  home: home,
+  profileId: profileId,
+  password: password,
+);
+
+/// A new identity and the 24 recovery words to show the user once.
+class CreatedIdentityView {
+  final ProfileIdentityView identity;
+  final String words;
+
+  const CreatedIdentityView({required this.identity, required this.words});
+
+  @override
+  int get hashCode => identity.hashCode ^ words.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is CreatedIdentityView &&
+          runtimeType == other.runtimeType &&
+          identity == other.identity &&
+          words == other.words;
+}
 
 /// An ephemeral user identity for the M1 wiring check. The key never leaves Rust.
 class EphemeralUser {
@@ -57,4 +122,36 @@ class IdentityStatusView {
           home == other.home &&
           homeExists == other.homeExists &&
           profile == other.profile;
+}
+
+/// A profile's Weirdnet identity, public facts only.
+class ProfileIdentityView {
+  final String userId;
+  final String fingerprint;
+  final PlatformInt64 createdMs;
+  final bool imported;
+
+  const ProfileIdentityView({
+    required this.userId,
+    required this.fingerprint,
+    required this.createdMs,
+    required this.imported,
+  });
+
+  @override
+  int get hashCode =>
+      userId.hashCode ^
+      fingerprint.hashCode ^
+      createdMs.hashCode ^
+      imported.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ProfileIdentityView &&
+          runtimeType == other.runtimeType &&
+          userId == other.userId &&
+          fingerprint == other.fingerprint &&
+          createdMs == other.createdMs &&
+          imported == other.imported;
 }
