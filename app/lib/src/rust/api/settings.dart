@@ -29,18 +29,28 @@ Future<SettingsView> setSidebarCollapsed({
   collapsed: collapsed,
 );
 
+/// Persist the expanded width of the left/right tab list.
+Future<SettingsView> setSidebarWidth({String? home, required int width}) =>
+    RustLib.instance.api.crateApiSettingsSetSidebarWidth(
+      home: home,
+      width: width,
+    );
+
 /// Snapshot of `settings.json` for the Flutter shell.
 class SettingsView {
   final String tabPosition;
   final bool sidebarCollapsed;
+  final int sidebarWidth;
 
   const SettingsView({
     required this.tabPosition,
     required this.sidebarCollapsed,
+    required this.sidebarWidth,
   });
 
   @override
-  int get hashCode => tabPosition.hashCode ^ sidebarCollapsed.hashCode;
+  int get hashCode =>
+      tabPosition.hashCode ^ sidebarCollapsed.hashCode ^ sidebarWidth.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -48,5 +58,6 @@ class SettingsView {
       other is SettingsView &&
           runtimeType == other.runtimeType &&
           tabPosition == other.tabPosition &&
-          sidebarCollapsed == other.sidebarCollapsed;
+          sidebarCollapsed == other.sidebarCollapsed &&
+          sidebarWidth == other.sidebarWidth;
 }

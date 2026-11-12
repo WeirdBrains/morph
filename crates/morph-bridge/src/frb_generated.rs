@@ -28,7 +28,7 @@
 // Section: imports
 
 use flutter_rust_bridge::for_generated::byteorder::{NativeEndian, ReadBytesExt, WriteBytesExt};
-use flutter_rust_bridge::for_generated::{Lifetimeable, Lockable, transform_result_dco};
+use flutter_rust_bridge::for_generated::{transform_result_dco, Lifetimeable, Lockable};
 use flutter_rust_bridge::{Handler, IntoIntoDart};
 
 // Section: boilerplate
@@ -39,7 +39,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.13.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1850655061;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -423637608;
 
 // Section: executor
 
@@ -514,6 +514,33 @@ fn wire__crate__api__settings__set_sidebar_collapsed_impl(
         },
     )
 }
+fn wire__crate__api__settings__set_sidebar_width_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "set_sidebar_width",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe { flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(ptr_, rust_vec_len_, data_len_) };
+            let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_home = <Option<String>>::sse_decode(&mut deserializer);
+            let api_width = <u32>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::settings::set_sidebar_width(api_home, api_width)?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__settings__set_tab_position_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -826,7 +853,12 @@ impl SseDecode for crate::api::settings::SettingsView {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_tabPosition = <String>::sse_decode(deserializer);
         let mut var_sidebarCollapsed = <bool>::sse_decode(deserializer);
-        return crate::api::settings::SettingsView { tab_position: var_tabPosition, sidebar_collapsed: var_sidebarCollapsed };
+        let mut var_sidebarWidth = <u32>::sse_decode(deserializer);
+        return crate::api::settings::SettingsView {
+            tab_position: var_tabPosition,
+            sidebar_collapsed: var_sidebarCollapsed,
+            sidebar_width: var_sidebarWidth,
+        };
     }
 }
 
@@ -881,10 +913,11 @@ fn pde_ffi_dispatcher_primary_impl(
         15 => wire__crate__api__profiles__rename_profile_impl(port, ptr, rust_vec_len, data_len),
         16 => wire__crate__api__profiles__set_current_profile_impl(port, ptr, rust_vec_len, data_len),
         17 => wire__crate__api__settings__set_sidebar_collapsed_impl(port, ptr, rust_vec_len, data_len),
-        18 => wire__crate__api__settings__set_tab_position_impl(port, ptr, rust_vec_len, data_len),
-        19 => wire__crate__api__control__start_webview_control_impl(port, ptr, rust_vec_len, data_len),
-        20 => wire__crate__api__control__start_webview_control_loopback_impl(port, ptr, rust_vec_len, data_len),
-        21 => wire__crate__api__control__stop_webview_control_impl(port, ptr, rust_vec_len, data_len),
+        18 => wire__crate__api__settings__set_sidebar_width_impl(port, ptr, rust_vec_len, data_len),
+        19 => wire__crate__api__settings__set_tab_position_impl(port, ptr, rust_vec_len, data_len),
+        20 => wire__crate__api__control__start_webview_control_impl(port, ptr, rust_vec_len, data_len),
+        21 => wire__crate__api__control__start_webview_control_loopback_impl(port, ptr, rust_vec_len, data_len),
+        22 => wire__crate__api__control__stop_webview_control_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -1009,7 +1042,12 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::profiles::ProfileView> for cr
 // Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::settings::SettingsView {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
-        [self.tab_position.into_into_dart().into_dart(), self.sidebar_collapsed.into_into_dart().into_dart()].into_dart()
+        [
+            self.tab_position.into_into_dart().into_dart(),
+            self.sidebar_collapsed.into_into_dart().into_dart(),
+            self.sidebar_width.into_into_dart().into_dart(),
+        ]
+        .into_dart()
     }
 }
 impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::settings::SettingsView {}
@@ -1181,6 +1219,7 @@ impl SseEncode for crate::api::settings::SettingsView {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.tab_position, serializer);
         <bool>::sse_encode(self.sidebar_collapsed, serializer);
+        <u32>::sse_encode(self.sidebar_width, serializer);
     }
 }
 
@@ -1219,7 +1258,7 @@ mod io {
 
     use super::*;
     use flutter_rust_bridge::for_generated::byteorder::{NativeEndian, ReadBytesExt, WriteBytesExt};
-    use flutter_rust_bridge::for_generated::{Lifetimeable, Lockable, transform_result_dco};
+    use flutter_rust_bridge::for_generated::{transform_result_dco, Lifetimeable, Lockable};
     use flutter_rust_bridge::{Handler, IntoIntoDart};
 
     // Section: boilerplate
@@ -1241,7 +1280,7 @@ mod web {
     use flutter_rust_bridge::for_generated::byteorder::{NativeEndian, ReadBytesExt, WriteBytesExt};
     use flutter_rust_bridge::for_generated::wasm_bindgen;
     use flutter_rust_bridge::for_generated::wasm_bindgen::prelude::*;
-    use flutter_rust_bridge::for_generated::{Lifetimeable, Lockable, transform_result_dco};
+    use flutter_rust_bridge::for_generated::{transform_result_dco, Lifetimeable, Lockable};
     use flutter_rust_bridge::{Handler, IntoIntoDart};
 
     // Section: boilerplate

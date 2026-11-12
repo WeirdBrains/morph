@@ -73,7 +73,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.13.0';
 
   @override
-  int get rustContentHash => -1850655061;
+  int get rustContentHash => -423637608;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -152,6 +152,11 @@ abstract class RustLibApi extends BaseApi {
   Future<SettingsView> crateApiSettingsSetSidebarCollapsed({
     String? home,
     required bool collapsed,
+  });
+
+  Future<SettingsView> crateApiSettingsSetSidebarWidth({
+    String? home,
+    required int width,
   });
 
   Future<SettingsView> crateApiSettingsSetTabPosition({
@@ -747,6 +752,41 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<SettingsView> crateApiSettingsSetSidebarWidth({
+    String? home,
+    required int width,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_opt_String(home, serializer);
+          sse_encode_u_32(width, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 18,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_settings_view,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiSettingsSetSidebarWidthConstMeta,
+        argValues: [home, width],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSettingsSetSidebarWidthConstMeta =>
+      const TaskConstMeta(
+        debugName: "set_sidebar_width",
+        argNames: ["home", "width"],
+      );
+
+  @override
   Future<SettingsView> crateApiSettingsSetTabPosition({
     String? home,
     required String position,
@@ -760,7 +800,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 18,
+            funcId: 19,
             port: port_,
           );
         },
@@ -790,7 +830,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 19,
+            funcId: 20,
             port: port_,
           );
         },
@@ -817,7 +857,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 20,
+            funcId: 21,
             port: port_,
           );
         },
@@ -847,7 +887,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 21,
+            funcId: 22,
             port: port_,
           );
         },
@@ -1031,11 +1071,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   SettingsView dco_decode_settings_view(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 2)
-      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    if (arr.length != 3)
+      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
     return SettingsView(
       tabPosition: dco_decode_String(arr[0]),
       sidebarCollapsed: dco_decode_bool(arr[1]),
+      sidebarWidth: dco_decode_u_32(arr[2]),
     );
   }
 
@@ -1260,9 +1301,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_tabPosition = sse_decode_String(deserializer);
     var var_sidebarCollapsed = sse_decode_bool(deserializer);
+    var var_sidebarWidth = sse_decode_u_32(deserializer);
     return SettingsView(
       tabPosition: var_tabPosition,
       sidebarCollapsed: var_sidebarCollapsed,
+      sidebarWidth: var_sidebarWidth,
     );
   }
 
@@ -1473,6 +1516,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.tabPosition, serializer);
     sse_encode_bool(self.sidebarCollapsed, serializer);
+    sse_encode_u_32(self.sidebarWidth, serializer);
   }
 
   @protected

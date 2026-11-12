@@ -45,14 +45,41 @@ impl<'de> Deserialize<'de> for TabPosition {
     }
 }
 
+/// Default expanded width of the left/right tab list, in logical pixels.
+pub const DEFAULT_SIDEBAR_WIDTH: u32 = 220;
+
+/// Inclusive lower bound for a user-resized sidebar.
+pub const MIN_SIDEBAR_WIDTH: u32 = 160;
+
+/// Inclusive upper bound for a user-resized sidebar.
+pub const MAX_SIDEBAR_WIDTH: u32 = 480;
+
+fn default_sidebar_width() -> u32 {
+    DEFAULT_SIDEBAR_WIDTH
+}
+
+/// Clamp a stored or dragged sidebar width into the supported range.
+pub fn clamp_sidebar_width(width: u32) -> u32 {
+    width.clamp(MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH)
+}
+
 /// User preferences kept under the Morph home directory.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default)]
     pub tab_position: TabPosition,
     /// Whether the left/right tab list is collapsed to favicons. Default: false.
     #[serde(default)]
     pub sidebar_collapsed: bool,
+    /// Expanded width of the left/right tab list, in logical pixels.
+    #[serde(default = "default_sidebar_width")]
+    pub sidebar_width: u32,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self { tab_position: TabPosition::default(), sidebar_collapsed: false, sidebar_width: DEFAULT_SIDEBAR_WIDTH }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -100,7 +127,9 @@ pub fn load(home: impl AsRef<Path>) -> Result<Settings, SettingsError> {
         return Ok(Settings::default());
     }
     let raw = fs::read_to_string(path)?;
-    Ok(serde_json::from_str(&raw)?)
+    let mut settings: Settings = serde_json::from_str(&raw)?;
+    settings.sidebar_width = clamp_sidebar_width(settings.sidebar_width);
+    Ok(settings)
 }
 
 /// Write [settings] to the current profile, migrating leftover files first.
@@ -136,6 +165,14 @@ pub fn set_tab_position(home: impl AsRef<Path>, position: TabPosition) -> Result
 pub fn set_sidebar_collapsed(home: impl AsRef<Path>, collapsed: bool) -> Result<Settings, SettingsError> {
     let mut settings = load(&home)?;
     settings.sidebar_collapsed = collapsed;
+    save(&home, &settings)?;
+    Ok(settings)
+}
+
+/// Load, set the expanded left/right tab list width, and persist it.
+pub fn set_sidebar_width(home: impl AsRef<Path>, width: u32) -> Result<Settings, SettingsError> {
+    let mut settings = load(&home)?;
+    settings.sidebar_width = clamp_sidebar_width(width);
     save(&home, &settings)?;
     Ok(settings)
 }
@@ -218,6 +255,42 @@ mod tests {
         let settings = load(tmp.path()).unwrap();
         assert_eq!(settings.tab_position, TabPosition::Left);
         assert!(!settings.sidebar_collapsed);
+        assert_eq!(settings.sidebar_width, DEFAULT_SIDEBAR_WIDTH);
+    }
+
+    #[test]
+    fn sidebar_width_defaults_and_round_trips() {
+        let tmp = tempdir().unwrap();
+        let home = tmp.path();
+        assert_eq!(load(home).unwrap().sidebar_width, DEFAULT_SIDEBAR_WIDTH);
+
+        let saved = set_sidebar_width(home, 300).unwrap();
+        assert_eq!(saved.sidebar_width, 300);
+        assert_eq!(saved.tab_position, TabPosition::Top);
+        assert!(!saved.sidebar_collapsed);
+        assert_eq!(load(home).unwrap().sidebar_width, 300);
+
+        let raw = fs::read_to_string(current_settings_path(home)).unwrap();
+        assert!(raw.contains("\"sidebar_width\": 300"), "{raw}");
+
+        let other = set_tab_position(home, TabPosition::Left).unwrap();
+        assert_eq!(other.sidebar_width, 300);
+        assert_eq!(other.tab_position, TabPosition::Left);
+    }
+
+    #[test]
+    fn sidebar_width_clamps_on_set_and_load() {
+        let tmp = tempdir().unwrap();
+        let home = tmp.path();
+        assert_eq!(set_sidebar_width(home, 80).unwrap().sidebar_width, MIN_SIDEBAR_WIDTH);
+        assert_eq!(load(home).unwrap().sidebar_width, MIN_SIDEBAR_WIDTH);
+        assert_eq!(set_sidebar_width(home, 900).unwrap().sidebar_width, MAX_SIDEBAR_WIDTH);
+        assert_eq!(load(home).unwrap().sidebar_width, MAX_SIDEBAR_WIDTH);
+
+        fs::write(current_settings_path(home), "{\"tab_position\":\"left\",\"sidebar_width\":12}\n").unwrap();
+        let loaded = load(home).unwrap();
+        assert_eq!(loaded.tab_position, TabPosition::Left);
+        assert_eq!(loaded.sidebar_width, MIN_SIDEBAR_WIDTH);
     }
 
     #[test]
