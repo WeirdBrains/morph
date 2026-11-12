@@ -79,8 +79,7 @@ pub fn current_settings_path(home: impl AsRef<Path>) -> PathBuf {
     let catalog_path = crate::profiles::catalog_path(home);
     if let Ok(raw) = fs::read_to_string(&catalog_path) {
         if let Ok(catalog) = serde_json::from_str::<crate::profiles::Catalog>(&raw) {
-            if crate::profiles::is_valid_id(&catalog.current) && catalog.get(&catalog.current).is_some()
-            {
+            if crate::profiles::is_valid_id(&catalog.current) && catalog.get(&catalog.current).is_some() {
                 return crate::profiles::settings_path(home, &catalog.current);
             }
         }
