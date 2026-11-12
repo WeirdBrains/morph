@@ -74,6 +74,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Shell shortcuts (Ctrl/Cmd+T, W, Tab, Shift+Tab, L, R, and 1–9) are
   handled by the shell before they are forwarded to a focused web view,
   so a page cannot swallow new-tab, close-tab, or the other chrome keys.
+- When desktop tabs overflow the strip or a left/right list, Morph keeps
+  the tabs that fit at their minimum size and puts the rest in a dropdown
+  after the last visible tab, before the + group. Choosing an entry
+  activates that tab and brings it into the visible set. Each entry has
+  a close control.
+- The expanded left and right tab lists have a draggable inner edge
+  (resize cursor, 160–480 px, and never wider than the window).
+  Double-click resets to 220 px. The width is stored in settings.json
+  next to tab position and the collapsed state. Collapsing still uses
+  the 48 px rail, and expanding restores the saved width.
 - Linux web views present through a Flutter GL texture by default: frames
   come from the already-painted offscreen surface (BGRA upload, no CPU
   swizzle) at the display refresh rate, with pointer-move and scroll
