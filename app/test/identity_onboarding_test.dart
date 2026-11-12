@@ -31,6 +31,28 @@ Future<({List<MorphIdentity> done, List<bool> skipped})> _pump(
 }
 
 void main() {
+  testWidgets('both password fields have their own eye toggle', (tester) async {
+    final api = FakeMorphApi()..onboarded = false;
+    await _pump(tester, api);
+    await tester.tap(find.byKey(const Key('onboarding-create')));
+    await tester.pumpAndSettle();
+    for (final key in ['onboarding-password', 'onboarding-confirm']) {
+      final toggle = find.descendant(
+        of: find.byKey(Key(key)),
+        matching: find.byKey(const Key('password-visibility')),
+      );
+      expect(toggle, findsOneWidget, reason: key);
+      final field = find.descendant(
+        of: find.byKey(Key(key)),
+        matching: find.byType(TextField),
+      );
+      expect(tester.widget<TextField>(field).obscureText, isTrue);
+      await tester.tap(toggle);
+      await tester.pump();
+      expect(tester.widget<TextField>(field).obscureText, isFalse, reason: key);
+    }
+  });
+
   testWidgets('create checks the password, shows 24 words, needs a tick', (
     tester,
   ) async {
