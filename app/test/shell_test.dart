@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:morph/src/api.dart';
 import 'package:morph/src/app.dart';
 import 'package:morph/src/shell.dart';
+import 'package:morph_webview/morph_webview.dart';
 
 class FakeMorphApi implements MorphApi {
   @override
@@ -35,6 +36,13 @@ class FakeMorphApi implements MorphApi {
 }
 
 void main() {
+  late FakeMorphWebViewPlatform fakeWebView;
+
+  setUp(() {
+    fakeWebView = FakeMorphWebViewPlatform();
+    MorphWebViewPlatform.instance = fakeWebView;
+  });
+
   testWidgets('shell shows the address bar and core version', (tester) async {
     const missingHome = '/tmp/morph-does-not-exist';
     final api = FakeMorphApi();
@@ -44,12 +52,14 @@ void main() {
       ),
     );
     await tester.pump();
+    await tester.pump();
 
     expect(find.byKey(const Key('address-bar')), findsOneWidget);
     expect(find.textContaining('morph-core 0.1.0'), findsOneWidget);
     expect(find.textContaining('Home exists false'), findsOneWidget);
 
     await tester.tap(find.text('Ping page bridge'));
+    await tester.pump();
     await tester.pump();
     expect(find.textContaining('pong'), findsOneWidget);
 
@@ -65,6 +75,7 @@ void main() {
     await tester.pumpWidget(
       MorphApp(api: FakeMorphApi(), subscribeToTicks: false),
     );
+    await tester.pump();
     await tester.pump();
     expect(find.text('Morph'), findsOneWidget);
   });

@@ -2,12 +2,12 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:morph_webview/morph_webview.dart';
 
 import 'api.dart';
 
-/// First-slice Morph shell: address bar chrome plus Rust wiring checks.
-/// The live web view (Linux texture backend and Android in-app web view)
-/// is the rest of milestone M1.
+/// Morph shell: address-bar chrome, Linux web-view texture, and Rust wiring.
 class MorphShell extends StatefulWidget {
   const MorphShell({
     super.key,
@@ -33,6 +33,7 @@ class MorphShellState extends State<MorphShell> {
   final TextEditingController address = TextEditingController(
     text: 'https://example.com',
   );
+  late final MorphWebViewController webView;
   String? coreVersionLabel;
   String? identityHome;
   bool? homeExists;
@@ -41,11 +42,33 @@ class MorphShellState extends State<MorphShell> {
   String? pageReply;
   int? tick;
   StreamSubscription<int>? _ticks;
+  StreamSubscription<MorphNavigationEvent>? _navSub;
+  StreamSubscription<String>? _pageSub;
+  MorphNavigationEvent navigation = const MorphNavigationEvent(url: '');
+  String userScript = '';
+  bool ready = false;
   Object? error;
 
   @override
   void initState() {
     super.initState();
+    webView = MorphWebViewController(initialUrl: address.text);
+    _navSub = webView.navigation.listen((event) {
+      if (!mounted) {
+        return;
+      }
+      final previousUrl = navigation.url;
+      setState(() {
+        navigation = event;
+        if (event.url.isNotEmpty && event.url != previousUrl) {
+          address.value = address.value.copyWith(
+            text: event.url,
+            selection: TextSelection.collapsed(offset: event.url.length),
+          );
+        }
+      });
+    });
+    _pageSub = webView.pageMessages.listen(_onPageMessage);
     unawaited(_load());
   }
 
@@ -65,6 +88,12 @@ class MorphShellState extends State<MorphShell> {
     try {
       final version = widget.api.coreVersion();
       final info = await widget.api.identityDirInfo(home: _home);
+      var script = '';
+      try {
+        script = await rootBundle.loadString('assets/morph-bridge.js');
+      } catch (_) {
+        // Tests or a missing asset still get the native morphRust shim.
+      }
       if (!mounted) {
         return;
       }
@@ -72,6 +101,8 @@ class MorphShellState extends State<MorphShell> {
         coreVersionLabel = version;
         identityHome = info.home;
         homeExists = info.homeExists;
+        userScript = script;
+        ready = true;
         error = null;
       });
       await _ticks?.cancel();
@@ -83,6 +114,26 @@ class MorphShellState extends State<MorphShell> {
           }
         });
       }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          error = e;
+          ready = true;
+        });
+      }
+    }
+  }
+
+  Future<void> _onPageMessage(String json) async {
+    try {
+      final reply = await widget.api.handlePageMessage(json: json);
+      if (!mounted) {
+        return;
+      }
+      setState(() => pageReply = reply);
+      await webView.evaluateJavaScript(
+        'window.MorphBridge && MorphBridge.deliver($reply);',
+      );
     } catch (e) {
       if (mounted) {
         setState(() => error = e);
@@ -108,6 +159,18 @@ class MorphShellState extends State<MorphShell> {
   }
 
   Future<void> _pingPage() async {
+    if (webView.isAttached) {
+      try {
+        await webView.evaluateJavaScript(
+          'window.MorphBridge && MorphBridge.ping();',
+        );
+      } catch (e) {
+        if (mounted) {
+          setState(() => error = e);
+        }
+      }
+      return;
+    }
     try {
       final reply = await widget.api.handlePageMessage(
         json: '{"id":"1","type":"ping"}',
@@ -123,9 +186,24 @@ class MorphShellState extends State<MorphShell> {
     }
   }
 
+  Future<void> _submitUrl(String raw) async {
+    var url = raw.trim();
+    if (url.isEmpty) {
+      return;
+    }
+    if (!url.contains('://')) {
+      url = 'https://$url';
+      address.text = url;
+    }
+    await webView.loadUrl(url);
+  }
+
   @override
   void dispose() {
     unawaited(_ticks?.cancel());
+    unawaited(_navSub?.cancel());
+    unawaited(_pageSub?.cancel());
+    unawaited(webView.dispose());
     address.dispose();
     super.dispose();
   }
@@ -141,20 +219,20 @@ class MorphShellState extends State<MorphShell> {
           children: [
             Row(
               children: [
-                const IconButton(
-                  onPressed: null,
+                IconButton(
+                  onPressed: navigation.canGoBack ? webView.goBack : null,
                   tooltip: 'Back',
-                  icon: Icon(Icons.arrow_back),
+                  icon: const Icon(Icons.arrow_back),
                 ),
-                const IconButton(
-                  onPressed: null,
+                IconButton(
+                  onPressed: navigation.canGoForward ? webView.goForward : null,
                   tooltip: 'Forward',
-                  icon: Icon(Icons.arrow_forward),
+                  icon: const Icon(Icons.arrow_forward),
                 ),
-                const IconButton(
-                  onPressed: null,
+                IconButton(
+                  onPressed: webView.isAttached ? webView.reload : null,
                   tooltip: 'Reload',
-                  icon: Icon(Icons.refresh),
+                  icon: const Icon(Icons.refresh),
                 ),
                 Expanded(
                   child: TextField(
@@ -166,20 +244,22 @@ class MorphShellState extends State<MorphShell> {
                     ),
                     keyboardType: TextInputType.url,
                     textInputAction: TextInputAction.go,
+                    onSubmitted: _submitUrl,
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 8),
             if (error != null) Text('Error: $error'),
             Text('morph-core ${coreVersionLabel ?? "…"}'),
             Text('Tick ${tick ?? "…"}'),
             Text('Home ${identityHome ?? "…"}'),
             if (homeExists != null) Text('Home exists $homeExists'),
+            Text('Render ${webView.renderPath}'),
             if (userId != null) Text('User $userId'),
             if (fingerprint != null) Text('Fingerprint $fingerprint'),
             if (pageReply != null) Text('Page $pageReply'),
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
             Wrap(
               spacing: 8,
               children: [
@@ -192,6 +272,17 @@ class MorphShellState extends State<MorphShell> {
                   child: const Text('Ping page bridge'),
                 ),
               ],
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: ready
+                  ? MorphWebView(
+                      key: const Key('web-view'),
+                      controller: webView,
+                      userScript: userScript,
+                      placeholder: const Center(child: Text('Loading page…')),
+                    )
+                  : const Center(child: CircularProgressIndicator()),
             ),
           ],
         ),

@@ -41,6 +41,9 @@ jobs:
       - run: flutter pub get
       - run: flutter analyze
       - run: flutter test
+      - name: morph_webview tests
+        run: flutter test
+        working-directory: packages/morph_webview
 
   linux:
     runs-on: ubuntu-22.04
@@ -60,7 +63,7 @@ jobs:
       - name: Linux build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libwebkit2gtk-4.1-dev libegl-dev
         working-directory: .
       - run: flutter pub get
       - run: flutter build linux
