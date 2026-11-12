@@ -90,12 +90,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "org.weirdbrains" "\0"
-            VALUE "FileDescription", "morph" "\0"
+            VALUE "FileDescription", "Morph" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "morph" "\0"
+            VALUE "InternalName", "Morph" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 org.weirdbrains. All rights reserved." "\0"
             VALUE "OriginalFilename", "morph.exe" "\0"
-            VALUE "ProductName", "morph" "\0"
+            VALUE "ProductName", "Morph" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END
