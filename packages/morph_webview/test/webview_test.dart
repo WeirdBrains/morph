@@ -48,6 +48,32 @@ void main() {
     expect(controller.currentNavigation.url, 'https://example.com');
   });
 
+  testWidgets('queues loadUrl until the session attaches', (tester) async {
+    final controller = MorphWebViewController(initialUrl: 'about:blank');
+    addTearDown(controller.dispose);
+
+    await controller.loadUrl('https://example.com');
+    expect(fake.loadedUrls, isEmpty);
+    expect(fake.lastSession, isNull);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SizedBox(
+          width: 400,
+          height: 300,
+          child: MorphWebView(controller: controller),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+    await tester.pump();
+
+    expect(fake.loadedUrls, contains('https://example.com'));
+    expect(fake.loadedUrls, isNot(contains('about:blank')));
+    expect(controller.currentNavigation.url, 'https://example.com');
+  });
+
   testWidgets('embeds a platform view when the session provides one', (
     tester,
   ) async {

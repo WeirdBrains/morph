@@ -19,12 +19,18 @@ class MorphShell extends StatefulWidget {
     required this.api,
     this.home,
     this.subscribeToTicks = true,
+    this.loadPageBridgeAsset = true,
   });
 
   final MorphApi api;
 
   /// Widget tests turn this off so a live tick stream cannot stall the tester.
   final bool subscribeToTicks;
+
+  /// Widget tests turn this off: loading `assets/morph-bridge.js` can stall
+  /// inside the fake async zone, and the in-memory fake web view does not
+  /// need the page-bridge script to accept a typed URL.
+  final bool loadPageBridgeAsset;
 
   /// Override for tests and `MORPH_HOME`. Null falls back to the environment,
   /// then to Rust's default (`~/.morph`) without creating it.
@@ -106,10 +112,12 @@ class MorphShellState extends State<MorphShell> {
         error = null;
       });
       var script = '';
-      try {
-        script = await rootBundle.loadString('assets/morph-bridge.js');
-      } catch (_) {
-        // Tests or a missing asset still get the native morphRust shim.
+      if (widget.loadPageBridgeAsset) {
+        try {
+          script = await rootBundle.loadString('assets/morph-bridge.js');
+        } catch (_) {
+          // A missing asset still gets the native morphRust shim.
+        }
       }
       if (!mounted) {
         return;
@@ -301,6 +309,13 @@ class MorphShellState extends State<MorphShell> {
                               textInputAction: TextInputAction.go,
                               onSubmitted: _submitUrl,
                             ),
+                          ),
+                          IconButton(
+                            key: const Key('address-go'),
+                            onPressed: () =>
+                                unawaited(_submitUrl(address.text)),
+                            tooltip: 'Go',
+                            icon: const Icon(Icons.arrow_outward),
                           ),
                           const MorphWindowDragArea(
                             child: SizedBox(width: 8, height: double.infinity),

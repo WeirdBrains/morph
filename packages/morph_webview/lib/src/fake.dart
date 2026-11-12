@@ -50,8 +50,6 @@ class FakeMorphWebViewSession extends MorphWebViewSession {
   }) : _nav = MorphNavigationEvent(url: url, title: 'Fake', progress: 1) {
     history.add(url);
     historyIndex = 0;
-    // Emit the first navigation on the next microtask so listeners can attach.
-    scheduleMicrotask(() => _navController.add(_nav));
   }
 
   @override
@@ -75,7 +73,22 @@ class FakeMorphWebViewSession extends MorphWebViewSession {
   final List<String> evaluated = [];
 
   @override
-  Stream<MorphNavigationEvent> get navigation => _navController.stream;
+  Stream<MorphNavigationEvent> get navigation {
+    // Schedule the initial event when a listener attaches, not in the
+    // constructor: async create() would otherwise publish it before
+    // MorphWebViewController can subscribe.
+    if (!_initialNavScheduled) {
+      _initialNavScheduled = true;
+      scheduleMicrotask(() {
+        if (!_navController.isClosed) {
+          _navController.add(_nav);
+        }
+      });
+    }
+    return _navController.stream;
+  }
+
+  bool _initialNavScheduled = false;
 
   @override
   Stream<String> get pageMessages => _pageController.stream;
