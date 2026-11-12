@@ -252,4 +252,93 @@ class FakeMorphApi implements MorphApi {
   Future<void> clearHistory(String profileId, {String? home}) async {
     historyByProfile.remove(profileId);
   }
+
+  final identitiesByProfile = <String, MorphIdentity>{};
+  final _sealed = <String, ({String words, String password})>{};
+  var _nextUser = 1;
+
+  /// Fake words: the user id they restore is encoded in the first word.
+  static String fakeWords(String userId) =>
+      [userId, for (var i = 1; i < 24; i++) 'word$i'].join(' ');
+
+  /// When true, a profile without a stored identity reports a stock one, so
+  /// shell tests that are not about onboarding never see it.
+  bool onboarded = true;
+
+  @override
+  Future<MorphIdentity?> profileIdentity(
+    String profileId, {
+    String? home,
+  }) async =>
+      identitiesByProfile[profileId] ??
+      (onboarded
+          ? MorphIdentity(
+              userId: 'stock-$profileId'.padRight(32, '0'),
+              fingerprint: 'fp-stock-$profileId',
+            )
+          : null);
+
+  void _checkNew(String profileId, String password) {
+    if (identitiesByProfile.containsKey(profileId)) {
+      throw StateError('this profile already has an identity');
+    }
+    if (password.length < 8) {
+      throw StateError('password must be at least 8 characters');
+    }
+  }
+
+  @override
+  Future<MorphNewIdentity> createProfileIdentity(
+    String profileId,
+    String password, {
+    String? home,
+  }) async {
+    _checkNew(profileId, password);
+    final userId = 'user${_nextUser++}'.padRight(32, '0');
+    final identity = MorphIdentity(
+      userId: userId,
+      fingerprint: 'fp-$userId',
+      created: DateTime.now(),
+    );
+    identitiesByProfile[profileId] = identity;
+    final words = fakeWords(userId);
+    _sealed[profileId] = (words: words, password: password);
+    return MorphNewIdentity(identity: identity, words: words);
+  }
+
+  @override
+  Future<MorphIdentity> importProfileIdentity(
+    String profileId,
+    String words,
+    String password, {
+    String? home,
+  }) async {
+    _checkNew(profileId, password);
+    final parts = words.trim().split(RegExp(r'\s+'));
+    if (parts.length != 24) {
+      throw StateError('expected 24 recovery words');
+    }
+    final identity = MorphIdentity(
+      userId: parts.first,
+      fingerprint: 'fp-${parts.first}',
+      created: DateTime.now(),
+      imported: true,
+    );
+    identitiesByProfile[profileId] = identity;
+    _sealed[profileId] = (words: words.trim(), password: password);
+    return identity;
+  }
+
+  @override
+  Future<String> profileRecoveryWords(
+    String profileId,
+    String password, {
+    String? home,
+  }) async {
+    final sealed = _sealed[profileId];
+    if (sealed == null || sealed.password != password) {
+      throw StateError('wrong password');
+    }
+    return sealed.words;
+  }
 }
