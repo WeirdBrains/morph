@@ -520,4 +520,78 @@ void main() {
       debugDefaultTargetPlatformOverride = null;
     }
   });
+
+  testWidgets('switching desktop tabs restores each tab URL and page', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    final view = tester.view;
+    view.physicalSize = const Size(1280, 800);
+    view.devicePixelRatio = 1.0;
+    addTearDown(view.reset);
+    try {
+      await tester.pumpWidget(
+        MorphApp(
+          api: FakeMorphApi(),
+          home: '/tmp/morph-does-not-exist',
+          subscribeToTicks: false,
+          loadPageBridgeAsset: false,
+        ),
+      );
+      await _pumpUntilIdentity(tester);
+
+      await tester.enterText(
+        find.byKey(const Key('address-bar')),
+        'one.example',
+      );
+      await tester.tap(find.byKey(const Key('address-go')));
+      await tester.pump();
+      await _pumpUntilWebViewAttached(tester, fakeWebView);
+      expect(find.byKey(const Key('start-page')), findsNothing);
+
+      await tester.tap(find.byKey(const Key('tab-new')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('start-page')), findsOneWidget);
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const Key('address-bar')))
+            .controller!
+            .text,
+        isEmpty,
+      );
+
+      await tester.enterText(
+        find.byKey(const Key('address-bar')),
+        'two.example',
+      );
+      await tester.tap(find.byKey(const Key('address-go')));
+      await tester.pump();
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('start-page')), findsNothing);
+
+      await tester.tap(find.byKey(const Key('tab-1')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('start-page')), findsNothing);
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const Key('address-bar')))
+            .controller!
+            .text,
+        'one.example',
+      );
+
+      await tester.tap(find.byKey(const Key('tab-2')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('start-page')), findsNothing);
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const Key('address-bar')))
+            .controller!
+            .text,
+        'two.example',
+      );
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
 }

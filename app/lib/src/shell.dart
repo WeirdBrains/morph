@@ -104,8 +104,9 @@ class MorphShellState extends State<MorphShell> {
     if (!mounted) {
       return;
     }
-    _navEvents[id] = event;
-    if (event.url.isNotEmpty && event.url != 'about:blank') {
+    final hasUrl = event.url.isNotEmpty && event.url != 'about:blank';
+    if (hasUrl) {
+      _navEvents[id] = event;
       tabs.update(id, url: event.url, title: event.title);
       _visited[id] = true;
     } else if (event.title.isNotEmpty) {
@@ -116,11 +117,15 @@ class MorphShellState extends State<MorphShell> {
       return;
     }
     setState(() {
-      navigation = event;
-      if (event.url.isNotEmpty && event.url != 'about:blank') {
+      if (hasUrl) {
+        navigation = event;
         _canonicalAddress = event.url;
         _applyAddressDisplay();
+      } else if (!_tabHasPage(id)) {
+        navigation = event;
       }
+      // Ignore a blank or about:blank event on a tab that already has a
+      // page so a resume snapshot cannot flash the start page.
     });
   }
 
@@ -295,13 +300,28 @@ class MorphShellState extends State<MorphShell> {
     }
   }
 
-  bool get _onStartPage {
-    if (!(_visited[tabs.activeId] ?? false)) {
+  bool _isRealUrl(String url) => url.isNotEmpty && url != 'about:blank';
+
+  String _urlForTab(MorphTab tab) {
+    final fromEvent = _navEvents[tab.id]?.url ?? '';
+    if (_isRealUrl(fromEvent)) {
+      return fromEvent;
+    }
+    return tab.url;
+  }
+
+  bool _tabHasPage(int id) {
+    if (_visited[id] ?? false) {
       return true;
     }
-    final url = navigation.url.isEmpty ? address.text : navigation.url;
-    return url.isEmpty || url == 'about:blank';
+    final tab = tabs.tab(id);
+    if (tab == null) {
+      return false;
+    }
+    return _isRealUrl(_urlForTab(tab));
   }
+
+  bool get _onStartPage => !_tabHasPage(tabs.activeId);
 
   Future<void> _submitUrl(String raw) async {
     var url = raw.trim();
@@ -431,9 +451,27 @@ class MorphShellState extends State<MorphShell> {
 
   void _syncAddressFromActive() {
     final tab = tabs.active;
-    navigation = _navEvents[tab.id] ?? MorphNavigationEvent(url: tab.url);
-    _canonicalAddress = tab.url;
-    _applyAddressDisplay();
+    final url = _urlForTab(tab);
+    final stored = _navEvents[tab.id];
+    if (stored != null && _isRealUrl(stored.url)) {
+      navigation = stored;
+    } else {
+      navigation = MorphNavigationEvent(
+        url: url,
+        title: tab.title,
+        canGoBack: stored?.canGoBack ?? false,
+        canGoForward: stored?.canGoForward ?? false,
+        progress: stored?.progress ?? 0,
+      );
+    }
+    _canonicalAddress = url;
+    final text = _isRealUrl(url) ? hostFriendlyUrl(url) : '';
+    if (address.text != text) {
+      address.value = TextEditingValue(
+        text: text,
+        selection: TextSelection.collapsed(offset: text.length),
+      );
+    }
   }
 
   Future<void> _setTabPosition(MorphTabPosition position) async {
