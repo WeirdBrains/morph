@@ -47,6 +47,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   restarts and tab recreation. `window.open` / new-window requests open a
   related view instead of being dropped. macOS, Windows, and Android keep
   the shared, non-incognito cookie store used by flutter_inappwebview.
+- Windows isolates each Morph profile with a WebView2
+  `WebViewEnvironment` whose `userDataFolder` is
+  `<morph home>/profiles/<id>/webview2`. macOS 14+ uses
+  `WKWebsiteDataStore(forIdentifier:)` via a creation hook; earlier
+  macOS keeps the default store. Android still uses the process-wide
+  WebView store (`dataDirectorySuffix` is process-global;
+  `androidx.webkit.Profile` is not exposed by flutter_inappwebview).
 - A session check covers a cross-host OAuth-style redirect (client state
   cookie set, hop to a different-host IdP, return with `code=`) so the
   callback still receives the client cookie after a simulated restart.
