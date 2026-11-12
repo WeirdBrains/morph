@@ -126,3 +126,21 @@ if(NOT CMAKE_BUILD_TYPE MATCHES "Debug")
   install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
     COMPONENT Runtime)
 endif()
+
+# Desktop entry and hicolor icons for a system or prefix install.
+# The relocatable bundle also gets a 256px icon in data/ so the
+# window can load it when the icon theme does not know Morph yet.
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/org.weirdbrains.morph.desktop"
+  DESTINATION "${CMAKE_INSTALL_PREFIX}/share/applications"
+  COMPONENT Runtime)
+foreach(SIZE 16 24 32 48 64 128 256 512)
+  install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/icons/hicolor/${SIZE}x${SIZE}/apps/${APPLICATION_ID}.png"
+    DESTINATION "${CMAKE_INSTALL_PREFIX}/share/icons/hicolor/${SIZE}x${SIZE}/apps"
+    COMPONENT Runtime)
+endforeach()
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/icons/hicolor/scalable/apps/${APPLICATION_ID}.svg"
+  DESTINATION "${CMAKE_INSTALL_PREFIX}/share/icons/hicolor/scalable/apps"
+  COMPONENT Runtime)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/data/icon.png"
+  DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
+  COMPONENT Runtime)
