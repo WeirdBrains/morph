@@ -6,6 +6,8 @@ import 'dart:ui' as ui;
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+import 'package:flutter_inappwebview_platform_interface/flutter_inappwebview_platform_interface.dart'
+    show InternalInAppWebViewKeepAlive;
 import 'package:morph_webview/control.dart';
 import 'package:morph_webview/morph_webview.dart';
 
@@ -73,6 +75,7 @@ class MorphWebViewInApp extends MorphWebViewPlatform {
     final viewId = _nextViewId++;
     await morphProfileStore.prepareMacos(profileId);
     final environment = await morphProfileStore.windowsEnvironment(profileId);
+    final android = await _AndroidView.prepare(viewId, profileId);
     final session = _InAppSession(
       viewId: viewId,
       initialUrl: initialUrl,
@@ -84,9 +87,20 @@ class MorphWebViewInApp extends MorphWebViewPlatform {
       bindings: bindings,
       onDispose: () => _forget(viewId),
       webViewEnvironment: environment,
+      android: android,
     );
     _sessions[viewId] = session;
     return session;
+  }
+
+  @override
+  Future<void> deleteProfileData(String profileId) async {
+    await morphProfileStore.deleteAndroid(profileId);
+  }
+
+  @override
+  Future<void> pruneProfileData(Iterable<String> liveProfileIds) async {
+    await morphProfileStore.pruneAndroid(liveProfileIds);
   }
 
   Future<void> _forget(int viewId) async {
@@ -108,14 +122,53 @@ String _renderPathForHost() {
   return 'wkwebview';
 }
 
-String _renderReasonForHost(String profileId) {
+String _renderReasonForHost(String profileId, {required bool isolated}) {
   if (Platform.isWindows) {
     return 'webview2 userDataFolder profiles/$profileId/webview2';
   }
   if (Platform.isAndroid) {
-    return 'android WebView is process-global; androidx.webkit Profile is not wired';
+    return isolated
+        ? 'androidx.webkit profile ${morphAndroidProfileName(profileId)}'
+        : 'android WebView lacks MULTI_PROFILE; profile $profileId blocked';
   }
   return 'wkwebview; per-profile WKWebsiteDataStore on macOS 14+';
+}
+
+/// One native Android WebView bound to a Morph profile.
+///
+/// The keep-alive id names the native WebView. MainActivity looks it up when
+/// the WebView is constructed and gives it the profile's androidx.webkit
+/// Profile before anything else touches it. Every native view (including a
+/// surface rebuild) gets a fresh id, so a rebuild never reuses a stale view.
+class _AndroidView {
+  _AndroidView(this.keepAlive, {required this.isolated});
+
+  final InAppWebViewKeepAlive keepAlive;
+
+  /// False when this device cannot keep the profile's storage apart.
+  final bool isolated;
+
+  static Future<_AndroidView?> prepare(int viewId, String profileId) async {
+    if (!Platform.isAndroid) {
+      return null;
+    }
+    final keepAlive = InAppWebViewKeepAlive()
+      ..id = 'morph-view-$viewId-${DateTime.now().microsecondsSinceEpoch}';
+    final reply = await morphProfileStore.prepareAndroid(
+      profileId,
+      keepAlive.id,
+    );
+    return _AndroidView(keepAlive, isolated: reply?.isolated ?? false);
+  }
+
+  Future<void> dispose() async {
+    await morphProfileStore.forgetAndroidView(keepAlive.id);
+    try {
+      await InAppWebViewController.disposeKeepAlive(keepAlive);
+    } catch (_) {
+      // Already gone with the engine.
+    }
+  }
 }
 
 class _InAppSession extends MorphWebViewSession {
@@ -130,10 +183,16 @@ class _InAppSession extends MorphWebViewSession {
     required this._bindings,
     required this._onDispose,
     this.webViewEnvironment,
+    _AndroidView? android,
   }) : assert(profileId.isNotEmpty),
+       _android = android,
+       isolated = android?.isolated ?? true,
        renderPath = MorphRenderPathInfo(
          path: _renderPathForHost(),
-         reason: _renderReasonForHost(profileId),
+         reason: _renderReasonForHost(
+           profileId,
+           isolated: android?.isolated ?? true,
+         ),
        ) {
     _view = _buildView(initialUrl);
     _navSub = _client.navigation.listen((event) {
@@ -151,7 +210,12 @@ class _InAppSession extends MorphWebViewSession {
   InAppWebView _buildView(String url, {int generation = 0}) {
     return InAppWebView(
       key: ValueKey<int>(generation),
-      initialUrlRequest: URLRequest(url: WebUri(url)),
+      keepAlive: _android?.keepAlive,
+      // Never load a site into shared storage for a non-default profile.
+      initialUrlRequest: isolated ? URLRequest(url: WebUri(url)) : null,
+      initialData: isolated
+          ? null
+          : InAppWebViewInitialData(data: morphAndroidUnisolatedHtml),
       webViewEnvironment: webViewEnvironment,
       initialSettings: morphInAppWebViewSettings(),
       initialUserScripts: UnmodifiableListView<UserScript>([
@@ -229,6 +293,11 @@ class _InAppSession extends MorphWebViewSession {
   final MorphControlBindings _bindings;
   final Future<void> Function() _onDispose;
   final WebViewEnvironment? webViewEnvironment;
+  _AndroidView? _android;
+
+  /// False when this profile's storage cannot be kept apart on this device;
+  /// navigation commands are then ignored.
+  final bool isolated;
   late InAppWebView _view;
   final _generation = ValueNotifier<int>(0);
   String? _lastUrl;
@@ -338,8 +407,19 @@ class _InAppSession extends MorphWebViewSession {
     _rendererGone = false;
     final url = _lastUrl ?? initialUrl;
     final next = _generation.value + 1;
+    // A keep-alive view outlives its widget, so give the rebuild its own
+    // native view (prepared for this profile) and drop the old one.
+    final previous = _android;
+    if (previous != null) {
+      _android = await _AndroidView.prepare(viewId, profileId);
+    }
     _view = _buildView(url, generation: next);
     _generation.value = next;
+    if (previous != null) {
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => unawaited(previous.dispose()),
+      );
+    }
     return true;
   }
 
@@ -398,6 +478,9 @@ class _InAppSession extends MorphWebViewSession {
     InAppWebViewController controller,
     MorphControlCommand command,
   ) async {
+    if (!isolated && command.kind == 'navigate') {
+      return;
+    }
     switch (command.kind) {
       case 'navigate':
         await controller.loadUrl(
@@ -514,6 +597,7 @@ class _InAppSession extends MorphWebViewSession {
     await _pageSub?.cancel();
     await _navController.close();
     await _pageController.close();
+    await _android?.dispose();
     await _onDispose();
   }
 }
