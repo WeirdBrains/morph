@@ -27,11 +27,19 @@ void main() {
       expect(morphFrameIsFlat(_flat(64 * 64, [255, 255, 255, 255])), isTrue);
     });
 
-    test('compression noise and a caret do not count as content', () {
+    test('rounding noise does not count as content', () {
       final frame = _flat(100 * 100, [250, 250, 250, 255]);
-      frame[0] = 253; // noise on the reference pixel's neighbour channel
-      frame[400] = 0; // one dark pixel (caret)
+      frame[401] = 252;
       expect(morphFrameIsFlat(frame), isTrue);
+    });
+
+    test('a few pixels of small text on white are content', () {
+      // A bare "403 Forbidden" in the corner of a 270 px wide capture.
+      final frame = _flat(270 * 600, [255, 255, 255, 255]);
+      for (final i in [5000, 5001, 5004, 5270, 5275, 5540]) {
+        frame.setRange(i * 4, i * 4 + 3, [120, 120, 120]);
+      }
+      expect(morphFrameIsFlat(frame), isFalse);
     });
 
     test('text on white is not flat', () {
@@ -170,7 +178,30 @@ void main() {
       await controller.dispose();
     });
 
-    test('a blank surface is rebuilt and checked again', () async {
+    test('a blank surface is confirmed, rebuilt and checked again', () async {
+      final controller = MorphWebViewController(
+        initialUrl: 'about:blank',
+        surfaceSettle: Duration.zero,
+      );
+      await controller.attach(width: 412, height: 800, devicePixelRatio: 2);
+      final session = fake.lastSession!;
+      session.surfaceVerdicts.addAll([
+        MorphSurfaceVerdict.blank,
+        MorphSurfaceVerdict.blank,
+        MorphSurfaceVerdict.healthy,
+      ]);
+      expect(
+        await controller.ensureSurfaceHealthy(),
+        MorphSurfaceVerdict.healthy,
+      );
+      expect(session.surfaceRebuilds, 1);
+      expect(session.surfaceRepaints, 2);
+      expect(session.surfaceChecks, 3);
+      expect(controller.surfaceRebuilds, 1);
+      await controller.dispose();
+    });
+
+    test('a surface that paints after a second nudge is not rebuilt', () async {
       final controller = MorphWebViewController(
         initialUrl: 'about:blank',
         surfaceSettle: Duration.zero,
@@ -185,9 +216,8 @@ void main() {
         await controller.ensureSurfaceHealthy(),
         MorphSurfaceVerdict.healthy,
       );
-      expect(session.surfaceRebuilds, 1);
-      expect(session.surfaceChecks, 2);
-      expect(controller.surfaceRebuilds, 1);
+      expect(session.surfaceRebuilds, 0);
+      expect(session.surfaceRepaints, 2);
       await controller.dispose();
     });
 
