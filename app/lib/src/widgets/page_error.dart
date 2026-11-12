@@ -15,7 +15,8 @@ import 'brand.dart';
     MorphLoadErrorKind.certificate => (
       "This connection isn't private",
       '$site sent a security certificate Morph cannot trust, so the page '
-          'was not loaded. ${error.message} Check the address for a typo.',
+          'was not loaded. ${_sentence(error.message)}Check the address for '
+          'a typo.',
     ),
     MorphLoadErrorKind.notFound => (
       "Can't find $site",
@@ -35,6 +36,17 @@ import 'brand.dart';
       error.message.isEmpty ? 'Try again in a moment.' : error.message,
     ),
   };
+}
+
+/// [text] as a sentence followed by a space ("Hostname mismatch" →
+/// "Hostname mismatch. "), or nothing when empty.
+String _sentence(String text) {
+  final trimmed = text.trim();
+  if (trimmed.isEmpty) {
+    return '';
+  }
+  final last = trimmed[trimmed.length - 1];
+  return '.!?'.contains(last) ? '$trimmed ' : '$trimmed. ';
 }
 
 /// Covers one tab with Morph's error page while its last main-frame load
