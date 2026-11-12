@@ -1,4 +1,5 @@
 pub mod control;
+pub mod device_link;
 pub mod events;
 pub mod identity;
 pub mod info;

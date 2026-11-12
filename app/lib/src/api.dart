@@ -141,6 +141,101 @@ abstract class MorphApi {
     String password, {
     String? home,
   });
+
+  // --- Login over a QR code (weirdnet-device-link) ---------------------
+  //
+  // The new device listens and shows a QR; the existing device scans it,
+  // both show the same six digits, and only after the user confirms them the
+  // identity moves over, sealed. Seeds, keys and passwords stay in Rust.
+
+  /// New device: listen and make a fresh offer (valid two minutes).
+  /// [deviceName] is shown on the other device.
+  Future<MorphLinkOffer> linkNewDeviceStart(String deviceName);
+  Future<MorphLinkStatus> linkNewDeviceStatus(int session);
+
+  /// New device: the user tapped "Codes match".
+  Future<void> linkNewDeviceConfirm(int session);
+
+  /// New device: store the identity that arrived in [profileId], sealed
+  /// under [password].
+  Future<MorphIdentity> linkNewDeviceFinish(
+    String profileId,
+    int session,
+    String password, {
+    String? home,
+  });
+  Future<void> linkNewDeviceCancel(int session);
+
+  /// Existing device: check [profileId]'s [password], read [link] (scanned
+  /// or pasted) and pair with the new device.
+  Future<MorphLinkPairing> linkAddDeviceStart(
+    String profileId,
+    String profileName,
+    String password,
+    String link, {
+    String? home,
+  });
+
+  /// Existing device: the codes match; send the identity.
+  Future<void> linkAddDeviceSend(int session);
+  Future<void> linkAddDeviceCancel(int session);
+}
+
+/// A new device's offer: [link] is what the QR code encodes.
+class MorphLinkOffer {
+  const MorphLinkOffer({
+    required this.session,
+    required this.link,
+    required this.expires,
+  });
+
+  final int session;
+  final String link;
+  final DateTime expires;
+}
+
+enum MorphLinkState {
+  waiting,
+  paired,
+  received,
+  done,
+  cancelled,
+  expired,
+  failed,
+}
+
+/// Where a new device's link stands. [sas] is set while paired or received.
+class MorphLinkStatus {
+  const MorphLinkStatus(this.state, {this.sas, this.reason});
+
+  final MorphLinkState state;
+  final String? sas;
+  final String? reason;
+
+  bool get ended => switch (state) {
+    MorphLinkState.done ||
+    MorphLinkState.cancelled ||
+    MorphLinkState.expired ||
+    MorphLinkState.failed => true,
+    _ => false,
+  };
+}
+
+/// An existing device paired with a scanned link.
+class MorphLinkPairing {
+  const MorphLinkPairing({
+    required this.session,
+    required this.sas,
+    required this.device,
+  });
+
+  final int session;
+
+  /// Six digits; the user compares them with the new device's screen.
+  final String sas;
+
+  /// What the new device calls itself.
+  final String device;
 }
 
 /// Public facts about a profile's identity.
@@ -150,12 +245,16 @@ class MorphIdentity {
     required this.fingerprint,
     this.created,
     this.imported = false,
+    this.linked = false,
   });
 
   final String userId;
   final String fingerprint;
   final DateTime? created;
   final bool imported;
+
+  /// Moved here from another device over a QR link.
+  final bool linked;
 }
 
 /// A just-created identity and its recovery words.

@@ -39,7 +39,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.13.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -803713452;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 253538829;
 
 // Section: executor
 
@@ -602,6 +602,226 @@ fn wire__crate__api__identity__import_profile_identity_impl(
             move |context| {
                 transform_result_sse::<_, String>((move || {
                     let output_ok = crate::api::identity::import_profile_identity(api_home, api_profile_id, api_words, api_password)?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__device_link__link_add_device_cancel_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "link_add_device_cancel",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe { flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(ptr_, rust_vec_len_, data_len_) };
+            let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_session = <u64>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok = Ok::<_, ()>({
+                        crate::api::device_link::link_add_device_cancel(api_session);
+                    })?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__device_link__link_add_device_send_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "link_add_device_send",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe { flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(ptr_, rust_vec_len_, data_len_) };
+            let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_session = <u64>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::device_link::link_add_device_send(api_session)?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__device_link__link_add_device_start_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "link_add_device_start",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe { flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(ptr_, rust_vec_len_, data_len_) };
+            let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_home = <Option<String>>::sse_decode(&mut deserializer);
+            let api_profile_id = <String>::sse_decode(&mut deserializer);
+            let api_profile_name = <String>::sse_decode(&mut deserializer);
+            let api_password = <String>::sse_decode(&mut deserializer);
+            let api_link = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok =
+                        crate::api::device_link::link_add_device_start(api_home, api_profile_id, api_profile_name, api_password, api_link)?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__device_link__link_new_device_cancel_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "link_new_device_cancel",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe { flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(ptr_, rust_vec_len_, data_len_) };
+            let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_session = <u64>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok = Ok::<_, ()>({
+                        crate::api::device_link::link_new_device_cancel(api_session);
+                    })?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__device_link__link_new_device_confirm_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "link_new_device_confirm",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe { flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(ptr_, rust_vec_len_, data_len_) };
+            let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_session = <u64>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::device_link::link_new_device_confirm(api_session)?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__device_link__link_new_device_finish_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "link_new_device_finish",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe { flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(ptr_, rust_vec_len_, data_len_) };
+            let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_home = <Option<String>>::sse_decode(&mut deserializer);
+            let api_profile_id = <String>::sse_decode(&mut deserializer);
+            let api_session = <u64>::sse_decode(&mut deserializer);
+            let api_password = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::device_link::link_new_device_finish(api_home, api_profile_id, api_session, api_password)?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__device_link__link_new_device_start_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "link_new_device_start",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe { flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(ptr_, rust_vec_len_, data_len_) };
+            let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_device_name = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::device_link::link_new_device_start(api_device_name)?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__device_link__link_new_device_status_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "link_new_device_status",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe { flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(ptr_, rust_vec_len_, data_len_) };
+            let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_session = <u64>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::device_link::link_new_device_status(api_session)?;
                     std::result::Result::Ok(output_ok)
                 })())
             }
@@ -1454,6 +1674,36 @@ impl SseDecode for crate::api::identity::IdentityStatusView {
     }
 }
 
+impl SseDecode for crate::api::device_link::LinkOfferView {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_session = <u64>::sse_decode(deserializer);
+        let mut var_link = <String>::sse_decode(deserializer);
+        let mut var_expiresMs = <i64>::sse_decode(deserializer);
+        return crate::api::device_link::LinkOfferView { session: var_session, link: var_link, expires_ms: var_expiresMs };
+    }
+}
+
+impl SseDecode for crate::api::device_link::LinkPairingView {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_session = <u64>::sse_decode(deserializer);
+        let mut var_sas = <String>::sse_decode(deserializer);
+        let mut var_device = <String>::sse_decode(deserializer);
+        return crate::api::device_link::LinkPairingView { session: var_session, sas: var_sas, device: var_device };
+    }
+}
+
+impl SseDecode for crate::api::device_link::LinkStatusView {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_state = <String>::sse_decode(deserializer);
+        let mut var_sas = <Option<String>>::sse_decode(deserializer);
+        let mut var_reason = <Option<String>>::sse_decode(deserializer);
+        return crate::api::device_link::LinkStatusView { state: var_state, sas: var_sas, reason: var_reason };
+    }
+}
+
 impl SseDecode for Vec<String> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -1578,11 +1828,13 @@ impl SseDecode for crate::api::identity::ProfileIdentityView {
         let mut var_fingerprint = <String>::sse_decode(deserializer);
         let mut var_createdMs = <i64>::sse_decode(deserializer);
         let mut var_imported = <bool>::sse_decode(deserializer);
+        let mut var_linked = <bool>::sse_decode(deserializer);
         return crate::api::identity::ProfileIdentityView {
             user_id: var_userId,
             fingerprint: var_fingerprint,
             created_ms: var_createdMs,
             imported: var_imported,
+            linked: var_linked,
         };
     }
 }
@@ -1688,29 +1940,37 @@ fn pde_ffi_dispatcher_primary_impl(
         18 => wire__crate__api__page__handle_page_message_impl(port, ptr, rust_vec_len, data_len),
         19 => wire__crate__api__identity__identity_dir_info_impl(port, ptr, rust_vec_len, data_len),
         20 => wire__crate__api__identity__import_profile_identity_impl(port, ptr, rust_vec_len, data_len),
-        21 => wire__crate__api__library__list_bookmarks_impl(port, ptr, rust_vec_len, data_len),
-        22 => wire__crate__api__library__list_history_impl(port, ptr, rust_vec_len, data_len),
-        23 => wire__crate__api__profiles__list_profiles_impl(port, ptr, rust_vec_len, data_len),
-        24 => wire__crate__api__settings__load_settings_impl(port, ptr, rust_vec_len, data_len),
-        25 => wire__crate__api__library__move_bookmark_item_impl(port, ptr, rust_vec_len, data_len),
-        26 => wire__crate__api__identity__new_ephemeral_user_impl(port, ptr, rust_vec_len, data_len),
-        27 => wire__crate__api__identity__profile_identity_impl(port, ptr, rust_vec_len, data_len),
-        28 => wire__crate__api__profiles__profile_paths_impl(port, ptr, rust_vec_len, data_len),
-        29 => wire__crate__api__identity__profile_recovery_words_impl(port, ptr, rust_vec_len, data_len),
-        30 => wire__crate__api__library__record_visit_impl(port, ptr, rust_vec_len, data_len),
-        31 => wire__crate__api__library__remove_bookmark_impl(port, ptr, rust_vec_len, data_len),
-        32 => wire__crate__api__library__rename_bookmark_folder_impl(port, ptr, rust_vec_len, data_len),
-        33 => wire__crate__api__profiles__rename_profile_impl(port, ptr, rust_vec_len, data_len),
-        34 => wire__crate__api__library__search_bookmarks_impl(port, ptr, rust_vec_len, data_len),
-        35 => wire__crate__api__profiles__set_current_profile_impl(port, ptr, rust_vec_len, data_len),
-        36 => wire__crate__api__settings__set_sidebar_collapsed_impl(port, ptr, rust_vec_len, data_len),
-        37 => wire__crate__api__settings__set_sidebar_width_impl(port, ptr, rust_vec_len, data_len),
-        38 => wire__crate__api__settings__set_tab_position_impl(port, ptr, rust_vec_len, data_len),
-        39 => wire__crate__api__control__start_webview_control_impl(port, ptr, rust_vec_len, data_len),
-        40 => wire__crate__api__control__start_webview_control_in_impl(port, ptr, rust_vec_len, data_len),
-        41 => wire__crate__api__control__start_webview_control_loopback_impl(port, ptr, rust_vec_len, data_len),
-        42 => wire__crate__api__control__stop_webview_control_impl(port, ptr, rust_vec_len, data_len),
-        43 => wire__crate__api__library__update_bookmark_impl(port, ptr, rust_vec_len, data_len),
+        21 => wire__crate__api__device_link__link_add_device_cancel_impl(port, ptr, rust_vec_len, data_len),
+        22 => wire__crate__api__device_link__link_add_device_send_impl(port, ptr, rust_vec_len, data_len),
+        23 => wire__crate__api__device_link__link_add_device_start_impl(port, ptr, rust_vec_len, data_len),
+        24 => wire__crate__api__device_link__link_new_device_cancel_impl(port, ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__device_link__link_new_device_confirm_impl(port, ptr, rust_vec_len, data_len),
+        26 => wire__crate__api__device_link__link_new_device_finish_impl(port, ptr, rust_vec_len, data_len),
+        27 => wire__crate__api__device_link__link_new_device_start_impl(port, ptr, rust_vec_len, data_len),
+        28 => wire__crate__api__device_link__link_new_device_status_impl(port, ptr, rust_vec_len, data_len),
+        29 => wire__crate__api__library__list_bookmarks_impl(port, ptr, rust_vec_len, data_len),
+        30 => wire__crate__api__library__list_history_impl(port, ptr, rust_vec_len, data_len),
+        31 => wire__crate__api__profiles__list_profiles_impl(port, ptr, rust_vec_len, data_len),
+        32 => wire__crate__api__settings__load_settings_impl(port, ptr, rust_vec_len, data_len),
+        33 => wire__crate__api__library__move_bookmark_item_impl(port, ptr, rust_vec_len, data_len),
+        34 => wire__crate__api__identity__new_ephemeral_user_impl(port, ptr, rust_vec_len, data_len),
+        35 => wire__crate__api__identity__profile_identity_impl(port, ptr, rust_vec_len, data_len),
+        36 => wire__crate__api__profiles__profile_paths_impl(port, ptr, rust_vec_len, data_len),
+        37 => wire__crate__api__identity__profile_recovery_words_impl(port, ptr, rust_vec_len, data_len),
+        38 => wire__crate__api__library__record_visit_impl(port, ptr, rust_vec_len, data_len),
+        39 => wire__crate__api__library__remove_bookmark_impl(port, ptr, rust_vec_len, data_len),
+        40 => wire__crate__api__library__rename_bookmark_folder_impl(port, ptr, rust_vec_len, data_len),
+        41 => wire__crate__api__profiles__rename_profile_impl(port, ptr, rust_vec_len, data_len),
+        42 => wire__crate__api__library__search_bookmarks_impl(port, ptr, rust_vec_len, data_len),
+        43 => wire__crate__api__profiles__set_current_profile_impl(port, ptr, rust_vec_len, data_len),
+        44 => wire__crate__api__settings__set_sidebar_collapsed_impl(port, ptr, rust_vec_len, data_len),
+        45 => wire__crate__api__settings__set_sidebar_width_impl(port, ptr, rust_vec_len, data_len),
+        46 => wire__crate__api__settings__set_tab_position_impl(port, ptr, rust_vec_len, data_len),
+        47 => wire__crate__api__control__start_webview_control_impl(port, ptr, rust_vec_len, data_len),
+        48 => wire__crate__api__control__start_webview_control_in_impl(port, ptr, rust_vec_len, data_len),
+        49 => wire__crate__api__control__start_webview_control_loopback_impl(port, ptr, rust_vec_len, data_len),
+        50 => wire__crate__api__control__stop_webview_control_impl(port, ptr, rust_vec_len, data_len),
+        51 => wire__crate__api__library__update_bookmark_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -1889,6 +2149,42 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::identity::IdentityStatusView>
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::device_link::LinkOfferView {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [self.session.into_into_dart().into_dart(), self.link.into_into_dart().into_dart(), self.expires_ms.into_into_dart().into_dart()].into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::device_link::LinkOfferView {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::device_link::LinkOfferView> for crate::api::device_link::LinkOfferView {
+    fn into_into_dart(self) -> crate::api::device_link::LinkOfferView {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::device_link::LinkPairingView {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [self.session.into_into_dart().into_dart(), self.sas.into_into_dart().into_dart(), self.device.into_into_dart().into_dart()].into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::device_link::LinkPairingView {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::device_link::LinkPairingView> for crate::api::device_link::LinkPairingView {
+    fn into_into_dart(self) -> crate::api::device_link::LinkPairingView {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::device_link::LinkStatusView {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [self.state.into_into_dart().into_dart(), self.sas.into_into_dart().into_dart(), self.reason.into_into_dart().into_dart()].into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::device_link::LinkStatusView {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::device_link::LinkStatusView> for crate::api::device_link::LinkStatusView {
+    fn into_into_dart(self) -> crate::api::device_link::LinkStatusView {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::identity::ProfileIdentityView {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
@@ -1896,6 +2192,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::identity::ProfileIdentityView
             self.fingerprint.into_into_dart().into_dart(),
             self.created_ms.into_into_dart().into_dart(),
             self.imported.into_into_dart().into_dart(),
+            self.linked.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -2122,6 +2419,33 @@ impl SseEncode for crate::api::identity::IdentityStatusView {
     }
 }
 
+impl SseEncode for crate::api::device_link::LinkOfferView {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <u64>::sse_encode(self.session, serializer);
+        <String>::sse_encode(self.link, serializer);
+        <i64>::sse_encode(self.expires_ms, serializer);
+    }
+}
+
+impl SseEncode for crate::api::device_link::LinkPairingView {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <u64>::sse_encode(self.session, serializer);
+        <String>::sse_encode(self.sas, serializer);
+        <String>::sse_encode(self.device, serializer);
+    }
+}
+
+impl SseEncode for crate::api::device_link::LinkStatusView {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.state, serializer);
+        <Option<String>>::sse_encode(self.sas, serializer);
+        <Option<String>>::sse_encode(self.reason, serializer);
+    }
+}
+
 impl SseEncode for Vec<String> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -2229,6 +2553,7 @@ impl SseEncode for crate::api::identity::ProfileIdentityView {
         <String>::sse_encode(self.fingerprint, serializer);
         <i64>::sse_encode(self.created_ms, serializer);
         <bool>::sse_encode(self.imported, serializer);
+        <bool>::sse_encode(self.linked, serializer);
     }
 }
 

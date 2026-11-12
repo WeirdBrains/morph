@@ -131,11 +131,15 @@ class ProfileIdentityView {
   final PlatformInt64 createdMs;
   final bool imported;
 
+  /// Moved here from another device over a QR link.
+  final bool linked;
+
   const ProfileIdentityView({
     required this.userId,
     required this.fingerprint,
     required this.createdMs,
     required this.imported,
+    required this.linked,
   });
 
   @override
@@ -143,7 +147,8 @@ class ProfileIdentityView {
       userId.hashCode ^
       fingerprint.hashCode ^
       createdMs.hashCode ^
-      imported.hashCode;
+      imported.hashCode ^
+      linked.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -153,5 +158,6 @@ class ProfileIdentityView {
           userId == other.userId &&
           fingerprint == other.fingerprint &&
           createdMs == other.createdMs &&
-          imported == other.imported;
+          imported == other.imported &&
+          linked == other.linked;
 }

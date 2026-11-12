@@ -517,4 +517,87 @@ class FakeMorphApi implements MorphApi {
     }
     return sealed.words;
   }
+
+  // --- QR device linking ---------------------------------------------
+  //
+  // Tests drive the new device's side through [linkStatus] and see what the
+  // UI did in [linkCalls].
+
+  final linkCalls = <String>[];
+  MorphLinkStatus linkStatus = const MorphLinkStatus(MorphLinkState.waiting);
+  String linkSas = '042917';
+
+  /// The identity a finished link stores (the other device's).
+  MorphIdentity linkedIdentity = const MorphIdentity(
+    userId: 'linkeduser0000000000000000000000',
+    fingerprint: 'fp-linked',
+    linked: true,
+  );
+
+  @override
+  Future<MorphLinkOffer> linkNewDeviceStart(String deviceName) async {
+    linkCalls.add('start $deviceName');
+    return MorphLinkOffer(
+      session: 7,
+      link: 'weirdnet-morph://link/fake-offer',
+      expires: DateTime.now().add(const Duration(minutes: 2)),
+    );
+  }
+
+  @override
+  Future<MorphLinkStatus> linkNewDeviceStatus(int session) async => linkStatus;
+
+  @override
+  Future<void> linkNewDeviceConfirm(int session) async =>
+      linkCalls.add('confirm $session');
+
+  @override
+  Future<MorphIdentity> linkNewDeviceFinish(
+    String profileId,
+    int session,
+    String password, {
+    String? home,
+  }) async {
+    if (password.length < 8) {
+      throw StateError('password must be at least 8 characters');
+    }
+    linkCalls.add('finish $profileId $session');
+    identitiesByProfile[profileId] = linkedIdentity;
+    return linkedIdentity;
+  }
+
+  @override
+  Future<void> linkNewDeviceCancel(int session) async =>
+      linkCalls.add('cancel $session');
+
+  @override
+  Future<MorphLinkPairing> linkAddDeviceStart(
+    String profileId,
+    String profileName,
+    String password,
+    String link, {
+    String? home,
+  }) async {
+    final sealed = _sealed[profileId];
+    if (sealed != null && sealed.password != password) {
+      throw StateError('wrong password');
+    }
+    if (!link.startsWith('weirdnet-morph://link/')) {
+      throw StateError('not a Morph link');
+    }
+    linkCalls.add('pair $profileId $link');
+    return MorphLinkPairing(
+      session: 9,
+      sas: linkSas,
+      device: 'Morph on laptop',
+    );
+  }
+
+  @override
+  Future<void> linkAddDeviceSend(int session) async =>
+      linkCalls.add('send $session');
+
+  @override
+  Future<void> linkAddDeviceCancel(int session) async =>
+      linkCalls.add('pair-cancel $session');
 }
