@@ -11,6 +11,7 @@ import 'package:flutter_inappwebview_platform_interface/flutter_inappwebview_pla
 import 'package:morph_webview/control.dart';
 import 'package:morph_webview/morph_webview.dart';
 
+import 'load_errors.dart';
 import 'popups.dart';
 import 'profile_store.dart';
 import 'renderer_watch.dart';
@@ -262,6 +263,40 @@ class _InAppSession extends MorphWebViewSession {
         _rememberUrl(url);
         unawaited(_emitNav(controller, url, isLoading: true));
       },
+      onReceivedError: (controller, request, error) {
+        final failed = morphInAppLoadError(
+          url: request.url.toString(),
+          isForMainFrame: request.isForMainFrame ?? true,
+          type: error.type,
+          description: error.description,
+        );
+        if (failed != null) {
+          _loadErrors.add(failed);
+        }
+      },
+      // Android only: there this fires just for certificate errors, and the
+      // page is left blank after the (default) cancel. Apple platforms ask
+      // here for every TLS connection, so they keep the default handling.
+      onReceivedServerTrustAuthRequest: Platform.isAndroid
+          ? (controller, challenge) async {
+              final url = morphCertificateErrorUrl(
+                challenge.protectionSpace.host,
+                [_requestedUrl, _lastUrl],
+              );
+              if (url != null) {
+                _loadErrors.add(
+                  MorphLoadError(
+                    url: url,
+                    kind: MorphLoadErrorKind.certificate,
+                    message: challenge.protectionSpace.sslError?.message ?? '',
+                  ),
+                );
+              }
+              return ServerTrustAuthResponse(
+                action: ServerTrustAuthResponseAction.CANCEL,
+              );
+            }
+          : null,
       onLoadStop: (controller, url) {
         _rememberUrl(url);
         unawaited(_emitNav(controller, url, isLoading: false, progress: 1));
@@ -332,6 +367,13 @@ class _InAppSession extends MorphWebViewSession {
   final _pending = <MorphControlCommand>[];
   final _navController = StreamController<MorphNavigationEvent>.broadcast();
   final _pageController = StreamController<String>.broadcast();
+  final _loadErrors = StreamController<MorphLoadError>.broadcast();
+
+  /// The last address the shell asked for, which may not have committed.
+  String? _requestedUrl;
+
+  @override
+  Stream<MorphLoadError> get loadErrors => _loadErrors.stream;
   StreamSubscription<(int, MorphNavigationEvent)>? _navSub;
   StreamSubscription<(int, String)>? _pageSub;
 
@@ -650,6 +692,7 @@ class _InAppSession extends MorphWebViewSession {
 
   @override
   Future<void> loadUrl(String url) async {
+    _requestedUrl = url;
     _client.send(
       viewId: viewId,
       navigate: Navigate(url: url),
@@ -755,6 +798,7 @@ class _InAppSession extends MorphWebViewSession {
     await _pageSub?.cancel();
     await _navController.close();
     await _pageController.close();
+    await _loadErrors.close();
     await _android?.dispose();
     await _onDispose();
   }
