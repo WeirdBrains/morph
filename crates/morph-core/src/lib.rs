@@ -5,6 +5,7 @@
 #![forbid(unsafe_code)]
 
 pub mod page_bridge;
+pub mod profiles;
 pub mod settings;
 pub mod tabs;
 
