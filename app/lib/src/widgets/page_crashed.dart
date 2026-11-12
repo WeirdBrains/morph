@@ -11,7 +11,7 @@ import 'brand.dart';
   return switch (fault) {
     MorphRendererFault.crashed => (
       'This page crashed',
-      'Only this tab was affected. Reload to try again.',
+      'Morph and your other tabs are still running. Reload to try again.',
     ),
     MorphRendererFault.killed => (
       'This page was stopped',
