@@ -1,0 +1,24 @@
+[workspace]
+resolver = "2"
+members = ["crates/morph-core", "crates/morph-identity", "crates/morph-bridge"]
+default-members = ["crates/morph-core", "crates/morph-identity", "crates/morph-bridge"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "BSD-3-Clause"
+authors = ["Michael Christenson II <m3talsmith@gmail.com>"]
+repository = "https://github.com/WeirdBrains/morph"
+homepage = "https://github.com/WeirdBrains/morph"
+
+[workspace.dependencies]
+morph-core = { path = "crates/morph-core" }
+morph-identity = { path = "crates/morph-identity" }
+weirdnet-keys = "=0.1.0"
+weirdnet-net = "=0.1.0"
+thiserror = "2"
+dirs = "6"
+zeroize = { version = "1", features = ["derive"] }
+flutter_rust_bridge = "=2.13.0"
+tempfile = "3"
