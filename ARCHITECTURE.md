@@ -1778,3 +1778,32 @@ paint a dark backdrop from load start until 400 ms after commit (or load
 finish), so reloads and sign-in redirects no longer flash white. Zero-copy
 (WPE DMA-BUF import) remains the real fix for the per-frame copy and upload
 at HiDPI sizes.
+
+### 2026-11-12 — Android: pre-raster for the visible tab, idle buffering for hidden ones
+
+Fast flings on long pages reached unpainted tiles. The visible tab now asks
+WebView to pre-raster beyond the viewport (`offscreenPreRaster`) at an
+IMPORTANT, never-waived renderer priority. With texture-layer composition the
+system always considers every WebView visible, so it never lowers a hidden
+tab by itself: a tab hidden for 45 s (`MorphWebViewController.idleAfter`)
+drops to `MorphBuffering.idle` (no pre-raster, waived priority,
+`WebView.onPause`; timers keep running, so background audio continues) and
+gets full buffering back the moment it is shown again. Measured on
+emulator-5600 (API 37, swiftshader, arm64 translation), 12 flings over the
+scroll fixture, then four tabs with three hidden for 65 s or more: delivered
+frames 176/176 → 223/195, p50 frame interval 48.5 → 46 ms; total PSS
+(app + renderer) at t0 430–432 → 435–441 MB (pre-raster cost), after the
+hidden tabs went idle 419–421 → 422–423 MB, so idle hands back what
+pre-raster costs. The emulator renders in software; checkerboarding and
+real frame pacing need a device run.
+
+### 2026-11-12 — Android: Morph error pages
+
+Android showed Chromium's own error pages, while Linux showed Morph's.
+`disableDefaultErrorPage` is now on and main-frame `onReceivedError` maps
+to the shared `MorphLoadErrorKind`s (`load_errors.dart`), so
+`MorphLoadErrorGate` shows the same pages everywhere. Cancelled loads and
+schemes handed to other apps show nothing. Android reports a bad certificate
+only through `onReceivedSslError`, so that hook (Android only; Apple
+platforms ask it for every TLS connection) raises a certificate page when
+the failing host is the page's own, and still cancels the load.
