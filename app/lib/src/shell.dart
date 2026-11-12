@@ -17,6 +17,7 @@ import 'widgets/brand.dart';
 import 'widgets/desktop_chrome.dart';
 import 'widgets/mobile_gestures.dart';
 import 'widgets/start_page.dart';
+import 'widgets/tab_switcher.dart';
 import 'widgets/window_chrome.dart';
 import 'window/morph_desktop_window.dart';
 import 'window/window_buttons.dart';
@@ -65,6 +66,8 @@ class MorphShellState extends State<MorphShell> {
   final _visited = <int, bool>{};
   MorphTabPosition _tabPosition = MorphTabPosition.top;
   bool _sidebarCollapsed = false;
+  bool _showSwitcher = false;
+  final _previews = <int, Uint8List?>{};
   late bool _debugOpen;
   String _canonicalAddress = '';
   String? coreVersionLabel;
@@ -346,6 +349,46 @@ class MorphShellState extends State<MorphShell> {
     setState(() => _debugOpen = !_debugOpen);
   }
 
+  Future<void> _capturePreview(int id) async {
+    try {
+      final bytes = await _controllerFor(id).takeScreenshot();
+      if (!mounted) {
+        return;
+      }
+      setState(() => _previews[id] = bytes);
+    } catch (_) {
+      // Backends without a screenshot still show a placeholder card.
+    }
+  }
+
+  Future<void> _openSwitcher() async {
+    await _capturePreview(tabs.activeId);
+    if (mounted) {
+      setState(() => _showSwitcher = true);
+    }
+  }
+
+  void _closeSwitcher() {
+    setState(() => _showSwitcher = false);
+  }
+
+  void _closeAllTabs() {
+    final ids = [for (final tab in tabs.tabs) tab.id];
+    for (final id in ids) {
+      final controller = _controllers.remove(id);
+      unawaited(_navSubs.remove(id)?.cancel());
+      unawaited(_pageSubs.remove(id)?.cancel());
+      unawaited(controller?.dispose());
+      _visited.remove(id);
+      _navEvents.remove(id);
+      _previews.remove(id);
+    }
+    tabs.closeAll();
+    _controllerFor(tabs.activeId);
+    _syncAddressFromActive();
+    setState(() => _showSwitcher = false);
+  }
+
   void _openTab() {
     final id = tabs.open();
     _controllerFor(id);
@@ -353,6 +396,7 @@ class MorphShellState extends State<MorphShell> {
     navigation = const MorphNavigationEvent(url: '');
     _canonicalAddress = '';
     address.clear();
+    _showSwitcher = false;
     setState(() {});
   }
 
@@ -363,6 +407,7 @@ class MorphShellState extends State<MorphShell> {
     unawaited(controller?.dispose());
     _visited.remove(id);
     _navEvents.remove(id);
+    _previews.remove(id);
     tabs.close(id);
     _controllerFor(tabs.activeId);
     _syncAddressFromActive();
@@ -370,12 +415,13 @@ class MorphShellState extends State<MorphShell> {
   }
 
   void _switchTab(int id) {
-    if (id == tabs.activeId) {
-      return;
+    if (id != tabs.activeId) {
+      unawaited(_capturePreview(tabs.activeId));
+      tabs.switchTo(id);
+      _controllerFor(id);
+      _syncAddressFromActive();
     }
-    tabs.switchTo(id);
-    _controllerFor(id);
-    _syncAddressFromActive();
+    _showSwitcher = false;
     setState(() {});
   }
 
@@ -484,6 +530,28 @@ class MorphShellState extends State<MorphShell> {
       ],
     );
 
+    if (_isMobile && _showSwitcher) {
+      return PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, _) {
+          if (!didPop) {
+            _closeSwitcher();
+          }
+        },
+        child: Scaffold(
+          body: MorphTabSwitcher(
+            tabs: tabs.tabs,
+            activeId: tabs.activeId,
+            previews: _previews,
+            onSelect: _switchTab,
+            onClose: _closeTab,
+            onCloseAll: _closeAllTabs,
+            onNewTab: _openTab,
+          ),
+        ),
+      );
+    }
+
     final body = MorphDesktopWindow.isDesktop
         ? Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -535,12 +603,18 @@ class MorphShellState extends State<MorphShell> {
           );
 
     return PopScope(
-      canPop: !_isMobile || !navigation.canGoBack,
+      canPop: !_isMobile || (!_showSwitcher && !navigation.canGoBack),
       onPopInvokedWithResult: (didPop, _) {
-        if (didPop || !navigation.canGoBack) {
+        if (didPop) {
           return;
         }
-        unawaited(webView.goBack());
+        if (_showSwitcher) {
+          setState(() => _showSwitcher = false);
+          return;
+        }
+        if (navigation.canGoBack) {
+          unawaited(webView.goBack());
+        }
       },
       child: CallbackShortcuts(
         bindings: {
@@ -681,6 +755,22 @@ class MorphShellState extends State<MorphShell> {
                     tooltip: 'Go',
                     icon: const Icon(Icons.arrow_outward),
                   ),
+                if (_isMobile) ...[
+                  IconButton(
+                    key: const Key('tab-count'),
+                    style: iconStyle,
+                    onPressed: () => unawaited(_openSwitcher()),
+                    tooltip: 'Tabs',
+                    icon: _TabCountIcon(count: tabs.length),
+                  ),
+                  IconButton(
+                    key: const Key('tab-new'),
+                    style: iconStyle,
+                    onPressed: _openTab,
+                    tooltip: 'New tab',
+                    icon: const Icon(Icons.add),
+                  ),
+                ],
                 if (includeChrome && MorphDesktopWindow.isDesktop)
                   const MorphWindowCloseButton(),
               ],
@@ -775,6 +865,31 @@ class MorphShellState extends State<MorphShell> {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _TabCountIcon extends StatelessWidget {
+  const _TabCountIcon({required this.count});
+
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final label = count > 99 ? '∞' : '$count';
+    return Container(
+      width: 24,
+      height: 24,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: colors.onSurface, width: 1.5),
+      ),
+      child: Text(
+        label,
+        style: MorphTheme.monoStyle(color: colors.onSurface, size: 11),
       ),
     );
   }
