@@ -15,7 +15,10 @@ void main() {
   });
 
   Future<(MorphWebViewController, FakeMorphWebViewSession)> attached() async {
-    final controller = MorphWebViewController(initialUrl: 'about:blank');
+    final controller = MorphWebViewController(
+      initialUrl: 'about:blank',
+      unresponsiveGrace: Duration.zero,
+    );
     await controller.attach(width: 412, height: 800, devicePixelRatio: 2);
     return (controller, fake.lastSession!);
   }
@@ -94,6 +97,17 @@ void main() {
     final (controller, session) = await attached();
     await controller.recoverFromFault();
     expect(session.rendererRecoveries, 0);
+    await controller.dispose();
+  });
+
+  test('a crash keeps the backend hint for the crash page', () async {
+    final (controller, session) = await attached();
+    session.emitRenderer(
+      MorphRendererFault.crashed,
+      detail: 'No GStreamer decoder for Opus.',
+    );
+    await _pump();
+    expect(controller.rendererDetail, 'No GStreamer decoder for Opus.');
     await controller.dispose();
   });
 }

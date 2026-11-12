@@ -27,6 +27,7 @@ import 'widgets/identity_onboarding.dart';
 import 'widgets/library_page.dart';
 import 'widgets/mobile_gestures.dart';
 import 'widgets/page_crashed.dart';
+import 'widgets/page_error.dart';
 import 'widgets/profile_menu.dart';
 import 'widgets/settings_page.dart';
 import 'widgets/start_page.dart';
@@ -1726,13 +1727,16 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
                 child: MorphRendererFaultGate(
                   controller: _controllerFor(tab.id),
                   active: tab.id == tabs.activeId,
-                  child: MorphWebView(
-                    key: Key('web-view-$_profileId-${tab.id}'),
+                  child: MorphLoadErrorGate(
                     controller: _controllerFor(tab.id),
-                    profileId: _profileId,
-                    userScript: userScript,
-                    placeholder: Center(
-                      child: CircularProgressIndicator(color: colors.primary),
+                    child: MorphWebView(
+                      key: Key('web-view-$_profileId-${tab.id}'),
+                      controller: _controllerFor(tab.id),
+                      profileId: _profileId,
+                      userScript: userScript,
+                      placeholder: Center(
+                        child: CircularProgressIndicator(color: colors.primary),
+                      ),
                     ),
                   ),
                 ),

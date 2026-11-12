@@ -13,8 +13,32 @@ class MorphWebViewController {
     this.initialUrl = 'https://example.com',
     this.surfaceSettle = const Duration(milliseconds: 600),
     this.rebuildCooldown = const Duration(seconds: 20),
+    this.unresponsiveGrace = defaultUnresponsiveGrace,
     DateTime Function()? clock,
   }) : _clock = clock ?? DateTime.now;
+
+  /// A controller for a window [session]'s page opened (window.open). It is
+  /// already attached; [MorphWebView] only sizes it.
+  MorphWebViewController._popup(
+    MorphWebViewSession session, {
+    required MorphWebViewController opener,
+  }) : initialUrl = '',
+       surfaceSettle = opener.surfaceSettle,
+       rebuildCooldown = opener.rebuildCooldown,
+       unresponsiveGrace = opener.unresponsiveGrace,
+       _clock = opener._clock,
+       _opener = opener {
+    _adopt(session);
+  }
+
+  /// Most popups stacked over one tab, the same cap as Android. Further
+  /// window.open calls are refused (the page sees a closed window).
+  static const maxPopups = 4;
+
+  /// How long a renderer may stay unresponsive before the tab says so.
+  /// Heavy pages (a YouTube watch page starting its player) routinely block
+  /// the renderer for several seconds; WebKit flags them after about three.
+  static const defaultUnresponsiveGrace = Duration(seconds: 10);
 
   final String initialUrl;
 
@@ -26,6 +50,19 @@ class MorphWebViewController {
   final Duration rebuildCooldown;
 
   final DateTime Function() _clock;
+
+  /// See [defaultUnresponsiveGrace]. Zero reports a hang at once.
+  final Duration unresponsiveGrace;
+  Timer? _hangTimer;
+  MorphWebViewController? _opener;
+
+  /// Windows this tab's pages opened, oldest first; the last one is on top.
+  /// Each is a full controller for its own page.
+  final popups = ValueNotifier<List<MorphWebViewController>>(const []);
+
+  /// The failed main-frame load this tab is showing, if any. Cleared by the
+  /// next navigation.
+  final loadError = ValueNotifier<MorphLoadError?>(null);
   Future<void>? _creating;
   Future<MorphSurfaceVerdict>? _healing;
   Future<MorphSurfaceVerdict>? _healQueued;
@@ -49,6 +86,10 @@ class MorphWebViewController {
   /// Set while this tab's renderer is crashed, killed or hung. Only this tab
   /// is affected; [recoverFromFault] brings it back.
   final rendererFault = ValueNotifier<MorphRendererFault?>(null);
+
+  /// What the backend knows about the last fault (say, missing video
+  /// decoders); empty when it has nothing to add.
+  String rendererDetail = '';
   Future<void>? _recovering;
   bool _terminating = false;
   final _navController = StreamController<MorphNavigationEvent>.broadcast();
@@ -133,13 +174,31 @@ class MorphWebViewController {
       userScript: userScript,
       profileId: profileId,
     );
+    _adopt(session);
+    final pending = _pendingUrl;
+    if (pending != null) {
+      // An address submitted while create was in flight.
+      _pendingUrl = null;
+      await session.loadUrl(pending);
+    }
+  }
+
+  void _adopt(MorphWebViewSession session) {
     _session = session;
     _renderPath = session.renderPath;
     _subs.add(
       session.navigation.listen((event) {
         _navigation = event;
+        final error = loadError.value;
+        if (error != null && event.isLoading && event.url != error.url) {
+          loadError.value = null;
+        }
         _navController.add(event);
       }),
+    );
+    _subs.add(session.loadErrors.listen((error) => loadError.value = error));
+    _subs.add(
+      session.popups.listen((popup) => (_opener ?? this)._addPopup(popup)),
     );
     _subs.add(session.pageMessages.listen(_pageController.add));
     _subs.add(
@@ -152,12 +211,32 @@ class MorphWebViewController {
       session.surfaceLost.listen((_) => unawaited(_rebuild(force: true))),
     );
     _subs.add(session.renderer.listen(_onRenderer));
-    final pending = _pendingUrl;
-    if (pending != null) {
-      // An address submitted while create was in flight.
-      _pendingUrl = null;
-      await session.loadUrl(pending);
+  }
+
+  void _addPopup(MorphWebViewSession session) {
+    if (_disposed || popups.value.length >= maxPopups) {
+      unawaited(session.dispose());
+      return;
     }
+    final popup = MorphWebViewController._popup(session, opener: this);
+    popup._subs.add(
+      session.closeRequested.listen((_) => unawaited(closePopup(popup))),
+    );
+    popups.value = [...popups.value, popup];
+  }
+
+  /// Closes [popup] (its close button or window.close()) and returns to the
+  /// window beneath it.
+  Future<void> closePopup(MorphWebViewController popup) async {
+    final list = popups.value;
+    if (!list.contains(popup)) {
+      return;
+    }
+    popups.value = [
+      for (final p in list)
+        if (!identical(p, popup)) p,
+    ];
+    await popup.dispose();
   }
 
   void _onRenderer(MorphRendererEvent event) {
@@ -166,6 +245,23 @@ class MorphWebViewController {
       return;
     }
     final fault = event.fault;
+    if (fault != MorphRendererFault.unresponsive) {
+      _hangTimer?.cancel();
+      _hangTimer = null;
+    }
+    if (fault == MorphRendererFault.unresponsive &&
+        rendererFault.value == null &&
+        unresponsiveGrace > Duration.zero) {
+      // Only a hang that outlasts the grace is shown; a report that clears
+      // before then never reaches the user.
+      _hangTimer ??= Timer(unresponsiveGrace, () {
+        _hangTimer = null;
+        if (!_disposed && rendererFault.value == null) {
+          rendererFault.value = MorphRendererFault.unresponsive;
+        }
+      });
+      return;
+    }
     if (fault == null) {
       if (rendererFault.value == MorphRendererFault.unresponsive) {
         rendererFault.value = null;
@@ -178,6 +274,7 @@ class MorphWebViewController {
         rendererFault.value != MorphRendererFault.unresponsive) {
       return;
     }
+    rendererDetail = event.detail;
     rendererFault.value = fault;
   }
 
@@ -327,6 +424,7 @@ class MorphWebViewController {
   }
 
   Future<void> loadUrl(String url) async {
+    loadError.value = null;
     if (_session == null) {
       // The shell can submit an address before the first platform view
       // attaches (common on Android while the system WebView starts). If a
@@ -340,9 +438,21 @@ class MorphWebViewController {
     focusNode.requestFocus();
   }
 
-  Future<void> goBack() async => _session?.goBack();
-  Future<void> goForward() async => _session?.goForward();
-  Future<void> reload() async => _session?.reload();
+  Future<void> goBack() async {
+    loadError.value = null;
+    await _session?.goBack();
+  }
+
+  Future<void> goForward() async {
+    loadError.value = null;
+    await _session?.goForward();
+  }
+
+  Future<void> reload() async {
+    loadError.value = null;
+    await _session?.reload();
+  }
+
   Future<void> sendPointer(MorphPointerEvent event) async =>
       _session?.sendPointer(event);
   Future<void> sendKey(MorphKeyEvent event) async => _session?.sendKey(event);
@@ -357,7 +467,16 @@ class MorphWebViewController {
 
   bool get desktopSite => _session?.desktopSite ?? false;
 
+  bool _disposed = false;
+
   Future<void> dispose() async {
+    _disposed = true;
+    _hangTimer?.cancel();
+    final open = popups.value;
+    popups.value = const [];
+    for (final popup in open) {
+      await popup.dispose();
+    }
     for (final sub in _subs) {
       await sub.cancel();
     }
@@ -367,6 +486,8 @@ class MorphWebViewController {
     focusNode.dispose();
     cursorShape.dispose();
     rendererFault.dispose();
+    popups.dispose();
+    loadError.dispose();
     await _navController.close();
     await _pageController.close();
     await _cursorController.close();

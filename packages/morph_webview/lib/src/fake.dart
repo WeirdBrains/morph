@@ -318,11 +318,38 @@ class FakeMorphWebViewSession extends MorphWebViewSession {
 
   /// Simulates this view's renderer crashing, being killed or hanging; null
   /// means it answers again.
-  void emitRenderer(MorphRendererFault? fault) =>
-      _renderer.add(MorphRendererEvent(fault));
+  void emitRenderer(MorphRendererFault? fault, {String detail = ''}) =>
+      _renderer.add(MorphRendererEvent(fault, detail: detail));
 
   @override
   Stream<MorphRendererEvent> get renderer => _renderer.stream;
+
+  final _loadErrors = StreamController<MorphLoadError>.broadcast();
+  final _popups = StreamController<MorphWebViewSession>.broadcast();
+  final _closeRequested = StreamController<void>.broadcast();
+  bool disposed = false;
+
+  /// Simulates a failed main-frame load.
+  void emitLoadError(MorphLoadError error) => _loadErrors.add(error);
+
+  /// Simulates the page opening a window; returns the popup's session.
+  FakeMorphWebViewSession emitPopup(String url) {
+    final popup = FakeMorphWebViewSession(renderPath: renderPath, url: url);
+    _popups.add(popup);
+    return popup;
+  }
+
+  /// Simulates window.close() in this page.
+  void emitCloseRequested() => _closeRequested.add(null);
+
+  @override
+  Stream<MorphLoadError> get loadErrors => _loadErrors.stream;
+
+  @override
+  Stream<MorphWebViewSession> get popups => _popups.stream;
+
+  @override
+  Stream<void> get closeRequested => _closeRequested.stream;
 
   @override
   Future<void> terminateRenderer() async {
@@ -365,6 +392,10 @@ class FakeMorphWebViewSession extends MorphWebViewSession {
 
   @override
   Future<void> dispose() async {
+    disposed = true;
+    await _loadErrors.close();
+    await _popups.close();
+    await _closeRequested.close();
     await _surfaceLost.close();
     await _renderer.close();
     await _navController.close();

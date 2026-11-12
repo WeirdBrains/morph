@@ -99,6 +99,19 @@ abstract class MorphWebViewSession {
   /// running; the shell shows a per-tab "page crashed" state.
   Stream<MorphRendererEvent> get renderer => const Stream.empty();
 
+  /// Main-frame loads that failed. Backends that already show their own
+  /// error page leave this empty.
+  Stream<MorphLoadError> get loadErrors => const Stream.empty();
+
+  /// Windows this page opened (window.open, target=_blank) that the backend
+  /// leaves for Dart to show. Android shows its popups natively and leaves
+  /// this empty.
+  Stream<MorphWebViewSession> get popups => const Stream.empty();
+
+  /// The page asked to close its window (window.close()). Only popups act
+  /// on it.
+  Stream<void> get closeRequested => const Stream.empty();
+
   /// Ends a hung renderer so the tab can be reloaded.
   Future<void> terminateRenderer() async {}
 
