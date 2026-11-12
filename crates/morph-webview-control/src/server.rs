@@ -54,7 +54,7 @@ impl ServiceState {
     }
 }
 
-struct ControlService {
+pub(crate) struct ControlService {
     state: ServiceState,
 }
 
@@ -273,22 +273,32 @@ async fn serve(
     let svc = WebViewControlServer::new(ControlService { state });
     match endpoint {
         ControlEndpoint::Unix(path) => {
-            let uds = tokio::net::UnixListener::bind(&path).map_err(ControlError::Io)?;
-            if let Err(err) = endpoint::restrict_unix_socket(&path) {
-                let _ = ready.send(Err(ControlError::Io(err)));
-                return Ok(());
+            #[cfg(unix)]
+            {
+                let uds = tokio::net::UnixListener::bind(&path).map_err(ControlError::Io)?;
+                if let Err(err) = endpoint::restrict_unix_socket(&path) {
+                    let _ = ready.send(Err(ControlError::Io(err)));
+                    return Ok(());
+                }
+                let incoming = tokio_stream::wrappers::UnixListenerStream::new(uds);
+                let _ = ready.send(Ok(ControlEndpoint::Unix(path.clone())));
+                tonic::transport::Server::builder()
+                    .add_service(svc)
+                    .serve_with_incoming_shutdown(incoming, async {
+                        let _ = stop.await;
+                    })
+                    .await
+                    .map_err(|e| ControlError::Transport(e.to_string()))?;
+                let _ = std::fs::remove_file(&path);
+                Ok(())
             }
-            let incoming = tokio_stream::wrappers::UnixListenerStream::new(uds);
-            let _ = ready.send(Ok(ControlEndpoint::Unix(path.clone())));
-            tonic::transport::Server::builder()
-                .add_service(svc)
-                .serve_with_incoming_shutdown(incoming, async {
-                    let _ = stop.await;
-                })
-                .await
-                .map_err(|e| ControlError::Transport(e.to_string()))?;
-            let _ = std::fs::remove_file(&path);
-            Ok(())
+            #[cfg(not(unix))]
+            {
+                drop(svc);
+                drop(stop);
+                let _ = ready.send(Err(ControlError::Transport(format!("unix-domain transport is only available on Unix (got {})", path.display()))));
+                Ok(())
+            }
         }
         ControlEndpoint::Loopback { port } => {
             let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
