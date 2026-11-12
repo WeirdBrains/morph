@@ -51,6 +51,22 @@ WebKitSettings* morph_session_create_settings(void) {
   WebKitSettings* settings = webkit_settings_new();
   webkit_settings_set_user_agent(settings, kSafariCompatibleUserAgent);
   webkit_settings_set_javascript_can_open_windows_automatically(settings, TRUE);
+  // Explicit browser-like media flags. Encrypted media is off by default in
+  // WebKitGTK, which makes some YouTube and Instagram streams report that
+  // the browser cannot play the video. Hardware acceleration stays on so
+  // video can be composited; software GStreamer decoders still work when
+  // no type is forced to require hardware support.
+  webkit_settings_set_enable_media(settings, TRUE);
+  webkit_settings_set_enable_mediasource(settings, TRUE);
+  webkit_settings_set_enable_encrypted_media(settings, TRUE);
+  webkit_settings_set_enable_media_capabilities(settings, TRUE);
+  webkit_settings_set_enable_media_stream(settings, TRUE);
+  webkit_settings_set_enable_webgl(settings, TRUE);
+  webkit_settings_set_media_playback_requires_user_gesture(settings, FALSE);
+  webkit_settings_set_media_playback_allows_inline(settings, TRUE);
+  webkit_settings_set_hardware_acceleration_policy(settings,
+                                                   WEBKIT_HARDWARE_ACCELERATION_POLICY_ALWAYS);
+  webkit_settings_set_media_content_types_requiring_hardware_support(settings, "");
   return settings;
 }
 

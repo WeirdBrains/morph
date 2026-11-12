@@ -184,7 +184,31 @@ static void check_context_setup() {
   expect_true(std::strstr(morph_session_user_agent(), "Version/26.0") != nullptr &&
                   std::strstr(morph_session_user_agent(), "Safari/605.1.15") != nullptr,
               "user agent should look like a current Safari release");
+  expect_true(webkit_settings_get_enable_media(settings), "media should be enabled");
+  expect_true(webkit_settings_get_enable_mediasource(settings), "MediaSource should be enabled");
+  expect_true(webkit_settings_get_enable_encrypted_media(settings),
+              "encrypted media should be enabled");
+  expect_true(webkit_settings_get_enable_webgl(settings), "WebGL should be enabled");
+  expect_true(!webkit_settings_get_media_playback_requires_user_gesture(settings),
+              "media should not require an extra user gesture");
+  expect_true(webkit_settings_get_media_playback_allows_inline(settings),
+              "inline media playback should be allowed");
   destroy_view(view);
+
+  // Inspect the settings object directly. Virtual-framebuffer runs disable
+  // compositing so the live view may report NEVER even though Morph asked
+  // for ALWAYS.
+  WebKitSettings* configured = morph_session_create_settings();
+  WebKitHardwareAccelerationPolicy policy =
+      webkit_settings_get_hardware_acceleration_policy(configured);
+  if (g_strcmp0(g_getenv("WEBKIT_DISABLE_COMPOSITING_MODE"), "1") == 0) {
+    expect_true(policy == WEBKIT_HARDWARE_ACCELERATION_POLICY_NEVER,
+                "disabled compositing clamps hardware acceleration to NEVER");
+  } else {
+    expect_true(policy == WEBKIT_HARDWARE_ACCELERATION_POLICY_ALWAYS,
+                "hardware acceleration should be always on");
+  }
+  g_object_unref(configured);
 }
 
 static bool body_has_session_cookie(WebKitWebView* view) {
