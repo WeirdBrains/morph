@@ -41,7 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (pinned at the end only when the strip overflows) so they never cover
   tabs or push window buttons off the top-right. Close stays visible in
   every tab position; minimize and maximize still appear on non-tiling
-  desktops.
+  desktops. Switching tabs restores that tab's URL, title, and web view.
 - Linux web views share one persistent WebKit session per Morph profile,
   with cookies stored in SQLite under the Morph home so logins survive
   restarts and tab recreation. `window.open` / new-window requests open a
