@@ -29,6 +29,7 @@ class MorphDesktopChrome extends StatelessWidget {
     required this.navigation,
     required this.content,
     this.sidebarCollapsed = false,
+    this.sidebarWidth = MorphTabOverflow.defaultSidebarWidth,
     this.buttonMode = MorphWindowButtonMode.all,
     this.platform,
     this.useNativeMacButtons = true,
@@ -39,6 +40,9 @@ class MorphDesktopChrome extends StatelessWidget {
     this.onNewTab,
     this.onPositionChanged,
     this.onToggleSidebar,
+    this.onSidebarWidthChanged,
+    this.onSidebarWidthCommit,
+    this.onSidebarWidthReset,
     this.onMinimize,
     this.onToggleMaximize,
     this.onCloseWindow,
@@ -51,6 +55,7 @@ class MorphDesktopChrome extends StatelessWidget {
   final Widget navigation;
   final Widget content;
   final bool sidebarCollapsed;
+  final double sidebarWidth;
   final MorphWindowButtonMode buttonMode;
   final TargetPlatform? platform;
   final bool useNativeMacButtons;
@@ -61,6 +66,9 @@ class MorphDesktopChrome extends StatelessWidget {
   final VoidCallback? onNewTab;
   final ValueChanged<MorphTabPosition>? onPositionChanged;
   final VoidCallback? onToggleSidebar;
+  final ValueChanged<double>? onSidebarWidthChanged;
+  final VoidCallback? onSidebarWidthCommit;
+  final VoidCallback? onSidebarWidthReset;
   final VoidCallback? onMinimize;
   final VoidCallback? onToggleMaximize;
   final VoidCallback? onCloseWindow;
@@ -130,11 +138,15 @@ class MorphDesktopChrome extends StatelessWidget {
                   activeId: activeId,
                   side: MorphTabPosition.left,
                   collapsed: sidebarCollapsed,
+                  width: sidebarWidth,
                   onSelectTab: onSelectTab,
                   onCloseTab: onCloseTab,
                   onNewTab: onNewTab,
                   onPositionChanged: onPositionChanged,
                   onToggleSidebar: onToggleSidebar,
+                  onWidthChanged: onSidebarWidthChanged,
+                  onWidthCommit: onSidebarWidthCommit,
+                  onWidthReset: onSidebarWidthReset,
                 ),
               Expanded(child: content),
               if (position == MorphTabPosition.right)
@@ -143,11 +155,15 @@ class MorphDesktopChrome extends StatelessWidget {
                   activeId: activeId,
                   side: MorphTabPosition.right,
                   collapsed: sidebarCollapsed,
+                  width: sidebarWidth,
                   onSelectTab: onSelectTab,
                   onCloseTab: onCloseTab,
                   onNewTab: onNewTab,
                   onPositionChanged: onPositionChanged,
                   onToggleSidebar: onToggleSidebar,
+                  onWidthChanged: onSidebarWidthChanged,
+                  onWidthCommit: onSidebarWidthCommit,
+                  onWidthReset: onSidebarWidthReset,
                 ),
             ],
           ),
@@ -510,6 +526,10 @@ class MorphTabList extends StatelessWidget {
     this.onNewTab,
     this.onPositionChanged,
     this.onToggleSidebar,
+    this.width = MorphTabOverflow.defaultSidebarWidth,
+    this.onWidthChanged,
+    this.onWidthCommit,
+    this.onWidthReset,
   });
 
   static const double collapsedWidth = MorphTabOverflow.collapsedSidebarWidth;
@@ -526,6 +546,10 @@ class MorphTabList extends StatelessWidget {
   final VoidCallback? onNewTab;
   final ValueChanged<MorphTabPosition>? onPositionChanged;
   final VoidCallback? onToggleSidebar;
+  final double width;
+  final ValueChanged<double>? onWidthChanged;
+  final VoidCallback? onWidthCommit;
+  final VoidCallback? onWidthReset;
 
   bool get _right => side == MorphTabPosition.right;
 
@@ -564,64 +588,152 @@ class MorphTabList extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [newTab, positionButton],
     );
+    final listWidth = collapsed ? collapsedWidth : width;
     return Material(
       key: const Key('tab-list'),
       color: colors.surface,
       child: SizedBox(
-        width: collapsed ? collapsedWidth : expandedWidth,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+        width: listWidth,
+        child: Stack(
           children: [
-            Align(alignment: Alignment.center, child: toggle),
-            Expanded(
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  final visibleCount = MorphTabOverflow.visibleCount(
-                    tabCount: tabs.length,
-                    available: constraints.maxHeight,
-                    minTabExtent: MorphTabOverflow.verticalMinExtent,
-                    trailingExtent: MorphTabOverflow.trailingGroupExtent(
-                      horizontal: false,
-                    ),
-                  );
-                  final activeIndex = tabs.indexWhere(
-                    (tab) => tab.id == activeId,
-                  );
-                  final (start, end) = MorphTabOverflow.visibleRange(
-                    tabCount: tabs.length,
-                    visibleCount: visibleCount,
-                    activeIndex: activeIndex < 0 ? 0 : activeIndex,
-                  );
-                  final visible = tabs.sublist(start, end);
-                  final hidden = [
-                    ...tabs.sublist(0, start),
-                    ...tabs.sublist(end),
-                  ];
-                  return MorphTrailingAfterChildren(
-                    axis: Axis.vertical,
-                    spacing: MorphTabOverflow.spacing,
-                    trailing: actions,
-                    children: [
-                      for (final tab in visible)
-                        MorphTabListTile(
-                          tab: tab,
-                          active: tab.id == activeId,
-                          collapsed: collapsed,
-                          onSelect: () => onSelectTab?.call(tab.id),
-                          onClose: () => onCloseTab?.call(tab.id),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Align(alignment: Alignment.center, child: toggle),
+                Expanded(
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final visibleCount = MorphTabOverflow.visibleCount(
+                        tabCount: tabs.length,
+                        available: constraints.maxHeight,
+                        minTabExtent: MorphTabOverflow.verticalMinExtent,
+                        trailingExtent: MorphTabOverflow.trailingGroupExtent(
+                          horizontal: false,
                         ),
-                      if (hidden.isNotEmpty)
-                        MorphTabOverflowButton(
-                          tabs: hidden,
-                          onSelect: onSelectTab,
-                          onClose: onCloseTab,
-                        ),
-                    ],
-                  );
-                },
-              ),
+                      );
+                      final activeIndex = tabs.indexWhere(
+                        (tab) => tab.id == activeId,
+                      );
+                      final (start, end) = MorphTabOverflow.visibleRange(
+                        tabCount: tabs.length,
+                        visibleCount: visibleCount,
+                        activeIndex: activeIndex < 0 ? 0 : activeIndex,
+                      );
+                      final visible = tabs.sublist(start, end);
+                      final hidden = [
+                        ...tabs.sublist(0, start),
+                        ...tabs.sublist(end),
+                      ];
+                      return MorphTrailingAfterChildren(
+                        axis: Axis.vertical,
+                        spacing: MorphTabOverflow.spacing,
+                        trailing: actions,
+                        children: [
+                          for (final tab in visible)
+                            MorphTabListTile(
+                              tab: tab,
+                              active: tab.id == activeId,
+                              collapsed: collapsed,
+                              onSelect: () => onSelectTab?.call(tab.id),
+                              onClose: () => onCloseTab?.call(tab.id),
+                            ),
+                          if (hidden.isNotEmpty)
+                            MorphTabOverflowButton(
+                              tabs: hidden,
+                              onSelect: onSelectTab,
+                              onClose: onCloseTab,
+                            ),
+                        ],
+                      );
+                    },
+                  ),
+                ),
+              ],
             ),
+            if (!collapsed)
+              Positioned(
+                top: 0,
+                bottom: 0,
+                right: side == MorphTabPosition.left ? 0 : null,
+                left: side == MorphTabPosition.right ? 0 : null,
+                child: MorphSidebarResizeHandle(
+                  side: side,
+                  width: width,
+                  windowWidth: MediaQuery.sizeOf(context).width,
+                  onWidthChanged: onWidthChanged,
+                  onWidthCommit: onWidthCommit,
+                  onReset: onWidthReset,
+                ),
+              ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Draggable inner edge of an expanded left or right tab list.
+class MorphSidebarResizeHandle extends StatefulWidget {
+  const MorphSidebarResizeHandle({
+    super.key,
+    required this.side,
+    required this.width,
+    this.windowWidth,
+    this.onWidthChanged,
+    this.onWidthCommit,
+    this.onReset,
+  });
+
+  static const double hitExtent = 6;
+
+  final MorphTabPosition side;
+  final double width;
+  final double? windowWidth;
+  final ValueChanged<double>? onWidthChanged;
+  final VoidCallback? onWidthCommit;
+  final VoidCallback? onReset;
+
+  @override
+  State<MorphSidebarResizeHandle> createState() =>
+      _MorphSidebarResizeHandleState();
+}
+
+class _MorphSidebarResizeHandleState extends State<MorphSidebarResizeHandle> {
+  double _origin = 0;
+  double _delta = 0;
+
+  void _apply() {
+    final next = MorphTabOverflow.clampSidebarWidth(
+      _origin + _delta,
+      windowWidth: widget.windowWidth,
+    );
+    widget.onWidthChanged?.call(next);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.resizeColumn,
+      child: GestureDetector(
+        key: const Key('sidebar-resize'),
+        behavior: HitTestBehavior.opaque,
+        onHorizontalDragStart: (details) {
+          _origin = widget.width;
+          _delta = 0;
+        },
+        onHorizontalDragUpdate: (details) {
+          final increment = widget.side == MorphTabPosition.left
+              ? details.delta.dx
+              : -details.delta.dx;
+          _delta += increment;
+          _apply();
+        },
+        onHorizontalDragEnd: (_) => widget.onWidthCommit?.call(),
+        onHorizontalDragCancel: () => widget.onWidthCommit?.call(),
+        onDoubleTap: widget.onReset,
+        child: const SizedBox(
+          width: MorphSidebarResizeHandle.hitExtent,
+          height: double.infinity,
         ),
       ),
     );
