@@ -137,14 +137,28 @@ class MorphBookmarkManagerState extends State<MorphBookmarkManager> {
       return;
     }
     final seq = ++_searchSeq;
-    final found = await widget.api.searchBookmarks(
+    // The tree comes along so each result can name its folder even when
+    // something else changed the bookmarks since the last load.
+    final found = widget.api.searchBookmarks(
       widget.profileId,
       query: _query.text.trim(),
       tag: _tag,
       home: widget.home,
     );
-    if (mounted && seq == _searchSeq) {
-      setState(() => _results = found);
+    final tree = widget.api.bookmarkTree(widget.profileId, home: widget.home);
+    try {
+      final results = await found;
+      final latest = await tree;
+      if (mounted && seq == _searchSeq) {
+        setState(() {
+          _results = results;
+          _tree = latest;
+        });
+      }
+    } catch (_) {
+      if (mounted && seq == _searchSeq) {
+        setState(() => _results = const []);
+      }
     }
   }
 
@@ -412,10 +426,17 @@ class MorphBookmarkManagerState extends State<MorphBookmarkManager> {
       child: Row(
         children: [
           Expanded(
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              reverse: true,
-              child: Row(children: crumbs),
+            // Reversed so a deep path keeps the current folder in view;
+            // the minimum width keeps a short path on the left.
+            child: LayoutBuilder(
+              builder: (context, box) => SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                reverse: true,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(minWidth: box.maxWidth),
+                  child: Row(children: crumbs),
+                ),
+              ),
             ),
           ),
           IconButton(
@@ -635,15 +656,24 @@ class MorphBookmarkManagerState extends State<MorphBookmarkManager> {
               style: MorphTheme.monoStyle(color: muted, size: 12),
             ),
             if (b.tags.isNotEmpty || folderLabel.isNotEmpty)
-              Text(
-                [
-                  if (folderLabel.isNotEmpty) folderLabel,
-                  ...b.tags.map((t) => '#$t'),
-                ].join('  '),
+              Text.rich(
+                TextSpan(
+                  children: [
+                    if (folderLabel.isNotEmpty)
+                      TextSpan(
+                        text: '▸ $folderLabel  ',
+                        style: TextStyle(color: muted),
+                      ),
+                    TextSpan(text: b.tags.map((t) => '#$t').join('  ')),
+                  ],
+                ),
                 key: Key('bookmark-tags-${b.id}'),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(color: MorphColors.magenta, fontSize: 12),
+                style: const TextStyle(
+                  color: MorphColors.magenta,
+                  fontSize: 12,
+                ),
               ),
           ],
         ),
@@ -936,12 +966,14 @@ class _EditBookmarkDialogState extends State<_EditBookmarkDialog> {
               controller: _title,
               decoration: const InputDecoration(labelText: 'Name'),
             ),
+            const SizedBox(height: 12),
             TextField(
               key: const Key('bookmark-edit-url'),
               controller: _url,
               decoration: const InputDecoration(labelText: 'URL'),
               keyboardType: TextInputType.url,
             ),
+            const SizedBox(height: 12),
             TextField(
               key: const Key('bookmark-edit-tags'),
               controller: _tags,

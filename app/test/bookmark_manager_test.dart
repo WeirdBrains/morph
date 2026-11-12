@@ -280,7 +280,10 @@ void main() {
         .firstWhere((b) => b.id == 'b1');
     expect(saved.title, 'Carbonara');
     expect(saved.tags, ['recipes', 'dinner']);
-    expect(find.text('#recipes  #dinner'), findsOneWidget);
+    expect(
+      find.textContaining('#recipes  #dinner', findRichText: true),
+      findsOneWidget,
+    );
 
     // Tag chips filter.
     await tester.tap(find.byKey(const Key('bookmark-tag-recipes')));
@@ -307,6 +310,16 @@ void main() {
         reason: query,
       );
     }
+    // Results say which folder a match lives in.
+    final folder = (await api.createBookmarkFolder(
+      'work',
+      'Food',
+    )).folders.single.id;
+    await api.moveBookmarkItem('work', 'b1', parentId: folder, index: 0);
+    await tester.enterText(find.byKey(const Key('bookmark-search')), 'pasta');
+    await tester.pumpAndSettle();
+    expect(find.textContaining('▸ Food', findRichText: true), findsOneWidget);
+
     await tester.enterText(find.byKey(const Key('bookmark-search')), 'zzz');
     await tester.pumpAndSettle();
     expect(find.text('No bookmarks match.'), findsOneWidget);
