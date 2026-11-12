@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../api.dart';
 import '../theme/morph_theme.dart';
+import 'password_field.dart';
 
 /// Shortest password Morph accepts for sealing a profile's user key. Mirrors
 /// `morph_identity::profile_identity::MIN_PASSWORD_LEN`.
@@ -232,23 +233,18 @@ class _MorphIdentityOnboardingState extends State<MorphIdentityOnboarding> {
             ),
             const SizedBox(height: 12),
           ],
-          TextField(
+          MorphPasswordField(
             key: const Key('onboarding-password'),
             controller: _password,
-            obscureText: true,
-            autocorrect: false,
-            enableSuggestions: false,
+            label: 'Password',
             autofillHints: const [AutofillHints.newPassword],
-            decoration: const InputDecoration(labelText: 'Password'),
+            textInputAction: TextInputAction.next,
           ),
           const SizedBox(height: 12),
-          TextField(
+          MorphPasswordField(
             key: const Key('onboarding-confirm'),
             controller: _confirm,
-            obscureText: true,
-            autocorrect: false,
-            enableSuggestions: false,
-            decoration: const InputDecoration(labelText: 'Confirm password'),
+            label: 'Confirm password',
             onSubmitted: (_) => _busy ? null : _submit(),
           ),
           if (_error != null) ...[
