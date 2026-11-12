@@ -153,6 +153,21 @@ backend per platform.
     backend without touching the app. Windows is the most likely candidate if WebView2
     custom-scheme support through the plugin falls short (checked in M7).
   - We don't use its beta Linux (WPE) backend.
+  - _(changed 2026-11-12)_ **Profile storage on Android:** every Morph profile
+    except `default` gets its own androidx.webkit `Profile` (`MULTI_PROFILE`,
+    WebView 120+), named `morph-<id>`, so cookies, local and session storage,
+    IndexedDB, Cache Storage, HTTP cache and service workers never mix.
+    `default` stays on the WebView's own `Default` profile so existing data is
+    kept. The profile has to be set before the WebView is used, so Dart names
+    each native view with a flutter_inappwebview keep-alive id, registers
+    `id -> profile` over `org.weirdbrains.morph_webview/profile`, and
+    `MainActivity.registerForContextMenu` (called from the InAppWebView
+    constructor, before settings, scripts or loads) applies it. A surface
+    rebuild gets a fresh id and native view. Deleting a Morph profile deletes
+    its WebView profile; one still in use is swept on the next start.
+    `setDataDirectorySuffix` is not a fallback: it is once per process. On a
+    WebView without `MULTI_PROFILE`, non-default profiles show an
+    update-your-WebView page and never load sites, rather than share storage.
 - **Page bridge:** a script injected at document start (`morph-bridge.js`) exposes a
   narrow message channel. DOM queries, injection and page events go through it as JSON.
   Rust never touches the DOM. The bridge contract is identical on every backend and is
