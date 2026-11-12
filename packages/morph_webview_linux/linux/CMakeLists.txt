@@ -27,6 +27,7 @@ list(APPEND PLUGIN_SOURCES
   "render_path.cc"
   "ime_context.cc"
   "key_map.cc"
+  "session.cc"
 )
 
 add_library(${PLUGIN_NAME} SHARED
