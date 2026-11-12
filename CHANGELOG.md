@@ -13,7 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   snapshot texture, WPE DMA-BUF feature detection, live navigation, and
   page-bridge wiring on a real view.
 - In-process gRPC control layer (`morph-webview-control`): a single ordered
-  `Session` stream over a Unix domain socket (loopback TCP on Windows). The
-  Linux plugin keeps the method channel for create/dispose/resize/texture and
-  routes navigation, input, and page-bridge traffic through the control
-  server, which handles page messages in Rust.
+  `Session` stream over a Unix domain socket, or a local named pipe on Windows
+  (loopback TCP remains available). The Linux plugin keeps the method channel
+  for create/dispose/resize/texture and routes navigation, input, and
+  page-bridge traffic through the control server, which handles page messages
+  in Rust.

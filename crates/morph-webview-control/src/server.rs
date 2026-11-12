@@ -306,10 +306,17 @@ async fn serve(
             Ok(())
         }
         ControlEndpoint::NamedPipe(name) => {
-            let _ = (svc, stop);
-            let _ =
-                ready.send(Err(ControlError::Transport(format!("named-pipe transport is not yet serving ({name}); use loopback TCP on Windows"))));
-            Ok(())
+            #[cfg(windows)]
+            {
+                crate::named_pipe::serve(name, svc, ready, stop).await
+            }
+            #[cfg(not(windows))]
+            {
+                drop(svc);
+                drop(stop);
+                let _ = ready.send(Err(ControlError::Transport(format!("named-pipe transport is only available on Windows (got {name})"))));
+                Ok(())
+            }
         }
     }
 }
@@ -353,6 +360,7 @@ pub async fn connect(
                 let name = name.clone();
                 let channel = tonic::transport::Endpoint::try_from("http://[::]:1")
                     .map_err(|e| ControlError::Transport(e.to_string()))?
+                    .connect_timeout(std::time::Duration::from_secs(3))
                     .connect_with_connector(service_fn(move |_: Uri| {
                         let name = name.clone();
                         async move {

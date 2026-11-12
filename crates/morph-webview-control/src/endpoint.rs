@@ -21,8 +21,7 @@ impl ControlEndpoint {
         }
         #[cfg(windows)]
         {
-            // Named-pipe serving is not wired yet; loopback is Dart-reachable and is the documented fallback.
-            Self::Loopback { port: 0 }
+            Self::NamedPipe(format!(r"\\.\pipe\morph-webview-control-{}", std::process::id()))
         }
         #[cfg(not(any(unix, windows)))]
         {
