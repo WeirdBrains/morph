@@ -58,6 +58,57 @@ abstract class MorphApi {
   });
   Future<void> deleteHistoryUrl(String profileId, String url, {String? home});
   Future<void> clearHistory(String profileId, {String? home});
+
+  /// [profileId]'s own Weirdnet identity, or null before onboarding.
+  Future<MorphIdentity?> profileIdentity(String profileId, {String? home});
+
+  /// Creates [profileId]'s identity sealed under [password]. The result holds
+  /// the recovery words, to show once.
+  Future<MorphNewIdentity> createProfileIdentity(
+    String profileId,
+    String password, {
+    String? home,
+  });
+
+  /// Restores an identity from its recovery [words] into [profileId].
+  Future<MorphIdentity> importProfileIdentity(
+    String profileId,
+    String words,
+    String password, {
+    String? home,
+  });
+
+  /// [profileId]'s recovery words, after checking its password.
+  Future<String> profileRecoveryWords(
+    String profileId,
+    String password, {
+    String? home,
+  });
+}
+
+/// Public facts about a profile's identity.
+class MorphIdentity {
+  const MorphIdentity({
+    required this.userId,
+    required this.fingerprint,
+    this.created,
+    this.imported = false,
+  });
+
+  final String userId;
+  final String fingerprint;
+  final DateTime? created;
+  final bool imported;
+}
+
+/// A just-created identity and its recovery words.
+class MorphNewIdentity {
+  const MorphNewIdentity({required this.identity, required this.words});
+
+  final MorphIdentity identity;
+
+  /// 24 words. Show once; never log or store them.
+  final String words;
 }
 
 class MorphBookmark {

@@ -343,6 +343,69 @@ class FfiMorphApi implements MorphApi {
   Future<void> deleteHistoryUrl(String profileId, String url, {String? home}) =>
       rust_library.deleteHistoryUrl(home: home, profileId: profileId, url: url);
 
+  static MorphIdentity _identity(rust_identity.ProfileIdentityView v) =>
+      MorphIdentity(
+        userId: v.userId,
+        fingerprint: v.fingerprint,
+        created: DateTime.fromMillisecondsSinceEpoch(v.createdMs.toInt()),
+        imported: v.imported,
+      );
+
+  @override
+  Future<MorphIdentity?> profileIdentity(
+    String profileId, {
+    String? home,
+  }) async {
+    final v = await rust_identity.profileIdentity(
+      home: home,
+      profileId: profileId,
+    );
+    return v == null ? null : _identity(v);
+  }
+
+  @override
+  Future<MorphNewIdentity> createProfileIdentity(
+    String profileId,
+    String password, {
+    String? home,
+  }) async {
+    final made = await rust_identity.createProfileIdentity(
+      home: home,
+      profileId: profileId,
+      password: password,
+    );
+    return MorphNewIdentity(
+      identity: _identity(made.identity),
+      words: made.words,
+    );
+  }
+
+  @override
+  Future<MorphIdentity> importProfileIdentity(
+    String profileId,
+    String words,
+    String password, {
+    String? home,
+  }) async => _identity(
+    await rust_identity.importProfileIdentity(
+      home: home,
+      profileId: profileId,
+      words: words,
+      password: password,
+    ),
+  );
+
+  @override
+  Future<String> profileRecoveryWords(
+    String profileId,
+    String password, {
+    String? home,
+  }) => rust_identity.profileRecoveryWords(
+    home: home,
+    profileId: profileId,
+    password: password,
+  );
+
   @override
   Future<void> clearHistory(String profileId, {String? home}) =>
       rust_library.clearHistory(home: home, profileId: profileId);
