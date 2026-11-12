@@ -52,6 +52,9 @@ jobs:
       - name: morph_webview_inapp tests
         run: flutter test
         working-directory: packages/morph_webview_inapp
+      - name: morph_webview_linux tests
+        run: flutter test
+        working-directory: packages/morph_webview_linux
 
   linux:
     runs-on: ubuntu-22.04
