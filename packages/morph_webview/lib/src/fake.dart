@@ -209,6 +209,14 @@ class FakeMorphWebViewSession extends MorphWebViewSession {
   bool _desktopSite = false;
   Uint8List? screenshotBytes;
 
+  /// Every [setBuffering] call, in order.
+  final bufferingChanges = <MorphBuffering>[];
+
+  @override
+  Future<void> setBuffering(MorphBuffering buffering) async {
+    bufferingChanges.add(buffering);
+  }
+
   @override
   bool get desktopSite => _desktopSite;
 

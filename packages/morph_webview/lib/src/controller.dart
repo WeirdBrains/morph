@@ -14,6 +14,7 @@ class MorphWebViewController {
     this.surfaceSettle = const Duration(milliseconds: 600),
     this.rebuildCooldown = const Duration(seconds: 20),
     this.unresponsiveGrace = defaultUnresponsiveGrace,
+    this.idleAfter = defaultIdleAfter,
     DateTime Function()? clock,
   }) : _clock = clock ?? DateTime.now;
 
@@ -26,6 +27,7 @@ class MorphWebViewController {
        surfaceSettle = opener.surfaceSettle,
        rebuildCooldown = opener.rebuildCooldown,
        unresponsiveGrace = opener.unresponsiveGrace,
+       idleAfter = opener.idleAfter,
        _clock = opener._clock,
        _opener = opener {
     _adopt(session);
@@ -39,6 +41,12 @@ class MorphWebViewController {
   /// Heavy pages (a YouTube watch page starting its player) routinely block
   /// the renderer for several seconds; WebKit flags them after about three.
   static const defaultUnresponsiveGrace = Duration(seconds: 10);
+
+  /// How long a tab stays hidden before it gives up its extra buffering.
+  static const defaultIdleAfter = Duration(seconds: 45);
+
+  /// How long this tab stays hidden before [MorphBuffering.idle].
+  final Duration idleAfter;
 
   final String initialUrl;
 
@@ -72,6 +80,53 @@ class MorphWebViewController {
   /// How many times this view rebuilt its native surface to recover from a
   /// blank or lost surface.
   int get surfaceRebuilds => _surfaceRebuilds;
+
+  bool _visible = true;
+  Timer? _idleTimer;
+  MorphBuffering _buffering = MorphBuffering.full;
+
+  /// Whether the shell shows this tab.
+  bool get visible => _visible;
+
+  /// What the engine is asked to keep rendered for this tab.
+  MorphBuffering get buffering => _buffering;
+
+  /// The shell shows (true) or hides (false) this tab. Showing restores full
+  /// buffering at once (call it as a tab switch starts, so the renderer is
+  /// warming up while the switch animates); hiding drops to
+  /// [MorphBuffering.idle] only after [idleAfter], so flipping between two
+  /// tabs keeps both fast.
+  void setVisible(bool visible) {
+    if (visible) {
+      _idleTimer?.cancel();
+      _idleTimer = null;
+      _visible = true;
+      _setBuffering(MorphBuffering.full);
+      return;
+    }
+    if (!_visible) {
+      return;
+    }
+    _visible = false;
+    _idleTimer?.cancel();
+    _idleTimer = Timer(idleAfter, () {
+      _idleTimer = null;
+      if (!_visible) {
+        _setBuffering(MorphBuffering.idle);
+      }
+    });
+  }
+
+  void _setBuffering(MorphBuffering buffering) {
+    if (_buffering == buffering) {
+      return;
+    }
+    _buffering = buffering;
+    final session = _session;
+    if (session != null) {
+      unawaited(session.setBuffering(buffering));
+    }
+  }
 
   MorphWebViewSession? _session;
   String? _pendingUrl;
@@ -186,6 +241,10 @@ class MorphWebViewController {
   void _adopt(MorphWebViewSession session) {
     _session = session;
     _renderPath = session.renderPath;
+    if (_buffering != MorphBuffering.full) {
+      // Hidden long enough before its view existed.
+      unawaited(session.setBuffering(_buffering));
+    }
     _subs.add(
       session.navigation.listen((event) {
         _navigation = event;
@@ -477,6 +536,8 @@ class MorphWebViewController {
     for (final popup in open) {
       await popup.dispose();
     }
+    _idleTimer?.cancel();
+    _idleTimer = null;
     for (final sub in _subs) {
       await sub.cancel();
     }
