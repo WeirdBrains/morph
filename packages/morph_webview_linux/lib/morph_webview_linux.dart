@@ -174,11 +174,6 @@ class _LinuxWebViewSession extends MorphWebViewSession {
   Future<void> terminateRenderer() =>
       _channel.invokeMethod<void>('terminateWebProcess', {'viewId': viewId});
 
-  /// The web view survives its web process; the controller's reload of the
-  /// last URL starts a new one, so there is nothing to rebuild.
-  @override
-  Future<void> recoverRenderer() async {}
-
   @override
   Future<void> resize({
     required int width,

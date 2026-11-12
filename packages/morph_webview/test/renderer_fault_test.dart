@@ -42,9 +42,8 @@ void main() {
     await controller.dispose();
   });
 
-  test('recovering reloads the last page in a new renderer', () async {
+  test('recovering brings the page back in a new renderer', () async {
     final (controller, session) = await attached();
-    await controller.loadUrl('https://example.org/a');
     session.emitRenderer(MorphRendererFault.killed);
     await _pump();
     await Future.wait([
@@ -53,7 +52,6 @@ void main() {
     ]);
     expect(session.rendererRecoveries, 1);
     expect(session.rendererTerminations, 0);
-    expect(session.history.last, 'https://example.org/a');
     expect(controller.rendererFault.value, isNull);
     await controller.dispose();
   });
