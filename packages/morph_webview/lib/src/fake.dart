@@ -309,6 +309,28 @@ class FakeMorphWebViewSession extends MorphWebViewSession {
   @override
   Stream<void> get surfaceLost => _surfaceLost.stream;
 
+  final _renderer = StreamController<MorphRendererEvent>.broadcast();
+  int rendererTerminations = 0;
+  int rendererRecoveries = 0;
+
+  /// Simulates this view's renderer crashing, being killed or hanging; null
+  /// means it answers again.
+  void emitRenderer(MorphRendererFault? fault) =>
+      _renderer.add(MorphRendererEvent(fault));
+
+  @override
+  Stream<MorphRendererEvent> get renderer => _renderer.stream;
+
+  @override
+  Future<void> terminateRenderer() async {
+    rendererTerminations++;
+  }
+
+  @override
+  Future<void> recoverRenderer() async {
+    rendererRecoveries++;
+  }
+
   @override
   Future<MorphSurfaceVerdict> checkSurface() async {
     surfaceChecks++;
@@ -334,6 +356,7 @@ class FakeMorphWebViewSession extends MorphWebViewSession {
   @override
   Future<void> dispose() async {
     await _surfaceLost.close();
+    await _renderer.close();
     await _navController.close();
     await _pageController.close();
     await _cursorController.close();

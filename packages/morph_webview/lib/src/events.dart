@@ -380,3 +380,28 @@ String debugFormatPointer(MorphPointerEvent event) {
   }
   return event.phase;
 }
+
+/// Why a tab's web content process stopped serving the page.
+enum MorphRendererFault {
+  /// The renderer crashed.
+  crashed,
+
+  /// The system or the engine killed it (low memory, or an explicit
+  /// terminate).
+  killed,
+
+  /// It went over its memory limit.
+  outOfMemory,
+
+  /// It is alive but has stopped responding. Can clear by itself.
+  unresponsive,
+}
+
+/// A change in a tab's renderer. A null [fault] means it is healthy again
+/// (only ever sent after [MorphRendererFault.unresponsive]).
+class MorphRendererEvent {
+  const MorphRendererEvent(this.fault, {this.detail = ''});
+
+  final MorphRendererFault? fault;
+  final String detail;
+}

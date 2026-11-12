@@ -44,6 +44,11 @@ class MorphWebViewController {
   );
   final focusNode = FocusNode(debugLabel: 'morph-webview');
   final cursorShape = ValueNotifier<String>('default');
+
+  /// Set while this tab's renderer is crashed, killed or hung. Only this tab
+  /// is affected; [recoverFromFault] brings it back.
+  final rendererFault = ValueNotifier<MorphRendererFault?>(null);
+  Future<void>? _recovering;
   final _navController = StreamController<MorphNavigationEvent>.broadcast();
   final _pageController = StreamController<String>.broadcast();
   final _cursorController = StreamController<MorphCursorEvent>.broadcast();
@@ -144,11 +149,63 @@ class MorphWebViewController {
     _subs.add(
       session.surfaceLost.listen((_) => unawaited(_rebuild(force: true))),
     );
+    _subs.add(session.renderer.listen(_onRenderer));
     final pending = _pendingUrl;
     if (pending != null) {
       // An address submitted while create was in flight.
       _pendingUrl = null;
       await session.loadUrl(pending);
+    }
+  }
+
+  void _onRenderer(MorphRendererEvent event) {
+    final fault = event.fault;
+    if (fault == null) {
+      if (rendererFault.value == MorphRendererFault.unresponsive) {
+        rendererFault.value = null;
+      }
+      return;
+    }
+    // A hang report never hides a crash that already happened.
+    if (fault == MorphRendererFault.unresponsive &&
+        rendererFault.value != null &&
+        rendererFault.value != MorphRendererFault.unresponsive) {
+      return;
+    }
+    rendererFault.value = fault;
+  }
+
+  /// Reloads a tab whose renderer crashed, was killed or hung: ends a hung
+  /// renderer first, then brings up a new one on the last URL. Concurrent
+  /// calls share one recovery.
+  Future<void> recoverFromFault() {
+    final running = _recovering;
+    if (running != null) {
+      return running;
+    }
+    final recovering = _recover();
+    _recovering = recovering;
+    return recovering.whenComplete(() {
+      if (identical(_recovering, recovering)) {
+        _recovering = null;
+      }
+    });
+  }
+
+  Future<void> _recover() async {
+    final session = _session;
+    final fault = rendererFault.value;
+    if (session == null || fault == null) {
+      return;
+    }
+    if (fault == MorphRendererFault.unresponsive) {
+      await session.terminateRenderer();
+    }
+    final url = _navigation.url.isNotEmpty ? _navigation.url : initialUrl;
+    rendererFault.value = null;
+    await session.recoverRenderer();
+    if (identical(_session, session) && url.isNotEmpty) {
+      await session.loadUrl(url);
     }
   }
 
@@ -177,6 +234,12 @@ class MorphWebViewController {
     final session = _session;
     if (session == null) {
       return MorphSurfaceVerdict.unknown;
+    }
+    if (rendererFault.value != null) {
+      // A crashed or hung tab waits for the user (or the shell) to recover
+      // it; rebuilding here would hide the crash and could loop on a page
+      // that crashes on load.
+      return MorphSurfaceVerdict.rendererGone;
     }
     await session.repaintSurface();
     var verdict = await session.checkSurface();
@@ -277,6 +340,7 @@ class MorphWebViewController {
     _session = null;
     focusNode.dispose();
     cursorShape.dispose();
+    rendererFault.dispose();
     await _navController.close();
     await _pageController.close();
     await _cursorController.close();

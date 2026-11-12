@@ -95,6 +95,22 @@ abstract class MorphWebViewSession {
   /// the Android renderer process died) and must be rebuilt.
   Stream<void> get surfaceLost => const Stream.empty();
 
+  /// Renderer crashes, kills and hangs for this view only. Other tabs keep
+  /// running; the shell shows a per-tab "page crashed" state.
+  Stream<MorphRendererEvent> get renderer => const Stream.empty();
+
+  /// Ends a hung renderer so the tab can be reloaded.
+  Future<void> terminateRenderer() async {}
+
+  /// Brings the view back after its renderer died: a fresh native view where
+  /// the old one is unusable, else a reload. The controller then loads the
+  /// last URL.
+  Future<void> recoverRenderer() async {
+    if (!await rebuildSurface()) {
+      await reload();
+    }
+  }
+
   Future<void> dispose();
 }
 
