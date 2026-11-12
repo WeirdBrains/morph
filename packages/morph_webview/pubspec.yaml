@@ -36,3 +36,5 @@ flutter:
         default_package: morph_webview_inapp
       windows:
         default_package: morph_webview_inapp
+      android:
+        default_package: morph_webview_inapp

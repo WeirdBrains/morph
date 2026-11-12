@@ -8,7 +8,7 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:morph_webview/control.dart';
 import 'package:morph_webview/morph_webview.dart';
 
-/// macOS (WKWebView) and Windows (WebView2) implementation of [MorphWebViewPlatform].
+/// macOS (WKWebView), Windows (WebView2), and Android WebView implementation of [MorphWebViewPlatform].
 class MorphWebViewInApp extends MorphWebViewPlatform {
   MorphWebViewInApp();
 
@@ -86,6 +86,16 @@ class MorphWebViewInApp extends MorphWebViewPlatform {
   }
 }
 
+String _renderPathForHost() {
+  if (Platform.isWindows) {
+    return 'webview2';
+  }
+  if (Platform.isAndroid) {
+    return 'android-webview';
+  }
+  return 'wkwebview';
+}
+
 class _InAppSession extends MorphWebViewSession {
   _InAppSession({
     required this.viewId,
@@ -97,7 +107,7 @@ class _InAppSession extends MorphWebViewSession {
     required this._bindings,
     required this._onDispose,
   }) : renderPath = MorphRenderPathInfo(
-         path: Platform.isWindows ? 'webview2' : 'wkwebview',
+         path: _renderPathForHost(),
          reason: 'flutter_inappwebview',
        ) {
     _view = InAppWebView(
