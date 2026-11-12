@@ -1678,3 +1678,17 @@ Morph has no search-engine setting yet; `searchUrl` uses DuckDuckGo
 (`https://duckduckgo.com/?q=`, query whitespace-collapsed, capped at 2000
 characters) until one exists. Non-text shares (images, files) are not
 accepted.
+
+### 2026-11-12 — Linux: the WPE path is opt-in until it has its own module
+
+On a machine with wpewebkit installed, `morph_webview_linux_plugin` linked
+both libWPEWebKit-2.0 and libwebkit2gtk-4.1. They export the same `webkit_*`
+names, so the GTK web view's calls bound to WPE's copies and the first tab
+crashed (SIGSEGV in `webkit_user_content_manager_register_script_message_handler`,
+a few seconds after launch). CI never saw it: Ubuntu 22.04 has no WPE.
+
+Decision: the WPE DMA-BUF path is built only with `-DMORPH_WEBVIEW_WPE=ON`.
+By default the plugin links webkit2gtk alone and reports `wpe-not-built`
+(flutter-gl, then snapshot). Step 3 (zero-copy WPE) must put the WPE renderer
+in a separate library (or dlopen it with RTLD_LOCAL) so the two WebKits never
+share a symbol namespace, then turn the option back on.

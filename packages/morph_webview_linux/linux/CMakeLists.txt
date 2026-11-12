@@ -13,15 +13,25 @@ pkg_check_modules(WEBKIT REQUIRED IMPORTED_TARGET webkit2gtk-4.1)
 pkg_check_modules(EGL REQUIRED IMPORTED_TARGET egl)
 pkg_check_modules(EPOXY REQUIRED IMPORTED_TARGET epoxy)
 
-# Optional WPE path (WPE Platform or WPEBackend-fdo). When headers are present
-# the DMA-BUF backend is compiled in; otherwise feature detection reports
-# wpe-not-built and the snapshot fallback is used.
-pkg_check_modules(WPE QUIET IMPORTED_TARGET wpe-webkit-2.0)
-if(NOT WPE_FOUND)
-  pkg_check_modules(WPE QUIET IMPORTED_TARGET wpe-webkit-1.1)
+# Optional WPE path (WPE Platform or WPEBackend-fdo), off by default.
+#
+# libWPEWebKit and libwebkit2gtk export the same webkit_* symbol names. Linked
+# into this one library next to webkit2gtk, the dynamic linker binds the GTK
+# web view's calls to WPE's copies and the first tab crashes in
+# webkit_user_content_manager_register_script_message_handler (seen on a
+# machine with wpewebkit 2.54 installed; CI has no WPE so it never linked).
+# Until the WPE renderer lives in its own module, build it only on request
+# (-DMORPH_WEBVIEW_WPE=ON); otherwise feature detection reports wpe-not-built
+# and flutter-gl / the snapshot fallback is used.
+option(MORPH_WEBVIEW_WPE "Link the experimental WPE DMA-BUF path" OFF)
+if(MORPH_WEBVIEW_WPE)
+  pkg_check_modules(WPE QUIET IMPORTED_TARGET wpe-webkit-2.0)
+  if(NOT WPE_FOUND)
+    pkg_check_modules(WPE QUIET IMPORTED_TARGET wpe-webkit-1.1)
+  endif()
+  pkg_check_modules(WPE_FDO QUIET IMPORTED_TARGET wpebackend-fdo-1.0)
+  pkg_check_modules(WPE_PLATFORM QUIET IMPORTED_TARGET wpe-platform-2.0)
 endif()
-pkg_check_modules(WPE_FDO QUIET IMPORTED_TARGET wpebackend-fdo-1.0)
-pkg_check_modules(WPE_PLATFORM QUIET IMPORTED_TARGET wpe-platform-2.0)
 
 list(APPEND PLUGIN_SOURCES
   "morph_webview_linux_plugin.cc"
@@ -53,7 +63,7 @@ if(WPE_FOUND AND (WPE_FDO_FOUND OR WPE_PLATFORM_FOUND))
   endif()
   message(STATUS "morph_webview_linux: building WPE DMA-BUF path")
 else()
-  message(STATUS "morph_webview_linux: WPE not found; snapshot path only")
+  message(STATUS "morph_webview_linux: WPE not built (MORPH_WEBVIEW_WPE=${MORPH_WEBVIEW_WPE}); flutter-gl and snapshot paths only")
 endif()
 
 # In-process gRPC control layer (staticlib). Never drop cargo target/ inside the repo.
