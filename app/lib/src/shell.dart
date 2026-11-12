@@ -1,5 +1,6 @@
 import 'default_browser.dart';
 import 'incoming_links.dart';
+import 'omnibox.dart';
 
 import 'dart:async';
 import 'dart:io';
@@ -452,12 +453,9 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
   }
 
   Future<void> _submitUrl(String raw) async {
-    var url = raw.trim();
-    if (url.isEmpty) {
+    final url = omniboxTarget(raw);
+    if (url == null) {
       return;
-    }
-    if (!url.contains('://')) {
-      url = 'https://$url';
     }
     _canonicalAddress = url;
     _applyAddressDisplay();

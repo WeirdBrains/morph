@@ -1692,3 +1692,14 @@ By default the plugin links webkit2gtk alone and reports `wpe-not-built`
 (flutter-gl, then snapshot). Step 3 (zero-copy WPE) must put the WPE renderer
 in a separate library (or dlopen it with RTLD_LOCAL) so the two WebKits never
 share a symbol namespace, then turn the option back on.
+
+### 2026-11-12 — Address bar: phrases are searches
+
+The shell prefixed `https://` to anything without `://`, so a phrase loaded
+as a percent-encoded URL and WebKit showed "The URL can't be shown".
+Decision: `omniboxTarget` (shared by every platform) opens text as an address
+only when it looks like one: http(s) with a host and no spaces, `about:`,
+`file:`, `data:`, `view-source:`, `localhost[:port]`, an IPv4 address, or a
+bare `host.tld[:port][/path]`. Everything else, including any input with a
+space and unknown schemes such as `javascript:`, is a DuckDuckGo search
+(`MorphIncomingLinks.searchUrl`) until a search-engine setting exists.
