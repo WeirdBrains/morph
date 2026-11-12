@@ -38,6 +38,12 @@ InAppWebViewSettings morphInAppWebViewSettings({bool? desktopSite}) {
     // Android: report a dead renderer so the tab shows its crash state and
     // can be rebuilt, instead of the whole app being killed.
     useOnRenderProcessGone: true,
+    // window.open and target=_blank open a real second web view (see
+    // popups.dart). Without this, Android loads the new window's address
+    // into the tab itself and the page loses window.opener: Google sign-in
+    // then shows accounts.google.com/gsi/select as a blank white page.
+    supportMultipleWindows: true,
+    javaScriptCanOpenWindowsAutomatically: true,
     preferredContentMode: switch (desktopSite) {
       null => UserPreferredContentMode.RECOMMENDED,
       true => UserPreferredContentMode.DESKTOP,
