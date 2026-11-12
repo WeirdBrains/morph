@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:flutter/widgets.dart';
+
 import 'events.dart';
 import 'platform.dart';
 
@@ -10,9 +12,11 @@ class FakeMorphWebViewPlatform extends MorphWebViewPlatform {
       path: 'webkitgtk-snapshot',
       reason: 'fake',
     ),
+    this.platformView,
   });
 
   final MorphRenderPathInfo renderPath;
+  final Widget? platformView;
   final List<String> loadedUrls = [];
   final List<String> evaluated = [];
   FakeMorphWebViewSession? lastSession;
@@ -29,6 +33,8 @@ class FakeMorphWebViewPlatform extends MorphWebViewPlatform {
     final session = FakeMorphWebViewSession(
       renderPath: renderPath,
       url: initialUrl,
+      textureId: platformView == null ? 1 : null,
+      platformView: platformView,
     );
     lastSession = session;
     return session;
@@ -40,6 +46,7 @@ class FakeMorphWebViewSession extends MorphWebViewSession {
     required this.renderPath,
     required String url,
     this.textureId = 1,
+    this.platformView,
   }) : _nav = MorphNavigationEvent(url: url, title: 'Fake', progress: 1) {
     history.add(url);
     historyIndex = 0;
@@ -48,7 +55,10 @@ class FakeMorphWebViewSession extends MorphWebViewSession {
   }
 
   @override
-  final int textureId;
+  final int? textureId;
+
+  @override
+  final Widget? platformView;
 
   @override
   final MorphRenderPathInfo renderPath;

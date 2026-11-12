@@ -139,9 +139,12 @@ class _MorphWebViewState extends State<MorphWebView> {
           }
         });
         final textureId = widget.controller.textureId;
+        final platformView = widget.controller.platformView;
         Widget child;
         if (_error != null) {
           child = Center(child: Text('Web view error: $_error'));
+        } else if (platformView != null) {
+          child = platformView;
         } else if (textureId != null) {
           child = Focus(
             onKeyEvent: _onKey,

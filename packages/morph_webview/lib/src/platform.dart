@@ -1,3 +1,4 @@
+import 'package:flutter/widgets.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
 import 'events.dart';
@@ -28,7 +29,10 @@ abstract class MorphWebViewPlatform extends PlatformInterface {
 
 /// One live view on a platform backend.
 abstract class MorphWebViewSession {
-  int get textureId;
+  int? get textureId;
+
+  /// When non-null, [MorphWebView] embeds this widget instead of a texture.
+  Widget? get platformView => null;
   MorphRenderPathInfo get renderPath;
 
   Stream<MorphNavigationEvent> get navigation;
@@ -64,7 +68,7 @@ class _UnimplementedWebViewPlatform extends MorphWebViewPlatform {
   }) {
     throw UnimplementedError(
       'MorphWebViewPlatform.create has not been set. '
-      'Widget tests should install a fake; the Linux app uses morph_webview_linux.',
+      'Widget tests should install a fake; desktop apps use a morph_webview platform package.',
     );
   }
 }

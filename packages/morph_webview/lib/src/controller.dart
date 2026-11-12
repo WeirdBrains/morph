@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:flutter/widgets.dart';
+
 import 'events.dart';
 import 'platform.dart';
 
@@ -22,6 +24,7 @@ class MorphWebViewController {
   MorphNavigationEvent get currentNavigation => _navigation;
   MorphRenderPathInfo get renderPath => _renderPath;
   int? get textureId => _session?.textureId;
+  Widget? get platformView => _session?.platformView;
   bool get isAttached => _session != null;
   bool get handlesPageBridge => _session?.handlesPageBridge ?? false;
 
