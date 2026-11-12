@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import '../tabs/tab_position.dart';
 import '../tabs/tab_set.dart';
 import '../theme/morph_theme.dart';
-import '../window/morph_desktop_window.dart';
 import '../window/window_buttons.dart';
 import 'brand.dart';
 import 'window_chrome.dart';

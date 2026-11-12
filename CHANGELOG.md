@@ -22,6 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   use flutter_inappwebview 6.x behind the Morph web-view interface and talk
   to the in-process control server. Dart's gRPC client falls back to loopback
   TCP on Windows because package:grpc cannot open a named pipe.
+- On mobile, back/forward/reload/go are hidden. Edge-swipe walks history
+  (with a visual arrow), pull-to-refresh reloads, and the system back
+  gesture or button goes back in web history when possible. Tapping the
+  URL field selects all of its text on every platform. Tapping the
+  address bar opens a Firefox-style sheet (no VPN row) with an editable
+  URL at the top; unbuilt actions show a coming soon snackbar. A tab-count
+  button opens a two-column tab grid with favicon, title, close, preview,
+  swipe-to-close, and a bottom search/menu pill plus a new-tab button.
 - Desktop tab chrome can sit on the top, bottom, left, or right of the web
   view. The address and back/forward/reload row always stays at the top.
   Left and right use a vertical list (favicon, truncated title, close) that

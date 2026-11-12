@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:morph/src/api.dart';
 import 'package:morph/src/app.dart';
-import 'package:morph/src/widgets/address_sheet.dart';
+import 'package:morph/src/widgets/tab_switcher.dart';
 import 'package:morph/src/shell.dart';
 import 'package:morph/src/theme/morph_theme.dart';
 import 'package:morph/src/widgets/start_page.dart';
@@ -270,6 +270,8 @@ void main() {
         expect(find.byKey(const Key('nav-back')), findsNothing);
         expect(find.byKey(const Key('nav-reload')), findsNothing);
         expect(find.byKey(const Key('mobile-gestures')), findsOneWidget);
+        expect(find.byKey(const Key('tab-count')), findsOneWidget);
+        expect(find.byKey(const Key('tab-new')), findsOneWidget);
         expect(find.text('Ping page bridge'), findsNothing);
         expect(find.textContaining('Error: no home directory'), findsNothing);
 
@@ -445,6 +447,66 @@ void main() {
       await tester.tap(find.byKey(const Key('sheet-history')));
       await tester.pump();
       expect(find.text('History is coming soon'), findsOneWidget);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('phone tab-count opens a two-column tab grid', (tester) async {
+    final view = tester.view;
+    view.physicalSize = const Size(412, 915);
+    view.devicePixelRatio = 1.0;
+    addTearDown(view.reset);
+
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    const missingHome = '/tmp/morph-does-not-exist';
+    try {
+      await tester.pumpWidget(
+        MorphApp(
+          api: FakeMorphApi(),
+          home: missingHome,
+          subscribeToTicks: false,
+          loadPageBridgeAsset: false,
+        ),
+      );
+      await _pumpUntilIdentity(tester);
+
+      expect(find.byKey(const Key('tab-count')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('tab-new')));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('tab-count')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('tab-switcher')), findsOneWidget);
+      expect(find.byKey(const Key('tab-switcher-grid')), findsOneWidget);
+      expect(find.byType(MorphTabCard), findsNWidgets(2));
+      expect(find.byKey(const Key('tab-switcher-search')), findsOneWidget);
+      expect(find.byKey(const Key('tab-switcher-new')), findsOneWidget);
+
+      final first = tester.getRect(find.byType(MorphTabCard).at(0));
+      final second = tester.getRect(find.byType(MorphTabCard).at(1));
+      expect(first.top, closeTo(second.top, 1));
+      expect(first.right, lessThanOrEqualTo(second.left + 0.5));
+
+      // Active card uses the Glitch cyan/magenta outline.
+      final active = tester.widget<MorphTabCard>(
+        find.byType(MorphTabCard).last,
+      );
+      expect(active.active, isTrue);
+
+      await tester.tap(find.byType(MorphTabCard).first);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('tab-switcher')), findsNothing);
+
+      await tester.tap(find.byKey(const Key('tab-count')));
+      await tester.pumpAndSettle();
+      await tester.fling(
+        find.byType(MorphTabCard).first,
+        const Offset(-300, 0),
+        800,
+      );
+      await tester.pumpAndSettle();
+      expect(find.byType(MorphTabCard), findsOneWidget);
     } finally {
       debugDefaultTargetPlatformOverride = null;
     }
