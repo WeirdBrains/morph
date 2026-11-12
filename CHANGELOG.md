@@ -9,3 +9,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Start the Morph workspace: Rust core, identity integration with Weirdnet 0.1.0,
   a Flutter shell wired through flutter_rust_bridge, and CI for the first M1 slice.
+- Linux `morph_webview` / `morph_webview_linux`: webkit2gtk-4.1 offscreen
+  snapshot texture, WPE DMA-BUF feature detection, live navigation, and
+  page-bridge wiring on a real view.
