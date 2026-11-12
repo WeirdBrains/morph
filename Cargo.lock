@@ -2839,9 +2839,11 @@ name = "morph-bridge"
 version = "0.1.0"
 dependencies = [
  "flutter_rust_bridge",
+ "jni-sys",
  "morph-core",
  "morph-identity",
  "morph-webview-control",
+ "ndk-context",
  "tempfile",
 ]
 

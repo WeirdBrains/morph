@@ -20,6 +20,12 @@ morph-core.workspace = true
 morph-identity.workspace = true
 morph-webview-control.workspace = true
 
+# hickory-resolver (libp2p DNS inside weirdnet-net) reads the system DNS
+# servers through ndk-context on Android; see src/android.rs.
+[target.'cfg(target_os = "android")'.dependencies]
+jni-sys.workspace = true
+ndk-context.workspace = true
+
 [dev-dependencies]
 tempfile.workspace = true
 
