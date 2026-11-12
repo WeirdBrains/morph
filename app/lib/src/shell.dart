@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:morph_webview/morph_webview.dart';
 
 import 'api.dart';
+import 'shell_shortcuts.dart';
 import 'host_friendly_url.dart';
 export 'host_friendly_url.dart';
 import 'theme/morph_theme.dart';
@@ -157,6 +158,7 @@ class MorphShellState extends State<MorphShell> {
         _applyAddressDisplay();
       }
     });
+    FocusManager.instance.addEarlyKeyEventHandler(_onShellKey);
     unawaited(_load());
   }
 
@@ -369,6 +371,7 @@ class MorphShellState extends State<MorphShell> {
 
   @override
   void dispose() {
+    FocusManager.instance.removeEarlyKeyEventHandler(_onShellKey);
     unawaited(_saveCurrentTabs());
     unawaited(_ticks?.cancel());
     for (final sub in _navSubs.values) {
@@ -675,6 +678,63 @@ class MorphShellState extends State<MorphShell> {
     }
   }
 
+  KeyEventResult _onShellKey(KeyEvent event) {
+    final shortcut = MorphShellShortcuts.match(event);
+    if (shortcut == null) {
+      return KeyEventResult.ignored;
+    }
+    final invoke =
+        event is KeyDownEvent ||
+        (event is KeyRepeatEvent &&
+            (shortcut == MorphShellShortcut.nextTab ||
+                shortcut == MorphShellShortcut.prevTab));
+    if (invoke && mounted) {
+      _invokeShellShortcut(shortcut);
+    }
+    return KeyEventResult.handled;
+  }
+
+  void _invokeShellShortcut(MorphShellShortcut shortcut) {
+    switch (shortcut) {
+      case MorphShellShortcut.newTab:
+        _openTab();
+      case MorphShellShortcut.closeTab:
+        _closeTab(tabs.activeId);
+      case MorphShellShortcut.nextTab:
+        _controllerFor(tabs.cycleNext());
+        _syncAddressFromActive();
+        setState(() {});
+      case MorphShellShortcut.prevTab:
+        _controllerFor(tabs.cyclePrev());
+        _syncAddressFromActive();
+        setState(() {});
+      case MorphShellShortcut.focusAddress:
+        addressFocus.requestFocus();
+        _selectAllAddress();
+      case MorphShellShortcut.reload:
+        unawaited(webView.reload());
+      case MorphShellShortcut.selectTab1:
+      case MorphShellShortcut.selectTab2:
+      case MorphShellShortcut.selectTab3:
+      case MorphShellShortcut.selectTab4:
+      case MorphShellShortcut.selectTab5:
+      case MorphShellShortcut.selectTab6:
+      case MorphShellShortcut.selectTab7:
+      case MorphShellShortcut.selectTab8:
+      case MorphShellShortcut.selectLastTab:
+        final index = MorphShellShortcuts.tabIndex(shortcut);
+        if (index == null || tabs.tabs.isEmpty) {
+          return;
+        }
+        final tab = index < 0
+            ? tabs.tabs.last
+            : (index < tabs.tabs.length ? tabs.tabs[index] : null);
+        if (tab != null) {
+          _switchTab(tab.id);
+        }
+    }
+  }
+
   Future<void> _openAddressSheet() async {
     if (!mounted) {
       return;
@@ -849,38 +909,11 @@ class MorphShellState extends State<MorphShell> {
           unawaited(webView.goBack());
         }
       },
-      child: CallbackShortcuts(
-        bindings: {
-          const SingleActivator(LogicalKeyboardKey.keyT, control: true):
-              _openTab,
-          const SingleActivator(LogicalKeyboardKey.keyT, meta: true): _openTab,
-          const SingleActivator(LogicalKeyboardKey.keyW, control: true): () {
-            _closeTab(tabs.activeId);
-          },
-          const SingleActivator(LogicalKeyboardKey.keyW, meta: true): () {
-            _closeTab(tabs.activeId);
-          },
-          const SingleActivator(LogicalKeyboardKey.tab, control: true): () {
-            _controllerFor(tabs.cycleNext());
-            _syncAddressFromActive();
-            setState(() {});
-          },
-          const SingleActivator(
-            LogicalKeyboardKey.tab,
-            control: true,
-            shift: true,
-          ): () {
-            _controllerFor(tabs.cyclePrev());
-            _syncAddressFromActive();
-            setState(() {});
-          },
-        },
-        child: Focus(
-          autofocus: true,
-          child: Scaffold(
-            resizeToAvoidBottomInset: true,
-            body: SafeArea(top: false, bottom: false, child: body),
-          ),
+      child: Focus(
+        autofocus: true,
+        child: Scaffold(
+          resizeToAvoidBottomInset: true,
+          body: SafeArea(top: false, bottom: false, child: body),
         ),
       ),
     );
