@@ -45,7 +45,10 @@ class InAppRendererWatch {
     _terminateRequested = false;
     final ended = _ended;
     if (ended != null && !ended.isCompleted) {
+      // The renderer ended because the user chose to reload; the tab is
+      // already recovering, so this is not a new fault to show.
       ended.complete();
+      return;
     }
     _emit(fault);
   }
