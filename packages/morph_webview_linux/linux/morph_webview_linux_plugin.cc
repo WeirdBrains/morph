@@ -5,11 +5,14 @@
 #include "key_map.h"
 #include "render_path.h"
 #include "session.h"
+#include "frame.h"
 
 #include <cairo/cairo.h>
 #include <flutter_linux/flutter_linux.h>
 #include <gtk/gtk.h>
 #include <webkit2/webkit2.h>
+
+#include <epoxy/gl.h>
 
 #include <cstring>
 #include <map>
@@ -45,9 +48,19 @@ G_DECLARE_FINAL_TYPE(MorphPixelBufferTexture,
                      PIXEL_BUFFER_TEXTURE,
                      FlPixelBufferTexture)
 
+G_DECLARE_FINAL_TYPE(MorphGlTexture, morph_gl_texture, MORPH, GL_TEXTURE, FlTextureGL)
+
 struct _MorphPixelBufferTexture {
   FlPixelBufferTexture parent_instance;
   MorphView* view;
+};
+
+struct _MorphGlTexture {
+  FlTextureGL parent_instance;
+  MorphView* view;
+  GLuint texture_id;
+  uint32_t uploaded_width;
+  uint32_t uploaded_height;
 };
 
 struct MorphView {
@@ -55,7 +68,17 @@ struct MorphView {
   gchar* profile_id;
   MorphWebviewLinuxPlugin* plugin;
   FlTextureRegistrar* textures;
-  MorphPixelBufferTexture* texture;
+  FlTexture* texture;
+  MorphPixelBufferTexture* pixel_texture;
+  MorphGlTexture* gl_texture;
+  gboolean use_gl;
+  gboolean frame_dirty;
+  gboolean live_present;
+  gint64 last_present_us;
+  gint64 last_input_us;
+  guint tick_id;
+  guint presents;
+  guint present_us_accum;
   GtkWidget* offscreen;
   WebKitWebView* web_view;
   uint8_t* front;
@@ -103,6 +126,7 @@ G_DEFINE_TYPE(MorphWebviewLinuxPlugin, morph_webview_linux_plugin, G_TYPE_OBJECT
 G_DEFINE_TYPE(MorphPixelBufferTexture,
               morph_pixel_buffer_texture,
               fl_pixel_buffer_texture_get_type())
+G_DEFINE_TYPE(MorphGlTexture, morph_gl_texture, fl_texture_gl_get_type())
 
 static gboolean morph_pixel_buffer_texture_copy_pixels(FlPixelBufferTexture* texture,
                                                        const uint8_t** buffer,
@@ -143,6 +167,80 @@ static MorphPixelBufferTexture* morph_pixel_buffer_texture_new(MorphView* view) 
   return texture;
 }
 
+static gboolean morph_gl_texture_populate(FlTextureGL* texture,
+                                          uint32_t* target,
+                                          uint32_t* name,
+                                          uint32_t* width,
+                                          uint32_t* height,
+                                          GError** error) {
+  MorphGlTexture* self = MORPH_GL_TEXTURE(texture);
+  MorphView* view = self->view;
+  if (view == nullptr) {
+    g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED, "view disposed");
+    return FALSE;
+  }
+  g_mutex_lock(&view->lock);
+  if (view->front == nullptr || view->tex_width == 0 || view->tex_height == 0) {
+    g_mutex_unlock(&view->lock);
+    g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED, "no frame yet");
+    return FALSE;
+  }
+  if (self->texture_id == 0) {
+    glGenTextures(1, &self->texture_id);
+    glBindTexture(GL_TEXTURE_2D, self->texture_id);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  } else {
+    glBindTexture(GL_TEXTURE_2D, self->texture_id);
+  }
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+  if (self->uploaded_width != view->tex_width || self->uploaded_height != view->tex_height) {
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, view->tex_width, view->tex_height, 0, GL_BGRA,
+                 GL_UNSIGNED_BYTE, view->front);
+    self->uploaded_width = view->tex_width;
+    self->uploaded_height = view->tex_height;
+  } else {
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, view->tex_width, view->tex_height, GL_BGRA,
+                    GL_UNSIGNED_BYTE, view->front);
+  }
+  *target = GL_TEXTURE_2D;
+  *name = self->texture_id;
+  *width = view->tex_width;
+  *height = view->tex_height;
+  g_mutex_unlock(&view->lock);
+  return TRUE;
+}
+
+static void morph_gl_texture_dispose(GObject* object) {
+  MorphGlTexture* self = MORPH_GL_TEXTURE(object);
+  if (self->texture_id != 0) {
+    glDeleteTextures(1, &self->texture_id);
+    self->texture_id = 0;
+  }
+  G_OBJECT_CLASS(morph_gl_texture_parent_class)->dispose(object);
+}
+
+static void morph_gl_texture_class_init(MorphGlTextureClass* klass) {
+  FL_TEXTURE_GL_CLASS(klass)->populate = morph_gl_texture_populate;
+  G_OBJECT_CLASS(klass)->dispose = morph_gl_texture_dispose;
+}
+
+static void morph_gl_texture_init(MorphGlTexture* self) {
+  self->view = nullptr;
+  self->texture_id = 0;
+  self->uploaded_width = 0;
+  self->uploaded_height = 0;
+}
+
+static MorphGlTexture* morph_gl_texture_new(MorphView* view) {
+  MorphGlTexture* texture =
+      MORPH_GL_TEXTURE(g_object_new(morph_gl_texture_get_type(), nullptr));
+  texture->view = view;
+  return texture;
+}
+
 static void emit_event(MorphView* view, FlValue* event) {
   MorphWebviewLinuxPlugin* plugin = view->plugin;
   if (plugin == nullptr || !plugin->events_listening || plugin->events == nullptr) {
@@ -172,28 +270,7 @@ static void emit_navigation(MorphView* view) {
 }
 
 static void request_snapshot(MorphView* view);
-
-static void copy_cairo_to_rgba(cairo_surface_t* surface,
-                               uint8_t* dest,
-                               uint32_t width,
-                               uint32_t height) {
-  cairo_surface_flush(surface);
-  unsigned char* src = cairo_image_surface_get_data(surface);
-  int stride = cairo_image_surface_get_stride(surface);
-  for (uint32_t y = 0; y < height; y++) {
-    unsigned char* row = src + static_cast<size_t>(y) * stride;
-    uint8_t* out = dest + static_cast<size_t>(y) * width * 4;
-    for (uint32_t x = 0; x < width; x++) {
-      // CAIRO_FORMAT_ARGB32 is native-endian, BGRA on little endian.
-      out[0] = row[2];
-      out[1] = row[1];
-      out[2] = row[0];
-      out[3] = row[3];
-      row += 4;
-      out += 4;
-    }
-  }
-}
+static void schedule_present(MorphView* view);
 
 static void ensure_buffers(MorphView* view, uint32_t width, uint32_t height) {
   if (width == 0) {
@@ -227,7 +304,11 @@ static void apply_snapshot_surface(MorphView* view, cairo_surface_t* surface) {
   }
   g_mutex_lock(&view->lock);
   ensure_buffers(view, static_cast<uint32_t>(width), static_cast<uint32_t>(height));
-  copy_cairo_to_rgba(surface, view->back, view->tex_width, view->tex_height);
+  if (view->use_gl) {
+    morph_copy_cairo_to_bgra(surface, view->back, view->tex_width, view->tex_height);
+  } else {
+    morph_copy_cairo_to_rgba(surface, view->back, view->tex_width, view->tex_height);
+  }
   uint8_t* tmp = view->front;
   view->front = view->back;
   view->back = tmp;
@@ -236,6 +317,47 @@ static void apply_snapshot_surface(MorphView* view, cairo_surface_t* surface) {
     fl_texture_registrar_mark_texture_frame_available(view->textures, FL_TEXTURE(view->texture));
   }
 }
+
+static void record_present(MorphView* view, gint64 started_us) {
+  gint64 now = g_get_monotonic_time();
+  view->last_present_us = now;
+  view->presents++;
+  if (now > started_us) {
+    view->present_us_accum += static_cast<guint>(now - started_us);
+  }
+  if (g_getenv("MORPH_WEBVIEW_STATS") == nullptr) {
+    return;
+  }
+  if (view->presents % 60 == 0 || now - view->last_input_us < 200000) {
+    const double avg_ms =
+        view->presents > 0 ? (static_cast<double>(view->present_us_accum) / view->presents) / 1000.0
+                           : 0;
+    const double lag_ms =
+        view->last_input_us > 0 ? static_cast<double>(now - view->last_input_us) / 1000.0 : 0;
+    g_printerr("morph_webview: path=%s presents=%u avg_present=%.2fms input_lag=%.2fms %ux%u\n",
+               view->render_path != nullptr ? view->render_path : "?", view->presents, avg_ms,
+               lag_ms, view->tex_width, view->tex_height);
+  }
+}
+
+static gboolean try_present_offscreen(MorphView* view) {
+  if (view->offscreen == nullptr) {
+    return FALSE;
+  }
+  cairo_surface_t* surface = gtk_offscreen_window_get_surface(GTK_OFFSCREEN_WINDOW(view->offscreen));
+  if (surface == nullptr || cairo_surface_get_type(surface) != CAIRO_SURFACE_TYPE_IMAGE) {
+    return FALSE;
+  }
+  if (cairo_image_surface_get_width(surface) <= 0 || cairo_image_surface_get_height(surface) <= 0) {
+    return FALSE;
+  }
+  gint64 started = g_get_monotonic_time();
+  apply_snapshot_surface(view, surface);
+  record_present(view, started);
+  return TRUE;
+}
+
+static void request_snapshot(MorphView* view);
 
 static void on_snapshot_ready(GObject* source, GAsyncResult* result, gpointer user_data) {
   MorphView* view = static_cast<MorphView*>(user_data);
@@ -248,12 +370,14 @@ static void on_snapshot_ready(GObject* source, GAsyncResult* result, gpointer us
       g_debug("morph_webview: snapshot failed: %s", error->message);
     }
   } else {
+    gint64 started = g_get_monotonic_time();
     apply_snapshot_surface(view, surface);
     cairo_surface_destroy(surface);
+    record_present(view, started);
   }
   if (view->snapshot_dirty) {
     view->snapshot_dirty = FALSE;
-    request_snapshot(view);
+    schedule_present(view);
   }
 }
 
@@ -270,35 +394,47 @@ static void request_snapshot(MorphView* view) {
                                WEBKIT_SNAPSHOT_OPTIONS_NONE, nullptr, on_snapshot_ready, view);
 }
 
-static gboolean snapshot_timer_cb(gpointer user_data) {
-  MorphView* view = static_cast<MorphView*>(user_data);
-  request_snapshot(view);
-  gboolean is_loading = FALSE;
-  if (view->web_view != nullptr) {
-    g_object_get(view->web_view, "is-loading", &is_loading, nullptr);
-  }
-  if (!is_loading) {
-    view->snapshot_timer = 0;
-    return G_SOURCE_REMOVE;
-  }
-  return G_SOURCE_CONTINUE;
+static void schedule_present(MorphView* view) {
+  view->frame_dirty = TRUE;
 }
 
-static void start_snapshot_timer(MorphView* view) {
-  if (view->snapshot_timer == 0) {
-    view->snapshot_timer = g_timeout_add(33, snapshot_timer_cb, view);
+static gboolean on_web_view_draw(GtkWidget*, cairo_t*, gpointer user_data) {
+  schedule_present(static_cast<MorphView*>(user_data));
+  return FALSE;
+}
+
+static gboolean on_frame_tick(GtkWidget*, GdkFrameClock*, gpointer user_data) {
+  MorphView* view = static_cast<MorphView*>(user_data);
+  if (view->web_view == nullptr) {
+    return G_SOURCE_CONTINUE;
   }
+  gint64 now = g_get_monotonic_time();
+  gint64 interval = static_cast<gint64>(morph_frame_interval_ms()) * 1000;
+  if (now - view->last_present_us < interval) {
+    return G_SOURCE_CONTINUE;
+  }
+  if (!view->frame_dirty && !view->live_present) {
+    return G_SOURCE_CONTINUE;
+  }
+  if (try_present_offscreen(view)) {
+    view->frame_dirty = FALSE;
+    view->live_present = TRUE;
+    return G_SOURCE_CONTINUE;
+  }
+  if (view->frame_dirty) {
+    view->frame_dirty = FALSE;
+    request_snapshot(view);
+  }
+  return G_SOURCE_CONTINUE;
 }
 
 static void on_load_changed(WebKitWebView* web_view, WebKitLoadEvent load_event, gpointer user_data) {
   MorphView* view = static_cast<MorphView*>(user_data);
   (void)web_view;
   emit_navigation(view);
-  if (load_event == WEBKIT_LOAD_STARTED) {
-    start_snapshot_timer(view);
-  }
-  if (load_event == WEBKIT_LOAD_COMMITTED || load_event == WEBKIT_LOAD_FINISHED) {
-    request_snapshot(view);
+  if (load_event == WEBKIT_LOAD_STARTED || load_event == WEBKIT_LOAD_COMMITTED ||
+      load_event == WEBKIT_LOAD_FINISHED) {
+    schedule_present(view);
   }
 }
 
@@ -356,7 +492,7 @@ static void apply_size(MorphView* view, uint32_t logical_width, uint32_t logical
   g_mutex_lock(&view->lock);
   ensure_buffers(view, static_cast<uint32_t>(phys_w), static_cast<uint32_t>(phys_h));
   g_mutex_unlock(&view->lock);
-  request_snapshot(view);
+  schedule_present(view);
 }
 
 static void on_mouse_target_changed(WebKitWebView* web_view,
@@ -434,8 +570,15 @@ static MorphView* morph_view_create(MorphWebviewLinuxPlugin* plugin,
   view->render_path = g_strdup(morph_render_path_name(path));
   view->render_reason = reason != nullptr ? reason : g_strdup("unknown");
 
-  view->texture = morph_pixel_buffer_texture_new(view);
-  if (!fl_texture_registrar_register_texture(plugin->textures, FL_TEXTURE(view->texture))) {
+  view->use_gl = path == MORPH_RENDER_PATH_FLUTTER_GL || path == MORPH_RENDER_PATH_WPE_DMABUF;
+  if (view->use_gl) {
+    view->gl_texture = morph_gl_texture_new(view);
+    view->texture = FL_TEXTURE(view->gl_texture);
+  } else {
+    view->pixel_texture = morph_pixel_buffer_texture_new(view);
+    view->texture = FL_TEXTURE(view->pixel_texture);
+  }
+  if (!fl_texture_registrar_register_texture(plugin->textures, view->texture)) {
     g_warning("morph_webview: failed to register texture");
   }
 
@@ -468,6 +611,10 @@ static MorphView* morph_view_create(MorphWebviewLinuxPlugin* plugin,
                             GDK_LEAVE_NOTIFY_MASK | GDK_KEY_PRESS_MASK | GDK_KEY_RELEASE_MASK |
                             GDK_FOCUS_CHANGE_MASK);
   gtk_widget_show_all(view->offscreen);
+  view->frame_dirty = TRUE;
+  view->live_present = view->use_gl ? TRUE : FALSE;
+  view->tick_id = gtk_widget_add_tick_callback(view->offscreen, on_frame_tick, view, nullptr);
+  g_signal_connect(view->web_view, "draw", G_CALLBACK(on_web_view_draw), view);
 
   view->ime = morph_ime_context_new();
   webkit_web_view_set_input_method_context(view->web_view, WEBKIT_INPUT_METHOD_CONTEXT(view->ime));
@@ -499,14 +646,24 @@ static void morph_view_destroy(MorphView* view) {
     g_source_remove(view->snapshot_timer);
     view->snapshot_timer = 0;
   }
+  if (view->tick_id != 0 && view->offscreen != nullptr) {
+    gtk_widget_remove_tick_callback(view->offscreen, view->tick_id);
+    view->tick_id = 0;
+  }
   if (view->textures != nullptr && view->texture != nullptr) {
-    fl_texture_registrar_unregister_texture(view->textures, FL_TEXTURE(view->texture));
+    fl_texture_registrar_unregister_texture(view->textures, view->texture);
   }
-  if (view->texture != nullptr) {
-    view->texture->view = nullptr;
-    g_object_unref(view->texture);
-    view->texture = nullptr;
+  if (view->gl_texture != nullptr) {
+    view->gl_texture->view = nullptr;
+    g_object_unref(view->gl_texture);
+    view->gl_texture = nullptr;
   }
+  if (view->pixel_texture != nullptr) {
+    view->pixel_texture->view = nullptr;
+    g_object_unref(view->pixel_texture);
+    view->pixel_texture = nullptr;
+  }
+  view->texture = nullptr;
   if (view->offscreen != nullptr) {
     gtk_widget_destroy(view->offscreen);
     view->offscreen = nullptr;
@@ -560,6 +717,18 @@ static void dispatch_pointer(MorphView* view,
                              gboolean alt,
                              gboolean shift,
                              gboolean meta);
+static void queue_pointer(MorphView* view,
+                          const gchar* phase,
+                          double x,
+                          double y,
+                          int button,
+                          int buttons,
+                          double dx,
+                          double dy,
+                          gboolean ctrl,
+                          gboolean alt,
+                          gboolean shift,
+                          gboolean meta);
 static void dispatch_key(MorphView* view,
                          const gchar* phase,
                          const gchar* key,
@@ -667,7 +836,7 @@ static gboolean run_control_job(gpointer data) {
       webkit_web_view_reload(view->web_view);
       break;
     case kControlPointer:
-      dispatch_pointer(view, job->s1 != nullptr ? job->s1 : "down", job->x, job->y, job->button,
+      queue_pointer(view, job->s1 != nullptr ? job->s1 : "down", job->x, job->y, job->button,
                        job->buttons, job->sx, job->sy, job->ctrl, job->alt, job->shift, job->meta);
       break;
     case kControlKey:
@@ -1065,15 +1234,14 @@ static void dispatch_pointer(MorphView* view,
     gdk_event_set_device(event, default_pointer_device());
     gtk_widget_event(GTK_WIDGET(view->web_view), event);
     gdk_event_free(event);
-    request_snapshot(view);
-    start_snapshot_timer(view);
+    schedule_present(view);
     return;
   }
 
   if (g_strcmp0(phase, "enter") == 0) {
     dispatch_crossing(view, TRUE, px, py, state);
     maybe_emit_cursor(view);
-    request_snapshot(view);
+    schedule_present(view);
     return;
   }
   if (g_strcmp0(phase, "leave") == 0) {
@@ -1083,7 +1251,7 @@ static void dispatch_pointer(MorphView* view,
       view->cursor_shape = g_strdup("default");
       morph_control_emit_cursor(view->view_id, "default");
     }
-    request_snapshot(view);
+    schedule_present(view);
     return;
   }
 
@@ -1103,7 +1271,7 @@ static void dispatch_pointer(MorphView* view,
     gtk_widget_event(GTK_WIDGET(view->web_view), event);
     gdk_event_free(event);
     maybe_emit_cursor(view);
-    request_snapshot(view);
+    schedule_present(view);
     return;
   }
 
@@ -1129,7 +1297,81 @@ static void dispatch_pointer(MorphView* view,
   gtk_widget_event(GTK_WIDGET(view->web_view), event);
   gdk_event_free(event);
   maybe_emit_cursor(view);
-  request_snapshot(view);
+  schedule_present(view);
+}
+
+static gboolean flush_pending_pointer(gpointer data) {
+  MorphView* view = static_cast<MorphView*>(data);
+  view->pending_move_source = 0;
+  if (view->pending_phase == nullptr || view->web_view == nullptr) {
+    return G_SOURCE_REMOVE;
+  }
+  dispatch_pointer(view, view->pending_phase, view->pending_x, view->pending_y, view->pending_button,
+                   view->pending_buttons, view->pending_sx, view->pending_sy, view->pending_ctrl,
+                   view->pending_alt, view->pending_shift, view->pending_meta);
+  g_free(view->pending_phase);
+  view->pending_phase = nullptr;
+  view->pending_sx = 0;
+  view->pending_sy = 0;
+  return G_SOURCE_REMOVE;
+}
+
+static gboolean is_coalesced_phase(const gchar* phase) {
+  return g_strcmp0(phase, "move") == 0 || g_strcmp0(phase, "hover") == 0 ||
+         g_strcmp0(phase, "scroll") == 0;
+}
+
+static void queue_pointer(MorphView* view,
+                          const gchar* phase,
+                          double x,
+                          double y,
+                          int button,
+                          int buttons,
+                          double dx,
+                          double dy,
+                          gboolean ctrl,
+                          gboolean alt,
+                          gboolean shift,
+                          gboolean meta) {
+  if (view == nullptr || view->web_view == nullptr) {
+    return;
+  }
+  view->last_input_us = g_get_monotonic_time();
+  if (is_coalesced_phase(phase)) {
+    if (g_strcmp0(phase, "scroll") == 0 && g_strcmp0(view->pending_phase, "scroll") == 0) {
+      view->pending_x = x;
+      view->pending_y = y;
+      view->pending_sx += dx;
+      view->pending_sy += dy;
+      view->pending_buttons = buttons;
+      view->pending_ctrl = ctrl;
+      view->pending_alt = alt;
+      view->pending_shift = shift;
+      view->pending_meta = meta;
+    } else {
+      g_free(view->pending_phase);
+      view->pending_phase = g_strdup(phase);
+      view->pending_x = x;
+      view->pending_y = y;
+      view->pending_button = button;
+      view->pending_buttons = buttons;
+      view->pending_sx = dx;
+      view->pending_sy = dy;
+      view->pending_ctrl = ctrl;
+      view->pending_alt = alt;
+      view->pending_shift = shift;
+      view->pending_meta = meta;
+    }
+    if (view->pending_move_source == 0) {
+      view->pending_move_source = g_idle_add(flush_pending_pointer, view);
+    }
+    return;
+  }
+  if (view->pending_move_source != 0) {
+    g_source_remove(view->pending_move_source);
+    flush_pending_pointer(view);
+  }
+  dispatch_pointer(view, phase, x, y, button, buttons, dx, dy, ctrl, alt, shift, meta);
 }
 
 static guint16 hardware_keycode_for(guint keyval, guint provided, guint8* group) {
@@ -1171,6 +1413,7 @@ static void dispatch_key(MorphView* view,
   if (window == nullptr) {
     return;
   }
+  view->last_input_us = g_get_monotonic_time();
   grab_view_focus(view);
   GdkEventType type = g_strcmp0(phase, "up") == 0 ? GDK_KEY_RELEASE : GDK_KEY_PRESS;
   guint keyval = morph_keyval_for_event(key, text);
@@ -1208,7 +1451,7 @@ static void dispatch_key(MorphView* view,
   gdk_event_set_device(event, default_keyboard_device());
   gtk_widget_event(GTK_WIDGET(view->web_view), event);
   gdk_event_free(event);
-  request_snapshot(view);
+  schedule_present(view);
 }
 
 static void dispatch_ime(MorphView* view, const gchar* phase, const gchar* text) {
@@ -1218,7 +1461,7 @@ static void dispatch_ime(MorphView* view, const gchar* phase, const gchar* text)
   if (view->ime != nullptr) {
     morph_ime_context_handle(view->ime, phase, text);
   }
-  request_snapshot(view);
+  schedule_present(view);
 }
 
 static FlMethodResponse* handle_create(MorphWebviewLinuxPlugin* plugin, FlValue* args) {

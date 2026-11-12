@@ -11,6 +11,7 @@ set(PLUGIN_NAME "morph_webview_linux_plugin")
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(WEBKIT REQUIRED IMPORTED_TARGET webkit2gtk-4.1)
 pkg_check_modules(EGL REQUIRED IMPORTED_TARGET egl)
+pkg_check_modules(EPOXY REQUIRED IMPORTED_TARGET epoxy)
 
 # Optional WPE path (WPE Platform or WPEBackend-fdo). When headers are present
 # the DMA-BUF backend is compiled in; otherwise feature detection reports
@@ -28,6 +29,7 @@ list(APPEND PLUGIN_SOURCES
   "ime_context.cc"
   "key_map.cc"
   "session.cc"
+  "frame.cc"
 )
 
 add_library(${PLUGIN_NAME} SHARED
@@ -92,6 +94,7 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE flutter)
 target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::GTK)
 target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::WEBKIT)
 target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::EGL)
+target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::EPOXY)
 target_link_libraries(${PLUGIN_NAME} PRIVATE "${MORPH_CONTROL_LIB}" pthread dl m)
 
 set(morph_webview_linux_bundled_libraries

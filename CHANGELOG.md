@@ -58,6 +58,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `settings.json`. Existing Morph data is migrated into the `default`
   profile. The profile catalog is available over the FRB bridge; the
   switcher UI is still to come.
+- Linux web views present through a Flutter GL texture by default: frames
+  come from the already-painted offscreen surface (BGRA upload, no CPU
+  swizzle) at the display refresh rate, with pointer-move and scroll
+  events coalesced. `webkit_web_view_get_snapshot` is the automatic
+  fallback when that surface is missing. On NVIDIA the proprietary
+  driver's WebKit DMA-BUF renderer stays disabled; true zero-copy
+  DMA-BUF import remains the WPE path on Mesa when WPE is built.
+  Override with `MORPH_WEBVIEW_RENDER=gl|snapshot|dmabuf`. Log fps and
+  input lag with `MORPH_WEBVIEW_STATS=1`.
 - Linux web views turn on MediaSource, encrypted media, WebGL, and always-on
   hardware acceleration so sites can play video. YouTube and Instagram still
   need the usual GStreamer codec plugins (`gst-plugins-good`,

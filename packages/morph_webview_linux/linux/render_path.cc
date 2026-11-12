@@ -47,6 +47,8 @@ const gchar* morph_render_path_name(MorphRenderPath path) {
   switch (path) {
     case MORPH_RENDER_PATH_WPE_DMABUF:
       return "wpe-dmabuf";
+    case MORPH_RENDER_PATH_FLUTTER_GL:
+      return "flutter-gl";
     case MORPH_RENDER_PATH_SNAPSHOT:
     default:
       return "webkitgtk-snapshot";
@@ -67,6 +69,12 @@ MorphRenderPath morph_detect_render_path(gchar** reason) {
       }
       return MORPH_RENDER_PATH_SNAPSHOT;
     }
+    if (g_ascii_strcasecmp(forced, "gl") == 0 || g_ascii_strcasecmp(forced, "flutter-gl") == 0) {
+      if (reason != nullptr) {
+        *reason = g_strdup("MORPH_WEBVIEW_RENDER=gl");
+      }
+      return MORPH_RENDER_PATH_FLUTTER_GL;
+    }
     if (g_ascii_strcasecmp(forced, "dmabuf") == 0 || g_ascii_strcasecmp(forced, "wpe-dmabuf") == 0) {
 #ifdef MORPH_HAS_WPE
       if (reason != nullptr) {
@@ -75,40 +83,42 @@ MorphRenderPath morph_detect_render_path(gchar** reason) {
       return MORPH_RENDER_PATH_WPE_DMABUF;
 #else
       if (reason != nullptr) {
-        *reason = g_strdup("MORPH_WEBVIEW_RENDER=dmabuf but WPE was not built");
+        *reason = g_strdup("MORPH_WEBVIEW_RENDER=dmabuf but WPE was not built; using flutter-gl");
       }
-      return MORPH_RENDER_PATH_SNAPSHOT;
+      return MORPH_RENDER_PATH_FLUTTER_GL;
 #endif
     }
   }
 
-#ifndef MORPH_HAS_WPE
   if (reason != nullptr) {
-    *reason = g_strdup("wpe-not-built");
+    *reason = nullptr;
   }
-  return MORPH_RENDER_PATH_SNAPSHOT;
-#else
-  if (morph_has_nvidia_proprietary_driver() && g_getenv("MORPH_FORCE_DMABUF") == nullptr) {
+#ifdef MORPH_HAS_WPE
+  const gboolean allow_wpe =
+      !morph_has_nvidia_proprietary_driver() || g_getenv("MORPH_FORCE_DMABUF") != nullptr;
+  if (allow_wpe && morph_has_drm_render_node() && morph_has_egl_dma_buf_import()) {
     if (reason != nullptr) {
-      *reason = g_strdup("nvidia-proprietary");
+      *reason = g_strdup("feature-detect-ok");
     }
-    return MORPH_RENDER_PATH_SNAPSHOT;
+    return MORPH_RENDER_PATH_WPE_DMABUF;
   }
-  if (!morph_has_drm_render_node()) {
-    if (reason != nullptr) {
-      *reason = g_strdup("no-drm-render-node");
-    }
-    return MORPH_RENDER_PATH_SNAPSHOT;
-  }
-  if (!morph_has_egl_dma_buf_import()) {
-    if (reason != nullptr) {
-      *reason = g_strdup("no-egl-dma-buf-import");
-    }
-    return MORPH_RENDER_PATH_SNAPSHOT;
-  }
-  if (reason != nullptr) {
-    *reason = g_strdup("feature-detect-ok");
-  }
-  return MORPH_RENDER_PATH_WPE_DMABUF;
 #endif
+  if (reason != nullptr) {
+    if (*reason == nullptr) {
+#ifdef MORPH_HAS_WPE
+      if (morph_has_nvidia_proprietary_driver() && g_getenv("MORPH_FORCE_DMABUF") == nullptr) {
+        *reason = g_strdup("nvidia-proprietary; using flutter-gl");
+      } else if (!morph_has_drm_render_node()) {
+        *reason = g_strdup("no-drm-render-node; using flutter-gl");
+      } else if (!morph_has_egl_dma_buf_import()) {
+        *reason = g_strdup("no-egl-dma-buf-import; using flutter-gl");
+      } else {
+        *reason = g_strdup("flutter-gl");
+      }
+#else
+      *reason = g_strdup("wpe-not-built; using flutter-gl");
+#endif
+    }
+  }
+  return MORPH_RENDER_PATH_FLUTTER_GL;
 }
