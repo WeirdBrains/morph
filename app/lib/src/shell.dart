@@ -1128,17 +1128,33 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
   }
 
   Future<void> _openLibrary(MorphLibraryTab tab) async {
-    await _showPanel(
-      (context) => MorphLibraryPage(
+    String? chosen;
+    ModalRoute<Object?>? panelRoute;
+    await _showPanel((context) {
+      panelRoute = ModalRoute.of(context);
+      return MorphLibraryPage(
         api: widget.api,
         profileId: _profileId,
         profileName: _profileName,
         home: _home,
         initialTab: tab,
         write: _libraryWrite,
-        onOpen: (url) => unawaited(_submitUrl(url)),
-      ),
-    );
+        onOpen: (url) => chosen = url,
+      );
+    });
+    final url = chosen;
+    if (url != null) {
+      // The panel's pop resolves when it starts closing; wait for the close
+      // animation to finish too.
+      await panelRoute?.completed;
+    }
+    if (url != null && mounted) {
+      // Navigate once the panel is gone, not while it still covers the web
+      // view: on Android a load that lands under a closing sheet can leave
+      // the surface white (the bookmark and history white page).
+      await _submitUrl(url);
+      _scheduleSurfaceCheck();
+    }
     await _loadBookmarks();
   }
 
