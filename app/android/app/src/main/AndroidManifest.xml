@@ -40,7 +40,27 @@
                 <category android:name="android.intent.category.APP_BROWSER"/>
                 <category android:name="android.intent.category.DEFAULT"/>
             </intent-filter>
+            <!-- Share target: a shared link opens in a new tab, other text
+                 is searched (IncomingLinks.sharedTextOf). -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND"/>
+                <action android:name="android.intent.action.SEND_MULTIPLE"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="text/plain"/>
+            </intent-filter>
         </activity>
+        <!-- "Search in Morph" in the text selection menu. -->
+        <activity-alias
+            android:name=".SearchInMorph"
+            android:targetActivity=".MainActivity"
+            android:label="@string/search_in_morph"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.PROCESS_TEXT"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="text/plain"/>
+            </intent-filter>
+        </activity-alias>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data
