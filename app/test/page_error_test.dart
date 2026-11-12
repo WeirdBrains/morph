@@ -4,6 +4,19 @@ import 'package:morph/src/widgets/page_error.dart';
 import 'package:morph_webview/morph_webview.dart';
 
 void main() {
+  test('an engine reason without a full stop still reads as a sentence', () {
+    String body(String message) => morphLoadErrorText(
+      MorphLoadError(
+        url: 'https://instgram.com/',
+        kind: MorphLoadErrorKind.certificate,
+        message: message,
+      ),
+    ).$2;
+    expect(body('Hostname mismatch'), contains('Hostname mismatch. Check'));
+    expect(body('Expired.'), contains('Expired. Check'));
+    expect(body(''), contains('not loaded. Check'));
+  });
+
   test('a bad certificate names the site and the reason', () {
     final (title, body) = morphLoadErrorText(
       const MorphLoadError(
