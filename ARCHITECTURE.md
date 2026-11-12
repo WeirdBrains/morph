@@ -168,6 +168,13 @@ backend per platform.
     `setDataDirectorySuffix` is not a fallback: it is once per process. On a
     WebView without `MULTI_PROFILE`, non-default profiles show an
     update-your-WebView page and never load sites, rather than share storage.
+- _(new 2026-11-12)_ **Control socket on Android.** The in-process web view
+  control server listens on a Unix socket under `XDG_RUNTIME_DIR`, `TMPDIR`
+  or `/tmp`. Android apps get neither variable and cannot write `/tmp`, so
+  every tab failed with "io: Permission denied". On Android the socket now
+  lives in `<app support dir>/run` (`start_webview_control_in`, a 0700 dir
+  only the app can reach). Loopback TCP is not used as a fallback there
+  because any app on the device could connect to it.
 - _(new 2026-11-12)_ **Tab crash isolation.** A tab's renderer crashing,
   being killed or hanging must never take down the shell or other tabs; the
   tab shows its own "page crashed" panel (Reload, plus Wait for a hang). The
