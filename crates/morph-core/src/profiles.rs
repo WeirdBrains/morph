@@ -338,6 +338,16 @@ fn preferred_current(profiles: &[Profile]) -> String {
         .expect("at least one profile")
 }
 
+/// Fail unless `id` is a valid id of a profile in the catalog. Per-profile
+/// stores call this before touching `<home>/profiles/<id>/`.
+pub fn require(home: impl AsRef<Path>, id: &str) -> Result<(), ProfileError> {
+    validate_id(id)?;
+    if load_catalog(home)?.get(id).is_none() {
+        return Err(ProfileError::Unknown(id.to_string()));
+    }
+    Ok(())
+}
+
 fn validate_id(id: &str) -> Result<(), ProfileError> {
     if is_valid_id(id) { Ok(()) } else { Err(ProfileError::InvalidId(id.to_string())) }
 }
