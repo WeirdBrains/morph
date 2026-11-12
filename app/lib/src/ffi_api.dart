@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'api.dart';
 import 'rust/api/events.dart' as rust_events;
 import 'rust/api/identity.dart' as rust_identity;
@@ -60,12 +63,29 @@ class FfiMorphApi implements MorphApi {
 
   @override
   Future<ProfileCatalog> listProfiles({String? home}) async {
-    return _catalog(await rust_profiles.listProfiles(home: home));
+    return _mergeColors(
+      home,
+      _catalog(await rust_profiles.listProfiles(home: home)),
+    );
   }
 
   @override
-  Future<ProfileCatalog> createProfile(String name, {String? home}) async {
-    return _catalog(await rust_profiles.createProfile(home: home, name: name));
+  Future<ProfileCatalog> createProfile(
+    String name, {
+    String? home,
+    String? color,
+  }) async {
+    final catalog = _catalog(
+      await rust_profiles.createProfile(home: home, name: name),
+    );
+    if (color != null && color.isNotEmpty) {
+      final created = catalog.profiles.firstWhere(
+        (profile) => profile.id == catalog.current,
+      );
+      await _writeColor(home, created.id, color);
+      return _mergeColors(home, catalog);
+    }
+    return _mergeColors(home, catalog);
   }
 
   @override
@@ -74,19 +94,28 @@ class FfiMorphApi implements MorphApi {
     String name, {
     String? home,
   }) async {
-    return _catalog(
-      await rust_profiles.renameProfile(home: home, id: id, name: name),
+    return _mergeColors(
+      home,
+      _catalog(
+        await rust_profiles.renameProfile(home: home, id: id, name: name),
+      ),
     );
   }
 
   @override
   Future<ProfileCatalog> deleteProfile(String id, {String? home}) async {
-    return _catalog(await rust_profiles.deleteProfile(home: home, id: id));
+    final catalog = _catalog(
+      await rust_profiles.deleteProfile(home: home, id: id),
+    );
+    return _mergeColors(home, catalog);
   }
 
   @override
   Future<ProfileCatalog> setCurrentProfile(String id, {String? home}) async {
-    return _catalog(await rust_profiles.setCurrentProfile(home: home, id: id));
+    return _mergeColors(
+      home,
+      _catalog(await rust_profiles.setCurrentProfile(home: home, id: id)),
+    );
   }
 
   @override
@@ -111,6 +140,111 @@ class FfiMorphApi implements MorphApi {
         for (final profile in view.profiles)
           ProfileInfo(id: profile.id, name: profile.name),
       ],
+    );
+  }
+
+  Future<ProfileCatalog> _mergeColors(
+    String? home,
+    ProfileCatalog catalog,
+  ) async {
+    final colored = <ProfileInfo>[];
+    for (final profile in catalog.profiles) {
+      final color = await _readColor(home, profile.id);
+      colored.add(
+        ProfileInfo(id: profile.id, name: profile.name, color: color),
+      );
+    }
+    return ProfileCatalog(current: catalog.current, profiles: colored);
+  }
+
+  Future<String> _readColor(String? home, String id) async {
+    try {
+      final paths = await profilePaths(id, home: home);
+      final file = File('${paths.profileDir}/color');
+      if (await file.exists()) {
+        return (await file.readAsString()).trim();
+      }
+    } catch (_) {}
+    return '';
+  }
+
+  Future<void> _writeColor(String? home, String id, String color) async {
+    final paths = await profilePaths(id, home: home);
+    final dir = Directory(paths.profileDir);
+    if (!await dir.exists()) {
+      await dir.create(recursive: true);
+    }
+    await File('${paths.profileDir}/color').writeAsString('$color\n');
+  }
+
+  @override
+  Future<ProfileTabSnapshot> loadProfileTabs({
+    String? home,
+    String? profileId,
+  }) async {
+    final id =
+        profileId ?? (await rust_profiles.listProfiles(home: home)).current;
+    try {
+      final paths = await profilePaths(id, home: home);
+      final file = File(paths.tabsPath);
+      if (!await file.exists()) {
+        return ProfileTabSnapshot.empty;
+      }
+      return _decodeTabs(await file.readAsString());
+    } catch (_) {
+      return ProfileTabSnapshot.empty;
+    }
+  }
+
+  @override
+  Future<void> saveProfileTabs(
+    ProfileTabSnapshot snapshot, {
+    String? home,
+    String? profileId,
+  }) async {
+    final id =
+        profileId ?? (await rust_profiles.listProfiles(home: home)).current;
+    final paths = await profilePaths(id, home: home);
+    final file = File(paths.tabsPath);
+    await file.parent.create(recursive: true);
+    await file.writeAsString('${jsonEncode(_encodeTabs(snapshot))}\n');
+  }
+
+  Map<String, Object?> _encodeTabs(ProfileTabSnapshot snapshot) {
+    return {
+      'active_id': snapshot.activeId,
+      'next_id': snapshot.nextId,
+      'tabs': [
+        for (final tab in snapshot.tabs)
+          {'id': tab.id, 'url': tab.url, 'title': tab.title},
+      ],
+    };
+  }
+
+  ProfileTabSnapshot _decodeTabs(String raw) {
+    final json = jsonDecode(raw);
+    if (json is! Map) {
+      return ProfileTabSnapshot.empty;
+    }
+    final tabs = <ProfileTab>[];
+    final rawTabs = json['tabs'];
+    if (rawTabs is List) {
+      for (final item in rawTabs) {
+        if (item is Map) {
+          tabs.add(
+            ProfileTab(
+              id: (item['id'] as num?)?.toInt() ?? 0,
+              url: item['url'] as String? ?? '',
+              title: item['title'] as String? ?? '',
+            ),
+          );
+        }
+      }
+    }
+    return ProfileTabSnapshot(
+      activeId: (json['active_id'] as num?)?.toInt() ?? 1,
+      nextId: (json['next_id'] as num?)?.toInt() ?? 2,
+      tabs: tabs,
     );
   }
 }

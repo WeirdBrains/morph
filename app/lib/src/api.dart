@@ -11,11 +11,21 @@ abstract class MorphApi {
   Future<bool> loadSidebarCollapsed({String? home});
   Future<void> saveSidebarCollapsed(bool collapsed, {String? home});
   Future<ProfileCatalog> listProfiles({String? home});
-  Future<ProfileCatalog> createProfile(String name, {String? home});
+  Future<ProfileCatalog> createProfile(
+    String name, {
+    String? home,
+    String? color,
+  });
   Future<ProfileCatalog> renameProfile(String id, String name, {String? home});
   Future<ProfileCatalog> deleteProfile(String id, {String? home});
   Future<ProfileCatalog> setCurrentProfile(String id, {String? home});
   Future<ProfilePaths> profilePaths(String id, {String? home});
+  Future<ProfileTabSnapshot> loadProfileTabs({String? home, String? profileId});
+  Future<void> saveProfileTabs(
+    ProfileTabSnapshot snapshot, {
+    String? home,
+    String? profileId,
+  });
 }
 
 class IdentityStatusView {
@@ -38,10 +48,36 @@ class EphemeralUser {
 }
 
 class ProfileInfo {
-  const ProfileInfo({required this.id, required this.name});
+  const ProfileInfo({required this.id, required this.name, this.color = ''});
 
   final String id;
   final String name;
+
+  /// Optional `#rrggbb` avatar color. Empty means the UI picks a stable color
+  /// from the profile id.
+  final String color;
+}
+
+class ProfileTab {
+  const ProfileTab({required this.id, this.url = '', this.title = ''});
+
+  final int id;
+  final String url;
+  final String title;
+}
+
+class ProfileTabSnapshot {
+  const ProfileTabSnapshot({
+    required this.activeId,
+    required this.nextId,
+    required this.tabs,
+  });
+
+  final int activeId;
+  final int nextId;
+  final List<ProfileTab> tabs;
+
+  static const empty = ProfileTabSnapshot(activeId: 1, nextId: 2, tabs: []);
 }
 
 class ProfileCatalog {
