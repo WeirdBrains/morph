@@ -24,10 +24,7 @@ pub struct CatalogView {
 
 impl CatalogView {
     fn from(catalog: &Catalog) -> Self {
-        Self {
-            current: catalog.current.clone(),
-            profiles: catalog.profiles.iter().map(ProfileView::from).collect(),
-        }
+        Self { current: catalog.current.clone(), profiles: catalog.profiles.iter().map(ProfileView::from).collect() }
     }
 }
 
