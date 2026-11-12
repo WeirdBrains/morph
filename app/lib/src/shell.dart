@@ -848,28 +848,6 @@ class MorphShellState extends State<MorphShell> {
       ],
     );
 
-    if (_isMobile && _showSwitcher) {
-      return PopScope(
-        canPop: false,
-        onPopInvokedWithResult: (didPop, _) {
-          if (!didPop) {
-            _closeSwitcher();
-          }
-        },
-        child: Scaffold(
-          body: MorphTabSwitcher(
-            tabs: tabs.tabs,
-            activeId: tabs.activeId,
-            previews: _previews,
-            onSelect: _switchTab,
-            onClose: _closeTab,
-            onCloseAll: _closeAllTabs,
-            onNewTab: _openTab,
-          ),
-        ),
-      );
-    }
-
     final body = MorphDesktopWindow.isDesktop
         ? Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -926,14 +904,14 @@ class MorphShellState extends State<MorphShell> {
             ],
           );
 
-    return PopScope(
+    final browser = PopScope(
       canPop: !_isMobile || (!_showSwitcher && !navigation.canGoBack),
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) {
           return;
         }
         if (_showSwitcher) {
-          setState(() => _showSwitcher = false);
+          _closeSwitcher();
           return;
         }
         if (navigation.canGoBack) {
@@ -947,6 +925,36 @@ class MorphShellState extends State<MorphShell> {
           body: SafeArea(top: false, bottom: false, child: body),
         ),
       ),
+    );
+
+    if (!_isMobile) {
+      return browser;
+    }
+    // Keep the browser (and every tab's platform web view) mounted under the
+    // grid. Swapping the tree out would dispose each AndroidView/UiKitView;
+    // remounting then creates a fresh native WebView on its initial URL, which
+    // is why returning from the grid used to show a blank white page.
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Offstage(
+          key: const Key('browser-view'),
+          offstage: _showSwitcher,
+          child: TickerMode(enabled: !_showSwitcher, child: browser),
+        ),
+        if (_showSwitcher)
+          Scaffold(
+            body: MorphTabSwitcher(
+              tabs: tabs.tabs,
+              activeId: tabs.activeId,
+              previews: _previews,
+              onSelect: _switchTab,
+              onClose: _closeTab,
+              onCloseAll: _closeAllTabs,
+              onNewTab: _openTab,
+            ),
+          ),
+      ],
     );
   }
 
