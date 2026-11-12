@@ -1807,3 +1807,29 @@ schemes handed to other apps show nothing. Android reports a bad certificate
 only through `onReceivedSslError`, so that hook (Android only; Apple
 platforms ask it for every TLS connection) raises a certificate page when
 the failing host is the page's own, and still cancels the load.
+
+### 2026-11-12 — Android: hybrid composition for web views
+
+Flings stuttered on a Pixel 9 Pro XL (1e9edbb): the page repeated a frame and
+then jumped ahead. Frame-by-frame analysis of that 120 Hz recording: in fast
+flings 44% of displayed frames had the page out of step with elapsed time
+(23% stale, 21% catch-up jumps up to 4-5 frames' worth), while the Flutter
+chrome stayed in place in every frame and nothing stalled (the end of the
+recording is the fling settling, then a still screen). The cause is
+texture-layer composition: the WebView draws into a SurfaceTexture on
+Android's UI thread and Flutter's raster thread samples it on its own clock.
+Web views now use hybrid composition (the WebView in the Android view
+hierarchy, composited by SurfaceFlinger) with no forced hardware layer;
+`LAYER_TYPE_HARDWARE` is what froze hybrid views after a resize, a second
+load or a resume on Flutter 3.47, and without it those cases keep painting
+(checked on the emulator, along with tab switching and tab previews).
+emulator-5600 (API 37, swiftshader, x86_64 release builds), six scripted
+flings over a long article, frame motion from `screenrecord`: single-frame
+jumps over 2.5× the expected step 5.7–11.8% (5 runs) → 1.7–2.4% (3 runs);
+frames whose content moved too far to match 13–74 → 5–19; total PSS
+232 → 237 MB. Flutter 3.47 ignores `EnableImpeller=false` on Android, so
+Skia is not an option. While a hybrid view is on screen Flutter rasters on
+the platform thread; Hybrid Composition++ (`initHybridAndroidView`, Vulkan
+and API 34+, `EnableHcpp`) avoids that, but flutter_inappwebview 6.1 only
+creates texture-layer or hybrid views, so it needs a plugin change. On Android 9 and older, hybrid composition
+copies each Flutter frame, which is the accepted cost.
