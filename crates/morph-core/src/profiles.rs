@@ -19,6 +19,7 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
 
@@ -131,8 +132,21 @@ pub fn is_valid_id(id: &str) -> bool {
 /// This may create `<home>/profiles.json` and move files that already exist
 /// under [home]. It is idempotent.
 pub fn load_catalog(home: impl AsRef<Path>) -> Result<Catalog, ProfileError> {
-    let home = home.as_ref();
-    migrate(home)?;
+    let _guard = catalog_lock();
+    load_catalog_locked(home.as_ref())
+}
+
+/// Serializes every read-modify-write of `profiles.json` in this process.
+/// Without it, concurrent bridge calls race on the shared temp file (one
+/// rename fails with ENOENT) or write back a stale catalog.
+static CATALOG_LOCK: Mutex<()> = Mutex::new(());
+
+fn catalog_lock() -> MutexGuard<'static, ()> {
+    CATALOG_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn load_catalog_locked(home: &Path) -> Result<Catalog, ProfileError> {
+    migrate_locked(home)?;
     let path = catalog_path(home);
     let raw = fs::read_to_string(path)?;
     let catalog: Catalog = serde_json::from_str(&raw)?;
@@ -163,7 +177,8 @@ pub fn current(home: impl AsRef<Path>) -> Result<Profile, ProfileError> {
 pub fn set_current(home: impl AsRef<Path>, id: &str) -> Result<Profile, ProfileError> {
     validate_id(id)?;
     let home = home.as_ref();
-    let mut catalog = load_catalog(home)?;
+    let _guard = catalog_lock();
+    let mut catalog = load_catalog_locked(home)?;
     let profile = catalog.get(id).cloned().ok_or_else(|| ProfileError::Unknown(id.to_string()))?;
     catalog.current = profile.id.clone();
     save_catalog(home, &catalog)?;
@@ -175,7 +190,8 @@ pub fn set_current(home: impl AsRef<Path>, id: &str) -> Result<Profile, ProfileE
 pub fn create(home: impl AsRef<Path>, name: &str) -> Result<Profile, ProfileError> {
     let name = normalize_name(name)?;
     let home = home.as_ref();
-    let mut catalog = load_catalog(home)?;
+    let _guard = catalog_lock();
+    let mut catalog = load_catalog_locked(home)?;
     let profile = Profile { id: next_id(&catalog), name };
     ensure_profile_dirs(home, &profile.id)?;
     catalog.profiles.push(profile.clone());
@@ -189,7 +205,8 @@ pub fn rename(home: impl AsRef<Path>, id: &str, name: &str) -> Result<Profile, P
     validate_id(id)?;
     let name = normalize_name(name)?;
     let home = home.as_ref();
-    let mut catalog = load_catalog(home)?;
+    let _guard = catalog_lock();
+    let mut catalog = load_catalog_locked(home)?;
     let profile = catalog.profiles.iter_mut().find(|profile| profile.id == id).ok_or_else(|| ProfileError::Unknown(id.to_string()))?;
     profile.name = name;
     let result = profile.clone();
@@ -202,7 +219,8 @@ pub fn rename(home: impl AsRef<Path>, id: &str, name: &str) -> Result<Profile, P
 pub fn delete(home: impl AsRef<Path>, id: &str) -> Result<Catalog, ProfileError> {
     validate_id(id)?;
     let home = home.as_ref();
-    let mut catalog = load_catalog(home)?;
+    let _guard = catalog_lock();
+    let mut catalog = load_catalog_locked(home)?;
     if catalog.get(id).is_none() {
         return Err(ProfileError::Unknown(id.to_string()));
     }
@@ -223,7 +241,11 @@ pub fn delete(home: impl AsRef<Path>, id: &str) -> Result<Catalog, ProfileError>
 
 /// Move leftover pre-profile files into `profiles/default/` and ensure the catalog exists.
 pub fn migrate(home: impl AsRef<Path>) -> Result<Catalog, ProfileError> {
-    let home = home.as_ref();
+    let _guard = catalog_lock();
+    migrate_locked(home.as_ref())
+}
+
+fn migrate_locked(home: &Path) -> Result<Catalog, ProfileError> {
     let path = catalog_path(home);
     let catalog = if path.exists() { serde_json::from_str(&fs::read_to_string(&path)?)? } else { Catalog::fresh_default() };
     let catalog = if catalog.profiles.is_empty() { Catalog::fresh_default() } else { catalog };
@@ -472,5 +494,30 @@ mod tests {
             assert_eq!(created.id, format!("p{i}"));
         }
         assert_eq!(list(&home).unwrap().len(), 9);
+    }
+
+    #[test]
+    fn concurrent_catalog_calls_neither_fail_nor_lose_profiles() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().to_path_buf();
+        load_catalog(&home).unwrap();
+        let threads: Vec<_> = (0..8)
+            .map(|t| {
+                let home = home.clone();
+                std::thread::spawn(move || {
+                    for i in 0..25 {
+                        load_catalog(&home).unwrap();
+                        require(&home, DEFAULT_PROFILE_ID).unwrap();
+                        if i % 5 == 0 {
+                            create(&home, &format!("T{t}-{i}")).unwrap();
+                        }
+                    }
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        assert_eq!(list(&home).unwrap().len(), 1 + 8 * 5);
     }
 }
