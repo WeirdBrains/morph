@@ -108,15 +108,13 @@ const morphSurfaceProbeScript = '''(function () {
   });
 })()''';
 
-/// Forces the web view to repaint without changing the page: a one-pixel
-/// scroll and back, then a style flip on the root over two animation frames.
-/// This is what a user's touch does when it "wakes" a stale surface.
+/// Forces the web view to produce a fresh compositor frame without changing
+/// the page or firing scroll events: the root is promoted to its own layer
+/// for two animation frames, then restored. A new frame is what a user's
+/// touch provides when it "wakes" a stale surface.
 const morphSurfaceRepaintScript = '''(function () {
   var e = document.documentElement;
   if (!e) { return 'none'; }
-  var x = window.scrollX, y = window.scrollY;
-  window.scrollTo(x, y + 1);
-  window.scrollTo(x, y);
   var prev = e.style.getPropertyValue('will-change');
   e.style.setProperty('will-change', 'transform');
   requestAnimationFrame(function () {
