@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:morph_webview/morph_webview.dart';
 
 import 'api.dart';
+import 'share.dart';
 import 'shell_shortcuts.dart';
 import 'host_friendly_url.dart';
 export 'host_friendly_url.dart';
@@ -1186,7 +1187,12 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
   }
 
   Future<void> _shareUrl(String url) async {
-    await Clipboard.setData(ClipboardData(text: url));
+    final title = navigation.title;
+    final sheet = await MorphShare.shareLink(url, title: title);
+    if (!sheet && mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Link copied')));
+    }
   }
 
   void _selectAllAddress() {
