@@ -1,0 +1,29 @@
+name: morph_webview_linux
+description: Morph-owned Linux WebKit backend (WPE DMA-BUF default, webkit2gtk-4.1 snapshot fallback).
+version: 0.1.0
+publish_to: none
+homepage: https://github.com/WeirdBrains/morph
+repository: https://github.com/WeirdBrains/morph
+license: BSD-3-Clause
+
+environment:
+  sdk: ^3.13.7
+  flutter: ">=3.47.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  morph_webview:
+    path: ../morph_webview
+  plugin_platform_interface: ^2.0.2
+
+dev_dependencies:
+  flutter_lints: ^6.0.0
+
+flutter:
+  plugin:
+    implements: morph_webview
+    platforms:
+      linux:
+        pluginClass: MorphWebviewLinuxPlugin
+        dartPluginClass: MorphWebViewLinux
