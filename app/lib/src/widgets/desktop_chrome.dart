@@ -126,6 +126,7 @@ class MorphDesktopChrome extends StatelessWidget {
                 MorphTabList(
                   tabs: tabs,
                   activeId: activeId,
+                  side: MorphTabPosition.left,
                   collapsed: sidebarCollapsed,
                   onSelectTab: onSelectTab,
                   onCloseTab: onCloseTab,
@@ -138,6 +139,7 @@ class MorphDesktopChrome extends StatelessWidget {
                 MorphTabList(
                   tabs: tabs,
                   activeId: activeId,
+                  side: MorphTabPosition.right,
                   collapsed: sidebarCollapsed,
                   onSelectTab: onSelectTab,
                   onCloseTab: onCloseTab,
@@ -290,6 +292,7 @@ class MorphTabList extends StatelessWidget {
     super.key,
     required this.tabs,
     required this.activeId,
+    required this.side,
     required this.collapsed,
     this.onSelectTab,
     this.onCloseTab,
@@ -298,8 +301,14 @@ class MorphTabList extends StatelessWidget {
     this.onToggleSidebar,
   });
 
+  static const double collapsedWidth = 48;
+  static const double expandedWidth = 220;
+
   final List<MorphTab> tabs;
   final int activeId;
+
+  /// [MorphTabPosition.left] or [MorphTabPosition.right].
+  final MorphTabPosition side;
   final bool collapsed;
   final ValueChanged<int>? onSelectTab;
   final ValueChanged<int>? onCloseTab;
@@ -307,40 +316,58 @@ class MorphTabList extends StatelessWidget {
   final ValueChanged<MorphTabPosition>? onPositionChanged;
   final VoidCallback? onToggleSidebar;
 
+  bool get _right => side == MorphTabPosition.right;
+
+  IconData get _toggleIcon {
+    // Expand points toward the content; collapse points toward the window edge.
+    if (collapsed) {
+      return _right
+          ? Icons.keyboard_double_arrow_left
+          : Icons.keyboard_double_arrow_right;
+    }
+    return _right
+        ? Icons.keyboard_double_arrow_right
+        : Icons.keyboard_double_arrow_left;
+  }
+
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
+    final newTab = _IconAction(
+      key: const Key('tab-new'),
+      tooltip: 'New tab',
+      icon: Icons.add,
+      onPressed: onNewTab,
+    );
+    final positionButton = MorphTabPositionButton(
+      onSelected: onPositionChanged,
+    );
+    final toggle = _IconAction(
+      key: const Key('tab-list-collapse'),
+      tooltip: collapsed ? 'Expand tabs' : 'Collapse tabs',
+      icon: _toggleIcon,
+      onPressed: onToggleSidebar,
+    );
     return Material(
       key: const Key('tab-list'),
       color: colors.surface,
       child: SizedBox(
-        width: collapsed ? 48 : 220,
+        width: collapsed ? collapsedWidth : expandedWidth,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            SizedBox(
-              height: 40,
-              child: Row(
-                children: [
-                  _IconAction(
-                    key: const Key('tab-new'),
-                    tooltip: 'New tab',
-                    icon: Icons.add,
-                    onPressed: onNewTab,
-                  ),
-                  MorphTabPositionButton(onSelected: onPositionChanged),
-                  const Spacer(),
-                  _IconAction(
-                    key: const Key('tab-list-collapse'),
-                    tooltip: collapsed ? 'Expand tabs' : 'Collapse tabs',
-                    icon: collapsed
-                        ? Icons.keyboard_double_arrow_right
-                        : Icons.keyboard_double_arrow_left,
-                    onPressed: onToggleSidebar,
-                  ),
-                ],
+            if (collapsed)
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [newTab, toggle, positionButton],
+              )
+            else
+              SizedBox(
+                height: 40,
+                child: Row(
+                  children: [newTab, positionButton, const Spacer(), toggle],
+                ),
               ),
-            ),
             Expanded(
               child: ListView.builder(
                 itemCount: tabs.length,
@@ -507,7 +534,7 @@ class _MorphTabListTileState extends State<MorphTabListTile> {
           onTap: widget.onSelect,
           child: Container(
             height: 36,
-            padding: const EdgeInsets.symmetric(horizontal: 8),
+            padding: EdgeInsets.symmetric(horizontal: widget.collapsed ? 0 : 8),
             decoration: BoxDecoration(
               color: widget.active
                   ? colors.surfaceContainerHighest
@@ -519,6 +546,9 @@ class _MorphTabListTileState extends State<MorphTabListTile> {
                   : null,
             ),
             child: Row(
+              mainAxisAlignment: widget.collapsed
+                  ? MainAxisAlignment.center
+                  : MainAxisAlignment.start,
               children: [
                 Icon(Icons.public, size: 16, color: colors.onSurfaceVariant),
                 if (!widget.collapsed) ...[
@@ -564,6 +594,7 @@ class MorphTabPositionButton extends StatelessWidget {
     return PopupMenuButton<MorphTabPosition>(
       key: const Key('tab-position'),
       tooltip: 'Tab position',
+      padding: EdgeInsets.zero,
       onSelected: onSelected,
       itemBuilder: (context) => [
         for (final position in MorphTabPosition.values)
@@ -573,10 +604,7 @@ class MorphTabPositionButton extends StatelessWidget {
             child: Text(_label(position)),
           ),
       ],
-      child: const Padding(
-        padding: EdgeInsets.all(8),
-        child: Icon(Icons.view_sidebar_outlined, size: 18),
-      ),
+      icon: const Icon(Icons.view_sidebar_outlined, size: 18),
     );
   }
 

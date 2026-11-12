@@ -12,7 +12,9 @@ Widget _harness({
   TargetPlatform platform = TargetPlatform.linux,
   MorphWindowButtonMode mode = MorphWindowButtonMode.all,
   bool useNativeMacButtons = true,
+  bool sidebarCollapsed = false,
   ValueChanged<MorphTabPosition>? onPositionChanged,
+  VoidCallback? onToggleSidebar,
 }) {
   return MaterialApp(
     theme: MorphTheme.dark,
@@ -21,6 +23,7 @@ Widget _harness({
         tabs: tabs.tabs,
         activeId: tabs.activeId,
         position: position,
+        sidebarCollapsed: sidebarCollapsed,
         buttonMode: mode,
         platform: platform,
         useNativeMacButtons: useNativeMacButtons,
@@ -40,6 +43,7 @@ Widget _harness({
           child: SizedBox.expand(),
         ),
         onPositionChanged: onPositionChanged,
+        onToggleSidebar: onToggleSidebar,
       ),
     ),
   );
@@ -263,5 +267,142 @@ void main() {
     await tester.tap(find.byKey(const Key('tab-position-left')));
     await tester.pumpAndSettle();
     expect(chosen, MorphTabPosition.left);
+  });
+
+  testWidgets('left and right: collapse then expand round trip', (
+    tester,
+  ) async {
+    _desktopSize(tester);
+    final tabs = MorphTabSet()..update(1, title: 'One');
+    for (final position in [MorphTabPosition.left, MorphTabPosition.right]) {
+      var collapsed = false;
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: MorphTheme.dark,
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (context, setState) {
+                return MorphDesktopChrome(
+                  tabs: tabs.tabs,
+                  activeId: tabs.activeId,
+                  position: position,
+                  sidebarCollapsed: collapsed,
+                  platform: TargetPlatform.linux,
+                  navigation: const SizedBox(
+                    key: Key('nav-row'),
+                    height: 48,
+                    child: TextField(key: Key('address-bar')),
+                  ),
+                  content: const ColoredBox(
+                    key: Key('web-content'),
+                    color: Colors.black,
+                    child: SizedBox.expand(),
+                  ),
+                  onToggleSidebar: () => setState(() => collapsed = !collapsed),
+                );
+              },
+            ),
+          ),
+        ),
+      );
+
+      expect(
+        tester.getSize(find.byKey(const Key('tab-list'))).width,
+        MorphTabList.expandedWidth,
+        reason: '$position expanded',
+      );
+      expect(find.text('One'), findsOneWidget);
+      expect(find.byKey(const Key('tab-list-collapse')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('tab-list-collapse')));
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.getSize(find.byKey(const Key('tab-list'))).width,
+        MorphTabList.collapsedWidth,
+        reason: '$position collapsed',
+      );
+      expect(find.text('One'), findsNothing);
+      expect(find.byKey(const Key('tab-list-collapse')), findsOneWidget);
+      expect(find.byKey(const Key('tab-new')), findsOneWidget);
+      expect(find.byKey(const Key('tab-position')), findsOneWidget);
+      // The expand control stays inside the rail and is tappable.
+      final list = tester.getRect(find.byKey(const Key('tab-list')));
+      final toggle = tester.getRect(find.byKey(const Key('tab-list-collapse')));
+      expect(
+        list.inflate(0.5).contains(toggle.center),
+        isTrue,
+        reason: '$position',
+      );
+      // Controls are stacked, not packed into one row.
+      expect(
+        tester.getRect(find.byKey(const Key('tab-new'))).bottom,
+        lessThanOrEqualTo(toggle.top + 0.5),
+        reason: '$position',
+      );
+      expect(
+        toggle.bottom,
+        lessThanOrEqualTo(
+          tester.getRect(find.byKey(const Key('tab-position'))).top + 0.5,
+        ),
+        reason: '$position',
+      );
+
+      await tester.tap(find.byKey(const Key('tab-list-collapse')));
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.getSize(find.byKey(const Key('tab-list'))).width,
+        MorphTabList.expandedWidth,
+        reason: '$position re-expanded',
+      );
+      expect(find.text('One'), findsOneWidget);
+    }
+  });
+
+  testWidgets('collapsed rails do not overflow at 48px or in a narrow window', (
+    tester,
+  ) async {
+    final overflows = <String>[];
+    final previous = FlutterError.onError;
+    FlutterError.onError = (details) {
+      final text = '${details.exceptionAsString()}\n${details.toString()}';
+      if (text.contains('overflowed') || text.contains('OVERFLOWING')) {
+        overflows.add(text);
+      }
+      previous?.call(details);
+    };
+    addTearDown(() => FlutterError.onError = previous);
+
+    final tabs = MorphTabSet()..update(1, title: 'One');
+    for (final size in const [Size(1280, 800), Size(580, 800)]) {
+      final view = tester.view;
+      view.physicalSize = size;
+      view.devicePixelRatio = 1.0;
+      addTearDown(view.reset);
+      for (final position in [MorphTabPosition.left, MorphTabPosition.right]) {
+        await tester.pumpWidget(
+          _harness(tabs: tabs, position: position, sidebarCollapsed: true),
+        );
+        await tester.pump();
+        expect(
+          tester.getSize(find.byKey(const Key('tab-list'))).width,
+          MorphTabList.collapsedWidth,
+          reason: '$position at ${size.width}',
+        );
+        expect(find.byKey(const Key('tab-list-collapse')), findsOneWidget);
+        final list = tester.getRect(find.byKey(const Key('tab-list')));
+        final toggle = tester.getRect(
+          find.byKey(const Key('tab-list-collapse')),
+        );
+        expect(
+          list.inflate(0.5).contains(toggle.center),
+          isTrue,
+          reason: '$position at ${size.width}',
+        );
+      }
+    }
+    expect(tester.takeException(), isNull);
+    expect(overflows, isEmpty);
   });
 }
