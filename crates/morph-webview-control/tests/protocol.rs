@@ -45,9 +45,21 @@ fn test_runtime() -> tokio::runtime::Runtime {
 fn temp_endpoint() -> ControlEndpoint {
     use std::sync::atomic::{AtomicU64, Ordering};
     static N: AtomicU64 = AtomicU64::new(0);
-    let path = std::env::temp_dir().join(format!("morph-control-test-{}-{}.sock", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
-    let _ = std::fs::remove_file(&path);
-    ControlEndpoint::Unix(path)
+    let n = N.fetch_add(1, Ordering::SeqCst);
+    #[cfg(unix)]
+    {
+        let path = std::env::temp_dir().join(format!("morph-control-test-{}-{}.sock", std::process::id(), n));
+        let _ = std::fs::remove_file(&path);
+        ControlEndpoint::Unix(path)
+    }
+    #[cfg(windows)]
+    {
+        ControlEndpoint::NamedPipe(format!(r"\\.\pipe\morph-control-test-{}-{}", std::process::id(), n))
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        ControlEndpoint::Loopback { port: 0 }
+    }
 }
 
 fn client_msg(seq: u64, view_id: i64, body: ClientBody) -> ClientMessage {
