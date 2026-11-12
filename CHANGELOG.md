@@ -22,3 +22,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   use flutter_inappwebview 6.x behind the Morph web-view interface and talk
   to the in-process control server. Dart's gRPC client falls back to loopback
   TCP on Windows because package:grpc cannot open a named pipe.
+- Android uses the same in-app backend and control layer, with the system
+  WebView in a Flutter platform view. The main manifest grants INTERNET, and
+  the shell can submit a typed URL before the view has finished attaching.
