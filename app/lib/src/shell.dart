@@ -14,6 +14,7 @@ import 'tabs/tab_position.dart';
 import 'tabs/tab_set.dart';
 import 'widgets/brand.dart';
 import 'widgets/desktop_chrome.dart';
+import 'widgets/mobile_gestures.dart';
 import 'widgets/start_page.dart';
 import 'widgets/window_chrome.dart';
 import 'window/morph_desktop_window.dart';
@@ -497,36 +498,46 @@ class MorphShellState extends State<MorphShell> {
             ],
           );
 
-    return CallbackShortcuts(
-      bindings: {
-        const SingleActivator(LogicalKeyboardKey.keyT, control: true): _openTab,
-        const SingleActivator(LogicalKeyboardKey.keyT, meta: true): _openTab,
-        const SingleActivator(LogicalKeyboardKey.keyW, control: true): () {
-          _closeTab(tabs.activeId);
-        },
-        const SingleActivator(LogicalKeyboardKey.keyW, meta: true): () {
-          _closeTab(tabs.activeId);
-        },
-        const SingleActivator(LogicalKeyboardKey.tab, control: true): () {
-          _controllerFor(tabs.cycleNext());
-          _syncAddressFromActive();
-          setState(() {});
-        },
-        const SingleActivator(
-          LogicalKeyboardKey.tab,
-          control: true,
-          shift: true,
-        ): () {
-          _controllerFor(tabs.cyclePrev());
-          _syncAddressFromActive();
-          setState(() {});
-        },
+    return PopScope(
+      canPop: !_isMobile || !navigation.canGoBack,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop || !navigation.canGoBack) {
+          return;
+        }
+        unawaited(webView.goBack());
       },
-      child: Focus(
-        autofocus: true,
-        child: Scaffold(
-          resizeToAvoidBottomInset: true,
-          body: SafeArea(top: false, bottom: false, child: body),
+      child: CallbackShortcuts(
+        bindings: {
+          const SingleActivator(LogicalKeyboardKey.keyT, control: true):
+              _openTab,
+          const SingleActivator(LogicalKeyboardKey.keyT, meta: true): _openTab,
+          const SingleActivator(LogicalKeyboardKey.keyW, control: true): () {
+            _closeTab(tabs.activeId);
+          },
+          const SingleActivator(LogicalKeyboardKey.keyW, meta: true): () {
+            _closeTab(tabs.activeId);
+          },
+          const SingleActivator(LogicalKeyboardKey.tab, control: true): () {
+            _controllerFor(tabs.cycleNext());
+            _syncAddressFromActive();
+            setState(() {});
+          },
+          const SingleActivator(
+            LogicalKeyboardKey.tab,
+            control: true,
+            shift: true,
+          ): () {
+            _controllerFor(tabs.cyclePrev());
+            _syncAddressFromActive();
+            setState(() {});
+          },
+        },
+        child: Focus(
+          autofocus: true,
+          child: Scaffold(
+            resizeToAvoidBottomInset: true,
+            body: SafeArea(top: false, bottom: false, child: body),
+          ),
         ),
       ),
     );
@@ -568,14 +579,14 @@ class MorphShellState extends State<MorphShell> {
                       ),
                     ),
                   ),
-                IconButton(
-                  key: const Key('nav-back'),
-                  style: iconStyle,
-                  onPressed: navigation.canGoBack ? webView.goBack : null,
-                  tooltip: 'Back',
-                  icon: const Icon(Icons.arrow_back),
-                ),
-                if (!compact || navigation.canGoForward)
+                if (!_isMobile) ...[
+                  IconButton(
+                    key: const Key('nav-back'),
+                    style: iconStyle,
+                    onPressed: navigation.canGoBack ? webView.goBack : null,
+                    tooltip: 'Back',
+                    icon: const Icon(Icons.arrow_back),
+                  ),
                   IconButton(
                     key: const Key('nav-forward'),
                     style: iconStyle,
@@ -585,15 +596,16 @@ class MorphShellState extends State<MorphShell> {
                     tooltip: 'Forward',
                     icon: const Icon(Icons.arrow_forward),
                   ),
-                IconButton(
-                  key: const Key('nav-reload'),
-                  style: iconStyle,
-                  onPressed: webView.isAttached && !_onStartPage
-                      ? webView.reload
-                      : null,
-                  tooltip: 'Reload',
-                  icon: const Icon(Icons.refresh),
-                ),
+                  IconButton(
+                    key: const Key('nav-reload'),
+                    style: iconStyle,
+                    onPressed: webView.isAttached && !_onStartPage
+                        ? webView.reload
+                        : null,
+                    tooltip: 'Reload',
+                    icon: const Icon(Icons.refresh),
+                  ),
+                ],
                 Expanded(
                   child: TextField(
                     key: const Key('address-bar'),
@@ -636,7 +648,7 @@ class MorphShellState extends State<MorphShell> {
   }
 
   Widget _webStack(ColorScheme colors) {
-    return Stack(
+    final stack = Stack(
       fit: StackFit.expand,
       children: [
         if (ready)
@@ -659,6 +671,18 @@ class MorphShellState extends State<MorphShell> {
           Center(child: CircularProgressIndicator(color: colors.primary)),
         if (_onStartPage) const MorphStartPage(),
       ],
+    );
+    if (!_isMobile) {
+      return stack;
+    }
+    return MorphMobileGestures(
+      canGoBack: navigation.canGoBack,
+      canGoForward: navigation.canGoForward,
+      canRefresh: webView.isAttached && !_onStartPage,
+      onBack: () => unawaited(webView.goBack()),
+      onForward: () => unawaited(webView.goForward()),
+      onRefresh: () => unawaited(webView.reload()),
+      child: stack,
     );
   }
 

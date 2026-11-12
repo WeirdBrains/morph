@@ -253,7 +253,9 @@ void main() {
         expect(find.byKey(const Key('debug-panel')), findsNothing);
         expect(find.byKey(const Key('address-go')), findsNothing);
         expect(find.byKey(const Key('nav-forward')), findsNothing);
-        expect(find.byKey(const Key('nav-back')), findsOneWidget);
+        expect(find.byKey(const Key('nav-back')), findsNothing);
+        expect(find.byKey(const Key('nav-reload')), findsNothing);
+        expect(find.byKey(const Key('mobile-gestures')), findsOneWidget);
         expect(find.text('Ping page bridge'), findsNothing);
         expect(find.textContaining('Error: no home directory'), findsNothing);
 
@@ -272,4 +274,118 @@ void main() {
       }
     },
   );
+
+  testWidgets('tapping the URL field selects all text on phone and desktop', (
+    tester,
+  ) async {
+    const missingHome = '/tmp/morph-does-not-exist';
+    for (final platform in [
+      TargetPlatform.android,
+      TargetPlatform.iOS,
+      TargetPlatform.linux,
+      TargetPlatform.macOS,
+      TargetPlatform.windows,
+    ]) {
+      debugDefaultTargetPlatformOverride = platform;
+      try {
+        await tester.pumpWidget(
+          MorphApp(
+            api: FakeMorphApi(),
+            home: missingHome,
+            subscribeToTicks: false,
+            loadPageBridgeAsset: false,
+          ),
+        );
+        await _pumpUntilIdentity(tester);
+
+        await tester.enterText(
+          find.byKey(const Key('address-bar')),
+          'https://example.com/path',
+        );
+        await tester.tap(find.byKey(const Key('address-bar')));
+        await tester.pump();
+
+        final field = tester.widget<TextField>(
+          find.byKey(const Key('address-bar')),
+        );
+        final value = field.controller!.value;
+        expect(
+          value.selection,
+          const TextSelection(
+            baseOffset: 0,
+            extentOffset: 'https://example.com/path'.length,
+          ),
+          reason: '$platform',
+        );
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pump();
+      }
+    }
+  });
+
+  testWidgets('phone edge swipe goes back and pull-to-refresh reloads', (
+    tester,
+  ) async {
+    final view = tester.view;
+    view.physicalSize = const Size(412, 915);
+    view.devicePixelRatio = 1.0;
+    addTearDown(view.reset);
+
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    const missingHome = '/tmp/morph-does-not-exist';
+    try {
+      await tester.pumpWidget(
+        MorphApp(
+          api: FakeMorphApi(),
+          home: missingHome,
+          subscribeToTicks: false,
+          loadPageBridgeAsset: false,
+        ),
+      );
+      await _pumpUntilIdentity(tester);
+
+      await tester.enterText(
+        find.byKey(const Key('address-bar')),
+        'example.com',
+      );
+      await tester.testTextInput.receiveAction(TextInputAction.go);
+      await tester.pump();
+      await _pumpUntilWebViewAttached(tester, fakeWebView);
+      expect(fakeWebView.lastSession, isNotNull);
+
+      // Walk history so back is available: load a second page.
+      await tester.enterText(
+        find.byKey(const Key('address-bar')),
+        'example.org',
+      );
+      await tester.testTextInput.receiveAction(TextInputAction.go);
+      await tester.pump();
+      await _pumpUntilWebViewAttached(tester, fakeWebView);
+
+      final session = fakeWebView.lastSession!;
+      expect(session.history, contains('https://example.org'));
+
+      // Edge-swipe back from the left.
+      final gestures = tester.getRect(find.byKey(const Key('mobile-gestures')));
+      await tester.dragFrom(
+        Offset(gestures.left + 8, gestures.center.dy),
+        const Offset(80, 0),
+      );
+      await tester.pumpAndSettle();
+      expect(session.history[session.historyIndex], 'https://example.com');
+
+      // Pull to refresh from the top strip (inside the content, past the edges).
+      final reloads = session.reloads;
+      await tester.dragFrom(
+        Offset(gestures.center.dx, gestures.top + 20),
+        const Offset(0, 80),
+      );
+      await tester.pumpAndSettle();
+      expect(session.reloads, reloads + 1);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
 }
