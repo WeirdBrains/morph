@@ -21,6 +21,7 @@ class MorphAddressSheet extends StatefulWidget {
     this.onShare,
     this.onReload,
     this.onDesktopSiteChanged,
+    this.onFind,
     this.identityLabel,
     this.profiles,
   });
@@ -35,6 +36,7 @@ class MorphAddressSheet extends StatefulWidget {
   final Future<void> Function(String url)? onShare;
   final VoidCallback? onReload;
   final ValueChanged<bool>? onDesktopSiteChanged;
+  final VoidCallback? onFind;
   final String? identityLabel;
 
   /// Optional profiles section (mobile). Desktop uses the nav-row button.
@@ -206,7 +208,12 @@ class _MorphAddressSheetState extends State<MorphAddressSheet> {
                   key: const Key('sheet-find'),
                   icon: Icons.search,
                   label: 'Find in page',
-                  onTap: () => _comingSoon('Find in page'),
+                  onTap: widget.onFind == null
+                      ? () => _comingSoon('Find in page')
+                      : () {
+                          Navigator.of(context).maybePop();
+                          widget.onFind!();
+                        },
                 ),
                 SwitchListTile(
                   key: const Key('sheet-desktop'),

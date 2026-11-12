@@ -17,6 +17,7 @@ import 'tabs/tab_set.dart';
 import 'widgets/address_sheet.dart';
 import 'widgets/brand.dart';
 import 'widgets/desktop_chrome.dart';
+import 'widgets/find_bar.dart';
 import 'widgets/mobile_gestures.dart';
 import 'widgets/profile_menu.dart';
 import 'widgets/start_page.dart';
@@ -77,6 +78,7 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
   );
   String _profileId = 'default';
   final _recorded = <int, String>{};
+  bool _findOpen = false;
   Future<void> _libraryWrites = Future.value();
   bool _showSwitcher = false;
   final _previews = <int, Uint8List?>{};
@@ -820,6 +822,40 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
     }
   }
 
+  void _openFind() {
+    if (!_findOpen) {
+      setState(() => _findOpen = true);
+      _scheduleSurfaceCheck();
+    }
+  }
+
+  void _closeFind() {
+    if (!_findOpen) {
+      return;
+    }
+    setState(() => _findOpen = false);
+    unawaited(
+      webView
+          .evaluateJavaScript(morphFindClearScript)
+          .then((_) {}, onError: (Object _) {}),
+    );
+    _scheduleSurfaceCheck();
+  }
+
+  Future<MorphFindResult> _findInPage(
+    String query, {
+    required bool backward,
+    required bool reset,
+  }) async {
+    if (!webView.isAttached || _onStartPage) {
+      return MorphFindResult.none;
+    }
+    final reply = await webView.evaluateJavaScript(
+      morphFindScript(query, backward: backward, reset: reset),
+    );
+    return parseMorphFindResult(reply);
+  }
+
   void _setSidebarWidth(double width) {
     setState(() => _sidebarWidth = width);
   }
@@ -872,6 +908,8 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
         _selectAllAddress();
       case MorphShellShortcut.reload:
         unawaited(webView.reload());
+      case MorphShellShortcut.find:
+        _openFind();
       case MorphShellShortcut.selectTab1:
       case MorphShellShortcut.selectTab2:
       case MorphShellShortcut.selectTab3:
@@ -920,6 +958,7 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
           onDesktopSiteChanged: (value) =>
               unawaited(webView.setDesktopSite(value)),
           onShare: _shareUrl,
+          onFind: _openFind,
           profiles: _profileSheetSection(),
         );
       },
@@ -979,6 +1018,12 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
               'Error: $error',
               style: MorphTheme.monoStyle(color: colors.error, size: 12),
             ),
+          ),
+        if (_findOpen)
+          MorphFindBar(
+            key: ValueKey('find-bar-$_profileId-${tabs.activeId}'),
+            onFind: _findInPage,
+            onClose: _closeFind,
           ),
         Expanded(child: _webStack(colors)),
       ],

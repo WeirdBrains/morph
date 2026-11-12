@@ -8,6 +8,7 @@ enum MorphShellShortcut {
   prevTab,
   focusAddress,
   reload,
+  find,
   selectTab1,
   selectTab2,
   selectTab3,
@@ -63,6 +64,9 @@ abstract final class MorphShellShortcuts {
     }
     if (key == LogicalKeyboardKey.keyR) {
       return MorphShellShortcut.reload;
+    }
+    if (key == LogicalKeyboardKey.keyF) {
+      return MorphShellShortcut.find;
     }
     if (key == LogicalKeyboardKey.digit1 || key == LogicalKeyboardKey.numpad1) {
       return MorphShellShortcut.selectTab1;

@@ -1183,6 +1183,87 @@ void main() {
     }
   });
 
+  testWidgets('Ctrl+F finds in the active page and Escape closes it', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    final view = tester.view;
+    view.physicalSize = const Size(1280, 800);
+    view.devicePixelRatio = 1.0;
+    try {
+      await tester.pumpWidget(
+        MorphApp(
+          api: FakeMorphApi(),
+          home: '/tmp/morph-does-not-exist',
+          subscribeToTicks: false,
+          loadPageBridgeAsset: false,
+        ),
+      );
+      await _pumpUntilIdentity(tester);
+      await tester.enterText(find.byKey(const Key('address-bar')), 'f.example');
+      await tester.tap(find.byKey(const Key('address-go')));
+      await tester.pump();
+      await _pumpUntilWebViewAttached(tester, fakeWebView);
+      await tester.pump();
+      final session = fakeWebView.lastSession!;
+      await _focusActiveWebView(tester);
+
+      expect(find.byKey(const Key('find-bar')), findsNothing);
+      await _sendChord(
+        tester,
+        LogicalKeyboardKey.controlLeft,
+        LogicalKeyboardKey.keyF,
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('find-bar')), findsOneWidget);
+      expect(session.keys.map((e) => e.key), isNot(contains('F')));
+
+      session.evaluated.clear();
+      await tester.enterText(find.byKey(const Key('find-field')), 'morph');
+      await tester.pump();
+      expect(session.evaluated.single, contains('"morph",false,true'));
+      expect(find.text('No matches'), findsOneWidget);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('find-bar')), findsNothing);
+      expect(session.evaluated.last, contains('delete window.__morphFind'));
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+      view.reset();
+    }
+  });
+
+  testWidgets('phone address sheet opens find in page', (tester) async {
+    final view = tester.view;
+    view.physicalSize = const Size(412, 915);
+    view.devicePixelRatio = 1.0;
+    addTearDown(view.reset);
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      await tester.pumpWidget(
+        MorphApp(
+          api: FakeMorphApi(),
+          home: '/tmp/morph-does-not-exist',
+          subscribeToTicks: false,
+          loadPageBridgeAsset: false,
+        ),
+      );
+      await _pumpUntilIdentity(tester);
+      await tester.tap(find.byKey(const Key('address-bar')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('sheet-find')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('address-sheet')), findsNothing);
+      expect(find.byKey(const Key('find-bar')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('find-close')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('find-bar')), findsNothing);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
   testWidgets(
     'shell shortcuts work while the web view has focus and are not forwarded',
     (tester) async {
