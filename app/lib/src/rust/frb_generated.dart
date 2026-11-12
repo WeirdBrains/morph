@@ -72,7 +72,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.13.0';
 
   @override
-  int get rustContentHash => -404524694;
+  int get rustContentHash => -296459195;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -119,6 +119,11 @@ abstract class RustLibApi extends BaseApi {
   Future<SettingsView> crateApiSettingsLoadSettings({String? home});
 
   Future<EphemeralUser> crateApiIdentityNewEphemeralUser();
+
+  Future<SettingsView> crateApiSettingsSetSidebarCollapsed({
+    String? home,
+    required bool collapsed,
+  });
 
   Future<SettingsView> crateApiSettingsSetTabPosition({
     String? home,
@@ -476,6 +481,41 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "new_ephemeral_user", argNames: []);
 
   @override
+  Future<SettingsView> crateApiSettingsSetSidebarCollapsed({
+    String? home,
+    required bool collapsed,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_opt_String(home, serializer);
+          sse_encode_bool(collapsed, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 11,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_settings_view,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiSettingsSetSidebarCollapsedConstMeta,
+        argValues: [home, collapsed],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSettingsSetSidebarCollapsedConstMeta =>
+      const TaskConstMeta(
+        debugName: "set_sidebar_collapsed",
+        argNames: ["home", "collapsed"],
+      );
+
+  @override
   Future<SettingsView> crateApiSettingsSetTabPosition({
     String? home,
     required String position,
@@ -489,7 +529,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 11,
+            funcId: 12,
             port: port_,
           );
         },
@@ -519,7 +559,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 12,
+            funcId: 13,
             port: port_,
           );
         },
@@ -546,7 +586,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 13,
+            funcId: 14,
             port: port_,
           );
         },
@@ -576,7 +616,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 14,
+            funcId: 15,
             port: port_,
           );
         },
@@ -712,9 +752,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   SettingsView dco_decode_settings_view(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 1)
-      throw Exception('unexpected arr length: expect 1 but see ${arr.length}');
-    return SettingsView(tabPosition: dco_decode_String(arr[0]));
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return SettingsView(
+      tabPosition: dco_decode_String(arr[0]),
+      sidebarCollapsed: dco_decode_bool(arr[1]),
+    );
   }
 
   @protected
@@ -886,7 +929,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   SettingsView sse_decode_settings_view(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_tabPosition = sse_decode_String(deserializer);
-    return SettingsView(tabPosition: var_tabPosition);
+    var var_sidebarCollapsed = sse_decode_bool(deserializer);
+    return SettingsView(
+      tabPosition: var_tabPosition,
+      sidebarCollapsed: var_sidebarCollapsed,
+    );
   }
 
   @protected
@@ -1053,6 +1100,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   void sse_encode_settings_view(SettingsView self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.tabPosition, serializer);
+    sse_encode_bool(self.sidebarCollapsed, serializer);
   }
 
   @protected

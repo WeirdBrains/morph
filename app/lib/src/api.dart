@@ -8,6 +8,8 @@ abstract class MorphApi {
   Future<String> handlePageMessage({required String json});
   Future<String> loadTabPosition({String? home});
   Future<void> saveTabPosition(String position, {String? home});
+  Future<bool> loadSidebarCollapsed({String? home});
+  Future<void> saveSidebarCollapsed(bool collapsed, {String? home});
 }
 
 class IdentityStatusView {

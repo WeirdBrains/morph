@@ -50,6 +50,9 @@ impl<'de> Deserialize<'de> for TabPosition {
 pub struct Settings {
     #[serde(default)]
     pub tab_position: TabPosition,
+    /// Whether the left/right tab list is collapsed to favicons. Default: false.
+    #[serde(default)]
+    pub sidebar_collapsed: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -102,6 +105,14 @@ pub fn set_tab_position(home: impl AsRef<Path>, position: TabPosition) -> Result
     Ok(settings)
 }
 
+/// Load, set whether the left/right tab list is collapsed, and persist it.
+pub fn set_sidebar_collapsed(home: impl AsRef<Path>, collapsed: bool) -> Result<Settings, SettingsError> {
+    let mut settings = load(&home)?;
+    settings.sidebar_collapsed = collapsed;
+    save(&home, &settings)?;
+    Ok(settings)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -149,6 +160,34 @@ mod tests {
         let tmp = tempdir().unwrap();
         fs::write(settings_path(tmp.path()), "{\"tab_position\":\"left\",\"future_flag\":true}\n").unwrap();
         assert_eq!(load(tmp.path()).unwrap().tab_position, TabPosition::Left);
+    }
+
+    #[test]
+    fn sidebar_collapsed_defaults_false_and_round_trips() {
+        let tmp = tempdir().unwrap();
+        let home = tmp.path().join("morph-home");
+        assert!(!load(&home).unwrap().sidebar_collapsed);
+
+        let saved = set_sidebar_collapsed(&home, true).unwrap();
+        assert!(saved.sidebar_collapsed);
+        assert_eq!(saved.tab_position, TabPosition::Top);
+        let loaded = load(&home).unwrap();
+        assert!(loaded.sidebar_collapsed);
+        let raw = fs::read_to_string(settings_path(&home)).unwrap();
+        assert!(raw.contains("\"sidebar_collapsed\": true"), "{raw}");
+
+        let saved = set_sidebar_collapsed(&home, false).unwrap();
+        assert!(!saved.sidebar_collapsed);
+        assert!(!load(&home).unwrap().sidebar_collapsed);
+    }
+
+    #[test]
+    fn missing_sidebar_collapsed_field_defaults_false() {
+        let tmp = tempdir().unwrap();
+        fs::write(settings_path(tmp.path()), "{\"tab_position\":\"left\"}\n").unwrap();
+        let settings = load(tmp.path()).unwrap();
+        assert_eq!(settings.tab_position, TabPosition::Left);
+        assert!(!settings.sidebar_collapsed);
     }
 
     #[test]

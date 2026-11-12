@@ -45,4 +45,15 @@ class FfiMorphApi implements MorphApi {
   Future<void> saveTabPosition(String position, {String? home}) async {
     await rust_settings.setTabPosition(home: home, position: position);
   }
+
+  @override
+  Future<bool> loadSidebarCollapsed({String? home}) async {
+    final settings = await rust_settings.loadSettings(home: home);
+    return settings.sidebarCollapsed;
+  }
+
+  @override
+  Future<void> saveSidebarCollapsed(bool collapsed, {String? home}) async {
+    await rust_settings.setSidebarCollapsed(home: home, collapsed: collapsed);
+  }
 }

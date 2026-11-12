@@ -180,11 +180,15 @@ class MorphShellState extends State<MorphShell> {
         final position = MorphTabPosition.fromKey(
           await widget.api.loadTabPosition(home: _home),
         );
+        final collapsed = await widget.api.loadSidebarCollapsed(home: _home);
         if (mounted) {
-          setState(() => _tabPosition = position);
+          setState(() {
+            _tabPosition = position;
+            _sidebarCollapsed = collapsed;
+          });
         }
       } catch (_) {
-        // A missing or unreadable preference stays at the default (top).
+        // A missing or unreadable preference stays at the defaults.
       }
       if (!mounted) {
         return;
@@ -441,6 +445,16 @@ class MorphShellState extends State<MorphShell> {
     }
   }
 
+  Future<void> _toggleSidebar() async {
+    final next = !_sidebarCollapsed;
+    setState(() => _sidebarCollapsed = next);
+    try {
+      await widget.api.saveSidebarCollapsed(next, home: _home);
+    } catch (_) {
+      // The in-memory choice still applies if persistence fails.
+    }
+  }
+
   Future<void> _openAddressSheet() async {
     if (!mounted) {
       return;
@@ -578,9 +592,7 @@ class MorphShellState extends State<MorphShell> {
                   onCloseTab: _closeTab,
                   onNewTab: _openTab,
                   onPositionChanged: _setTabPosition,
-                  onToggleSidebar: () {
-                    setState(() => _sidebarCollapsed = !_sidebarCollapsed);
-                  },
+                  onToggleSidebar: _toggleSidebar,
                   onDebugLongPress: _toggleDebugPanel,
                 ),
               ),
