@@ -1,0 +1,42 @@
+# Rust
+/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# Flutter / Dart
+**/.dart_tool/
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+**/.pub-cache/
+**/.pub/
+**/build/
+**/coverage/
+**/*.iml
+.idea/
+.vscode/
+.widget_preview/
+
+# Symbolication / obfuscation
+app.*.symbols
+app.*.map.json
+
+# Android Studio outputs
+app/android/app/debug
+app/android/app/profile
+app/android/app/release
+
+# OS / editor
+.DS_Store
+*.swp
+*~
+
+# Local assistant context (never committed)
+.agent-context/
+
+# Secrets and local data
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.keystore
