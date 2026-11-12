@@ -9,6 +9,9 @@
 //! recovery words encode (`weirdnet_keys::words`), so the words alone restore the
 //! same identity in another profile or on another device. Nothing here is shared
 //! between profiles, and nothing secret is written unsealed.
+//!
+//! The profile's library database key ([`LibraryKey`]) is derived from the same
+//! seed with HKDF-SHA256, so it exists only while the identity is unlocked.
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -48,10 +51,47 @@ pub struct ProfileIdentity {
     pub source: Source,
 }
 
+/// HKDF info for the library database key. Bump the version to rotate keys.
+const LIBRARY_KEY_INFO: &[u8] = b"morph/library-db/v1";
+
+/// The 32-byte key of a profile's library database. Zeroed on drop; its
+/// `Debug` never shows the bytes.
+#[derive(Clone)]
+pub struct LibraryKey(Zeroizing<[u8; 32]>);
+
+impl LibraryKey {
+    /// HKDF-SHA256 over the identity seed (no salt; the info string binds it
+    /// to this use).
+    fn derive(seed: &Key32) -> Self {
+        let mut out = Zeroizing::new([0u8; 32]);
+        hkdf::Hkdf::<sha2::Sha256>::new(None, &seed.0).expand(LIBRARY_KEY_INFO, out.as_mut()).expect("32 bytes is a valid HKDF-SHA256 length");
+        Self(out)
+    }
+
+    /// The raw key bytes, for handing to SQLCipher.
+    pub fn expose(&self) -> &[u8; 32] {
+        &self.0
+    }
+
+    /// A key from raw bytes (tests and callers that hold one already).
+    pub fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(Zeroizing::new(bytes))
+    }
+}
+
+impl std::fmt::Debug for LibraryKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("LibraryKey(..)")
+    }
+}
+
 /// A new identity and its recovery words. Show the words once, then drop this.
 pub struct Created {
     pub identity: ProfileIdentity,
     pub words: Zeroizing<String>,
+    /// The library database key, so the caller can encrypt the library now
+    /// without asking for the password again.
+    pub library_key: LibraryKey,
 }
 
 pub fn identity_dir(profile_dir: &Path) -> PathBuf {
@@ -87,13 +127,25 @@ pub fn load(profile_dir: &Path) -> Result<Option<ProfileIdentity>> {
 pub fn create(profile_dir: &Path, password: &SecretString, now_ms: i64) -> Result<Created> {
     let seed = Key32::random()?;
     let identity = store(profile_dir, &seed, password, Source::Created, now_ms)?;
-    Ok(Created { identity, words: to_words(&seed)? })
+    Ok(Created { identity, words: to_words(&seed)?, library_key: LibraryKey::derive(&seed) })
 }
 
 /// Restore an identity from its 24 recovery words into this profile.
 pub fn import(profile_dir: &Path, words: &str, password: &SecretString, now_ms: i64) -> Result<ProfileIdentity> {
+    Ok(import_unlocked(profile_dir, words, password, now_ms)?.0)
+}
+
+/// [`import`], also returning the library database key.
+pub fn import_unlocked(profile_dir: &Path, words: &str, password: &SecretString, now_ms: i64) -> Result<(ProfileIdentity, LibraryKey)> {
     let seed = from_words(words)?;
-    store(profile_dir, &seed, password, Source::Imported, now_ms)
+    let identity = store(profile_dir, &seed, password, Source::Imported, now_ms)?;
+    Ok((identity, LibraryKey::derive(&seed)))
+}
+
+/// Open the profile's sealed seed with its password and derive the library
+/// database key from it.
+pub fn library_key(profile_dir: &Path, password: &SecretString) -> Result<LibraryKey> {
+    Ok(LibraryKey::derive(&open_seed(profile_dir, password)?))
 }
 
 /// Open the profile's user key with its password.
@@ -279,6 +331,23 @@ mod tests {
         assert!(create(&dir, &pw("long enough"), 2).is_err());
         assert!(import(&dir, &first.words, &pw("long enough"), 2).is_err());
         assert_eq!(load(&dir).unwrap().unwrap(), first.identity);
+    }
+
+    #[test]
+    fn the_library_key_follows_the_seed_not_the_password() {
+        let tmp = tempfile::tempdir().unwrap();
+        let made = create(&tmp.path().join("a"), &pw("password-a"), 1).unwrap();
+        let again = library_key(&tmp.path().join("a"), &pw("password-a")).unwrap();
+        assert_eq!(again.expose(), made.library_key.expose());
+        assert!(library_key(&tmp.path().join("a"), &pw("wrong pass")).is_err());
+        let (_, restored) = import_unlocked(&tmp.path().join("b"), &made.words, &pw("password-b"), 2).unwrap();
+        assert_eq!(restored.expose(), made.library_key.expose(), "same words, same library key");
+        let other = create(&tmp.path().join("c"), &pw("password-a"), 1).unwrap();
+        assert_ne!(other.library_key.expose(), made.library_key.expose());
+        // Not the seed itself, and never printed.
+        let seed = from_words(&made.words).unwrap();
+        assert_ne!(made.library_key.expose(), &seed.0);
+        assert_eq!(format!("{:?}", made.library_key), "LibraryKey(..)");
     }
 
     #[test]
