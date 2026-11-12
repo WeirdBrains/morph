@@ -12,3 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Linux `morph_webview` / `morph_webview_linux`: webkit2gtk-4.1 offscreen
   snapshot texture, WPE DMA-BUF feature detection, live navigation, and
   page-bridge wiring on a real view.
+- In-process gRPC control layer (`morph-webview-control`): a single ordered
+  `Session` stream over a Unix domain socket (loopback TCP on Windows). The
+  Linux plugin keeps the method channel for create/dispose/resize/texture and
+  routes navigation, input, and page-bridge traffic through the control
+  server, which handles page messages in Rust.

@@ -1,5 +1,6 @@
 #include "include/morph_webview_linux/morph_webview_linux_plugin.h"
 
+#include "morph_webview_control.h"
 #include "render_path.h"
 
 #include <cairo/cairo.h>
@@ -77,6 +78,7 @@ struct _MorphWebviewLinuxPlugin {
   gboolean events_listening;
   int64_t next_view_id;
   std::map<int64_t, MorphView*>* views;
+  gchar* control_endpoint;
 };
 
 G_DEFINE_TYPE(MorphWebviewLinuxPlugin, morph_webview_linux_plugin, G_TYPE_OBJECT)
@@ -123,7 +125,7 @@ static MorphPixelBufferTexture* morph_pixel_buffer_texture_new(MorphView* view) 
   return texture;
 }
 
-static void emit_event(MorphView* view, FlValue* event) {
+__attribute__((unused)) static void emit_event(MorphView* view, FlValue* event) {
   MorphWebviewLinuxPlugin* plugin = view->plugin;
   if (plugin == nullptr || !plugin->events_listening || plugin->events == nullptr) {
     fl_value_unref(event);
@@ -138,23 +140,17 @@ static void emit_event(MorphView* view, FlValue* event) {
 }
 
 static void emit_navigation(MorphView* view) {
-  FlValue* event = fl_value_new_map();
-  fl_value_set_string_take(event, "type", fl_value_new_string("navigation"));
   const gchar* uri = webkit_web_view_get_uri(view->web_view);
   const gchar* title = webkit_web_view_get_title(view->web_view);
-  fl_value_set_string_take(event, "url", fl_value_new_string(uri != nullptr ? uri : ""));
-  fl_value_set_string_take(event, "title", fl_value_new_string(title != nullptr ? title : ""));
-  fl_value_set_string_take(event, "canGoBack",
-                           fl_value_new_bool(webkit_web_view_can_go_back(view->web_view)));
-  fl_value_set_string_take(event, "canGoForward",
-                           fl_value_new_bool(webkit_web_view_can_go_forward(view->web_view)));
   gboolean is_loading = FALSE;
   g_object_get(view->web_view, "is-loading", &is_loading, nullptr);
   gdouble progress = 0;
   g_object_get(view->web_view, "estimated-load-progress", &progress, nullptr);
-  fl_value_set_string_take(event, "isLoading", fl_value_new_bool(is_loading));
-  fl_value_set_string_take(event, "progress", fl_value_new_float(progress));
-  emit_event(view, event);
+  morph_control_emit_navigation(
+      view->view_id, uri != nullptr ? uri : "", title != nullptr ? title : "",
+      webkit_web_view_can_go_back(view->web_view) ? 1 : 0,
+      webkit_web_view_can_go_forward(view->web_view) ? 1 : 0, is_loading ? 1 : 0,
+      progress);
 }
 
 static void request_snapshot(MorphView* view);
@@ -301,10 +297,7 @@ static void on_script_message(WebKitUserContentManager* manager,
   MorphView* view = static_cast<MorphView*>(user_data);
   JSCValue* value = webkit_javascript_result_get_js_value(result);
   g_autofree gchar* json = jsc_value_to_string(value);
-  FlValue* event = fl_value_new_map();
-  fl_value_set_string_take(event, "type", fl_value_new_string("pageMessage"));
-  fl_value_set_string_take(event, "json", fl_value_new_string(json != nullptr ? json : ""));
-  emit_event(view, event);
+  morph_control_emit_page_message(view->view_id, json != nullptr ? json : "");
 }
 
 static void add_user_script(WebKitUserContentManager* manager, const gchar* source) {
@@ -447,6 +440,226 @@ static MorphView* lookup_view(MorphWebviewLinuxPlugin* plugin, FlValue* args) {
   return it->second;
 }
 
+static void dispatch_scroll(MorphView* view, double x, double y, double dx, double dy);
+static void dispatch_button(MorphView* view, const gchar* phase, double x, double y, int button);
+static void dispatch_key(MorphView* view,
+                         const gchar* phase,
+                         const gchar* key,
+                         guint hardware_keycode,
+                         gboolean ctrl,
+                         gboolean alt,
+                         gboolean shift,
+                         gboolean meta);
+
+static MorphView* find_view(MorphWebviewLinuxPlugin* plugin, int64_t view_id) {
+  if (plugin == nullptr || plugin->views == nullptr) {
+    return nullptr;
+  }
+  auto it = plugin->views->find(view_id);
+  if (it == plugin->views->end()) {
+    return nullptr;
+  }
+  return it->second;
+}
+
+enum ControlJobKind {
+  kControlNavigate = 0,
+  kControlGoBack,
+  kControlGoForward,
+  kControlReload,
+  kControlPointer,
+  kControlKey,
+  kControlIme,
+  kControlEvaluateJs,
+};
+
+struct ControlJob {
+  MorphWebviewLinuxPlugin* plugin;
+  int64_t view_id;
+  ControlJobKind kind;
+  gchar* s1;
+  gchar* s2;
+  double x;
+  double y;
+  double sx;
+  double sy;
+  int32_t button;
+  uint32_t keycode;
+  uint64_t request_id;
+  int ctrl;
+  int alt;
+  int shift;
+  int meta;
+};
+
+static void free_control_job(ControlJob* job) {
+  if (job->plugin != nullptr) {
+    g_object_unref(job->plugin);
+  }
+  g_free(job->s1);
+  g_free(job->s2);
+  delete job;
+}
+
+static void on_control_js_finished(GObject* source, GAsyncResult* result, gpointer user_data) {
+  ControlJob* job = static_cast<ControlJob*>(user_data);
+  g_autoptr(GError) error = nullptr;
+  JSCValue* value =
+      webkit_web_view_evaluate_javascript_finish(WEBKIT_WEB_VIEW(source), result, &error);
+  if (value == nullptr) {
+    morph_control_complete_evaluate_js(job->view_id, job->request_id, "",
+                                       error != nullptr ? error->message : "evaluate failed");
+  } else {
+    g_autofree gchar* text = jsc_value_to_string(value);
+    morph_control_complete_evaluate_js(job->view_id, job->request_id, text != nullptr ? text : "",
+                                       "");
+  }
+  free_control_job(job);
+}
+
+static gboolean run_control_job(gpointer data) {
+  ControlJob* job = static_cast<ControlJob*>(data);
+  MorphView* view = find_view(job->plugin, job->view_id);
+  if (view == nullptr) {
+    if (job->kind == kControlEvaluateJs) {
+      morph_control_complete_evaluate_js(job->view_id, job->request_id, "", "unknown view");
+    }
+    free_control_job(job);
+    return G_SOURCE_REMOVE;
+  }
+  switch (job->kind) {
+    case kControlNavigate:
+      webkit_web_view_load_uri(view->web_view, job->s1 != nullptr ? job->s1 : "about:blank");
+      break;
+    case kControlGoBack:
+      webkit_web_view_go_back(view->web_view);
+      break;
+    case kControlGoForward:
+      webkit_web_view_go_forward(view->web_view);
+      break;
+    case kControlReload:
+      webkit_web_view_reload(view->web_view);
+      break;
+    case kControlPointer:
+      if (g_strcmp0(job->s1, "scroll") == 0) {
+        dispatch_scroll(view, job->x, job->y, job->sx, job->sy);
+      } else {
+        dispatch_button(view, job->s1 != nullptr ? job->s1 : "down", job->x, job->y, job->button);
+      }
+      break;
+    case kControlKey:
+      dispatch_key(view, job->s1 != nullptr ? job->s1 : "down", job->s2 != nullptr ? job->s2 : "",
+                   job->keycode, job->ctrl, job->alt, job->shift, job->meta);
+      break;
+    case kControlIme:
+      break;
+    case kControlEvaluateJs: {
+      const gchar* script = job->s1 != nullptr ? job->s1 : "";
+      webkit_web_view_evaluate_javascript(view->web_view, script, -1, nullptr, nullptr, nullptr,
+                                          on_control_js_finished, job);
+      return G_SOURCE_REMOVE;
+    }
+  }
+  free_control_job(job);
+  return G_SOURCE_REMOVE;
+}
+
+static ControlJob* new_control_job(void* user_data, int64_t view_id, ControlJobKind kind) {
+  auto* job = new ControlJob();
+  memset(job, 0, sizeof(*job));
+  job->plugin = MORPH_WEBVIEW_LINUX_PLUGIN(user_data);
+  if (job->plugin != nullptr) {
+    g_object_ref(job->plugin);
+  }
+  job->view_id = view_id;
+  job->kind = kind;
+  return job;
+}
+
+static void queue_control_job(ControlJob* job) { g_idle_add(run_control_job, job); }
+
+static void control_navigate(int64_t view_id, const char* url, void* user_data) {
+  ControlJob* job = new_control_job(user_data, view_id, kControlNavigate);
+  job->s1 = g_strdup(url);
+  queue_control_job(job);
+}
+static void control_go_back(int64_t view_id, void* user_data) {
+  queue_control_job(new_control_job(user_data, view_id, kControlGoBack));
+}
+static void control_go_forward(int64_t view_id, void* user_data) {
+  queue_control_job(new_control_job(user_data, view_id, kControlGoForward));
+}
+static void control_reload(int64_t view_id, void* user_data) {
+  queue_control_job(new_control_job(user_data, view_id, kControlReload));
+}
+static void control_pointer(int64_t view_id,
+                            const char* phase,
+                            double x,
+                            double y,
+                            int32_t button,
+                            double scroll_delta_x,
+                            double scroll_delta_y,
+                            void* user_data) {
+  ControlJob* job = new_control_job(user_data, view_id, kControlPointer);
+  job->s1 = g_strdup(phase);
+  job->x = x;
+  job->y = y;
+  job->button = button;
+  job->sx = scroll_delta_x;
+  job->sy = scroll_delta_y;
+  queue_control_job(job);
+}
+static void control_key(int64_t view_id,
+                        const char* phase,
+                        const char* key,
+                        uint32_t hardware_keycode,
+                        int ctrl,
+                        int alt,
+                        int shift,
+                        int meta,
+                        void* user_data) {
+  ControlJob* job = new_control_job(user_data, view_id, kControlKey);
+  job->s1 = g_strdup(phase);
+  job->s2 = g_strdup(key);
+  job->keycode = hardware_keycode;
+  job->ctrl = ctrl;
+  job->alt = alt;
+  job->shift = shift;
+  job->meta = meta;
+  queue_control_job(job);
+}
+static void control_ime(int64_t view_id, const char* phase, const char* text, void* user_data) {
+  (void)phase;
+  (void)text;
+  queue_control_job(new_control_job(user_data, view_id, kControlIme));
+}
+static void control_evaluate_js(int64_t view_id, uint64_t request_id, const char* script, void* user_data) {
+  ControlJob* job = new_control_job(user_data, view_id, kControlEvaluateJs);
+  job->s1 = g_strdup(script);
+  job->request_id = request_id;
+  queue_control_job(job);
+}
+
+static void start_control_server(MorphWebviewLinuxPlugin* plugin) {
+  MorphControlHandlers handlers = {};
+  handlers.navigate = control_navigate;
+  handlers.go_back = control_go_back;
+  handlers.go_forward = control_go_forward;
+  handlers.reload = control_reload;
+  handlers.pointer = control_pointer;
+  handlers.key = control_key;
+  handlers.ime = control_ime;
+  handlers.evaluate_js = control_evaluate_js;
+  handlers.user_data = plugin;
+  char uri[1024];
+  if (morph_control_start(nullptr, &handlers, uri, sizeof(uri)) != 0) {
+    g_warning("morph_webview: failed to start in-process control server");
+    return;
+  }
+  g_free(plugin->control_endpoint);
+  plugin->control_endpoint = g_strdup(uri);
+}
+
 static const gchar* arg_string(FlValue* args, const char* key, const gchar* fallback) {
   FlValue* value = fl_value_lookup_string(args, key);
   if (value == nullptr || fl_value_get_type(value) != FL_VALUE_TYPE_STRING) {
@@ -483,7 +696,7 @@ static double arg_float(FlValue* args, const char* key, double fallback) {
   return fallback;
 }
 
-static gboolean arg_bool(FlValue* args, const char* key, gboolean fallback) {
+__attribute__((unused)) static gboolean arg_bool(FlValue* args, const char* key, gboolean fallback) {
   FlValue* value = fl_value_lookup_string(args, key);
   if (value == nullptr) {
     return fallback;
@@ -639,6 +852,7 @@ static guint keyval_from_label(const gchar* key) {
 static void dispatch_key(MorphView* view,
                          const gchar* phase,
                          const gchar* key,
+                         guint hardware_keycode,
                          gboolean ctrl,
                          gboolean alt,
                          gboolean shift,
@@ -656,29 +870,11 @@ static void dispatch_key(MorphView* view,
   event->key.keyval = keyval_from_label(key);
   event->key.state = (ctrl ? GDK_CONTROL_MASK : 0) | (alt ? GDK_MOD1_MASK : 0) |
                      (shift ? GDK_SHIFT_MASK : 0) | (meta ? GDK_META_MASK : 0);
-  event->key.hardware_keycode = 0;
+  event->key.hardware_keycode = static_cast<guint16>(hardware_keycode);
   gdk_event_set_device(event, default_keyboard_device());
   gtk_widget_event(GTK_WIDGET(view->web_view), event);
   gdk_event_free(event);
   request_snapshot(view);
-}
-
-static void on_js_finished(GObject* source, GAsyncResult* result, gpointer user_data) {
-  FlMethodCall* call = static_cast<FlMethodCall*>(user_data);
-  g_autoptr(GError) error = nullptr;
-  JSCValue* value =
-      webkit_web_view_evaluate_javascript_finish(WEBKIT_WEB_VIEW(source), result, &error);
-  g_autoptr(FlMethodResponse) response = nullptr;
-  if (value == nullptr) {
-    response = FL_METHOD_RESPONSE(fl_method_error_response_new(
-        "js_error", error != nullptr ? error->message : "evaluate failed", nullptr));
-  } else {
-    g_autofree gchar* text = jsc_value_to_string(value);
-    response = FL_METHOD_RESPONSE(
-        fl_method_success_response_new(fl_value_new_string(text != nullptr ? text : "")));
-  }
-  fl_method_call_respond(call, response, nullptr);
-  g_object_unref(call);
 }
 
 static FlMethodResponse* handle_create(MorphWebviewLinuxPlugin* plugin, FlValue* args) {
@@ -695,6 +891,9 @@ static FlMethodResponse* handle_create(MorphWebviewLinuxPlugin* plugin, FlValue*
                            fl_value_new_int(fl_texture_get_id(FL_TEXTURE(view->texture))));
   fl_value_set_string_take(result, "renderPath", fl_value_new_string(view->render_path));
   fl_value_set_string_take(result, "renderReason", fl_value_new_string(view->render_reason));
+  fl_value_set_string_take(
+      result, "controlEndpoint",
+      fl_value_new_string(plugin->control_endpoint != nullptr ? plugin->control_endpoint : ""));
   return FL_METHOD_RESPONSE(fl_method_success_response_new(result));
 }
 
@@ -720,39 +919,6 @@ static void morph_webview_linux_plugin_handle_method_call(MorphWebviewLinuxPlugi
                  static_cast<uint32_t>(arg_int(args, "height", view->logical_height)),
                  arg_float(args, "devicePixelRatio", view->dpr));
       response = FL_METHOD_RESPONSE(fl_method_success_response_new(fl_value_new_null()));
-    } else if (strcmp(method, "loadUrl") == 0) {
-      webkit_web_view_load_uri(view->web_view, arg_string(args, "url", "about:blank"));
-      response = FL_METHOD_RESPONSE(fl_method_success_response_new(fl_value_new_null()));
-    } else if (strcmp(method, "goBack") == 0) {
-      webkit_web_view_go_back(view->web_view);
-      response = FL_METHOD_RESPONSE(fl_method_success_response_new(fl_value_new_null()));
-    } else if (strcmp(method, "goForward") == 0) {
-      webkit_web_view_go_forward(view->web_view);
-      response = FL_METHOD_RESPONSE(fl_method_success_response_new(fl_value_new_null()));
-    } else if (strcmp(method, "reload") == 0) {
-      webkit_web_view_reload(view->web_view);
-      response = FL_METHOD_RESPONSE(fl_method_success_response_new(fl_value_new_null()));
-    } else if (strcmp(method, "sendPointer") == 0) {
-      const gchar* phase = arg_string(args, "phase", "down");
-      double x = arg_float(args, "x", 0);
-      double y = arg_float(args, "y", 0);
-      if (g_strcmp0(phase, "scroll") == 0) {
-        dispatch_scroll(view, x, y, arg_float(args, "scrollDeltaX", 0),
-                        arg_float(args, "scrollDeltaY", 0));
-      } else {
-        dispatch_button(view, phase, x, y, static_cast<int>(arg_int(args, "button", 1)));
-      }
-      response = FL_METHOD_RESPONSE(fl_method_success_response_new(fl_value_new_null()));
-    } else if (strcmp(method, "sendKey") == 0) {
-      dispatch_key(view, arg_string(args, "phase", "down"), arg_string(args, "key", ""),
-                   arg_bool(args, "ctrl", FALSE), arg_bool(args, "alt", FALSE),
-                   arg_bool(args, "shift", FALSE), arg_bool(args, "meta", FALSE));
-      response = FL_METHOD_RESPONSE(fl_method_success_response_new(fl_value_new_null()));
-    } else if (strcmp(method, "evaluateJavaScript") == 0) {
-      const gchar* script = arg_string(args, "script", "");
-      webkit_web_view_evaluate_javascript(view->web_view, script, -1, nullptr, nullptr, nullptr,
-                                          on_js_finished, g_object_ref(method_call));
-      return;
     } else {
       response = FL_METHOD_RESPONSE(fl_method_not_implemented_response_new());
     }
@@ -790,6 +956,8 @@ static FlMethodErrorResponse* events_cancel_cb(FlEventChannel* channel,
 
 static void morph_webview_linux_plugin_dispose(GObject* object) {
   MorphWebviewLinuxPlugin* self = MORPH_WEBVIEW_LINUX_PLUGIN(object);
+  morph_control_stop();
+  g_clear_pointer(&self->control_endpoint, g_free);
   if (self->views != nullptr) {
     for (auto& entry : *self->views) {
       morph_view_destroy(entry.second);
@@ -812,6 +980,7 @@ static void morph_webview_linux_plugin_init(MorphWebviewLinuxPlugin* self) {
   self->next_view_id = 1;
   self->views = new std::map<int64_t, MorphView*>();
   self->events_listening = FALSE;
+  self->control_endpoint = nullptr;
 }
 
 void morph_webview_linux_plugin_register_with_registrar(FlPluginRegistrar* registrar) {
@@ -830,6 +999,8 @@ void morph_webview_linux_plugin_register_with_registrar(FlPluginRegistrar* regis
                                         FL_METHOD_CODEC(codec));
   fl_event_channel_set_stream_handlers(plugin->events, events_listen_cb, events_cancel_cb,
                                        g_object_ref(plugin), g_object_unref);
+
+  start_control_server(plugin);
 
   g_object_unref(plugin);
 }

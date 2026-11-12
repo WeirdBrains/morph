@@ -34,6 +34,7 @@ void main() {
     expect(fake.loadedUrls, contains('https://example.com'));
     expect(controller.textureId, 1);
     expect(controller.renderPath.path, 'webkitgtk-snapshot');
+    expect(controller.handlesPageBridge, isFalse);
 
     await controller.loadUrl('https://example.org/');
     await tester.pump();

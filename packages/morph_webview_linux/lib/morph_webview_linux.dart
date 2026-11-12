@@ -3,26 +3,34 @@ import 'dart:async';
 import 'package:flutter/services.dart';
 import 'package:morph_webview/morph_webview.dart';
 
-/// Linux method-channel implementation of [MorphWebViewPlatform].
+import 'src/control_client.dart';
+import 'src/generated/morph.webview.v1.pb.dart' as proto;
+
+/// Linux implementation of [MorphWebViewPlatform].
+///
+/// Lifecycle and texture ids stay on the method channel. Navigation, input,
+/// and the page bridge go over the in-process gRPC control session.
 class MorphWebViewLinux extends MorphWebViewPlatform {
-  MorphWebViewLinux({MethodChannel? channel, EventChannel? events})
+  MorphWebViewLinux({MethodChannel? channel})
     : _channel =
-          channel ?? const MethodChannel('org.weirdbrains.morph_webview'),
-      _events =
-          events ?? const EventChannel('org.weirdbrains.morph_webview/events');
+          channel ?? const MethodChannel('org.weirdbrains.morph_webview');
 
   final MethodChannel _channel;
-  final EventChannel _events;
-  Stream<Map<dynamic, dynamic>>? _broadcast;
+  MorphControlClient? _control;
 
   static void registerWith() {
     MorphWebViewPlatform.instance = MorphWebViewLinux();
   }
 
-  Stream<Map<dynamic, dynamic>> get _eventStream {
-    return _broadcast ??= _events.receiveBroadcastStream().map(
-      (event) => Map<dynamic, dynamic>.from(event as Map),
-    );
+  Future<MorphControlClient> _connect(String endpoint) async {
+    final existing = _control;
+    if (existing != null && existing.uri == endpoint) {
+      return existing;
+    }
+    final client = MorphControlClient(endpoint);
+    await client.connect();
+    _control = client;
+    return client;
   }
 
   @override
@@ -45,34 +53,50 @@ class MorphWebViewLinux extends MorphWebViewPlatform {
     }
     final viewId = result['viewId']! as int;
     final textureId = result['textureId']! as int;
+    final endpoint = (result['controlEndpoint'] as String?) ?? '';
+    if (endpoint.isEmpty) {
+      throw StateError('morph_webview_linux did not return a control endpoint');
+    }
     final path = MorphRenderPathInfo(
       path: result['renderPath']! as String,
       reason: (result['renderReason'] as String?) ?? '',
     );
+    final control = await _connect(endpoint);
     return _LinuxWebViewSession(
       channel: _channel,
+      control: control,
       viewId: viewId,
       textureId: textureId,
       renderPath: path,
-      events: _eventStream.where((event) => event['viewId'] == viewId),
     );
   }
 }
 
 class _LinuxWebViewSession extends MorphWebViewSession {
   _LinuxWebViewSession({
-    required MethodChannel channel,
+    required this._channel,
+    required this._control,
     required this.viewId,
     required this.textureId,
     required this.renderPath,
-    required Stream<Map<dynamic, dynamic>> events,
-  }) : _channel = channel {
-    _sub = events.listen(_onEvent);
+  }) {
+    _navSub = _control.navigation.listen((entry) {
+      if (entry.$1 == viewId) {
+        _navController.add(entry.$2);
+      }
+    });
+    _pageSub = _control.pageMessages.listen((entry) {
+      if (entry.$1 == viewId) {
+        _pageController.add(entry.$2);
+      }
+    });
   }
 
   final MethodChannel _channel;
+  final MorphControlClient _control;
   final int viewId;
-  late final StreamSubscription<Map<dynamic, dynamic>> _sub;
+  late final StreamSubscription<(int, MorphNavigationEvent)> _navSub;
+  late final StreamSubscription<(int, String)> _pageSub;
   final _navController = StreamController<MorphNavigationEvent>.broadcast();
   final _pageController = StreamController<String>.broadcast();
 
@@ -83,32 +107,13 @@ class _LinuxWebViewSession extends MorphWebViewSession {
   final MorphRenderPathInfo renderPath;
 
   @override
+  bool get handlesPageBridge => true;
+
+  @override
   Stream<MorphNavigationEvent> get navigation => _navController.stream;
 
   @override
   Stream<String> get pageMessages => _pageController.stream;
-
-  void _onEvent(Map<dynamic, dynamic> event) {
-    final type = event['type'] as String?;
-    if (type == 'navigation') {
-      _navController.add(
-        MorphNavigationEvent(
-          url: (event['url'] as String?) ?? '',
-          title: (event['title'] as String?) ?? '',
-          canGoBack: event['canGoBack'] == true,
-          canGoForward: event['canGoForward'] == true,
-          isLoading: event['isLoading'] == true,
-          progress: (event['progress'] as num?)?.toDouble() ?? 0,
-        ),
-      );
-    } else if (type == 'pageMessage') {
-      _pageController.add((event['json'] as String?) ?? '');
-    }
-  }
-
-  Future<void> _invoke(String method, [Map<String, Object?>? args]) {
-    return _channel.invokeMethod<void>(method, {'viewId': viewId, ...?args});
-  }
 
   @override
   Future<void> resize({
@@ -116,7 +121,8 @@ class _LinuxWebViewSession extends MorphWebViewSession {
     required int height,
     required double devicePixelRatio,
   }) {
-    return _invoke('resize', {
+    return _channel.invokeMethod<void>('resize', {
+      'viewId': viewId,
       'width': width,
       'height': height,
       'devicePixelRatio': devicePixelRatio,
@@ -124,37 +130,69 @@ class _LinuxWebViewSession extends MorphWebViewSession {
   }
 
   @override
-  Future<void> loadUrl(String url) => _invoke('loadUrl', {'url': url});
+  Future<void> loadUrl(String url) async {
+    _control.send(
+      viewId: viewId,
+      navigate: proto.Navigate(url: url),
+    );
+  }
 
   @override
-  Future<void> goBack() => _invoke('goBack');
+  Future<void> goBack() async {
+    _control.send(viewId: viewId, goBack: proto.GoBack());
+  }
 
   @override
-  Future<void> goForward() => _invoke('goForward');
+  Future<void> goForward() async {
+    _control.send(viewId: viewId, goForward: proto.GoForward());
+  }
 
   @override
-  Future<void> reload() => _invoke('reload');
+  Future<void> reload() async {
+    _control.send(viewId: viewId, reload: proto.Reload());
+  }
 
   @override
-  Future<void> sendPointer(MorphPointerEvent event) =>
-      _invoke('sendPointer', event.toMap());
+  Future<void> sendPointer(MorphPointerEvent event) async {
+    _control.send(
+      viewId: viewId,
+      pointer: proto.PointerEvent(
+        phase: event.phase,
+        x: event.x,
+        y: event.y,
+        button: event.button,
+        scrollDeltaX: event.scrollDeltaX,
+        scrollDeltaY: event.scrollDeltaY,
+      ),
+    );
+  }
 
   @override
-  Future<void> sendKey(MorphKeyEvent event) =>
-      _invoke('sendKey', event.toMap());
+  Future<void> sendKey(MorphKeyEvent event) async {
+    _control.send(
+      viewId: viewId,
+      key: proto.KeyEvent(
+        phase: event.phase,
+        key: event.key,
+        hardwareKeycode: event.hardwareKeycode,
+        ctrl: event.ctrl,
+        alt: event.alt,
+        shift: event.shift,
+        meta: event.meta,
+      ),
+    );
+  }
 
   @override
   Future<String?> evaluateJavaScript(String script) {
-    return _channel.invokeMethod<String>('evaluateJavaScript', {
-      'viewId': viewId,
-      'script': script,
-    });
+    return _control.evaluateJavaScript(viewId, script);
   }
 
   @override
   Future<void> dispose() async {
-    await _sub.cancel();
-    await _invoke('dispose');
+    await _navSub.cancel();
+    await _pageSub.cancel();
+    await _channel.invokeMethod<void>('dispose', {'viewId': viewId});
     await _navController.close();
     await _pageController.close();
   }
