@@ -35,8 +35,8 @@ InAppWebViewSettings morphInAppWebViewSettings({bool? desktopSite}) {
     // Android: texture-layer hybrid composition, no forced hardware layer.
     useHybridComposition: false,
     hardwareAcceleration: false,
-    // Android: let Morph rebuild the view when the renderer dies instead of
-    // leaving a dead white surface.
+    // Android: report a dead renderer so the tab shows its crash state and
+    // can be rebuilt, instead of the whole app being killed.
     useOnRenderProcessGone: true,
     preferredContentMode: switch (desktopSite) {
       null => UserPreferredContentMode.RECOMMENDED,
