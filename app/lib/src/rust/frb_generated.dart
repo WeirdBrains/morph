@@ -3,6 +3,7 @@
 
 // ignore_for_file: unused_import, unused_element, unnecessary_import, duplicate_ignore, invalid_use_of_internal_member, annotate_overrides, non_constant_identifier_names, curly_braces_in_flow_control_structures, prefer_const_literals_to_create_immutables, unused_field
 
+import 'api/control.dart';
 import 'api/events.dart';
 import 'api/identity.dart';
 import 'api/info.dart';
@@ -70,7 +71,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.13.0';
 
   @override
-  int get rustContentHash => -29436689;
+  int get rustContentHash => -558630746;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -82,6 +83,30 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
 }
 
 abstract class RustLibApi extends BaseApi {
+  Stream<ControlBackendEvent> crateApiControlControlBackendEvents();
+
+  Future<void> crateApiControlControlCompleteEvaluateJs({
+    required PlatformInt64 viewId,
+    required BigInt requestId,
+    required String result,
+    required String error,
+  });
+
+  Future<void> crateApiControlControlEmitNavigation({
+    required PlatformInt64 viewId,
+    required String url,
+    required String title,
+    required bool canGoBack,
+    required bool canGoForward,
+    required bool isLoading,
+    required double progress,
+  });
+
+  Future<void> crateApiControlControlEmitPageMessage({
+    required PlatformInt64 viewId,
+    required String json,
+  });
+
   String crateApiInfoCoreVersion();
 
   Stream<int> crateApiEventsEventTicks();
@@ -91,6 +116,12 @@ abstract class RustLibApi extends BaseApi {
   Future<IdentityStatusView> crateApiIdentityIdentityDirInfo({String? home});
 
   Future<EphemeralUser> crateApiIdentityNewEphemeralUser();
+
+  Future<String> crateApiControlStartWebviewControl();
+
+  Future<String> crateApiControlStartWebviewControlLoopback();
+
+  Future<void> crateApiControlStopWebviewControl();
 }
 
 class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
@@ -102,12 +133,182 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   });
 
   @override
+  Stream<ControlBackendEvent> crateApiControlControlBackendEvents() {
+    final sink = RustStreamSink<ControlBackendEvent>();
+    unawaited(
+      handler.executeNormal(
+        NormalTask(
+          callFfi: (port_) {
+            final serializer = SseSerializer(generalizedFrbRustBinding);
+            sse_encode_StreamSink_control_backend_event_Sse(sink, serializer);
+            pdeCallFfi(
+              generalizedFrbRustBinding,
+              serializer,
+              funcId: 1,
+              port: port_,
+            );
+          },
+          codec: SseCodec(
+            decodeSuccessData: sse_decode_unit,
+            decodeErrorData: null,
+          ),
+          constMeta: kCrateApiControlControlBackendEventsConstMeta,
+          argValues: [sink],
+          apiImpl: this,
+        ),
+      ),
+    );
+    return sink.stream;
+  }
+
+  TaskConstMeta get kCrateApiControlControlBackendEventsConstMeta =>
+      const TaskConstMeta(
+        debugName: "control_backend_events",
+        argNames: ["sink"],
+      );
+
+  @override
+  Future<void> crateApiControlControlCompleteEvaluateJs({
+    required PlatformInt64 viewId,
+    required BigInt requestId,
+    required String result,
+    required String error,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_i_64(viewId, serializer);
+          sse_encode_u_64(requestId, serializer);
+          sse_encode_String(result, serializer);
+          sse_encode_String(error, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 2,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiControlControlCompleteEvaluateJsConstMeta,
+        argValues: [viewId, requestId, result, error],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiControlControlCompleteEvaluateJsConstMeta =>
+      const TaskConstMeta(
+        debugName: "control_complete_evaluate_js",
+        argNames: ["viewId", "requestId", "result", "error"],
+      );
+
+  @override
+  Future<void> crateApiControlControlEmitNavigation({
+    required PlatformInt64 viewId,
+    required String url,
+    required String title,
+    required bool canGoBack,
+    required bool canGoForward,
+    required bool isLoading,
+    required double progress,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_i_64(viewId, serializer);
+          sse_encode_String(url, serializer);
+          sse_encode_String(title, serializer);
+          sse_encode_bool(canGoBack, serializer);
+          sse_encode_bool(canGoForward, serializer);
+          sse_encode_bool(isLoading, serializer);
+          sse_encode_f_64(progress, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 3,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiControlControlEmitNavigationConstMeta,
+        argValues: [
+          viewId,
+          url,
+          title,
+          canGoBack,
+          canGoForward,
+          isLoading,
+          progress,
+        ],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiControlControlEmitNavigationConstMeta =>
+      const TaskConstMeta(
+        debugName: "control_emit_navigation",
+        argNames: [
+          "viewId",
+          "url",
+          "title",
+          "canGoBack",
+          "canGoForward",
+          "isLoading",
+          "progress",
+        ],
+      );
+
+  @override
+  Future<void> crateApiControlControlEmitPageMessage({
+    required PlatformInt64 viewId,
+    required String json,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_i_64(viewId, serializer);
+          sse_encode_String(json, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 4,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiControlControlEmitPageMessageConstMeta,
+        argValues: [viewId, json],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiControlControlEmitPageMessageConstMeta =>
+      const TaskConstMeta(
+        debugName: "control_emit_page_message",
+        argNames: ["viewId", "json"],
+      );
+
+  @override
   String crateApiInfoCoreVersion() {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 1)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 5)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -135,7 +336,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 2,
+              funcId: 6,
               port: port_,
             );
           },
@@ -165,7 +366,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 3,
+            funcId: 7,
             port: port_,
           );
         },
@@ -193,7 +394,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 4,
+            funcId: 8,
             port: port_,
           );
         },
@@ -220,7 +421,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 5,
+            funcId: 9,
             port: port_,
           );
         },
@@ -238,10 +439,101 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiIdentityNewEphemeralUserConstMeta =>
       const TaskConstMeta(debugName: "new_ephemeral_user", argNames: []);
 
+  @override
+  Future<String> crateApiControlStartWebviewControl() {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 10,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiControlStartWebviewControlConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiControlStartWebviewControlConstMeta =>
+      const TaskConstMeta(debugName: "start_webview_control", argNames: []);
+
+  @override
+  Future<String> crateApiControlStartWebviewControlLoopback() {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 11,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiControlStartWebviewControlLoopbackConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiControlStartWebviewControlLoopbackConstMeta =>
+      const TaskConstMeta(
+        debugName: "start_webview_control_loopback",
+        argNames: [],
+      );
+
+  @override
+  Future<void> crateApiControlStopWebviewControl() {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 12,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiControlStopWebviewControlConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiControlStopWebviewControlConstMeta =>
+      const TaskConstMeta(debugName: "stop_webview_control", argNames: []);
+
   @protected
   AnyhowException dco_decode_AnyhowException(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return AnyhowException(raw as String);
+  }
+
+  @protected
+  RustStreamSink<ControlBackendEvent>
+  dco_decode_StreamSink_control_backend_event_Sse(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    throw UnimplementedError();
   }
 
   @protected
@@ -263,6 +555,34 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  ControlBackendEvent dco_decode_control_backend_event(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 18)
+      throw Exception('unexpected arr length: expect 18 but see ${arr.length}');
+    return ControlBackendEvent(
+      kind: dco_decode_String(arr[0]),
+      viewId: dco_decode_i_64(arr[1]),
+      url: dco_decode_String(arr[2]),
+      requestId: dco_decode_u_64(arr[3]),
+      script: dco_decode_String(arr[4]),
+      phase: dco_decode_String(arr[5]),
+      x: dco_decode_f_64(arr[6]),
+      y: dco_decode_f_64(arr[7]),
+      button: dco_decode_i_32(arr[8]),
+      scrollDeltaX: dco_decode_f_64(arr[9]),
+      scrollDeltaY: dco_decode_f_64(arr[10]),
+      key: dco_decode_String(arr[11]),
+      hardwareKeycode: dco_decode_u_32(arr[12]),
+      ctrl: dco_decode_bool(arr[13]),
+      alt: dco_decode_bool(arr[14]),
+      shift: dco_decode_bool(arr[15]),
+      meta: dco_decode_bool(arr[16]),
+      text: dco_decode_String(arr[17]),
+    );
+  }
+
+  @protected
   EphemeralUser dco_decode_ephemeral_user(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
@@ -272,6 +592,24 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       userId: dco_decode_String(arr[0]),
       fingerprint: dco_decode_String(arr[1]),
     );
+  }
+
+  @protected
+  double dco_decode_f_64(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as double;
+  }
+
+  @protected
+  int dco_decode_i_32(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as int;
+  }
+
+  @protected
+  PlatformInt64 dco_decode_i_64(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dcoDecodeI64(raw);
   }
 
   @protected
@@ -306,6 +644,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  BigInt dco_decode_u_64(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dcoDecodeU64(raw);
+  }
+
+  @protected
   int dco_decode_u_8(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as int;
@@ -322,6 +666,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var inner = sse_decode_String(deserializer);
     return AnyhowException(inner);
+  }
+
+  @protected
+  RustStreamSink<ControlBackendEvent>
+  sse_decode_StreamSink_control_backend_event_Sse(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    throw UnimplementedError('Unreachable ()');
   }
 
   @protected
@@ -346,11 +699,74 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  ControlBackendEvent sse_decode_control_backend_event(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_kind = sse_decode_String(deserializer);
+    var var_viewId = sse_decode_i_64(deserializer);
+    var var_url = sse_decode_String(deserializer);
+    var var_requestId = sse_decode_u_64(deserializer);
+    var var_script = sse_decode_String(deserializer);
+    var var_phase = sse_decode_String(deserializer);
+    var var_x = sse_decode_f_64(deserializer);
+    var var_y = sse_decode_f_64(deserializer);
+    var var_button = sse_decode_i_32(deserializer);
+    var var_scrollDeltaX = sse_decode_f_64(deserializer);
+    var var_scrollDeltaY = sse_decode_f_64(deserializer);
+    var var_key = sse_decode_String(deserializer);
+    var var_hardwareKeycode = sse_decode_u_32(deserializer);
+    var var_ctrl = sse_decode_bool(deserializer);
+    var var_alt = sse_decode_bool(deserializer);
+    var var_shift = sse_decode_bool(deserializer);
+    var var_meta = sse_decode_bool(deserializer);
+    var var_text = sse_decode_String(deserializer);
+    return ControlBackendEvent(
+      kind: var_kind,
+      viewId: var_viewId,
+      url: var_url,
+      requestId: var_requestId,
+      script: var_script,
+      phase: var_phase,
+      x: var_x,
+      y: var_y,
+      button: var_button,
+      scrollDeltaX: var_scrollDeltaX,
+      scrollDeltaY: var_scrollDeltaY,
+      key: var_key,
+      hardwareKeycode: var_hardwareKeycode,
+      ctrl: var_ctrl,
+      alt: var_alt,
+      shift: var_shift,
+      meta: var_meta,
+      text: var_text,
+    );
+  }
+
+  @protected
   EphemeralUser sse_decode_ephemeral_user(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_userId = sse_decode_String(deserializer);
     var var_fingerprint = sse_decode_String(deserializer);
     return EphemeralUser(userId: var_userId, fingerprint: var_fingerprint);
+  }
+
+  @protected
+  double sse_decode_f_64(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getFloat64();
+  }
+
+  @protected
+  int sse_decode_i_32(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getInt32();
+  }
+
+  @protected
+  PlatformInt64 sse_decode_i_64(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getPlatformInt64();
   }
 
   @protected
@@ -393,6 +809,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  BigInt sse_decode_u_64(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getBigUint64();
+  }
+
+  @protected
   int sse_decode_u_8(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getUint8();
@@ -404,18 +826,29 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  int sse_decode_i_32(SseDeserializer deserializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    return deserializer.buffer.getInt32();
-  }
-
-  @protected
   void sse_encode_AnyhowException(
     AnyhowException self,
     SseSerializer serializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.message, serializer);
+  }
+
+  @protected
+  void sse_encode_StreamSink_control_backend_event_Sse(
+    RustStreamSink<ControlBackendEvent> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(
+      self.setupAndSerialize(
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_control_backend_event,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+      ),
+      serializer,
+    );
   }
 
   @protected
@@ -448,10 +881,54 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_control_backend_event(
+    ControlBackendEvent self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.kind, serializer);
+    sse_encode_i_64(self.viewId, serializer);
+    sse_encode_String(self.url, serializer);
+    sse_encode_u_64(self.requestId, serializer);
+    sse_encode_String(self.script, serializer);
+    sse_encode_String(self.phase, serializer);
+    sse_encode_f_64(self.x, serializer);
+    sse_encode_f_64(self.y, serializer);
+    sse_encode_i_32(self.button, serializer);
+    sse_encode_f_64(self.scrollDeltaX, serializer);
+    sse_encode_f_64(self.scrollDeltaY, serializer);
+    sse_encode_String(self.key, serializer);
+    sse_encode_u_32(self.hardwareKeycode, serializer);
+    sse_encode_bool(self.ctrl, serializer);
+    sse_encode_bool(self.alt, serializer);
+    sse_encode_bool(self.shift, serializer);
+    sse_encode_bool(self.meta, serializer);
+    sse_encode_String(self.text, serializer);
+  }
+
+  @protected
   void sse_encode_ephemeral_user(EphemeralUser self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.userId, serializer);
     sse_encode_String(self.fingerprint, serializer);
+  }
+
+  @protected
+  void sse_encode_f_64(double self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putFloat64(self);
+  }
+
+  @protected
+  void sse_encode_i_32(int self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putInt32(self);
+  }
+
+  @protected
+  void sse_encode_i_64(PlatformInt64 self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putPlatformInt64(self);
   }
 
   @protected
@@ -492,6 +969,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_u_64(BigInt self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putBigUint64(self);
+  }
+
+  @protected
   void sse_encode_u_8(int self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putUint8(self);
@@ -500,11 +983,5 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   void sse_encode_unit(void self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-  }
-
-  @protected
-  void sse_encode_i_32(int self, SseSerializer serializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    serializer.buffer.putInt32(self);
   }
 }

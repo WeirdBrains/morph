@@ -2841,6 +2841,7 @@ dependencies = [
  "flutter_rust_bridge",
  "morph-core",
  "morph-identity",
+ "morph-webview-control",
  "tempfile",
 ]
 
