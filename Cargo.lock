@@ -2868,6 +2868,7 @@ dependencies = [
  "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.21",
+ "weirdnet-device-link",
  "weirdnet-keys",
  "weirdnet-net",
  "zeroize",

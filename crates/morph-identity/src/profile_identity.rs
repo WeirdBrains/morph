@@ -39,6 +39,8 @@ const SEED_AAD: &[u8] = b"morph/identity/user-seed/v1";
 pub enum Source {
     Created,
     Imported,
+    /// Moved here from another device over a QR link (`device_link`).
+    Linked,
 }
 
 /// What a profile's identity says about itself. Public; safe to show and log.
@@ -102,7 +104,7 @@ fn public_path(profile_dir: &Path) -> PathBuf {
     identity_dir(profile_dir).join("identity.json")
 }
 
-fn sealed_path(profile_dir: &Path) -> PathBuf {
+pub(crate) fn sealed_path(profile_dir: &Path) -> PathBuf {
     identity_dir(profile_dir).join("user.key")
 }
 
@@ -158,7 +160,7 @@ pub fn recovery_words(profile_dir: &Path, password: &SecretString) -> Result<Zer
     Ok(to_words(&open_seed(profile_dir, password)?)?)
 }
 
-fn open_seed(profile_dir: &Path, password: &SecretString) -> Result<Key32> {
+pub(crate) fn open_seed(profile_dir: &Path, password: &SecretString) -> Result<Key32> {
     let identity = load(profile_dir)?.ok_or_else(|| Error::Message("this profile has no identity yet".into()))?;
     let raw = fs::read(sealed_path(profile_dir))?;
     let sealed: PasswordSealed = serde_json::from_slice(&raw).map_err(|e| Error::Message(format!("user.key: {e}")))?;
@@ -176,14 +178,14 @@ fn user_from_seed(seed: &Key32) -> Result<UserIdentity> {
     Ok(UserIdentity { keypair, user_id })
 }
 
-fn check_password(password: &SecretString) -> Result<()> {
+pub(crate) fn check_password(password: &SecretString) -> Result<()> {
     if password.expose_secret().chars().count() < MIN_PASSWORD_LEN {
         return Err(Error::Message(format!("password must be at least {MIN_PASSWORD_LEN} characters")));
     }
     Ok(())
 }
 
-fn store(profile_dir: &Path, seed: &Key32, password: &SecretString, source: Source, now_ms: i64) -> Result<ProfileIdentity> {
+pub(crate) fn store(profile_dir: &Path, seed: &Key32, password: &SecretString, source: Source, now_ms: i64) -> Result<ProfileIdentity> {
     check_password(password)?;
     if public_path(profile_dir).exists() || sealed_path(profile_dir).exists() {
         return Err(Error::Message("this profile already has an identity".into()));
@@ -224,7 +226,7 @@ fn private_dir(_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     let tmp = path.with_extension("tmp");
     {
         let mut options = fs::OpenOptions::new();
