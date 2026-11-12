@@ -856,8 +856,6 @@ static const gchar* css_cursor_from_gdk(GdkCursor* cursor) {
       return "text";
     case GDK_WATCH:
       return "wait";
-    case GDK_LEFT_PTR_WATCH:
-      return "progress";
     case GDK_CROSSHAIR:
     case GDK_CROSS:
     case GDK_TCROSS:
