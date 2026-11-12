@@ -42,6 +42,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   restarts and tab recreation. `window.open` / new-window requests open a
   related view instead of being dropped. macOS, Windows, and Android keep
   the shared, non-incognito cookie store used by flutter_inappwebview.
+- Linux web views turn on MediaSource, encrypted media, WebGL, and always-on
+  hardware acceleration so sites can play video. YouTube and Instagram still
+  need the usual GStreamer codec plugins (`gst-plugins-good`,
+  `gst-plugins-bad`, `gst-plugins-ugly`, and `gst-libav`).
 - Desktop window buttons: Windows and Linux draw minimize, maximize, and
   close (close-only on tiling compositors such as Hyprland, Sway, i3, niri,
   and river). Override with `MORPH_WINDOW_BUTTONS=close` or
