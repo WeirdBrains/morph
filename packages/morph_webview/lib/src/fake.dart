@@ -164,8 +164,11 @@ class FakeMorphWebViewSession extends MorphWebViewSession {
     }
   }
 
+  int reloads = 0;
+
   @override
   Future<void> reload() async {
+    reloads++;
     _navController.add(_nav);
   }
 
