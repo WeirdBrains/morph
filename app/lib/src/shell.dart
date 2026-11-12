@@ -76,6 +76,8 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
     profiles: [ProfileInfo(id: 'default', name: 'Default')],
   );
   String _profileId = 'default';
+  final _recorded = <int, String>{};
+  Future<void> _libraryWrites = Future.value();
   bool _showSwitcher = false;
   final _previews = <int, Uint8List?>{};
   late bool _debugOpen;
@@ -110,6 +112,34 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
     });
   }
 
+  /// Runs per-profile library writes one at a time so read-modify-write
+  /// saves in the core never race each other.
+  Future<T> _libraryWrite<T>(Future<T> Function() write) {
+    final next = _libraryWrites.then((_) => write());
+    _libraryWrites = next.then((_) {}, onError: (_) {});
+    return next;
+  }
+
+  void _recordVisit(int id, MorphNavigationEvent event) {
+    final key = '${event.url}\n${event.title}';
+    if (_recorded[id] == key) {
+      return;
+    }
+    _recorded[id] = key;
+    final profileId = _profileId;
+    final home = _home;
+    unawaited(
+      _libraryWrite(
+        () => widget.api.recordVisit(
+          profileId,
+          event.url,
+          event.title,
+          home: home,
+        ),
+      ).catchError((Object _) {}),
+    );
+  }
+
   void _onTabNav(int id, MorphNavigationEvent event) {
     if (!mounted) {
       return;
@@ -119,6 +149,9 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
       _navEvents[id] = event;
       tabs.update(id, url: event.url, title: event.title);
       _visited[id] = true;
+      if (!event.isLoading) {
+        _recordVisit(id, event);
+      }
     } else if (event.title.isNotEmpty) {
       tabs.update(id, title: event.title);
     }
@@ -505,6 +538,7 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
       unawaited(controller?.dispose());
       _visited.remove(id);
       _navEvents.remove(id);
+      _recorded.remove(id);
       _previews.remove(id);
     }
     tabs.closeAll();
@@ -532,6 +566,7 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
     unawaited(controller?.dispose());
     _visited.remove(id);
     _navEvents.remove(id);
+    _recorded.remove(id);
     _previews.remove(id);
     tabs.close(id);
     _controllerFor(tabs.activeId);
@@ -648,6 +683,7 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
     }
     _controllers.clear();
     _navEvents.clear();
+    _recorded.clear();
     _visited.clear();
     _previews.clear();
   }

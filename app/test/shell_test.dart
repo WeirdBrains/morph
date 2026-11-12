@@ -483,6 +483,38 @@ void main() {
     }
   });
 
+  testWidgets('finished page loads are recorded in the profile history', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      final api = FakeMorphApi();
+      await tester.pumpWidget(
+        MorphApp(
+          api: api,
+          home: '/tmp/morph-history-test',
+          subscribeToTicks: false,
+          loadPageBridgeAsset: false,
+        ),
+      );
+      await _pumpUntilIdentity(tester);
+      await _enterAndSubmitUrl(tester, 'example.com');
+      await _pumpUntilWebViewAttached(tester, fakeWebView);
+      await tester.pump();
+      fakeWebView.lastSession!.loadUrl('https://example.org/');
+      await tester.pump();
+      await tester.pump();
+
+      final urls = [
+        for (final e in api.historyByProfile['default'] ?? const []) e.url,
+      ];
+      expect(urls, ['https://example.org/', 'https://example.com']);
+      expect(api.historyByProfile.keys, ['default']);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
   testWidgets('address bar loads a typed URL on Android', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
     const missingHome = '/tmp/morph-does-not-exist';
