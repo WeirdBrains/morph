@@ -1341,6 +1341,23 @@ real.
   Find in page is a page script (`window.find` plus a text match count), so it
   behaves the same on every backend. Tab position and the sidebar stay
   app-wide; Settings labels them that way.
+- _(new 2026-11-12)_ **Bookmark folders and tags** (`morph-core::bookmarks`,
+  file version 2). Folders nest without limit; folders and bookmarks share one
+  ordering inside a parent, kept as fractional base-62 keys (rocicorp-style
+  midpoints) so a move rewrites only the moved item. Every item has a UUIDv7
+  id and created/updated times; older id-less bookmarks get a deterministic
+  `legacy-` id until the file is next written. Deleting leaves a tombstone for
+  90 days. Ids, keys, times and tombstones are what Weirdnet sync will merge
+  on (docs/identity-recovery.md). Moves that would put a folder inside itself
+  are refused in the core, and loading repairs missing parents and cycles.
+  Deleting a folder deletes what is inside it, after a confirm that counts
+  it. Tags are lowercase keywords (trimmed, `#` dropped, 40 chars max).
+  Search needs every word to match the title, URL or a tag; a tag chip
+  filters exactly. In the Library, desktop drags from a handle and phones
+  long-press the row; folder rows take drops before, into (middle half) or
+  after, breadcrumbs take drops too, and "Move to…" does the same without
+  dragging. This stays in `morph-core` because it is browser data, not shared
+  Weirdnet code.
 
 ## 9a. Updating the Flutter app over the air _(changed 2026-11-11: decided)_
 
