@@ -45,4 +45,34 @@ void main() {
     await tester.pump();
     expect(controller.currentNavigation.url, 'https://example.com');
   });
+
+  testWidgets('embeds a platform view when the session provides one', (
+    tester,
+  ) async {
+    fake = FakeMorphWebViewPlatform(
+      renderPath: const MorphRenderPathInfo(path: 'wkwebview', reason: 'fake'),
+      platformView: const Text('platform-view'),
+    );
+    MorphWebViewPlatform.instance = fake;
+    final controller = MorphWebViewController(
+      initialUrl: 'https://example.com',
+    );
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SizedBox(
+          width: 400,
+          height: 300,
+          child: MorphWebView(controller: controller),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('platform-view'), findsOneWidget);
+    expect(controller.textureId, isNull);
+    expect(controller.renderPath.path, 'wkwebview');
+  });
 }

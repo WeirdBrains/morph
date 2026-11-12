@@ -1,10 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter/services.dart';
+import 'package:morph_webview/control.dart' as proto;
 import 'package:morph_webview/morph_webview.dart';
-
-import 'src/control_client.dart';
-import 'src/generated/morph.webview.v1.pb.dart' as proto;
 
 /// Linux implementation of [MorphWebViewPlatform].
 ///

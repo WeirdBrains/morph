@@ -7,11 +7,22 @@ import 'package:morph_webview/morph_webview.dart';
 
 import 'generated/morph.webview.v1.pbgrpc.dart';
 
-/// One in-process gRPC session shared by every Linux view in this isolate.
+/// One in-process gRPC session shared by every view in this isolate.
 class MorphControlClient {
   MorphControlClient(this.uri);
 
   final String uri;
+
+  /// Dart's `package:grpc` has no first-class Windows named-pipe transport.
+  /// The Rust server still prefers a named pipe; clients fall back to loopback TCP.
+  static const bool supportsNamedPipes = false;
+
+  static bool canOpen(String uri) {
+    if (uri.startsWith('pipe://')) {
+      return supportsNamedPipes;
+    }
+    return true;
+  }
 
   ClientChannel? _channel;
   WebViewControlClient? _stub;
@@ -50,6 +61,12 @@ class MorphControlClient {
   }
 
   static ClientChannel _channelFor(String uri) {
+    if (uri.startsWith('pipe://')) {
+      throw UnsupportedError(
+        'Dart package:grpc cannot open a Windows named pipe ($uri). '
+        'Start the control server on loopback TCP instead.',
+      );
+    }
     if (uri.startsWith('unix://')) {
       final path = uri.substring('unix://'.length);
       return ClientChannel(

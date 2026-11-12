@@ -14,8 +14,13 @@ dependencies:
   flutter:
     sdk: flutter
   plugin_platform_interface: ^2.0.2
+  grpc: ^5.2.0
+  protobuf: ^6.1.0
+  fixnum: ^1.1.1
   morph_webview_linux:
     path: ../morph_webview_linux
+  morph_webview_inapp:
+    path: ../morph_webview_inapp
 
 dev_dependencies:
   flutter_test:
@@ -27,3 +32,7 @@ flutter:
     platforms:
       linux:
         default_package: morph_webview_linux
+      macos:
+        default_package: morph_webview_inapp
+      windows:
+        default_package: morph_webview_inapp
