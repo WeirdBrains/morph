@@ -2,7 +2,7 @@
 
 Morph is a distributed web browser that has intelligence built in. It's your research assistant, rubber duck, and journaler. Morph tends to your long term and short term web needs. It changes the way you view and interact with the world.
 
-Adopted 2026-11-11. Build order is in `PRIORITIES.md`. Technical detail is in `ARCHITECTURE.md`.
+Adopted 2026-11-11. Build order is in [`PRIORITIES.md`](PRIORITIES.md). Technical detail is in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 # Overview
 
