@@ -9,6 +9,8 @@ import 'api.dart';
 import 'theme/morph_theme.dart';
 import 'widgets/brand.dart';
 import 'widgets/start_page.dart';
+import 'widgets/window_chrome.dart';
+import 'window/morph_desktop_window.dart';
 
 /// Morph shell: address-bar chrome, Linux web-view texture, and Rust wiring.
 class MorphShell extends StatefulWidget {
@@ -248,47 +250,64 @@ class MorphShellState extends State<MorphShell> {
             color: theme.scaffoldBackgroundColor,
             child: SafeArea(
               bottom: false,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(8, 8, 12, 8),
-                child: Row(
+              child: SizedBox(
+                height: 52,
+                child: Stack(
                   children: [
-                    const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 4),
-                      child: MorphMark(size: 28),
-                    ),
-                    IconButton(
-                      onPressed: navigation.canGoBack ? webView.goBack : null,
-                      tooltip: 'Back',
-                      icon: const Icon(Icons.arrow_back),
-                    ),
-                    IconButton(
-                      onPressed: navigation.canGoForward
-                          ? webView.goForward
-                          : null,
-                      tooltip: 'Forward',
-                      icon: const Icon(Icons.arrow_forward),
-                    ),
-                    IconButton(
-                      onPressed: webView.isAttached && !_onStartPage
-                          ? webView.reload
-                          : null,
-                      tooltip: 'Reload',
-                      icon: const Icon(Icons.refresh),
-                    ),
-                    Expanded(
-                      child: TextField(
-                        key: const Key('address-bar'),
-                        controller: address,
-                        style: MorphTheme.monoStyle(
-                          color: colors.onSurface,
-                          size: 14,
-                        ),
-                        decoration: const InputDecoration(
-                          hintText: 'Enter an address',
-                        ),
-                        keyboardType: TextInputType.url,
-                        textInputAction: TextInputAction.go,
-                        onSubmitted: _submitUrl,
+                    const MorphWindowDragArea(child: SizedBox.expand()),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(8, 8, 4, 8),
+                      child: Row(
+                        children: [
+                          const MorphWindowDragArea(
+                            child: Padding(
+                              padding: EdgeInsets.symmetric(horizontal: 4),
+                              child: MorphMark(size: 28),
+                            ),
+                          ),
+                          IconButton(
+                            onPressed: navigation.canGoBack
+                                ? webView.goBack
+                                : null,
+                            tooltip: 'Back',
+                            icon: const Icon(Icons.arrow_back),
+                          ),
+                          IconButton(
+                            onPressed: navigation.canGoForward
+                                ? webView.goForward
+                                : null,
+                            tooltip: 'Forward',
+                            icon: const Icon(Icons.arrow_forward),
+                          ),
+                          IconButton(
+                            onPressed: webView.isAttached && !_onStartPage
+                                ? webView.reload
+                                : null,
+                            tooltip: 'Reload',
+                            icon: const Icon(Icons.refresh),
+                          ),
+                          Expanded(
+                            child: TextField(
+                              key: const Key('address-bar'),
+                              controller: address,
+                              style: MorphTheme.monoStyle(
+                                color: colors.onSurface,
+                                size: 14,
+                              ),
+                              decoration: const InputDecoration(
+                                hintText: 'Enter an address',
+                              ),
+                              keyboardType: TextInputType.url,
+                              textInputAction: TextInputAction.go,
+                              onSubmitted: _submitUrl,
+                            ),
+                          ),
+                          const MorphWindowDragArea(
+                            child: SizedBox(width: 8, height: double.infinity),
+                          ),
+                          if (MorphDesktopWindow.isDesktop)
+                            const MorphWindowCloseButton(),
+                        ],
                       ),
                     ),
                   ],

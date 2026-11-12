@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:morph/src/api.dart';
@@ -103,5 +104,26 @@ void main() {
     expect(find.byKey(const Key('morph-wordmark')), findsOneWidget);
     expect(find.byKey(const Key('start-page')), findsOneWidget);
     expect(find.byKey(const Key('address-bar')), findsOneWidget);
+  });
+
+  testWidgets('desktop chrome shows a close button', (tester) async {
+    const missingHome = '/tmp/morph-does-not-exist';
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    try {
+      await tester.pumpWidget(
+        MorphApp(
+          api: FakeMorphApi(),
+          home: missingHome,
+          subscribeToTicks: false,
+        ),
+      );
+      await _pumpUntilIdentity(tester);
+      expect(find.byKey(const Key('window-close')), findsOneWidget);
+      expect(find.byTooltip('Close'), findsOneWidget);
+      expect(find.byKey(const Key('address-bar')), findsOneWidget);
+      expect(find.byTooltip('Back'), findsOneWidget);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
   });
 }

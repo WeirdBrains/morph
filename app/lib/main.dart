@@ -2,12 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:morph_webview/morph_webview.dart';
 
 import 'src/app.dart';
+import 'src/window/morph_desktop_window.dart';
 import 'src/ffi_api.dart';
 import 'src/rust/api/control.dart' as rust_control;
 import 'src/rust/frb_generated.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  MorphDesktopWindow.applyChromeless();
   await RustLib.init();
   MorphWebViewControl.start = _startControl;
   runApp(const MorphApp(api: FfiMorphApi()));
