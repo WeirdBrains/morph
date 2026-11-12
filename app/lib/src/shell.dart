@@ -634,6 +634,8 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
 
   void _switchTab(int id) {
     if (id != tabs.activeId) {
+      // Warm the target tab's renderer back up before the switch is drawn.
+      _controllerFor(id).setVisible(true);
       unawaited(_capturePreview(tabs.activeId));
       tabs.switchTo(id);
       _controllerFor(id);
@@ -1732,6 +1734,7 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
                     child: MorphWebView(
                       key: Key('web-view-$_profileId-${tab.id}'),
                       controller: _controllerFor(tab.id),
+                      active: tab.id == tabs.activeId,
                       profileId: _profileId,
                       userScript: userScript,
                       placeholder: Center(
