@@ -17,6 +17,10 @@ Widget _harness({
   VoidCallback? onToggleSidebar,
   ValueChanged<int>? onSelectTab,
   ValueChanged<int>? onCloseTab,
+  double sidebarWidth = 220,
+  ValueChanged<double>? onSidebarWidthChanged,
+  VoidCallback? onSidebarWidthCommit,
+  VoidCallback? onSidebarWidthReset,
 }) {
   return MaterialApp(
     theme: MorphTheme.dark,
@@ -46,6 +50,10 @@ Widget _harness({
         ),
         onPositionChanged: onPositionChanged,
         onToggleSidebar: onToggleSidebar,
+        sidebarWidth: sidebarWidth,
+        onSidebarWidthChanged: onSidebarWidthChanged,
+        onSidebarWidthCommit: onSidebarWidthCommit,
+        onSidebarWidthReset: onSidebarWidthReset,
         onSelectTab: onSelectTab,
         onCloseTab: onCloseTab,
       ),
@@ -732,5 +740,130 @@ void main() {
       expect(find.byKey(Key('tab-overflow-$closeId')), findsNothing);
       setHarness(() {});
     }
+  });
+  testWidgets('left and right sidebars drag, clamp, reset, and restore width', (
+    tester,
+  ) async {
+    for (final position in [MorphTabPosition.left, MorphTabPosition.right]) {
+      _desktopSize(tester);
+      var width = 220.0;
+      var committed = <double>[];
+      late void Function(void Function()) setHarness;
+      var collapsed = false;
+      final tabs = _nTabs(3);
+      await tester.pumpWidget(
+        StatefulBuilder(
+          builder: (context, setState) {
+            setHarness = setState;
+            return _harness(
+              tabs: tabs,
+              position: position,
+              sidebarCollapsed: collapsed,
+              sidebarWidth: width,
+              onSidebarWidthChanged: (next) {
+                setState(() => width = next);
+              },
+              onSidebarWidthCommit: () => committed.add(width),
+              onSidebarWidthReset: () {
+                setState(() => width = 220);
+                committed.add(220);
+              },
+              onToggleSidebar: () {
+                setState(() => collapsed = !collapsed);
+              },
+            );
+          },
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.getSize(find.byKey(const Key('tab-list'))).width,
+        220,
+        reason: '$position default',
+      );
+      final cursor = tester
+          .widget<MouseRegion>(
+            find.ancestor(
+              of: find.byKey(const Key('sidebar-resize')),
+              matching: find.byType(MouseRegion),
+            ),
+          )
+          .cursor;
+      expect(cursor, SystemMouseCursors.resizeColumn, reason: '$position');
+
+      final outward = position == MorphTabPosition.left
+          ? const Offset(800, 0)
+          : const Offset(-800, 0);
+      await tester.drag(find.byKey(const Key('sidebar-resize')), outward);
+      await tester.pumpAndSettle();
+      expect(width, 480, reason: '$position max clamp');
+      expect(
+        tester.getSize(find.byKey(const Key('tab-list'))).width,
+        480,
+        reason: '$position max size',
+      );
+      expect(committed, isNotEmpty, reason: '$position commit');
+
+      final inward = position == MorphTabPosition.left
+          ? const Offset(-800, 0)
+          : const Offset(800, 0);
+      await tester.drag(find.byKey(const Key('sidebar-resize')), inward);
+      await tester.pumpAndSettle();
+      expect(width, 160, reason: '$position min clamp');
+
+      await tester.tap(find.byKey(const Key('sidebar-resize')));
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.tap(find.byKey(const Key('sidebar-resize')));
+      await tester.pumpAndSettle();
+      expect(width, 220, reason: '$position double-click reset');
+
+      setHarness(() => width = 300);
+      await tester.pumpAndSettle();
+      expect(tester.getSize(find.byKey(const Key('tab-list'))).width, 300);
+      await tester.tap(find.byKey(const Key('tab-list-collapse')));
+      await tester.pumpAndSettle();
+      expect(
+        tester.getSize(find.byKey(const Key('tab-list'))).width,
+        48,
+        reason: '$position collapsed rail',
+      );
+      expect(find.byKey(const Key('sidebar-resize')), findsNothing);
+      await tester.tap(find.byKey(const Key('tab-list-collapse')));
+      await tester.pumpAndSettle();
+      expect(
+        tester.getSize(find.byKey(const Key('tab-list'))).width,
+        300,
+        reason: '$position expand restores saved width',
+      );
+    }
+
+    // Narrow window: 480 is not allowed when it would eat the content.
+    final view = tester.view;
+    view.physicalSize = const Size(500, 800);
+    view.devicePixelRatio = 1.0;
+    addTearDown(view.reset);
+    var width = 220.0;
+    await tester.pumpWidget(
+      StatefulBuilder(
+        builder: (context, setState) {
+          return _harness(
+            tabs: _nTabs(3),
+            position: MorphTabPosition.left,
+            sidebarWidth: width,
+            onSidebarWidthChanged: (next) {
+              setState(() => width = next);
+            },
+          );
+        },
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.drag(
+      find.byKey(const Key('sidebar-resize')),
+      const Offset(800, 0),
+    );
+    await tester.pumpAndSettle();
+    expect(width, 252, reason: 'narrow window clamp (500-48-200 = 252)');
   });
 }
