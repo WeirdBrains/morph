@@ -37,6 +37,10 @@ WebKitSettings* morph_session_create_settings(void);
 // User-agent string applied to Linux web views.
 const gchar* morph_session_user_agent(void);
 
+// Renderer fault name sent to Dart when a view's web process ends:
+// "crashed", "outOfMemory" or "killed" (terminated through the API).
+const gchar* morph_session_fault_for_termination(WebKitWebProcessTerminationReason reason);
+
 // Drop every cached context so the next context_for_profile() rebuilds it.
 // For tests only; not used by the plugin.
 void morph_session_reset_for_tests(void);
