@@ -40,6 +40,17 @@ static const char kMorphRustShim[] = R"JS(
 })();
 )JS";
 
+// The offscreen web view cannot host a GTK drag-and-drop session: dragging a
+// selection or an image left a stuck drag ghost. Cancelling dragstart keeps
+// WebKit from starting one, so the gesture extends or restarts the text
+// selection instead. Click-drag selection and double-click word selection are
+// unaffected. Linux only; the Windows and macOS views are native and keep DnD.
+static const char kNoDragShim[] = R"JS(
+window.addEventListener('dragstart', function (event) {
+  event.preventDefault();
+}, true);
+)JS";
+
 struct MorphView;
 
 G_DECLARE_FINAL_TYPE(MorphPixelBufferTexture,
@@ -822,15 +833,21 @@ static void on_script_message(WebKitUserContentManager* manager,
   morph_control_emit_page_message(view->view_id, json != nullptr ? json : "");
 }
 
-static void add_user_script(WebKitUserContentManager* manager, const gchar* source) {
+static void add_user_script_to(WebKitUserContentManager* manager,
+                               const gchar* source,
+                               WebKitUserContentInjectedFrames frames) {
   if (source == nullptr || *source == '\0') {
     return;
   }
   WebKitUserScript* script =
-      webkit_user_script_new(source, WEBKIT_USER_CONTENT_INJECT_TOP_FRAME,
+      webkit_user_script_new(source, frames,
                              WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_START, nullptr, nullptr);
   webkit_user_content_manager_add_script(manager, script);
   webkit_user_script_unref(script);
+}
+
+static void add_user_script(WebKitUserContentManager* manager, const gchar* source) {
+  add_user_script_to(manager, source, WEBKIT_USER_CONTENT_INJECT_TOP_FRAME);
 }
 
 static void apply_size(MorphView* view, uint32_t logical_width, uint32_t logical_height, double dpr) {
@@ -955,6 +972,7 @@ static MorphView* morph_view_create(MorphWebviewLinuxPlugin* plugin,
                    view);
   webkit_user_content_manager_register_script_message_handler(manager, "morphRust");
   add_user_script(manager, kMorphRustShim);
+  add_user_script_to(manager, kNoDragShim, WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES);
   add_user_script(manager, user_script);
 
   view->offscreen = gtk_offscreen_window_new();
