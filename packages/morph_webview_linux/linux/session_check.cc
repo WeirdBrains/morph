@@ -1,6 +1,8 @@
 // Cookie and session persistence check for the Linux WebKit web view.
 // Uses a local HTTP server that sets a cookie and redirects, then verifies
-// the cookie survives view recreation and a simulated app restart.
+// the cookie survives view recreation and a simulated app restart. A second
+// pair of origins exercises a cross-host OAuth-style redirect (client -> IdP
+// -> client callback) so the client state cookie is sent on the return hop.
 #include "session.h"
 
 #include <gtk/gtk.h>
@@ -119,6 +121,105 @@ static SoupServer* start_server(guint* port) {
   *port = static_cast<guint>(g_uri_get_port(static_cast<GUri*>(uris->data)));
   g_slist_free_full(uris, reinterpret_cast<GDestroyNotify>(g_uri_unref));
   return server;
+}
+
+
+struct OAuthServers {
+  SoupServer* client;
+  SoupServer* idp;
+  guint client_port;
+  guint idp_port;
+};
+
+static void handle_oauth_login(SoupServer*,
+                               SoupServerMessage* msg,
+                               const char*,
+                               GHashTable*,
+                               gpointer user_data) {
+  auto* oauth = static_cast<OAuthServers*>(user_data);
+  gchar* location = g_strdup_printf("http://localhost:%u/authorize?redirect_uri=http://127.0.0.1:%u/callback",
+                                    oauth->idp_port, oauth->client_port);
+  SoupMessageHeaders* headers = soup_server_message_get_response_headers(msg);
+  soup_message_headers_append(headers, "Set-Cookie",
+                              "morph_oauth_state=xyz; Path=/; Max-Age=86400; SameSite=Lax");
+  soup_message_headers_append(headers, "Location", location);
+  soup_server_message_set_status(msg, 302, nullptr);
+  soup_server_message_set_response(msg, "text/plain", SOUP_MEMORY_STATIC, "redirect", 8);
+  g_free(location);
+}
+
+static void handle_oauth_authorize(SoupServer*,
+                                   SoupServerMessage* msg,
+                                   const char*,
+                                   GHashTable*,
+                                   gpointer) {
+  GUri* uri = soup_server_message_get_uri(msg);
+  const gchar* query = g_uri_get_query(uri);
+  gchar* redirect = nullptr;
+  if (query != nullptr) {
+    GHashTable* params = g_uri_parse_params(query, -1, "&", G_URI_PARAMS_NONE, nullptr);
+    if (params != nullptr) {
+      const gchar* target = static_cast<const gchar*>(g_hash_table_lookup(params, "redirect_uri"));
+      if (target != nullptr && g_str_has_prefix(target, "http://127.0.0.1:")) {
+        redirect = g_strdup_printf("%s%scode=tok", target, strchr(target, '?') != nullptr ? "&" : "?");
+      }
+      g_hash_table_unref(params);
+    }
+  }
+  SoupMessageHeaders* headers = soup_server_message_get_response_headers(msg);
+  soup_message_headers_append(headers, "Set-Cookie",
+                              "morph_idp=ok; Path=/; Max-Age=86400; SameSite=Lax");
+  if (redirect != nullptr) {
+    soup_message_headers_append(headers, "Location", redirect);
+    soup_server_message_set_status(msg, 302, nullptr);
+    soup_server_message_set_response(msg, "text/plain", SOUP_MEMORY_STATIC, "idp", 3);
+  } else {
+    soup_server_message_set_status(msg, 400, nullptr);
+    soup_server_message_set_response(msg, "text/plain", SOUP_MEMORY_STATIC, "bad redirect", 12);
+  }
+  g_free(redirect);
+}
+
+static void handle_oauth_callback(SoupServer*,
+                                  SoupServerMessage* msg,
+                                  const char*,
+                                  GHashTable*,
+                                  gpointer) {
+  SoupMessageHeaders* request_headers = soup_server_message_get_request_headers(msg);
+  const char* cookie = soup_message_headers_get_one(request_headers, "Cookie");
+  GUri* uri = soup_server_message_get_uri(msg);
+  const gchar* query = g_uri_get_query(uri);
+  gchar* body = g_strdup_printf(
+      "<!doctype html><title>callback</title><body>cookie=%s query=%s</body>",
+      cookie != nullptr ? cookie : "(none)", query != nullptr ? query : "(none)");
+  soup_server_message_set_status(msg, 200, nullptr);
+  soup_server_message_set_response(msg, "text/html", SOUP_MEMORY_TAKE, body, strlen(body));
+}
+
+static void listen_on_ephemeral_port(SoupServer* server, guint* port) {
+  GError* error = nullptr;
+  if (!soup_server_listen_local(server, 0, static_cast<SoupServerListenOptions>(0), &error)) {
+    std::fprintf(stderr, "failed to listen: %s\n", error->message);
+    g_error_free(error);
+    std::exit(2);
+  }
+  GSList* uris = soup_server_get_uris(server);
+  *port = static_cast<guint>(g_uri_get_port(static_cast<GUri*>(uris->data)));
+  g_slist_free_full(uris, reinterpret_cast<GDestroyNotify>(g_uri_unref));
+}
+
+static OAuthServers start_oauth_servers() {
+  OAuthServers oauth = {};
+  oauth.client = soup_server_new("server-header", "morph-oauth-client", nullptr);
+  oauth.idp = soup_server_new("server-header", "morph-oauth-idp", nullptr);
+  // Bind first so /login can advertise the IdP origin. Cookies are host-keyed,
+  // not port-keyed, so the IdP is reached as localhost and the client as 127.0.0.1.
+  listen_on_ephemeral_port(oauth.idp, &oauth.idp_port);
+  soup_server_add_handler(oauth.idp, "/authorize", handle_oauth_authorize, nullptr, nullptr);
+  soup_server_add_handler(oauth.client, "/login", handle_oauth_login, &oauth, nullptr);
+  soup_server_add_handler(oauth.client, "/callback", handle_oauth_callback, nullptr, nullptr);
+  listen_on_ephemeral_port(oauth.client, &oauth.client_port);
+  return oauth;
 }
 
 static WebKitWebView* make_view_for_profile(const char* profile_id) {
@@ -319,6 +420,43 @@ static void check_profile_isolation(const char* check_url) {
   morph_session_reset_for_tests();
 }
 
+static void check_oauth_cross_host_redirect(const OAuthServers* oauth) {
+  gchar* login_url = g_strdup_printf("http://127.0.0.1:%u/login", oauth->client_port);
+  WebKitWebView* view = make_view_for_profile("default");
+  load_and_wait(view, login_url);
+  const char* uri = webkit_web_view_get_uri(view);
+  expect_true(uri != nullptr && std::strstr(uri, "/callback") != nullptr,
+              "OAuth login should follow the IdP redirect back to the client callback");
+  expect_true(uri != nullptr && std::strstr(uri, "code=tok") != nullptr,
+              "callback should include the authorization code");
+  gchar* body = eval_js(view, "document.body ? document.body.innerText : ''");
+  expect_true(body != nullptr && std::strstr(body, "morph_oauth_state=xyz") != nullptr,
+              "client state cookie must be sent on the cross-host return to /callback");
+  expect_true(body != nullptr && std::strstr(body, "code=tok") != nullptr,
+              "callback page should expose the authorization code");
+  gchar* cookie = eval_js(view, "document.cookie");
+  expect_true(cookie != nullptr && std::strstr(cookie, "morph_oauth_state=xyz") != nullptr,
+              "document.cookie should keep the client state after the IdP hop");
+  expect_true(cookie == nullptr || std::strstr(cookie, "morph_idp=") == nullptr,
+              "the IdP cookie must not leak onto the client origin");
+  g_free(body);
+  g_free(cookie);
+  destroy_view(view);
+
+  drain_main_loop_ms(400);
+  morph_session_reset_for_tests();
+  gchar* callback_url = g_strdup_printf("http://127.0.0.1:%u/callback?code=replay", oauth->client_port);
+  WebKitWebView* restarted = make_view_for_profile("default");
+  load_and_wait(restarted, callback_url);
+  gchar* again = eval_js(restarted, "document.body ? document.body.innerText : ''");
+  expect_true(again != nullptr && std::strstr(again, "morph_oauth_state=xyz") != nullptr,
+              "OAuth state cookie should survive a restart after the cross-host return");
+  destroy_view(restarted);
+  g_free(again);
+  g_free(callback_url);
+  g_free(login_url);
+}
+
 int main(int argc, char** argv) {
   // Offscreen / virtual-framebuffer environments often have no hardware GL.
   g_setenv("WEBKIT_DISABLE_DMABUF_RENDERER", "1", FALSE);
@@ -382,6 +520,11 @@ int main(int argc, char** argv) {
   expect_true(g_file_test(cookie_path, G_FILE_TEST_EXISTS),
               "cookies.sqlite should be created in the Morph profile");
   g_free(cookie_path);
+
+  OAuthServers oauth = start_oauth_servers();
+  check_oauth_cross_host_redirect(&oauth);
+  g_object_unref(oauth.client);
+  g_object_unref(oauth.idp);
 
   check_profile_isolation(check_url);
 
