@@ -4,11 +4,12 @@ import 'package:morph/src/tabs/tab_overflow.dart';
 void main() {
   const trailing = 72.0; // two 36px strip actions
   const min = MorphTabOverflow.horizontalMinExtent;
+  const max = MorphTabOverflow.horizontalMaxExtent;
   const spacing = MorphTabOverflow.spacing;
   const overflowBtn = MorphTabOverflow.overflowButtonExtent;
 
-  double needed(int tabs, {required bool overflow}) {
-    var extent = tabs * min;
+  double needed(int tabs, {required bool overflow, required double tabExtent}) {
+    var extent = tabs * tabExtent;
     if (tabs > 1) {
       extent += (tabs - 1) * spacing;
     }
@@ -18,6 +19,94 @@ void main() {
     extent += (tabs > 0 || overflow ? spacing : 0) + trailing;
     return extent;
   }
+
+  test('a single tab uses the 150 px maximum', () {
+    expect(
+      MorphTabOverflow.tabWidth(
+        visibleTabCount: 1,
+        available: 1280,
+        trailingExtent: trailing,
+        overflow: false,
+      ),
+      max,
+    );
+    expect(
+      MorphTabOverflow.visibleCount(
+        tabCount: 1,
+        available: 400,
+        minTabExtent: min,
+        trailingExtent: trailing,
+      ),
+      1,
+    );
+  });
+
+  test('many tabs clamp at the 50 px minimum before overflowing', () {
+    // 20 tabs still fit at 1280 once each can shrink to 50 px.
+    expect(
+      MorphTabOverflow.visibleCount(
+        tabCount: 20,
+        available: 1280,
+        minTabExtent: min,
+        trailingExtent: trailing,
+      ),
+      20,
+    );
+    final packed = needed(20, overflow: false, tabExtent: min);
+    expect(
+      MorphTabOverflow.tabWidth(
+        visibleTabCount: 20,
+        available: packed,
+        trailingExtent: trailing,
+        overflow: false,
+      ),
+      closeTo(min, 0.01),
+    );
+    // A wider strip shares leftover pixels, but never exceeds the 150 cap
+    // or drops below 50.
+    final loose = MorphTabOverflow.tabWidth(
+      visibleTabCount: 20,
+      available: 1280,
+      trailingExtent: trailing,
+      overflow: false,
+    );
+    expect(loose, inInclusiveRange(min, max));
+    expect(
+      MorphTabOverflow.tabWidth(
+        visibleTabCount: 40,
+        available: 200,
+        trailingExtent: trailing,
+        overflow: true,
+      ),
+      min,
+    );
+  });
+
+  test('overflow starts only after every visible tab is at 50 px', () {
+    final allFit = needed(8, overflow: false, tabExtent: min);
+    expect(
+      MorphTabOverflow.visibleCount(
+        tabCount: 8,
+        available: allFit,
+        minTabExtent: min,
+        trailingExtent: trailing,
+      ),
+      8,
+    );
+    expect(
+      MorphTabOverflow.visibleCount(
+        tabCount: 8,
+        available: allFit - 1,
+        minTabExtent: min,
+        trailingExtent: trailing,
+      ),
+      7,
+    );
+    expect(
+      needed(7, overflow: true, tabExtent: min),
+      lessThanOrEqualTo(allFit - 1 + 0.5),
+    );
+  });
 
   test('all tabs fit at wide widths without an overflow button', () {
     expect(
@@ -29,16 +118,7 @@ void main() {
       ),
       3,
     );
-    expect(
-      MorphTabOverflow.visibleCount(
-        tabCount: 1,
-        available: 400,
-        minTabExtent: min,
-        trailingExtent: trailing,
-      ),
-      1,
-    );
-    final exact = needed(4, overflow: false);
+    final exact = needed(4, overflow: false, tabExtent: min);
     expect(
       MorphTabOverflow.visibleCount(
         tabCount: 4,
@@ -48,59 +128,48 @@ void main() {
       ),
       4,
     );
-  });
-
-  test('reserves the overflow button once tabs no longer fit', () {
-    final almost = needed(4, overflow: false) - 1;
     expect(
-      MorphTabOverflow.visibleCount(
-        tabCount: 4,
-        available: almost,
-        minTabExtent: min,
-        trailingExtent: trailing,
-      ),
-      3,
-    );
-    expect(
-      MorphTabOverflow.visibleCount(
-        tabCount: 20,
+      MorphTabOverflow.tabWidth(
+        visibleTabCount: 3,
         available: 1280,
-        minTabExtent: min,
         trailingExtent: trailing,
+        overflow: false,
       ),
-      lessThan(20),
-    );
-    expect(
-      MorphTabOverflow.visibleCount(
-        tabCount: 20,
-        available: 1280,
-        minTabExtent: min,
-        trailingExtent: trailing,
-      ),
-      greaterThanOrEqualTo(1),
+      max,
     );
   });
 
   test('fit calculation at a few strip widths', () {
     const widths = [580.0, 800.0, 1280.0, 1600.0];
     for (final width in widths) {
+      // 40 tabs is enough that every width in this set must overflow.
+      const count = 40;
       final visible = MorphTabOverflow.visibleCount(
-        tabCount: 20,
+        tabCount: count,
         available: width,
         minTabExtent: min,
         trailingExtent: trailing,
       );
-      expect(visible, inInclusiveRange(1, 19), reason: 'width $width');
+      expect(visible, inInclusiveRange(1, count - 1), reason: 'width $width');
       expect(
-        needed(visible, overflow: true),
+        needed(visible, overflow: true, tabExtent: min),
         lessThanOrEqualTo(width + 0.5),
         reason: 'width $width',
       );
       expect(
-        needed(visible + 1, overflow: true),
+        needed(visible + 1, overflow: true, tabExtent: min),
         greaterThan(width + 0.5),
-        reason: 'width $width should not fit one more',
+        reason: 'width $width should not fit one more at 50 px',
       );
+      final tabWidth = MorphTabOverflow.tabWidth(
+        visibleTabCount: visible,
+        available: width,
+        trailingExtent: trailing,
+        overflow: true,
+      );
+      expect(tabWidth, greaterThanOrEqualTo(min), reason: 'width $width');
+      // Leftover pixels are shared, so the width sits at or just above 50.
+      expect(tabWidth, lessThan(min + spacing + 1), reason: 'width $width');
     }
   });
 

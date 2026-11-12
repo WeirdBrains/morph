@@ -1,13 +1,18 @@
 /// Fit math for the desktop tab strip and list overflow menu.
 ///
-/// The strip shows as many tabs as will fit at [horizontalMinExtent] (or
-/// [verticalMinExtent] in a list), after reserving the trailing +/position
-/// group and, when needed, an overflow button.
+/// Horizontal tabs share the strip evenly between [horizontalMinExtent]
+/// and [horizontalMaxExtent], after reserving the trailing +/position
+/// group and, when needed, an overflow button. Tabs only move into the
+/// overflow menu once every visible tab is at the minimum width. Vertical
+/// lists still fit by [verticalMinExtent] and the sidebar width.
 class MorphTabOverflow {
   MorphTabOverflow._();
 
   /// Minimum width of a horizontal tab chip.
-  static const double horizontalMinExtent = 180;
+  static const double horizontalMinExtent = 50;
+
+  /// Maximum width of a horizontal tab chip.
+  static const double horizontalMaxExtent = 150;
 
   /// Height of a left/right tab list tile.
   static const double verticalMinExtent = 36;
@@ -39,6 +44,45 @@ class MorphTabOverflow {
       return trailingActionExtent * 2;
     }
     return trailingActionExtent * 2;
+  }
+
+  /// Width of each visible horizontal tab in a strip of [available] width.
+  ///
+  /// Remaining space after the trailing group, inter-tab spacing, and the
+  /// overflow button (when [overflow] is true) is divided evenly, then
+  /// clamped to [horizontalMinExtent]–[horizontalMaxExtent].
+  static double tabWidth({
+    required int visibleTabCount,
+    required double available,
+    required double trailingExtent,
+    required bool overflow,
+    double minTabExtent = horizontalMinExtent,
+    double maxTabExtent = horizontalMaxExtent,
+    double overflowButtonExtent = overflowButtonExtent,
+    double spacing = spacing,
+  }) {
+    if (visibleTabCount <= 0) {
+      return minTabExtent;
+    }
+    var reserved = 0.0;
+    if (visibleTabCount > 1) {
+      reserved += (visibleTabCount - 1) * spacing;
+    }
+    if (overflow) {
+      reserved += (visibleTabCount > 0 ? spacing : 0) + overflowButtonExtent;
+    }
+    if (trailingExtent > 0) {
+      reserved +=
+          (visibleTabCount > 0 || overflow ? spacing : 0) + trailingExtent;
+    }
+    final each = (available - reserved) / visibleTabCount;
+    if (each < minTabExtent) {
+      return minTabExtent;
+    }
+    if (each > maxTabExtent) {
+      return maxTabExtent;
+    }
+    return each;
   }
 
   /// How many tabs to show in a strip or list of [available] extent.
