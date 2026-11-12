@@ -45,4 +45,12 @@ void main() {
     expect(settings.cacheEnabled, isTrue);
     expect(settings.javaScriptEnabled, isTrue);
   });
+
+  test('pages can open real windows (sign-in popups keep their opener)', () {
+    for (final desktop in [null, true, false]) {
+      final settings = morphInAppWebViewSettings(desktopSite: desktop);
+      expect(settings.supportMultipleWindows, isTrue);
+      expect(settings.javaScriptCanOpenWindowsAutomatically, isTrue);
+    }
+  });
 }

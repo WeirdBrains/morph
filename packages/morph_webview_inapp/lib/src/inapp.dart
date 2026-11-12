@@ -11,6 +11,7 @@ import 'package:flutter_inappwebview_platform_interface/flutter_inappwebview_pla
 import 'package:morph_webview/control.dart';
 import 'package:morph_webview/morph_webview.dart';
 
+import 'popups.dart';
 import 'profile_store.dart';
 import 'renderer_watch.dart';
 import 'settings.dart';
@@ -149,12 +150,16 @@ class _AndroidView {
   /// False when this device cannot keep the profile's storage apart.
   final bool isolated;
 
-  static Future<_AndroidView?> prepare(int viewId, String profileId) async {
+  static Future<_AndroidView?> prepare(
+    int viewId,
+    String profileId, {
+    String kind = 'view',
+  }) async {
     if (!Platform.isAndroid) {
       return null;
     }
     final keepAlive = InAppWebViewKeepAlive()
-      ..id = 'morph-view-$viewId-${DateTime.now().microsecondsSinceEpoch}';
+      ..id = 'morph-$kind-$viewId-${DateTime.now().microsecondsSinceEpoch}';
     final reply = await morphProfileStore.prepareAndroid(
       profileId,
       keepAlive.id,
@@ -260,6 +265,7 @@ class _InAppSession extends MorphWebViewSession {
       onUpdateVisitedHistory: (controller, url, isReload) {
         _rememberUrl(url);
       },
+      onCreateWindow: (controller, action) => _openPopup(action),
       onRenderProcessGone: (controller, detail) {
         // The native WebView is unusable once its renderer is gone. The tab
         // shows its crash state; recoverRenderer builds a fresh view. On
@@ -331,10 +337,88 @@ class _InAppSession extends MorphWebViewSession {
   /// Stable wrapper so the shell never sees the widget change; a rebuild swaps
   /// the keyed [InAppWebView] inside it for a fresh native view.
   @override
-  late final Widget platformView = ValueListenableBuilder<int>(
-    valueListenable: _generation,
-    builder: (context, generation, _) => _view,
+  late final Widget platformView = MorphPopupOverlay(
+    stack: _popups,
+    onClose: (windowId) => unawaited(_closePopup(windowId)),
+    child: ValueListenableBuilder<int>(
+      valueListenable: _generation,
+      builder: (context, generation, _) => _view,
+    ),
   );
+
+  final _popups = MorphPopupStack();
+
+  /// Native views (keep-alives) behind open popups, by window id.
+  final _popupViews = <int, _AndroidView>{};
+
+  /// A page asked for a new window: give the engine a real web view for it,
+  /// in this tab's profile, stacked over the tab.
+  Future<bool> _openPopup(CreateWindowAction action) async {
+    if (!isolated || _popups.isFull) {
+      return false;
+    }
+    final windowId = action.windowId;
+    final android = await _AndroidView.prepare(
+      viewId,
+      profileId,
+      kind: 'popup',
+    );
+    if (android != null) {
+      _popupViews[windowId] = android;
+    }
+    late final MorphPopup popup;
+    popup = MorphPopup(
+      windowId: windowId,
+      url: action.request.url?.toString() ?? '',
+      view: InAppWebView(
+        key: ValueKey<String>('morph-popup-$windowId'),
+        windowId: windowId,
+        keepAlive: android?.keepAlive,
+        webViewEnvironment: webViewEnvironment,
+        initialSettings: morphInAppWebViewSettings(),
+        onCreateWindow: (controller, next) => _openPopup(next),
+        onCloseWindow: (controller) => unawaited(_closePopup(windowId)),
+        onLoadStart: (controller, url) {
+          popup.address.value = url?.toString() ?? popup.address.value;
+        },
+        onLoadStop: (controller, url) {
+          popup.address.value = url?.toString() ?? popup.address.value;
+        },
+        onTitleChanged: (controller, title) {
+          popup.title.value = title ?? '';
+        },
+        onRenderProcessGone: (controller, detail) {
+          _watch.renderProcessGone(didCrash: detail.didCrash);
+        },
+      ),
+    );
+    if (!_popups.push(popup)) {
+      _popupViews.remove(windowId);
+      await android?.dispose();
+      popup.dispose();
+      return false;
+    }
+    return true;
+  }
+
+  Future<void> _closePopup(int windowId) async {
+    final popup = _popups.remove(windowId);
+    final android = _popupViews.remove(windowId);
+    // Let the frame that drops the popup's widget go first.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      popup?.dispose();
+      if (android != null) {
+        unawaited(android.dispose());
+      }
+    });
+  }
+
+  Future<void> _closeAllPopups() async {
+    for (final popup in _popups.clear()) {
+      popup.dispose();
+      await _popupViews.remove(popup.windowId)?.dispose();
+    }
+  }
 
   void _rememberUrl(WebUri? url) {
     final value = url?.toString() ?? '';
@@ -431,6 +515,8 @@ class _InAppSession extends MorphWebViewSession {
     // its keyed widget leaves the tree.
     _controller = null;
     _watch.rebuilt();
+    // A new main view has no tie to the old one's windows.
+    await _closeAllPopups();
     final url = _lastUrl ?? initialUrl;
     final next = _generation.value + 1;
     // A keep-alive view outlives its widget, so give the rebuild its own
@@ -617,6 +703,8 @@ class _InAppSession extends MorphWebViewSession {
 
   @override
   Future<void> dispose() async {
+    await _closeAllPopups();
+    _popups.dispose();
     await _surfaceLost.close();
     await _watch.close();
     _generation.dispose();
