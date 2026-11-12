@@ -13,8 +13,8 @@ Future<void> main(List<String> arguments) async {
   WidgetsFlutterBinding.ensureInitialized();
   MorphDesktopWindow.applyChromeless();
   await RustLib.init();
-  MorphWebViewControl.start = _startControl;
   final home = await defaultMorphHome();
+  MorphWebViewControl.start = () => _startControl(controlSocketDir(home));
   runApp(
     MorphApp(
       api: const FfiMorphApi(),
@@ -24,9 +24,11 @@ Future<void> main(List<String> arguments) async {
   );
 }
 
-Future<MorphControlBindings> _startControl() async {
+Future<MorphControlBindings> _startControl(String? socketDir) async {
   final events = rust_control.controlBackendEvents();
-  var endpoint = await rust_control.startWebviewControl();
+  var endpoint = socketDir == null
+      ? await rust_control.startWebviewControl()
+      : await rust_control.startWebviewControlIn(dir: socketDir);
   if (!MorphControlClient.canOpen(endpoint)) {
     await rust_control.stopWebviewControl();
     endpoint = await rust_control.startWebviewControlLoopback();

@@ -29,6 +29,22 @@ impl ControlEndpoint {
         }
     }
 
+    /// A per-process endpoint inside `dir`, a directory only this app can
+    /// write to. Android needs this: apps there have no `XDG_RUNTIME_DIR` or
+    /// `TMPDIR`, and `/tmp` is not theirs, so [`Self::default_for_process`]
+    /// cannot bind. Windows ignores `dir` (named pipes have no directory).
+    pub fn in_dir(dir: impl AsRef<Path>) -> Self {
+        #[cfg(unix)]
+        {
+            Self::Unix(dir.as_ref().join(format!("webview-control-{}.sock", std::process::id())))
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = dir;
+            Self::default_for_process()
+        }
+    }
+
     pub fn from_path(path: impl AsRef<Path>) -> Self {
         #[cfg(unix)]
         {
@@ -102,4 +118,29 @@ pub fn prepare_unix_socket(_path: &Path) -> io::Result<()> {
 #[cfg(not(unix))]
 pub fn restrict_unix_socket(_path: &Path) -> io::Result<()> {
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn in_dir_puts_the_socket_in_that_dir() {
+        let dir = Path::new("/data/user/0/app/files/run");
+        let endpoint = ControlEndpoint::in_dir(dir);
+        let path = endpoint.unix_path().unwrap();
+        assert_eq!(path.parent(), Some(dir));
+        assert!(path.file_name().unwrap().to_string_lossy().ends_with(".sock"));
+    }
+
+    #[test]
+    fn prepare_creates_a_private_dir() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = std::env::temp_dir().join(format!("morph-endpoint-test-{}", std::process::id()));
+        let path = ControlEndpoint::in_dir(tmp.join("run")).unix_path().unwrap().to_path_buf();
+        prepare_unix_socket(&path).unwrap();
+        let mode = std::fs::metadata(tmp.join("run")).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 }

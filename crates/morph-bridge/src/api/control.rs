@@ -127,6 +127,13 @@ pub fn start_webview_control() -> Result<String, String> {
     Ok(bound.uri())
 }
 
+/// Start the server with its socket in `dir`, a directory private to the
+/// app. Android uses this because apps there cannot write to `/tmp`.
+pub fn start_webview_control_in(dir: String) -> Result<String, String> {
+    let bound = start_global(Some(ControlEndpoint::in_dir(dir)), Arc::new(ForwardingBackend {})).map_err(|e| e.to_string())?;
+    Ok(bound.uri())
+}
+
 /// Start the server on loopback TCP (used if a client cannot open a named pipe).
 pub fn start_webview_control_loopback() -> Result<String, String> {
     let bound = start_global(Some(ControlEndpoint::Loopback { port: 0 }), Arc::new(ForwardingBackend {})).map_err(|e| e.to_string())?;

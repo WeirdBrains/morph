@@ -21,6 +21,11 @@ Stream<ControlBackendEvent> controlBackendEvents() =>
 Future<String> startWebviewControl() =>
     RustLib.instance.api.crateApiControlStartWebviewControl();
 
+/// Start the server with its socket in `dir`, a directory private to the
+/// app. Android uses this because apps there cannot write to `/tmp`.
+Future<String> startWebviewControlIn({required String dir}) =>
+    RustLib.instance.api.crateApiControlStartWebviewControlIn(dir: dir);
+
 /// Start the server on loopback TCP (used if a client cannot open a named pipe).
 Future<String> startWebviewControlLoopback() =>
     RustLib.instance.api.crateApiControlStartWebviewControlLoopback();

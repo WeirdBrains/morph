@@ -27,3 +27,17 @@ Future<String?> defaultMorphHome({
       return null;
   }
 }
+
+/// Where the web view control socket goes, or null for the Rust default
+/// (`XDG_RUNTIME_DIR`, `TMPDIR` or `/tmp`).
+///
+/// Android apps get neither variable and cannot write to `/tmp`, so the
+/// socket lives in a `run` folder inside the app's own [home]. Desktop and
+/// iOS keep the default (iOS paths are too long for a socket name).
+String? controlSocketDir(String? home, {TargetPlatform? platform}) {
+  if (kIsWeb || home == null) {
+    return null;
+  }
+  final target = platform ?? defaultTargetPlatform;
+  return target == TargetPlatform.android ? '$home/run' : null;
+}
