@@ -1488,10 +1488,16 @@ void main() {
       await tester.tap(find.byKey(const Key('sheet-bookmarks')));
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('library-page')), findsOneWidget);
+      expect(find.byKey(const Key('address-sheet')), findsNothing);
       expect(
         find.byKey(const Key('bookmark-https://m.example')),
         findsOneWidget,
       );
+      final nav = tester.state<NavigatorState>(find.byType(Navigator).first);
+      nav.pop();
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('library-page')), findsNothing);
+      expect(find.byKey(const Key('address-sheet')), findsNothing);
     } finally {
       debugDefaultTargetPlatformOverride = null;
     }
