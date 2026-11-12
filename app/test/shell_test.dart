@@ -881,6 +881,199 @@ void main() {
       view.reset();
     }
   });
+
+  testWidgets(
+    'shell shortcuts work while the web view has focus and are not forwarded',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+      final view = tester.view;
+      view.physicalSize = const Size(1280, 800);
+      view.devicePixelRatio = 1.0;
+      try {
+        await tester.pumpWidget(
+          MorphApp(
+            api: FakeMorphApi(),
+            home: '/tmp/morph-does-not-exist',
+            subscribeToTicks: false,
+            loadPageBridgeAsset: false,
+          ),
+        );
+        await _pumpUntilIdentity(tester);
+        await tester.enterText(
+          find.byKey(const Key('address-bar')),
+          'one.example',
+        );
+        await tester.tap(find.byKey(const Key('address-go')));
+        await tester.pump();
+        await _pumpUntilWebViewAttached(tester, fakeWebView);
+        await tester.pump();
+
+        final session = fakeWebView.lastSession!;
+        await _focusActiveWebView(tester);
+        session.keys.clear();
+
+        await tester.sendKeyEvent(LogicalKeyboardKey.keyA);
+        await tester.pump();
+        expect(
+          session.keys.map((event) => event.key),
+          contains('A'),
+          reason: 'plain keys should still reach the web view',
+        );
+        session.keys.clear();
+
+        await _sendChord(
+          tester,
+          LogicalKeyboardKey.controlLeft,
+          LogicalKeyboardKey.keyT,
+        );
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('tab-2')), findsOneWidget);
+        expect(
+          session.keys.map((event) => event.key),
+          isNot(contains('T')),
+          reason: 'Ctrl+T must not be forwarded to the web view',
+        );
+
+        await _sendChord(
+          tester,
+          LogicalKeyboardKey.controlLeft,
+          LogicalKeyboardKey.keyW,
+        );
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('tab-2')), findsNothing);
+        expect(find.byKey(const Key('tab-1')), findsOneWidget);
+
+        await _focusActiveWebView(tester);
+        await _sendChord(
+          tester,
+          LogicalKeyboardKey.metaLeft,
+          LogicalKeyboardKey.keyT,
+        );
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('tab-3')), findsOneWidget);
+
+        await tester.tap(find.byKey(const Key('tab-new')));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('tab-4')), findsOneWidget);
+
+        await _sendChord(
+          tester,
+          LogicalKeyboardKey.controlLeft,
+          LogicalKeyboardKey.digit1,
+        );
+        await tester.pumpAndSettle();
+        expect(
+          tester
+              .widget<TextField>(find.byKey(const Key('address-bar')))
+              .controller!
+              .text,
+          'one.example',
+        );
+
+        await _sendChord(
+          tester,
+          LogicalKeyboardKey.controlLeft,
+          LogicalKeyboardKey.digit9,
+        );
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('tab-4')), findsOneWidget);
+
+        await _sendChord(
+          tester,
+          LogicalKeyboardKey.controlLeft,
+          LogicalKeyboardKey.tab,
+        );
+        await tester.pumpAndSettle();
+        expect(
+          tester
+              .widget<TextField>(find.byKey(const Key('address-bar')))
+              .controller!
+              .text,
+          'one.example',
+        );
+
+        await _sendChord(
+          tester,
+          LogicalKeyboardKey.controlLeft,
+          LogicalKeyboardKey.tab,
+          shift: true,
+        );
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('tab-4')), findsOneWidget);
+
+        await tester.tap(find.byKey(const Key('tab-1')));
+        await tester.pumpAndSettle();
+        await _focusActiveWebView(tester);
+        final reloads = session.reloads;
+        session.keys.clear();
+        await _sendChord(
+          tester,
+          LogicalKeyboardKey.controlLeft,
+          LogicalKeyboardKey.keyR,
+        );
+        await tester.pump();
+        expect(session.reloads, reloads + 1);
+        expect(session.keys.map((event) => event.key), isNot(contains('R')));
+
+        session.keys.clear();
+        await _sendChord(
+          tester,
+          LogicalKeyboardKey.controlLeft,
+          LogicalKeyboardKey.keyL,
+        );
+        await tester.pumpAndSettle();
+        expect(tester.binding.focusManager.primaryFocus, isNotNull);
+        expect(
+          tester
+              .widget<TextField>(find.byKey(const Key('address-bar')))
+              .focusNode!
+              .hasFocus,
+          isTrue,
+        );
+        expect(session.keys.map((event) => event.key), isNot(contains('L')));
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+        view.reset();
+      }
+    },
+  );
+}
+
+Future<void> _sendChord(
+  WidgetTester tester,
+  LogicalKeyboardKey modifier,
+  LogicalKeyboardKey key, {
+  bool shift = false,
+}) async {
+  await tester.sendKeyDownEvent(modifier);
+  if (shift) {
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+  }
+  await tester.sendKeyEvent(key);
+  if (shift) {
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+  }
+  await tester.sendKeyUpEvent(modifier);
+}
+
+Future<void> _focusActiveWebView(WidgetTester tester) async {
+  var focused = false;
+  void visit(Element element) {
+    final widget = element.widget;
+    if (widget is Offstage && widget.offstage) {
+      return;
+    }
+    if (widget is Focus && widget.focusNode?.debugLabel == 'morph-webview') {
+      widget.focusNode!.requestFocus();
+      focused = true;
+      return;
+    }
+    element.visitChildren(visit);
+  }
+
+  tester.element(find.byType(MorphShell)).visitChildren(visit);
+  await tester.pump();
+  expect(focused, isTrue, reason: 'active web view was not focusable');
 }
 
 Future<void> _addNamedProfile(WidgetTester tester, String name) async {
