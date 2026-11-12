@@ -230,6 +230,41 @@ Future<void> _enterAndSubmitUrl(WidgetTester tester, String url) async {
   }
 }
 
+/// Stands in for a native platform view (Android WebView). Each mount is a new
+/// native view, so a dispose here means the page would be lost.
+class _NativeViewProbe extends StatefulWidget {
+  const _NativeViewProbe();
+
+  static int mounts = 0;
+  static int disposals = 0;
+
+  static void reset() {
+    mounts = 0;
+    disposals = 0;
+  }
+
+  @override
+  State<_NativeViewProbe> createState() => _NativeViewProbeState();
+}
+
+class _NativeViewProbeState extends State<_NativeViewProbe> {
+  @override
+  void initState() {
+    super.initState();
+    _NativeViewProbe.mounts++;
+  }
+
+  @override
+  void dispose() {
+    _NativeViewProbe.disposals++;
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      const ColoredBox(key: Key('native-view-probe'), color: Color(0xFF123456));
+}
+
 void main() {
   late FakeMorphWebViewPlatform fakeWebView;
 
@@ -639,6 +674,103 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.byType(MorphTabCard), findsOneWidget);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('phone tab grid keeps each tab platform web view alive', (
+    tester,
+  ) async {
+    final view = tester.view;
+    view.physicalSize = const Size(412, 915);
+    view.devicePixelRatio = 1.0;
+    addTearDown(view.reset);
+    _NativeViewProbe.reset();
+    fakeWebView = FakeMorphWebViewPlatform(
+      renderPath: const MorphRenderPathInfo(
+        path: 'android-webview',
+        reason: 'fake',
+      ),
+      platformView: const _NativeViewProbe(),
+    );
+    MorphWebViewPlatform.instance = fakeWebView;
+
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      await tester.pumpWidget(
+        MorphApp(
+          api: FakeMorphApi(),
+          home: '/tmp/morph-does-not-exist',
+          subscribeToTicks: false,
+          loadPageBridgeAsset: false,
+        ),
+      );
+      await _pumpUntilIdentity(tester);
+
+      await _enterAndSubmitUrl(tester, 'one.example');
+      await _pumpUntilWebViewAttached(tester, fakeWebView);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('native-view-probe')), findsOneWidget);
+      expect(_NativeViewProbe.mounts, 1);
+      final created = fakeWebView.loadedUrls.length;
+      final firstSession = fakeWebView.lastSession;
+      final state = tester.state<MorphShellState>(find.byType(MorphShell));
+
+      // Open the grid and tap the same card: the page must not be torn down.
+      await tester.tap(find.byKey(const Key('tab-count')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('tab-switcher')), findsOneWidget);
+      await tester.tap(find.byType(MorphTabCard).first);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('tab-switcher')), findsNothing);
+      expect(find.byKey(const Key('native-view-probe')), findsOneWidget);
+      expect(_NativeViewProbe.disposals, 0);
+      expect(_NativeViewProbe.mounts, 1);
+      expect(fakeWebView.loadedUrls.length, created);
+      expect(fakeWebView.lastSession, same(firstSession));
+      expect(state.navigation.url, contains('one.example'));
+
+      // New tab from the grid's "+", then back to the first tab via the grid.
+      await tester.tap(find.byKey(const Key('tab-count')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('tab-switcher-new')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('tab-switcher')), findsNothing);
+      await _enterAndSubmitUrl(tester, 'two.example');
+      for (var i = 0; i < 10 && _NativeViewProbe.mounts < 2; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)),
+        );
+        await tester.pump();
+      }
+      expect(_NativeViewProbe.mounts, 2);
+      expect(state.navigation.url, contains('two.example'));
+
+      await tester.tap(find.byKey(const Key('tab-count')));
+      await tester.pumpAndSettle();
+      expect(find.byType(MorphTabCard), findsNWidgets(2));
+      await tester.tap(find.byType(MorphTabCard).first);
+      await tester.pumpAndSettle();
+      expect(state.navigation.url, contains('one.example'));
+
+      await tester.tap(find.byKey(const Key('tab-count')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byType(MorphTabCard).last);
+      await tester.pumpAndSettle();
+      expect(state.navigation.url, contains('two.example'));
+
+      // Android back also closes the grid without dropping the page.
+      await tester.tap(find.byKey(const Key('tab-count')));
+      await tester.pumpAndSettle();
+      final handled = await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(handled, isTrue);
+      expect(find.byKey(const Key('tab-switcher')), findsNothing);
+
+      expect(_NativeViewProbe.disposals, 0);
+      expect(_NativeViewProbe.mounts, 2);
+      expect(fakeWebView.loadedUrls.length, created + 1);
     } finally {
       debugDefaultTargetPlatformOverride = null;
     }
