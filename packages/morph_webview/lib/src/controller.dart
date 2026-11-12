@@ -176,7 +176,7 @@ class MorphWebViewController {
   }
 
   /// Reloads a tab whose renderer crashed, was killed or hung: ends a hung
-  /// renderer first, then brings up a new one on the last URL. Concurrent
+  /// renderer first, then brings the page back in a new one. Concurrent
   /// calls share one recovery.
   Future<void> recoverFromFault() {
     final running = _recovering;
@@ -201,12 +201,8 @@ class MorphWebViewController {
     if (fault == MorphRendererFault.unresponsive) {
       await session.terminateRenderer();
     }
-    final url = _navigation.url.isNotEmpty ? _navigation.url : initialUrl;
     rendererFault.value = null;
     await session.recoverRenderer();
-    if (identical(_session, session) && url.isNotEmpty) {
-      await session.loadUrl(url);
-    }
   }
 
   /// Makes sure the visible surface is painting the page, and recovers it

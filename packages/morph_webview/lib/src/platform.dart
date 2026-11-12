@@ -102,9 +102,8 @@ abstract class MorphWebViewSession {
   /// Ends a hung renderer so the tab can be reloaded.
   Future<void> terminateRenderer() async {}
 
-  /// Brings the view back after its renderer died: a fresh native view where
-  /// the old one is unusable, else a reload. The controller then loads the
-  /// last URL.
+  /// Brings the view back on its last page after its renderer died: a fresh
+  /// native view where the old one is unusable, else a reload.
   Future<void> recoverRenderer() async {
     if (!await rebuildSurface()) {
       await reload();
