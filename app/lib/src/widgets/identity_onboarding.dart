@@ -9,7 +9,7 @@ import 'password_field.dart';
 /// `morph_identity::profile_identity::MIN_PASSWORD_LEN`.
 const morphMinPasswordLength = 8;
 
-enum _Step { welcome, create, import, words }
+enum _Step { welcome, create, import, words, link }
 
 /// First-use onboarding for one profile's Weirdnet identity: create a new one
 /// (and write down its 24 recovery words) or restore one from its words.
@@ -25,6 +25,7 @@ class MorphIdentityOnboarding extends StatefulWidget {
     required this.onImport,
     required this.onDone,
     required this.onSkip,
+    this.linkFromDevice,
   });
 
   final String profileName;
@@ -32,6 +33,10 @@ class MorphIdentityOnboarding extends StatefulWidget {
   final Future<MorphIdentity> Function(String words, String password) onImport;
   final ValueChanged<MorphIdentity> onDone;
   final VoidCallback onSkip;
+
+  /// Builds the "Link from another device" step (QR login); null hides it.
+  /// The built widget calls [onDone] itself when the identity is stored.
+  final WidgetBuilder? linkFromDevice;
 
   @override
   State<MorphIdentityOnboarding> createState() =>
@@ -177,7 +182,10 @@ class _MorphIdentityOnboardingState extends State<MorphIdentityOnboarding> {
       appBar: AppBar(
         title: Text('Identity · ${widget.profileName}'),
         automaticallyImplyLeading: false,
-        leading: _step == _Step.create || _step == _Step.import
+        leading:
+            _step == _Step.create ||
+                _step == _Step.import ||
+                _step == _Step.link
             ? IconButton(
                 tooltip: 'Back',
                 icon: const Icon(Icons.arrow_back),
@@ -192,6 +200,7 @@ class _MorphIdentityOnboardingState extends State<MorphIdentityOnboarding> {
             _Step.welcome => _welcome(context),
             _Step.create || _Step.import => _form(context),
             _Step.words => _wordsStep(context),
+            _Step.link => widget.linkFromDevice!(context),
           },
         ),
       ),
@@ -232,6 +241,15 @@ class _MorphIdentityOnboardingState extends State<MorphIdentityOnboarding> {
           icon: const Icon(Icons.restore),
           label: const Text('Restore from recovery words'),
         ),
+        if (widget.linkFromDevice != null) ...[
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
+            key: const Key('onboarding-link'),
+            onPressed: () => _go(_Step.link),
+            icon: const Icon(Icons.qr_code_2),
+            label: const Text('Link from another device'),
+          ),
+        ],
         const SizedBox(height: 12),
         TextButton(
           key: const Key('onboarding-skip'),

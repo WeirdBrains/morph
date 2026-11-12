@@ -1072,6 +1072,78 @@ void main() {
     }
   });
 
+  testWidgets('desktop links a profile from another device, then adds one', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    final view = tester.view;
+    view.physicalSize = const Size(1280, 1100);
+    view.devicePixelRatio = 1.0;
+    final api = FakeMorphApi()..onboarded = false;
+    try {
+      await tester.pumpWidget(
+        MorphApp(
+          api: api,
+          home: '/tmp/morph-does-not-exist',
+          subscribeToTicks: false,
+          loadPageBridgeAsset: false,
+        ),
+      );
+      await _pumpUntilIdentity(tester);
+      await tester.pumpAndSettle();
+
+      // New device: onboarding shows the code, then the received identity
+      // is sealed under this device's password.
+      await tester.tap(find.byKey(const Key('onboarding-link')));
+      await tester.pump();
+      await tester.pump();
+      expect(find.byKey(const Key('link-qr')), findsOneWidget);
+      expect(api.linkCalls.single, startsWith('start Morph'));
+      api.linkStatus = const MorphLinkStatus(
+        MorphLinkState.paired,
+        sas: '042917',
+      );
+      await tester.pump(const Duration(milliseconds: 600));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('link-match')));
+      await tester.pump();
+      api.linkStatus = const MorphLinkStatus(
+        MorphLinkState.received,
+        sas: '042917',
+      );
+      await tester.pump(const Duration(milliseconds: 600));
+      await tester.pump();
+      await tester.enterText(
+        find.byKey(const Key('link-password')),
+        'long enough',
+      );
+      await tester.enterText(
+        find.byKey(const Key('link-password-confirm')),
+        'long enough',
+      );
+      await tester.tap(find.byKey(const Key('link-finish')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('identity-onboarding')), findsNothing);
+      expect(api.identitiesByProfile['default']!.linked, isTrue);
+
+      // Existing device: Identity, then Add device, opens the pairing panel.
+      await tester.tap(find.byKey(const Key('nav-menu')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('menu-identity')));
+      await tester.pumpAndSettle();
+      expect(find.text('Linked from another device.'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('identity-add-device')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('add-device-panel')), findsOneWidget);
+      // No camera on a desktop: paste only.
+      expect(find.byKey(const Key('add-device-scan')), findsNothing);
+      expect(find.byKey(const Key('add-device-link')), findsOneWidget);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+      view.reset();
+    }
+  });
+
   testWidgets('phone onboards the profile and shows it in the sheet', (
     tester,
   ) async {
