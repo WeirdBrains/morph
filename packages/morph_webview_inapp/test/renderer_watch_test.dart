@@ -48,7 +48,13 @@ void main() {
     expect(watch.renderProcessUnresponsive(), isTrue);
     watch.renderProcessGone(didCrash: false);
     await terminating;
+    await pump();
     expect(watch.gone, isTrue);
+    // The kill it asked for is not reported as a new fault.
+    expect(seen, [
+      MorphRendererFault.unresponsive,
+      MorphRendererFault.unresponsive,
+    ]);
     // Once gone, later reports do not ask to terminate again.
     expect(watch.renderProcessUnresponsive(), isFalse);
   });

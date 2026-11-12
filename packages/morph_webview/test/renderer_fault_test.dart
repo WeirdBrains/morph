@@ -62,8 +62,10 @@ void main() {
     await _pump();
     expect(controller.rendererFault.value, MorphRendererFault.unresponsive);
     await controller.recoverFromFault();
+    await _pump();
     expect(session.rendererTerminations, 1);
     expect(session.rendererRecoveries, 1);
+    // The kill that reload asked for is not shown as a new crash.
     expect(controller.rendererFault.value, isNull);
     await controller.dispose();
   });

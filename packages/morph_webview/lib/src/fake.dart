@@ -324,6 +324,9 @@ class FakeMorphWebViewSession extends MorphWebViewSession {
   @override
   Future<void> terminateRenderer() async {
     rendererTerminations++;
+    // Like a real engine: ending the renderer reports it gone, just after
+    // the call returns.
+    scheduleMicrotask(() => emitRenderer(MorphRendererFault.killed));
   }
 
   @override

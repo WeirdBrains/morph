@@ -49,6 +49,7 @@ class MorphWebViewController {
   /// is affected; [recoverFromFault] brings it back.
   final rendererFault = ValueNotifier<MorphRendererFault?>(null);
   Future<void>? _recovering;
+  bool _terminating = false;
   final _navController = StreamController<MorphNavigationEvent>.broadcast();
   final _pageController = StreamController<String>.broadcast();
   final _cursorController = StreamController<MorphCursorEvent>.broadcast();
@@ -159,6 +160,10 @@ class MorphWebViewController {
   }
 
   void _onRenderer(MorphRendererEvent event) {
+    if (_terminating) {
+      // The renderer is ending because the user chose to reload.
+      return;
+    }
     final fault = event.fault;
     if (fault == null) {
       if (rendererFault.value == MorphRendererFault.unresponsive) {
@@ -199,7 +204,14 @@ class MorphWebViewController {
       return;
     }
     if (fault == MorphRendererFault.unresponsive) {
-      await session.terminateRenderer();
+      _terminating = true;
+      try {
+        await session.terminateRenderer();
+        // Let the termination's own events arrive before listening again.
+        await Future<void>.delayed(Duration.zero);
+      } finally {
+        _terminating = false;
+      }
     }
     rendererFault.value = null;
     await session.recoverRenderer();
