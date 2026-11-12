@@ -7,7 +7,7 @@ import '../frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `resolve_home`
+// These functions are ignored because they are not marked as `pub`: `from`, `resolve_home`
 
 /// Load preferences from the Morph home. A missing file returns defaults.
 Future<SettingsView> loadSettings({String? home}) =>
@@ -20,19 +20,33 @@ Future<SettingsView> setTabPosition({String? home, required String position}) =>
       position: position,
     );
 
+/// Persist whether the left/right tab list is collapsed to favicons.
+Future<SettingsView> setSidebarCollapsed({
+  String? home,
+  required bool collapsed,
+}) => RustLib.instance.api.crateApiSettingsSetSidebarCollapsed(
+  home: home,
+  collapsed: collapsed,
+);
+
 /// Snapshot of `settings.json` for the Flutter shell.
 class SettingsView {
   final String tabPosition;
+  final bool sidebarCollapsed;
 
-  const SettingsView({required this.tabPosition});
+  const SettingsView({
+    required this.tabPosition,
+    required this.sidebarCollapsed,
+  });
 
   @override
-  int get hashCode => tabPosition.hashCode;
+  int get hashCode => tabPosition.hashCode ^ sidebarCollapsed.hashCode;
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       other is SettingsView &&
           runtimeType == other.runtimeType &&
-          tabPosition == other.tabPosition;
+          tabPosition == other.tabPosition &&
+          sidebarCollapsed == other.sidebarCollapsed;
 }

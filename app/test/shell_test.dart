@@ -39,6 +39,7 @@ class FakeMorphApi implements MorphApi {
   }
 
   String tabPosition = 'top';
+  bool sidebarCollapsed = false;
 
   @override
   Future<String> loadTabPosition({String? home}) async => tabPosition;
@@ -46,6 +47,14 @@ class FakeMorphApi implements MorphApi {
   @override
   Future<void> saveTabPosition(String position, {String? home}) async {
     tabPosition = position;
+  }
+
+  @override
+  Future<bool> loadSidebarCollapsed({String? home}) async => sidebarCollapsed;
+
+  @override
+  Future<void> saveSidebarCollapsed(bool collapsed, {String? home}) async {
+    sidebarCollapsed = collapsed;
   }
 }
 

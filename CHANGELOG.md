@@ -35,8 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Left and right use a vertical list (favicon, truncated title, close) that
   can collapse to a 48px favicon rail, with new-tab, expand, and position
   stacked so the rail can always be opened again; bottom tab decorations
-  flip downward so they attach to the content above. The last position is
-  stored in `settings.json` under the Morph home.
+  flip downward so they attach to the content above. The last position and
+  collapsed-rail state are stored in `settings.json` under the Morph home.
 - Desktop window buttons: Windows and Linux draw minimize, maximize, and
   close (close-only on tiling compositors such as Hyprland, Sway, i3, niri,
   and river). Override with `MORPH_WINDOW_BUTTONS=close` or

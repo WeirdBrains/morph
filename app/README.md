@@ -21,6 +21,8 @@ river show only close. Override with `MORPH_WINDOW_BUTTONS=close` or
 on the left of a hidden title bar; the tab strip pads to clear them.
 
 Tab position (top, bottom, left, or right) is stored as `tab_position` in
-`settings.json` under the Morph home. The address and navigation row always
-stays at the top; only the tab strip or list moves. Bottom tabs flip their
-decorations downward so they attach to the content above.
+`settings.json` under the Morph home. Collapsing the left or right tab list
+is stored as `sidebar_collapsed` in the same file (default: expanded). The
+address and navigation row always stays at the top; only the tab strip or
+list moves. Bottom tabs flip their decorations downward so they attach to
+the content above.
