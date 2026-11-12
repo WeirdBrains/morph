@@ -17,7 +17,7 @@ web view is registered on that same path (system WebView platform
 view, address-bar navigation). Each Android profile now has its own
 androidx.webkit WebView profile, verified on the API 37 emulator. Bookmarks, history, find in page,
 settings and Android sharing work on desktop and phone, with bookmarks and history kept per
-profile, and each profile is onboarded to its own Weirdnet identity on first use. DMA-BUF frame-rate measurements and
+profile, and each profile is onboarded to its own Weirdnet identity on first use. A crashed or hung tab now shows its own "page crashed, reload" panel while the shell and other tabs keep running (Linux runs a web process per tab; Android shares one renderer, see ARCHITECTURE.md §2). DMA-BUF frame-rate measurements and
 hidden-text-layer alignment tests are still ahead in M1.
 
 1. Webview _(moved up: everything else plugs into it)_
