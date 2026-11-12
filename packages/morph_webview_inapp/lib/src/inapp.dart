@@ -16,7 +16,7 @@ import 'settings.dart';
 class MorphWebViewInApp extends MorphWebViewPlatform {
   MorphWebViewInApp();
 
-  MorphControlClient? _client;
+  Future<MorphControlClient>? _client;
   StreamSubscription<MorphControlCommand>? _backendSub;
   final _sessions = <int, _InAppSession>{};
   int _nextViewId = 1;
@@ -36,17 +36,22 @@ class MorphWebViewInApp extends MorphWebViewPlatform {
     );
   }
 
-  Future<MorphControlClient> _ensureClient() async {
-    final existing = _client;
-    if (existing != null) {
-      return existing;
+  Future<MorphControlClient> _ensureClient() {
+    // Single-flight: tabs restored together must share one client.
+    return _client ??= _connectClient();
+  }
+
+  Future<MorphControlClient> _connectClient() async {
+    try {
+      final bindings = await MorphWebViewControl.ensureStarted();
+      final client = MorphControlClient(bindings.endpoint);
+      await client.connect();
+      _backendSub ??= bindings.backendEvents.listen(_onBackend);
+      return client;
+    } catch (_) {
+      _client = null;
+      rethrow;
     }
-    final bindings = await MorphWebViewControl.ensureStarted();
-    final client = MorphControlClient(bindings.endpoint);
-    await client.connect();
-    _client = client;
-    _backendSub = bindings.backendEvents.listen(_onBackend);
-    return client;
   }
 
   void _onBackend(MorphControlCommand command) {
@@ -85,13 +90,11 @@ class MorphWebViewInApp extends MorphWebViewPlatform {
   }
 
   Future<void> _forget(int viewId) async {
+    // The control client and backend subscription stay up for the app's
+    // life. Tearing them down when the last tab closed raced the next
+    // create() (profile switches dispose every tab first), and the backend
+    // event stream cannot be listened to twice.
     _sessions.remove(viewId);
-    if (_sessions.isEmpty) {
-      await _backendSub?.cancel();
-      _backendSub = null;
-      await _client?.shutdown();
-      _client = null;
-    }
   }
 }
 
