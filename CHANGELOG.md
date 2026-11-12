@@ -33,10 +33,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Desktop tab chrome can sit on the top, bottom, left, or right of the web
   view. The address and back/forward/reload row always stays at the top.
   Left and right use a vertical list (favicon, truncated title, close) that
-  can collapse to a 48px favicon rail, with new-tab, expand, and position
-  stacked so the rail can always be opened again; bottom tab decorations
-  flip downward so they attach to the content above. The last position and
-  collapsed-rail state are stored in `settings.json` under the Morph home.
+  can collapse to a 48px favicon rail, with new-tab and position trailing
+  the last tab and an expand control that stays visible; bottom tab
+  decorations flip downward so they attach to the content above. The last
+  position and collapsed-rail state are stored in `settings.json` under
+  the Morph home. New-tab and tab-position always follow the last tab
+  (pinned at the end only when the strip overflows) so they never cover
+  tabs or push window buttons off the top-right. Close stays visible in
+  every tab position; minimize and maximize still appear on non-tiling
+  desktops.
 - Linux web views share one persistent WebKit session per Morph profile,
   with cookies stored in SQLite under the Morph home so logins survive
   restarts and tab recreation. `window.open` / new-window requests open a
