@@ -20,8 +20,9 @@ class MorphApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Morph',
-      theme: MorphTheme.dark,
-      lightTheme: MorphTheme.light,
+      debugShowCheckedModeBanner: false,
+      theme: MorphTheme.light,
+      darkTheme: MorphTheme.dark,
       themeMode: ThemeMode.dark,
       home: MorphShell(
         api: api,

@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["crates/morph-core", "crates/morph-identity", "crates/morph-bridge"]
-default-members = ["crates/morph-core", "crates/morph-identity", "crates/morph-bridge"]
+members = ["crates/morph-core", "crates/morph-identity", "crates/morph-bridge", "crates/morph-webview-control"]
+default-members = ["crates/morph-core", "crates/morph-identity", "crates/morph-bridge", "crates/morph-webview-control"]
 
 [workspace.package]
 version = "0.1.0"
@@ -15,6 +15,7 @@ homepage = "https://github.com/WeirdBrains/morph"
 [workspace.dependencies]
 morph-core = { path = "crates/morph-core" }
 morph-identity = { path = "crates/morph-identity" }
+morph-webview-control = { path = "crates/morph-webview-control" }
 weirdnet-keys = "=0.1.0"
 weirdnet-net = "=0.1.0"
 thiserror = "2"

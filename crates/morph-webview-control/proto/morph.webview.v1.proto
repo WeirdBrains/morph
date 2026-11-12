@@ -1,0 +1,113 @@
+syntax = "proto3";
+
+package morph.webview.v1;
+
+option java_multiple_files = true;
+option java_package = "org.weirdbrains.morph.webview.v1";
+
+// In-process control channel between Dart (or any client) and the web-view backend.
+// One bidirectional stream keeps pointer, key, and IME events in order.
+service WebViewControl {
+  rpc Session(stream ClientMessage) returns (stream ServerMessage);
+}
+
+message ClientMessage {
+  uint64 seq = 1;
+  int64 view_id = 2;
+  oneof body {
+    Navigate navigate = 3;
+    GoBack go_back = 4;
+    GoForward go_forward = 5;
+    Reload reload = 6;
+    PointerEvent pointer = 7;
+    KeyEvent key = 8;
+    ImeEvent ime = 9;
+    EvaluateJavaScript evaluate_javascript = 10;
+    PageMessage page_message = 11;
+  }
+}
+
+message ServerMessage {
+  uint64 seq = 1;
+  int64 view_id = 2;
+  oneof body {
+    NavigationEvent navigation = 3;
+    PageMessage page_message = 4;
+    EvaluateJavaScriptResult evaluate_javascript_result = 5;
+    Ack ack = 6;
+    Error error = 7;
+  }
+}
+
+message Navigate {
+  string url = 1;
+}
+
+message GoBack {}
+
+message GoForward {}
+
+message Reload {}
+
+message PointerEvent {
+  // down, move, up, cancel, scroll
+  string phase = 1;
+  double x = 2;
+  double y = 3;
+  int32 button = 4;
+  double scroll_delta_x = 5;
+  double scroll_delta_y = 6;
+}
+
+message KeyEvent {
+  // down or up
+  string phase = 1;
+  string key = 2;
+  uint32 hardware_keycode = 3;
+  bool ctrl = 4;
+  bool alt = 5;
+  bool shift = 6;
+  bool meta = 7;
+}
+
+message ImeEvent {
+  // compose_start, compose_update, compose_end, commit
+  string phase = 1;
+  string text = 2;
+}
+
+message EvaluateJavaScript {
+  uint64 request_id = 1;
+  string script = 2;
+}
+
+message EvaluateJavaScriptResult {
+  uint64 request_id = 1;
+  string result = 2;
+  string error = 3;
+}
+
+message PageMessage {
+  // JSON envelope from or to morph-bridge.js.
+  string json = 1;
+  // When true, the control layer already ran the Rust hook and delivered any reply to the page.
+  bool handled = 2;
+}
+
+message NavigationEvent {
+  string url = 1;
+  string title = 2;
+  bool can_go_back = 3;
+  bool can_go_forward = 4;
+  bool is_loading = 5;
+  double progress = 6;
+}
+
+message Ack {
+  uint64 client_seq = 1;
+}
+
+message Error {
+  uint64 client_seq = 1;
+  string message = 2;
+}

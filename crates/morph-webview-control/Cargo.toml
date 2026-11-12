@@ -1,0 +1,32 @@
+[package]
+name = "morph-webview-control"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "In-process gRPC control layer for Morph web views."
+publish = false
+
+[lib]
+name = "morph_webview_control"
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+morph-core = { workspace = true }
+thiserror = { workspace = true }
+prost = "0.13"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "fs"] }
+tokio-stream = { version = "0.1", features = ["net"] }
+tonic = "0.13"
+tower = "0.5"
+hyper-util = { version = "0.1", features = ["tokio"] }
+
+[build-dependencies]
+protoc-bin-vendored = "3"
+tonic-build = "0.13"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
