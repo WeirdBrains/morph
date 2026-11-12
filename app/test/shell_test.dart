@@ -769,6 +769,67 @@ void main() {
     }
   });
 
+  testWidgets('a hidden tab drops its buffering and gets it back on switch', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    final view = tester.view;
+    view.physicalSize = const Size(1280, 800);
+    view.devicePixelRatio = 1.0;
+    addTearDown(view.reset);
+    try {
+      await tester.pumpWidget(
+        MorphApp(
+          api: FakeMorphApi(),
+          home: '/tmp/morph-does-not-exist',
+          subscribeToTicks: false,
+          loadPageBridgeAsset: false,
+        ),
+      );
+      await _pumpUntilIdentity(tester);
+      await tester.enterText(
+        find.byKey(const Key('address-bar')),
+        'one.example',
+      );
+      await tester.tap(find.byKey(const Key('address-go')));
+      await tester.pump();
+      await _pumpUntilWebViewAttached(tester, fakeWebView);
+      final first = fakeWebView.lastSession!;
+
+      await tester.tap(find.byKey(const Key('tab-new')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('address-bar')),
+        'two.example',
+      );
+      await tester.tap(find.byKey(const Key('address-go')));
+      await tester.pump();
+      await tester.pumpAndSettle();
+      final second = fakeWebView.lastSession!;
+      expect(identical(first, second), isFalse);
+
+      // Tab 1 is hidden, but not for long enough yet.
+      await tester.pump(const Duration(seconds: 10));
+      expect(first.bufferingChanges, isEmpty);
+      await tester.pump(MorphWebViewController.defaultIdleAfter);
+      expect(first.bufferingChanges, [MorphBuffering.idle]);
+      expect(second.bufferingChanges, isEmpty, reason: 'the visible tab');
+
+      await tester.tap(find.byKey(const Key('tab-1')));
+      await tester.pump();
+      expect(first.bufferingChanges, [
+        MorphBuffering.idle,
+        MorphBuffering.full,
+      ]);
+      await tester.pumpAndSettle();
+      await tester.pump(MorphWebViewController.defaultIdleAfter);
+      expect(second.bufferingChanges, [MorphBuffering.idle]);
+      expect(first.bufferingChanges, hasLength(2));
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
   testWidgets('a crashed tab shows its own crash state and reloads', (
     tester,
   ) async {
