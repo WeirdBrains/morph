@@ -168,6 +168,11 @@ backend per platform.
     `setDataDirectorySuffix` is not a fallback: it is once per process. On a
     WebView without `MULTI_PROFILE`, non-default profiles show an
     update-your-WebView page and never load sites, rather than share storage.
+- _(new 2026-11-12)_ **Android versionCode grows with every commit.** It was
+  pubspec's `+1`, while an earlier split-ABI build had shipped 2001, so newer
+  APKs were refused as downgrades. `build.gradle.kts` now uses
+  10000 + `git rev-list --count HEAD` unless `--build-number` is given. All
+  APKs stay signed with the same debug key until a release key exists.
 - _(new 2026-11-12)_ **Control socket on Android.** The in-process web view
   control server listens on a Unix socket under `XDG_RUNTIME_DIR`, `TMPDIR`
   or `/tmp`. Android apps get neither variable and cannot write `/tmp`, so

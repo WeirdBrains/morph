@@ -4,6 +4,19 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// Each build must install over the one before it: Android refuses an APK
+// whose versionCode is lower than the installed one, and earlier split-ABI
+// builds shipped 2001. Unless --build-number sets one, the code is 10000 plus
+// the commit count, which only grows on main (history is never rewritten).
+val commitCount: Int? = try {
+    providers.exec {
+        commandLine("git", "rev-list", "--count", "HEAD")
+        isIgnoreExitValue = true
+    }.standardOutput.asText.get().trim().toIntOrNull()
+} catch (e: Exception) {
+    null
+}
+
 android {
     namespace = "org.weirdbrains.morph"
     compileSdk = flutter.compileSdkVersion
@@ -25,7 +38,7 @@ android {
         // is added automatically by Flutter. (https://developer.android.com/studio/build/configure-apk-splits#configure-APK-versions)
         // You can force using the value of versionCode by specifying the `-P force-version-code-ignoring-abi=true`
         // flag during build.
-        versionCode = flutter.versionCode
+        versionCode = flutter.versionCode.let { if (it > 1) it else 10000 + (commitCount ?: 0) }
         versionName = flutter.versionName
     }
 
