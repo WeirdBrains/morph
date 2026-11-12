@@ -36,6 +36,16 @@ class FakeMorphApi implements MorphApi {
   Future<String> handlePageMessage({required String json}) async {
     return '{"id":"1","type":"pong"}';
   }
+
+  String tabPosition = 'top';
+
+  @override
+  Future<String> loadTabPosition({String? home}) async => tabPosition;
+
+  @override
+  Future<void> saveTabPosition(String position, {String? home}) async {
+    tabPosition = position;
+  }
 }
 
 /// Wait until identity info is on screen. Do not wait for `ready`: that flag
@@ -83,7 +93,12 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         theme: MorphTheme.dark,
-        home: MorphShell(api: api, home: missingHome, subscribeToTicks: false),
+        home: MorphShell(
+          api: api,
+          home: missingHome,
+          subscribeToTicks: false,
+          showDebugPanel: true,
+        ),
       ),
     );
     await _pumpUntilIdentity(tester);
@@ -160,7 +175,9 @@ void main() {
       await _pumpUntilIdentity(tester);
 
       expect(find.byKey(const Key('window-close')), findsNothing);
-      expect(find.byKey(const Key('address-go')), findsOneWidget);
+      expect(find.byKey(const Key('address-go')), findsNothing);
+      expect(find.byKey(const Key('nav-forward')), findsNothing);
+      expect(find.byKey(const Key('debug-panel')), findsNothing);
       expect(find.byKey(const Key('address-bar')), findsOneWidget);
 
       await tester.enterText(
@@ -180,24 +197,79 @@ void main() {
   });
 
   testWidgets('Go button submits the address bar', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
     const missingHome = '/tmp/morph-does-not-exist';
-    await tester.pumpWidget(
-      MorphApp(
-        api: FakeMorphApi(),
-        home: missingHome,
-        subscribeToTicks: false,
-        loadPageBridgeAsset: false,
-      ),
-    );
-    await _pumpUntilIdentity(tester);
+    try {
+      await tester.pumpWidget(
+        MorphApp(
+          api: FakeMorphApi(),
+          home: missingHome,
+          subscribeToTicks: false,
+          loadPageBridgeAsset: false,
+        ),
+      );
+      await _pumpUntilIdentity(tester);
 
-    await tester.enterText(find.byKey(const Key('address-bar')), 'example.org');
-    await tester.tap(find.byKey(const Key('address-go')));
-    await tester.pump();
-    await _pumpUntilWebViewAttached(tester, fakeWebView);
+      await tester.enterText(
+        find.byKey(const Key('address-bar')),
+        'example.org',
+      );
+      await tester.tap(find.byKey(const Key('address-go')));
+      await tester.pump();
+      await _pumpUntilWebViewAttached(tester, fakeWebView);
 
-    expect(fakeWebView.lastSession, isNotNull);
-    expect(fakeWebView.lastSession!.history, contains('https://example.org'));
-    expect(find.byKey(const Key('start-page')), findsNothing);
+      expect(fakeWebView.lastSession, isNotNull);
+      expect(fakeWebView.lastSession!.history, contains('https://example.org'));
+      expect(find.byKey(const Key('start-page')), findsNothing);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
   });
+
+  testWidgets(
+    'phone chrome hides debug chrome and keeps a wide address field',
+    (tester) async {
+      final view = tester.view;
+      view.physicalSize = const Size(412, 915);
+      view.devicePixelRatio = 1.0;
+      view.padding = const FakeViewPadding(top: 44, bottom: 34);
+      view.viewPadding = const FakeViewPadding(top: 44, bottom: 34);
+      view.viewInsets = FakeViewPadding.zero;
+      addTearDown(view.reset);
+
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      try {
+        const missingHome = '/tmp/morph-does-not-exist';
+        await tester.pumpWidget(
+          MorphApp(
+            api: FakeMorphApi(),
+            home: missingHome,
+            subscribeToTicks: false,
+            loadPageBridgeAsset: false,
+          ),
+        );
+        await _pumpUntilIdentity(tester);
+
+        expect(find.byKey(const Key('debug-panel')), findsNothing);
+        expect(find.byKey(const Key('address-go')), findsNothing);
+        expect(find.byKey(const Key('nav-forward')), findsNothing);
+        expect(find.byKey(const Key('nav-back')), findsOneWidget);
+        expect(find.text('Ping page bridge'), findsNothing);
+        expect(find.textContaining('Error: no home directory'), findsNothing);
+
+        final address = tester.getRect(find.byKey(const Key('address-bar')));
+        expect(address.top, greaterThanOrEqualTo(44));
+        expect(address.width, greaterThan(200));
+
+        await tester.longPress(find.byKey(const Key('debug-toggle')));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('debug-panel')), findsOneWidget);
+        expect(find.text('Ping page bridge'), findsOneWidget);
+        final panel = tester.getRect(find.byKey(const Key('debug-panel')));
+        expect(panel.bottom, lessThanOrEqualTo(915 - 34 + 0.5));
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    },
+  );
 }

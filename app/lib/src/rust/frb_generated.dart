@@ -8,6 +8,7 @@ import 'api/events.dart';
 import 'api/identity.dart';
 import 'api/info.dart';
 import 'api/page.dart';
+import 'api/settings.dart';
 
 import 'dart:async';
 import 'dart:convert';
@@ -71,7 +72,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.13.0';
 
   @override
-  int get rustContentHash => -558630746;
+  int get rustContentHash => -404524694;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -115,7 +116,14 @@ abstract class RustLibApi extends BaseApi {
 
   Future<IdentityStatusView> crateApiIdentityIdentityDirInfo({String? home});
 
+  Future<SettingsView> crateApiSettingsLoadSettings({String? home});
+
   Future<EphemeralUser> crateApiIdentityNewEphemeralUser();
+
+  Future<SettingsView> crateApiSettingsSetTabPosition({
+    String? home,
+    required String position,
+  });
 
   Future<String> crateApiControlStartWebviewControl();
 
@@ -413,6 +421,34 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "identity_dir_info", argNames: ["home"]);
 
   @override
+  Future<SettingsView> crateApiSettingsLoadSettings({String? home}) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_opt_String(home, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 9,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_settings_view,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiSettingsLoadSettingsConstMeta,
+        argValues: [home],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSettingsLoadSettingsConstMeta =>
+      const TaskConstMeta(debugName: "load_settings", argNames: ["home"]);
+
+  @override
   Future<EphemeralUser> crateApiIdentityNewEphemeralUser() {
     return handler.executeNormal(
       NormalTask(
@@ -421,7 +457,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 9,
+            funcId: 10,
             port: port_,
           );
         },
@@ -440,6 +476,41 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "new_ephemeral_user", argNames: []);
 
   @override
+  Future<SettingsView> crateApiSettingsSetTabPosition({
+    String? home,
+    required String position,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_opt_String(home, serializer);
+          sse_encode_String(position, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 11,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_settings_view,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiSettingsSetTabPositionConstMeta,
+        argValues: [home, position],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSettingsSetTabPositionConstMeta =>
+      const TaskConstMeta(
+        debugName: "set_tab_position",
+        argNames: ["home", "position"],
+      );
+
+  @override
   Future<String> crateApiControlStartWebviewControl() {
     return handler.executeNormal(
       NormalTask(
@@ -448,7 +519,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 10,
+            funcId: 12,
             port: port_,
           );
         },
@@ -475,7 +546,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 11,
+            funcId: 13,
             port: port_,
           );
         },
@@ -505,7 +576,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 12,
+            funcId: 14,
             port: port_,
           );
         },
@@ -635,6 +706,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   String? dco_decode_opt_String(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_String(raw);
+  }
+
+  @protected
+  SettingsView dco_decode_settings_view(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 1)
+      throw Exception('unexpected arr length: expect 1 but see ${arr.length}');
+    return SettingsView(tabPosition: dco_decode_String(arr[0]));
   }
 
   @protected
@@ -803,6 +883,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  SettingsView sse_decode_settings_view(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_tabPosition = sse_decode_String(deserializer);
+    return SettingsView(tabPosition: var_tabPosition);
+  }
+
+  @protected
   int sse_decode_u_32(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getUint32();
@@ -960,6 +1047,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     if (self != null) {
       sse_encode_String(self, serializer);
     }
+  }
+
+  @protected
+  void sse_encode_settings_view(SettingsView self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.tabPosition, serializer);
   }
 
   @protected

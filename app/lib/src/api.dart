@@ -6,6 +6,8 @@ abstract class MorphApi {
   Stream<int> eventTicks();
   Future<EphemeralUser> newEphemeralUser();
   Future<String> handlePageMessage({required String json});
+  Future<String> loadTabPosition({String? home});
+  Future<void> saveTabPosition(String position, {String? home});
 }
 
 class IdentityStatusView {
