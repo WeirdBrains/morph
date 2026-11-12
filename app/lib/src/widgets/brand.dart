@@ -42,22 +42,28 @@ class MorphWordmark extends StatelessWidget {
   }
 }
 
-/// A thin cyan / magenta scanline used under the toolbar.
+/// A thin cyan / magenta scanline used under the toolbar. With [accents]
+/// off only the plain divider line is drawn (side tab positions, where the
+/// slices would read as stray active-tab marks).
 class MorphGlitchRule extends StatelessWidget {
-  const MorphGlitchRule({super.key});
+  const MorphGlitchRule({super.key, this.accents = true});
+
+  final bool accents;
 
   @override
   Widget build(BuildContext context) {
-    return const SizedBox(
+    return SizedBox(
       height: 3,
       width: double.infinity,
-      child: CustomPaint(painter: _GlitchRulePainter()),
+      child: CustomPaint(painter: _GlitchRulePainter(accents: accents)),
     );
   }
 }
 
 class _GlitchRulePainter extends CustomPainter {
-  const _GlitchRulePainter();
+  const _GlitchRulePainter({required this.accents});
+
+  final bool accents;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -66,6 +72,9 @@ class _GlitchRulePainter extends CustomPainter {
       ..color = MorphColors.borderDark.withValues(alpha: 0.6)
       ..strokeWidth = 1;
     canvas.drawLine(Offset(0, y), Offset(size.width, y), base);
+    if (!accents) {
+      return;
+    }
 
     final cyan = Paint()
       ..color = MorphColors.cyan
@@ -93,5 +102,6 @@ class _GlitchRulePainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(covariant _GlitchRulePainter oldDelegate) =>
+      oldDelegate.accents != accents;
 }

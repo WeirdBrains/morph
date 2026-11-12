@@ -127,7 +127,12 @@ class MorphDesktopChrome extends StatelessWidget {
             onDebugLongPress: onDebugLongPress,
           ),
         navigation,
-        const MorphGlitchRule(),
+        MorphGlitchRule(
+          key: const Key('glitch-rule'),
+          accents:
+              position == MorphTabPosition.top ||
+              position == MorphTabPosition.bottom,
+        ),
         Expanded(
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
