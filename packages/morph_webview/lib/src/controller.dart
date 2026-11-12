@@ -222,9 +222,10 @@ class MorphWebViewController {
   /// when it is not: first a repaint nudge, then (if the page has content but
   /// the frame is still flat) a fresh native view on the same URL.
   ///
-  /// Concurrent calls share one check. Call it after anything that can leave
-  /// a stale surface: the keyboard or a sheet closing, the app resuming,
-  /// returning from the tab grid, a tab or profile switch, a finished load.
+  /// Calls made while a check runs share one follow-up check. Call it after
+  /// anything that can leave a stale surface: the keyboard or a sheet
+  /// closing, the app resuming, returning from the tab grid, a tab or profile
+  /// switch, a finished load.
   Future<MorphSurfaceVerdict> ensureSurfaceHealthy() {
     final running = _healing;
     if (running == null) {
