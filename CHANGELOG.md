@@ -71,6 +71,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Switching restores that profile's saved tabs and recreates its web
   views. Open-in-new-window is not available yet (window_manager 0.6
   is single-window).
+- Shell shortcuts (Ctrl/Cmd+T, W, Tab, Shift+Tab, L, R, and 1–9) are
+  handled by the shell before they are forwarded to a focused web view,
+  so a page cannot swallow new-tab, close-tab, or the other chrome keys.
 - Linux web views present through a Flutter GL texture by default: frames
   come from the already-painted offscreen surface (BGRA upload, no CPU
   swizzle) at the display refresh rate, with pointer-move and scroll
