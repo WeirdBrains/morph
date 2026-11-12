@@ -1,0 +1,48 @@
+/* Morph colour tokens. Dark is the default. Set data-theme="light" on
+   <html> (or another ancestor) to switch. Neon cyan and magenta are
+   brand fills; use --morph-primary / --morph-secondary for text. */
+
+:root {
+  --morph-charcoal: #0d0d12;
+  --morph-white: #ffffff;
+  --morph-cyan: #00e5ff;
+  --morph-magenta: #ff2bd6;
+
+  --morph-background: #0d0d12;
+  --morph-surface: #16161d;
+  --morph-surface-variant: #1e1e28;
+  --morph-text-primary: #f5f6fa;
+  --morph-text-secondary: #a8aab8;
+  --morph-primary: #00e5ff;
+  --morph-on-primary: #0d0d12;
+  --morph-secondary: #ff2bd6;
+  --morph-on-secondary: #0d0d12;
+  --morph-success: #3dff9a;
+  --morph-warning: #ffc14d;
+  --morph-error: #ff4d6a;
+  --morph-info: #6b9bff;
+  --morph-on-status: #0d0d12;
+  --morph-border: #707284;
+  --morph-selection: #0a434d;
+  --morph-focus: #00e5ff;
+}
+
+[data-theme="light"] {
+  --morph-background: #f4f5f8;
+  --morph-surface: #ffffff;
+  --morph-surface-variant: #e8e9f0;
+  --morph-text-primary: #0d0d12;
+  --morph-text-secondary: #4a4c5a;
+  --morph-primary: #006e8a;
+  --morph-on-primary: #ffffff;
+  --morph-secondary: #b0008a;
+  --morph-on-secondary: #ffffff;
+  --morph-success: #00743f;
+  --morph-warning: #8a5a00;
+  --morph-error: #c4002a;
+  --morph-info: #1a4ec8;
+  --morph-on-status: #ffffff;
+  --morph-border: #7a7c8a;
+  --morph-selection: #bff8ff;
+  --morph-focus: #006e8a;
+}

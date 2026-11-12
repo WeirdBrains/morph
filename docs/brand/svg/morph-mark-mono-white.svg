@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Morph monochrome mark. Same geometry as the colour mark, including
+  the displaced glitch slices, all in currentColor. Default colour is
+  charcoal so the file works as a standalone dark-on-light mark.
+  Set color="#0D0D12" (or any other fill) on the root or a parent to
+  invert it.
+-->
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 1024 1024"
+     width="1024"
+     height="1024"
+     fill="none"
+     color="#FFFFFF"
+     role="img"
+     aria-label="Morph">
+  <path fill="currentColor" fill-rule="evenodd"
+        d="M192 192h192L512 448 640 192h192v640H640V448H384v384H192Z"/>
+  <g id="glitch">
+    <rect fill="currentColor" x="128" y="320" width="224" height="64"/>
+    <rect fill="currentColor" x="288" y="320" width="112" height="64"/>
+    <rect fill="currentColor" x="656" y="320" width="112" height="64"/>
+    <rect fill="currentColor" x="672" y="320" width="224" height="64"/>
+    <rect fill="currentColor" x="96"  y="400" width="160" height="32"/>
+    <rect fill="currentColor" x="320" y="400" width="96"  height="32"/>
+    <rect fill="currentColor" x="624" y="400" width="80"  height="32"/>
+    <rect fill="currentColor" x="768" y="400" width="144" height="32"/>
+    <rect fill="currentColor" x="64"  y="448" width="288" height="64"/>
+    <rect fill="currentColor" x="304" y="448" width="128" height="64"/>
+    <rect fill="currentColor" x="592" y="448" width="128" height="64"/>
+    <rect fill="currentColor" x="672" y="448" width="288" height="64"/>
+    <rect fill="currentColor" x="160" y="544" width="176" height="32"/>
+    <rect fill="currentColor" x="256" y="544" width="80"  height="32"/>
+    <rect fill="currentColor" x="704" y="544" width="64"  height="32"/>
+    <rect fill="currentColor" x="800" y="544" width="112" height="32"/>
+    <rect fill="currentColor" x="80"  y="608" width="272" height="64"/>
+    <rect fill="currentColor" x="336" y="608" width="80"  height="64"/>
+    <rect fill="currentColor" x="608" y="608" width="80"  height="64"/>
+    <rect fill="currentColor" x="672" y="608" width="272" height="64"/>
+    <rect fill="currentColor" x="128" y="688" width="192" height="32"/>
+    <rect fill="currentColor" x="352" y="688" width="64"  height="32"/>
+    <rect fill="currentColor" x="640" y="688" width="96"  height="32"/>
+    <rect fill="currentColor" x="736" y="688" width="160" height="32"/>
+  </g>
+</svg>

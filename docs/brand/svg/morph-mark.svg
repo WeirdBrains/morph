@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Morph mark (transparent). Glitch direction.
+
+  1024 viewBox, snapped to a 32-unit grid so the white M stays
+  readable at 16px (64 units per device pixel).
+
+  M: heavy block letter, (192,192)–(832,832), stem 192,
+  triangular counter meeting at (512,448).
+  Cyan (#00E5FF) shifts left; magenta (#FF2BD6) shifts right.
+  The core M and the centre of the V stay white.
+-->
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 1024 1024"
+     width="1024"
+     height="1024"
+     fill="none"
+     role="img"
+     aria-label="Morph">
+  <!-- White core M: two stems + shoulders into a sharp crotch. -->
+  <path fill="#FFFFFF" fill-rule="evenodd"
+        d="M192 192h192L512 448 640 192h192v640H640V448H384v384H192Z"/>
+
+  <!-- Glitch slices. All edges on the 32-unit grid. -->
+  <g id="glitch">
+    <!-- Row 1, y=320 h=64: modest chromatic split -->
+    <rect fill="#00E5FF" x="128" y="320" width="224" height="64"/>
+    <rect fill="#FF2BD6" x="288" y="320" width="112" height="64"/>
+    <rect fill="#00E5FF" x="656" y="320" width="112" height="64"/>
+    <rect fill="#FF2BD6" x="672" y="320" width="224" height="64"/>
+
+    <!-- Row 2, y=400 h=32: staggered short ticks -->
+    <rect fill="#00E5FF" x="96"  y="400" width="160" height="32"/>
+    <rect fill="#FF2BD6" x="320" y="400" width="96"  height="32"/>
+    <rect fill="#00E5FF" x="624" y="400" width="80"  height="32"/>
+    <rect fill="#FF2BD6" x="768" y="400" width="144" height="32"/>
+
+    <!-- Row 3, y=448 h=64: stronger split at the crotch; centre stays white -->
+    <rect fill="#00E5FF" x="64"  y="448" width="288" height="64"/>
+    <rect fill="#FF2BD6" x="304" y="448" width="128" height="64"/>
+    <rect fill="#00E5FF" x="592" y="448" width="128" height="64"/>
+    <rect fill="#FF2BD6" x="672" y="448" width="288" height="64"/>
+
+    <!-- Row 4, y=544 h=32: light mid-lower ticks -->
+    <rect fill="#00E5FF" x="160" y="544" width="176" height="32"/>
+    <rect fill="#FF2BD6" x="256" y="544" width="80"  height="32"/>
+    <rect fill="#00E5FF" x="704" y="544" width="64"  height="32"/>
+    <rect fill="#FF2BD6" x="800" y="544" width="112" height="32"/>
+
+    <!-- Row 5, y=608 h=64: long lower split -->
+    <rect fill="#00E5FF" x="80"  y="608" width="272" height="64"/>
+    <rect fill="#FF2BD6" x="336" y="608" width="80"  height="64"/>
+    <rect fill="#00E5FF" x="608" y="608" width="80"  height="64"/>
+    <rect fill="#FF2BD6" x="672" y="608" width="272" height="64"/>
+
+    <!-- Row 6, y=688 h=32: modest closing ticks; bottom of the M stays clean -->
+    <rect fill="#00E5FF" x="128" y="688" width="192" height="32"/>
+    <rect fill="#FF2BD6" x="352" y="688" width="64"  height="32"/>
+    <rect fill="#00E5FF" x="640" y="688" width="96"  height="32"/>
+    <rect fill="#FF2BD6" x="736" y="688" width="160" height="32"/>
+  </g>
+</svg>
