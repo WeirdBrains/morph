@@ -1657,3 +1657,24 @@ fixture (before: same-tab, message lost; after: opener got the message, the
 popup closed) and with linkedin.com → "Continue with Google", which now
 opens accounts.google.com in a popup over LinkedIn.
 
+
+### 2026-11-12 — Android share target and "Search in Morph"
+
+Morph accepts `ACTION_SEND` and `ACTION_SEND_MULTIPLE` with `text/plain` (the
+share sheet) and `ACTION_PROCESS_TEXT` through an activity-alias labelled
+"Search in Morph" (the text-selection menu). `IncomingLinks.kt` pulls out
+the text (`EXTRA_TEXT`, joined lines for SEND_MULTIPLE, `EXTRA_SUBJECT` as a
+fallback, `EXTRA_PROCESS_TEXT`) and hands it to Dart on the existing links
+channel: `initialShare` for the launch intent (cold start), `share` pushes
+for `onNewIntent` (running; the activity is singleTop).
+
+Dart owns the decision (`MorphIncomingLinks.sharedTarget`): the first
+http(s) link in the text, with trailing punctuation trimmed; else the text
+as a lone `host.tld/path`; else a web search. The result goes through the
+same path as ACTION_VIEW links, so it opens in a new tab of the active
+profile and reuses the tab if it is still an empty start page.
+
+Morph has no search-engine setting yet; `searchUrl` uses DuckDuckGo
+(`https://duckduckgo.com/?q=`, query whitespace-collapsed, capped at 2000
+characters) until one exists. Non-text shares (images, files) are not
+accepted.
