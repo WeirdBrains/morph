@@ -194,6 +194,37 @@ backend per platform.
     flutter_inappwebview 6.1 exposes no `ProcessFailed` event, so Morph shows
     WebView2's own error page there for now; wiring `ProcessFailed` needs a
     plugin patch or a Morph-owned Windows backend.
+- _(new 2026-11-12)_ **Default browser and incoming links.** Settings has
+  "Make default browser" on every platform, with the current status. Each
+  platform keeps the final say with the user, and nothing needs admin rights:
+  - **Android:** http/https `VIEW` + `BROWSABLE` filters (and `APP_BROWSER`)
+    make Morph eligible; Android 10+ asks with
+    `RoleManager.ROLE_BROWSER`, older versions (or a refused role) open the
+    default-apps screen.
+  - **Linux:** the desktop entry declares `x-scheme-handler/http(s)` and
+    `Exec=morph %u`; Morph runs `xdg-settings set default-web-browser`
+    (falling back to `xdg-mime default`), user level only. Without an
+    installed entry (a dev build) Morph writes its own to
+    `$XDG_DATA_HOME/applications`, marked `X-Morph-Generated`, and never
+    overwrites one the user or a package installed.
+  - **macOS:** `CFBundleURLTypes` for http/https and
+    `NSWorkspace.setDefaultApplication`, which shows the system prompt.
+    Not compiled in CI (no macOS job yet).
+  - **Windows:** Morph registers capabilities under HKCU
+    (`Software\Clients\StartMenuInternet\Morph`, `RegisteredApplications`,
+    a `MorphURL` ProgId) and opens `ms-settings:defaultapps`; Windows does
+    not let apps set the default themselves.
+  Links arrive as arguments (Linux, Windows) or over the
+  `org.weirdbrains.morph/links` channel (Android intents, macOS Apple
+  Events) and open in a new tab of the active profile; an empty start tab
+  is reused. A second launch on Linux/Windows is still a second instance
+  until Morph is single-instance.
+- _(new 2026-11-12)_ **Library opens wait for the panel.** Opening a bookmark
+  or history entry navigates only after the library panel's close animation
+  has finished, then checks the surface. Surface checks asked for while one
+  is running queue one follow-up instead of reusing the running result,
+  which may have probed the page mid-navigation (the Android white page
+  after opening a bookmark).
 - **Page bridge:** a script injected at document start (`morph-bridge.js`) exposes a
   narrow message channel. DOM queries, injection and page events go through it as JSON.
   Rust never touches the DOM. The bridge contract is identical on every backend and is
