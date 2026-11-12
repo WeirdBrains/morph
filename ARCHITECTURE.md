@@ -1704,6 +1704,32 @@ bare `host.tld[:port][/path]`. Everything else, including any input with a
 space and unknown schemes such as `javascript:`, is a DuckDuckGo search
 (`MorphIncomingLinks.searchUrl`) until a search-engine setting exists.
 
+### 2026-11-12 — Linux: Morph error pages, popups, hang grace
+
+- *Error pages.* The plugin handles `load-failed` and
+  `load-failed-with-tls-errors`, returns TRUE (no WebKit plain-text page) and
+  sends a `load-error` event (domain, code, message, tls). Cancelled loads,
+  downloads (policy change) and plugin handoffs keep the current page. Dart
+  maps errors to kinds (certificate, not found, unreachable, timed out,
+  other); `MorphLoadErrorGate` shows a Morph page with "Try again" (and
+  "Search instead" for an unknown host). There is no "proceed anyway" for bad
+  certificates. Any navigation clears it. Android keeps its engine page for
+  now.
+- *Popups.* WebKit's `create` already made a related view, but Dart never
+  showed it, so `window.open` loaded invisibly (sign-in popups, "Log in with
+  …"). The `new-window` event now carries the opener, texture and render
+  path; the Linux session wraps it as a session of its own and the
+  controller stacks it in `popups` (cap 4, same as Android; the native side
+  refuses a fifth). `MorphPopupLayer` draws it over the tab with "Title ·
+  host" and a close button; `window.close()` sends `closed`. Nested popups
+  stack on the same tab. Same profile and context (related view), so
+  `window.opener` and `postMessage` work. Windows and macOS: no popup support
+  yet (native views, to do with their backends).
+- *Hang grace.* WebKit flags a renderer unresponsive after ~3 s, which heavy
+  pages (a YouTube watch page starting its player) hit routinely. The tab now
+  says "isn't responding" only if it is still unresponsive after 10 s
+  (`MorphWebViewController.unresponsiveGrace`); a crash still shows at once.
+
 ### 2026-11-12 — Linux: WebKit's DMA-BUF renderer stays on; video crash fixed
 
 The plugin set `WEBKIT_DISABLE_DMABUF_RENDERER=1` on NVIDIA. With it,

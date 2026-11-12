@@ -830,8 +830,12 @@ void main() {
       expect(find.byKey(const Key('page-crashed')), findsNothing);
 
       // A hang offers Wait; waiting hides it, answering again clears it.
+      // Only after the grace: heavy pages block the renderer for seconds.
       second.emitRenderer(MorphRendererFault.unresponsive);
       await tester.pump();
+      await tester.pump(const Duration(seconds: 2));
+      expect(find.text("This page isn't responding"), findsNothing);
+      await tester.pump(MorphWebViewController.defaultUnresponsiveGrace);
       await tester.pump();
       expect(find.text("This page isn't responding"), findsOneWidget);
       await tester.tap(find.byKey(const Key('page-crashed-wait')));

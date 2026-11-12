@@ -73,4 +73,66 @@ void main() {
     expect(calls.single.arguments, {'viewId': 7});
     await session.dispose();
   });
+
+  test('a TLS load error maps to a certificate error page', () {
+    final error = morphLoadErrorFromEvent({
+      'type': 'load-error',
+      'url': 'https://instgram.com/',
+      'domain': 'g-tls-error-quark',
+      'code': 3,
+      'message': 'The certificate is for a different site.',
+      'tls': true,
+    });
+    expect(error.kind, MorphLoadErrorKind.certificate);
+    expect(error.url, 'https://instgram.com/');
+  });
+
+  test(
+    'a session surfaces its load errors, popups and close requests',
+    () async {
+      final events = StreamController<Map<Object?, Object?>>.broadcast();
+      final tab = MorphWebViewLinux.sessionForTesting(
+        channel: channel,
+        viewId: 1,
+        events: events.stream,
+      );
+      final errors = <MorphLoadError>[];
+      final popups = <MorphWebViewSession>[];
+      tab.loadErrors.listen(errors.add);
+      tab.popups.listen(popups.add);
+      events.add({
+        'viewId': 1,
+        'type': 'load-error',
+        'url': 'https://nope.invalid/',
+        'domain': 'g-resolver-error-quark',
+        'code': 1,
+        'tls': false,
+      });
+      // Another tab's popup is not ours.
+      events.add({'viewId': 9, 'type': 'new-window', 'openerViewId': 2});
+      events.add({
+        'viewId': 5,
+        'type': 'new-window',
+        'openerViewId': 1,
+        'textureId': 55,
+        'url': 'https://accounts.example/',
+      });
+      await Future<void>.delayed(Duration.zero);
+      expect(errors.single.kind, MorphLoadErrorKind.notFound);
+      expect(popups, hasLength(1));
+      final popup = popups.single;
+      expect(popup.textureId, 55);
+      var closed = 0;
+      popup.closeRequested.listen((_) => closed++);
+      events.add({'viewId': 5, 'type': 'closed'});
+      await Future<void>.delayed(Duration.zero);
+      expect(closed, 1);
+      calls.clear();
+      await popup.dispose();
+      // The native view is already gone after window.close().
+      expect(calls.where((c) => c.method == 'dispose'), isEmpty);
+      await tab.dispose();
+      await events.close();
+    },
+  );
 }

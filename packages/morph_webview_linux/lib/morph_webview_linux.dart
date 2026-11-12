@@ -113,12 +113,46 @@ class _LinuxWebViewSession extends MorphWebViewSession {
     required Stream<Map<Object?, Object?>> events,
   }) {
     _eventSub = events.listen((event) {
-      if (event['viewId'] != viewId || event['type'] != 'renderer') {
+      final type = event['type'];
+      if (type == 'new-window' && event['openerViewId'] == viewId) {
+        // A window this page opened. The native view already exists and is
+        // loading; wrap it in a session of its own.
+        final popupId = event['viewId'];
+        if (popupId is int) {
+          _popupController.add(
+            _LinuxWebViewSession(
+              channel: _channel,
+              control: _control,
+              viewId: popupId,
+              textureId: (event['textureId'] as int?) ?? popupId,
+              renderPath: MorphRenderPathInfo(
+                path: (event['renderPath'] as String?) ?? renderPath.path,
+                reason: (event['renderReason'] as String?) ?? '',
+              ),
+              events: events,
+            ),
+          );
+        }
         return;
       }
-      _rendererController.add(
-        MorphRendererEvent(morphRendererFaultFromName(event['fault'])),
-      );
+      if (event['viewId'] != viewId) {
+        return;
+      }
+      switch (type) {
+        case 'renderer':
+          _rendererController.add(
+            MorphRendererEvent(
+              morphRendererFaultFromName(event['fault']),
+              detail: (event['detail'] as String?) ?? '',
+            ),
+          );
+        case 'load-error':
+          _loadErrorController.add(morphLoadErrorFromEvent(event));
+        case 'closed':
+          // The native view is already gone; dispose must not ask again.
+          _nativeClosed = true;
+          _closeController.add(null);
+      }
     });
     _navSub = _control.navigation.listen((entry) {
       if (entry.$1 == viewId) {
@@ -148,6 +182,19 @@ class _LinuxWebViewSession extends MorphWebViewSession {
   final _navController = StreamController<MorphNavigationEvent>.broadcast();
   final _pageController = StreamController<String>.broadcast();
   final _cursorController = StreamController<MorphCursorEvent>.broadcast();
+  final _loadErrorController = StreamController<MorphLoadError>.broadcast();
+  final _popupController = StreamController<MorphWebViewSession>.broadcast();
+  final _closeController = StreamController<void>.broadcast();
+  bool _nativeClosed = false;
+
+  @override
+  Stream<MorphLoadError> get loadErrors => _loadErrorController.stream;
+
+  @override
+  Stream<MorphWebViewSession> get popups => _popupController.stream;
+
+  @override
+  Stream<void> get closeRequested => _closeController.stream;
 
   @override
   final int textureId;
@@ -268,7 +315,12 @@ class _LinuxWebViewSession extends MorphWebViewSession {
     await _pageSub.cancel();
     await _cursorSub.cancel();
     await _eventSub.cancel();
-    await _channel.invokeMethod<void>('dispose', {'viewId': viewId});
+    if (!_nativeClosed) {
+      await _channel.invokeMethod<void>('dispose', {'viewId': viewId});
+    }
+    await _loadErrorController.close();
+    await _popupController.close();
+    await _closeController.close();
     await _navController.close();
     await _pageController.close();
     await _cursorController.close();
@@ -288,4 +340,17 @@ MorphRendererFault? morphRendererFaultFromName(Object? name) {
     // A reason this build does not know yet still means the page is gone.
     _ => MorphRendererFault.crashed,
   };
+}
+
+/// A native "load-error" event as a [MorphLoadError].
+MorphLoadError morphLoadErrorFromEvent(Map<Object?, Object?> event) {
+  return MorphLoadError(
+    url: (event['url'] as String?) ?? '',
+    kind: morphLoadErrorKindFor(
+      domain: (event['domain'] as String?) ?? '',
+      code: (event['code'] as int?) ?? 0,
+      tls: event['tls'] == true,
+    ),
+    message: (event['message'] as String?) ?? '',
+  );
 }

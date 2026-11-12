@@ -120,6 +120,7 @@ class _MorphRendererFaultGateState extends State<MorphRendererFaultGate> {
             behavior: HitTestBehavior.opaque,
             child: MorphPageCrashed(
               fault: fault,
+              detail: widget.controller.rendererDetail,
               onReload: _reload,
               onWait: fault == MorphRendererFault.unresponsive
                   ? () => setState(() => _waiting = true)
@@ -138,9 +139,13 @@ class MorphPageCrashed extends StatelessWidget {
     required this.fault,
     required this.onReload,
     this.onWait,
+    this.detail = '',
   });
 
   final MorphRendererFault fault;
+
+  /// A backend hint, such as missing video decoders.
+  final String detail;
   final VoidCallback onReload;
   final VoidCallback? onWait;
 
@@ -179,6 +184,18 @@ class MorphPageCrashed extends StatelessWidget {
                       size: 13,
                     ),
                   ),
+                  if (detail.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      detail,
+                      key: const Key('page-crashed-detail'),
+                      textAlign: TextAlign.center,
+                      style: MorphTheme.monoStyle(
+                        color: colors.onSurfaceVariant,
+                        size: 12,
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 24),
                   Wrap(
                     spacing: 12,

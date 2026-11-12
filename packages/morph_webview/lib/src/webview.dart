@@ -363,6 +363,32 @@ class _MorphWebViewState extends State<MorphWebView>
 
   @override
   Widget build(BuildContext context) {
+    return ValueListenableBuilder<List<MorphWebViewController>>(
+      valueListenable: widget.controller.popups,
+      builder: (context, popups, _) {
+        final page = _page(context);
+        if (popups.isEmpty) {
+          return page;
+        }
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            page,
+            for (final popup in popups)
+              MorphPopupLayer(
+                key: ObjectKey(popup),
+                controller: popup,
+                userScript: widget.userScript,
+                profileId: widget.profileId,
+                onClose: () => unawaited(widget.controller.closePopup(popup)),
+              ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _page(BuildContext context) {
     final dpr = MediaQuery.devicePixelRatioOf(context);
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -529,4 +555,76 @@ class _MorphWebViewState extends State<MorphWebView>
     TextInputControl? oldControl,
     TextInputControl? newControl,
   ) {}
+}
+
+/// One window a page opened, shown over the tab (or the popup beneath it)
+/// with its address and a close button. Closing it returns to the opener.
+class MorphPopupLayer extends StatelessWidget {
+  const MorphPopupLayer({
+    super.key,
+    required this.controller,
+    required this.onClose,
+    this.userScript = '',
+    this.profileId = 'default',
+  });
+
+  final MorphWebViewController controller;
+  final VoidCallback onClose;
+  final String userScript;
+  final String profileId;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Material(
+      key: const Key('morph-popup'),
+      color: theme.colorScheme.surface,
+      elevation: 8,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SizedBox(
+            height: 40,
+            child: Row(
+              children: [
+                const SizedBox(width: 12),
+                Expanded(
+                  child: StreamBuilder<MorphNavigationEvent>(
+                    stream: controller.navigation,
+                    initialData: controller.currentNavigation,
+                    builder: (context, snapshot) {
+                      final nav = snapshot.data;
+                      final host = Uri.tryParse(nav?.url ?? '')?.host ?? '';
+                      final title = nav?.title ?? '';
+                      return Text(
+                        title.isNotEmpty && host.isNotEmpty
+                            ? '$title · $host'
+                            : (host.isNotEmpty ? host : title),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.bodyMedium,
+                      );
+                    },
+                  ),
+                ),
+                IconButton(
+                  key: const Key('morph-popup-close'),
+                  tooltip: 'Close window',
+                  icon: const Icon(Icons.close, size: 18),
+                  onPressed: onClose,
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: MorphWebView(
+              controller: controller,
+              userScript: userScript,
+              profileId: profileId,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }

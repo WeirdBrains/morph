@@ -405,3 +405,72 @@ class MorphRendererEvent {
   final MorphRendererFault? fault;
   final String detail;
 }
+
+/// What kind of failure stopped a page from loading.
+enum MorphLoadErrorKind {
+  /// The site's TLS certificate is not trusted (expired, wrong host,
+  /// self-signed, unknown issuer).
+  certificate,
+
+  /// The host name does not resolve (often a typo).
+  notFound,
+
+  /// The host exists but could not be reached (refused, offline, reset).
+  unreachable,
+
+  /// The server took too long.
+  timedOut,
+
+  /// Anything else; [MorphLoadError.message] has the engine's text.
+  other,
+}
+
+/// A main-frame load that failed. The shell shows its own page for it
+/// instead of the engine's plain text.
+class MorphLoadError {
+  const MorphLoadError({
+    required this.url,
+    required this.kind,
+    this.message = '',
+  });
+
+  final String url;
+  final MorphLoadErrorKind kind;
+  final String message;
+}
+
+/// Maps an engine error (GLib error domain and code, as WebKitGTK reports
+/// them) to a [MorphLoadErrorKind]. [tls] is set for certificate failures.
+MorphLoadErrorKind morphLoadErrorKindFor({
+  required String domain,
+  required int code,
+  bool tls = false,
+}) {
+  if (tls || domain == 'g-tls-error-quark') {
+    return MorphLoadErrorKind.certificate;
+  }
+  if (domain == 'g-resolver-error-quark') {
+    return MorphLoadErrorKind.notFound;
+  }
+  if (domain == 'g-io-error-quark') {
+    // GIOErrorEnum values.
+    const timedOut = 24;
+    const hostNotFound = 28;
+    const unreachable = {
+      39, // connection refused
+      44, // network unreachable
+      45, // host unreachable
+      46, // connection closed
+    };
+    if (code == timedOut) {
+      return MorphLoadErrorKind.timedOut;
+    }
+    if (code == hostNotFound) {
+      return MorphLoadErrorKind.notFound;
+    }
+    if (unreachable.contains(code)) {
+      return MorphLoadErrorKind.unreachable;
+    }
+  }
+  return MorphLoadErrorKind.other;
+}
