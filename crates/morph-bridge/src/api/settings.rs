@@ -8,11 +8,16 @@ use std::path::PathBuf;
 pub struct SettingsView {
     pub tab_position: String,
     pub sidebar_collapsed: bool,
+    pub sidebar_width: u32,
 }
 
 impl SettingsView {
     fn from(settings: &settings::Settings) -> Self {
-        Self { tab_position: settings.tab_position.as_str().to_string(), sidebar_collapsed: settings.sidebar_collapsed }
+        Self {
+            tab_position: settings.tab_position.as_str().to_string(),
+            sidebar_collapsed: settings.sidebar_collapsed,
+            sidebar_width: settings.sidebar_width,
+        }
     }
 }
 
@@ -42,6 +47,13 @@ pub fn set_sidebar_collapsed(home: Option<String>, collapsed: bool) -> Result<Se
     Ok(SettingsView::from(&settings))
 }
 
+/// Persist the expanded width of the left/right tab list.
+pub fn set_sidebar_width(home: Option<String>, width: u32) -> Result<SettingsView, String> {
+    let home = resolve_home(home)?;
+    let settings = settings::set_sidebar_width(&home, width).map_err(|e| e.to_string())?;
+    Ok(SettingsView::from(&settings))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -53,6 +65,7 @@ mod tests {
         let loaded = load_settings(Some(home.clone())).unwrap();
         assert_eq!(loaded.tab_position, "top");
         assert!(!loaded.sidebar_collapsed);
+        assert_eq!(loaded.sidebar_width, 220);
         assert!(!std::path::Path::new(&home).exists());
 
         let saved = set_tab_position(Some(home.clone()), "LEFT".into()).unwrap();
@@ -61,8 +74,17 @@ mod tests {
         let collapsed = set_sidebar_collapsed(Some(home.clone()), true).unwrap();
         assert!(collapsed.sidebar_collapsed);
         assert_eq!(collapsed.tab_position, "left");
-        let again = load_settings(Some(home)).unwrap();
+        let again = load_settings(Some(home.clone())).unwrap();
         assert_eq!(again.tab_position, "left");
+        assert!(again.sidebar_collapsed);
+        assert_eq!(again.sidebar_width, 220);
+
+        let wide = set_sidebar_width(Some(home.clone()), 300).unwrap();
+        assert_eq!(wide.sidebar_width, 300);
+        assert!(wide.sidebar_collapsed);
+        assert_eq!(wide.tab_position, "left");
+        let again = load_settings(Some(home)).unwrap();
+        assert_eq!(again.sidebar_width, 300);
         assert!(again.sidebar_collapsed);
     }
 }
