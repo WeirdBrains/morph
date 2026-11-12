@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:morph/src/tabs/tab_overflow.dart';
 import 'package:morph/src/tabs/tab_position.dart';
 import 'package:morph/src/tabs/tab_set.dart';
 import 'package:morph/src/theme/morph_theme.dart';
 import 'package:morph/src/widgets/desktop_chrome.dart';
+import 'package:morph/src/widgets/tab_active_border.dart';
 import 'package:morph/src/window/window_buttons.dart';
 
 Widget _harness({
@@ -292,8 +294,15 @@ void main() {
     final indicator = tester.getRect(find.byKey(const Key('tab-indicator-1')));
     expect(indicator.left, closeTo(tab.left, 0.5));
     expect(indicator.right, closeTo(tab.right, 0.5));
-    expect(indicator.bottom, closeTo(tab.bottom, 0.5));
-    expect(indicator.height, closeTo(2, 0.5));
+    expect(indicator.top, closeTo(tab.top, 0.5));
+    expect(indicator.height, closeTo(MorphTabActiveBorder.bandExtent, 0.5));
+    expect(
+      tester
+          .widget<MorphTabActiveBorder>(find.byType(MorphTabActiveBorder))
+          .edge,
+      MorphTabActiveEdge.top,
+    );
+    expect(tester.getSize(find.byType(MorphTabChip)).width, 150);
   });
 
   testWidgets('bottom: nav at top, flipped tabs below content', (tester) async {
@@ -342,8 +351,14 @@ void main() {
     final indicator = tester.getRect(find.byKey(const Key('tab-indicator-1')));
     expect(indicator.left, closeTo(tab.left, 0.5));
     expect(indicator.right, closeTo(tab.right, 0.5));
-    expect(indicator.top, closeTo(tab.top, 0.5));
-    expect(indicator.height, closeTo(2, 0.5));
+    expect(indicator.bottom, closeTo(tab.bottom, 0.5));
+    expect(indicator.height, closeTo(MorphTabActiveBorder.bandExtent, 0.5));
+    expect(
+      tester
+          .widget<MorphTabActiveBorder>(find.byType(MorphTabActiveBorder))
+          .edge,
+      MorphTabActiveEdge.bottom,
+    );
   });
 
   testWidgets('left: nav full width at top, vertical list beside content', (
@@ -373,6 +388,18 @@ void main() {
       lessThanOrEqualTo(nav.top + 0.5),
     );
     expect(find.byKey(const Key('tab-list-collapse')), findsOneWidget);
+    final tile = tester.getRect(find.byKey(const Key('tab-1')));
+    final indicator = tester.getRect(find.byKey(const Key('tab-indicator-1')));
+    expect(indicator.right, closeTo(tile.right, 0.5));
+    expect(indicator.top, closeTo(tile.top, 0.5));
+    expect(indicator.bottom, closeTo(tile.bottom, 0.5));
+    expect(indicator.width, closeTo(MorphTabActiveBorder.bandExtent, 0.5));
+    expect(
+      tester
+          .widget<MorphTabActiveBorder>(find.byType(MorphTabActiveBorder))
+          .edge,
+      MorphTabActiveEdge.right,
+    );
   });
 
   testWidgets('right: nav at top, list to the right of content', (
@@ -395,6 +422,18 @@ void main() {
     expect(
       tester.getRect(find.byKey(const Key('window-close'))).bottom,
       lessThanOrEqualTo(nav.top + 0.5),
+    );
+    final tile = tester.getRect(find.byKey(const Key('tab-1')));
+    final indicator = tester.getRect(find.byKey(const Key('tab-indicator-1')));
+    expect(indicator.left, closeTo(tile.left, 0.5));
+    expect(indicator.top, closeTo(tile.top, 0.5));
+    expect(indicator.bottom, closeTo(tile.bottom, 0.5));
+    expect(indicator.width, closeTo(MorphTabActiveBorder.bandExtent, 0.5));
+    expect(
+      tester
+          .widget<MorphTabActiveBorder>(find.byType(MorphTabActiveBorder))
+          .edge,
+      MorphTabActiveEdge.left,
     );
   });
 
@@ -682,7 +721,7 @@ void main() {
   ) async {
     _desktopSize(tester);
     for (final position in MorphTabPosition.values) {
-      var tabs = _nTabs(20);
+      var tabs = _nTabs(40);
       late void Function(void Function()) setHarness;
       await tester.pumpWidget(
         StatefulBuilder(
@@ -711,13 +750,17 @@ void main() {
       );
       expect(before, isNot(contains(tabs.tabs.last.id)), reason: '$position');
       expect(find.byKey(Key('tab-${tabs.tabs.last.id}')), findsNothing);
+      final hiddenId = tabs.tabs
+          .firstWhere((tab) => !before.contains(tab.id))
+          .id;
 
       await tester.tap(find.byKey(const Key('tab-overflow')));
       await tester.pumpAndSettle();
-      final hiddenId = tabs.tabs.last.id;
       expect(find.byKey(Key('tab-overflow-$hiddenId')), findsOneWidget);
       expect(find.byKey(Key('tab-overflow-close-$hiddenId')), findsOneWidget);
 
+      await tester.ensureVisible(find.byKey(Key('tab-overflow-$hiddenId')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(Key('tab-overflow-$hiddenId')));
       await tester.pumpAndSettle();
       expect(tabs.activeId, hiddenId, reason: '$position');
@@ -865,5 +908,137 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(width, 252, reason: 'narrow window clamp (500-48-200 = 252)');
+  });
+
+  testWidgets('horizontal tabs grow and shrink between 50 and 150 px', (
+    tester,
+  ) async {
+    _desktopSize(tester);
+
+    var tabs = _nTabs(1);
+    late void Function(void Function()) setHarness;
+    await tester.pumpWidget(
+      StatefulBuilder(
+        builder: (context, setState) {
+          setHarness = setState;
+          return _harness(tabs: tabs, position: MorphTabPosition.top);
+        },
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.getSize(find.byType(MorphTabChip)).width, 150);
+
+    setHarness(() => tabs = _nTabs(4));
+    await tester.pumpAndSettle();
+    final four = tester.getSize(find.byType(MorphTabChip).first).width;
+    expect(four, 150);
+    expect(find.byKey(const Key('tab-overflow')), findsNothing);
+    expect(find.byKey(const Key('tab-title-1')), findsOneWidget);
+
+    setHarness(() => tabs = _nTabs(40));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('tab-overflow')), findsOneWidget);
+    final narrow = tester.getSize(find.byType(MorphTabChip).first).width;
+    expect(
+      narrow,
+      inInclusiveRange(
+        MorphTabOverflow.horizontalMinExtent,
+        MorphTabOverflow.horizontalMinExtent + MorphTabOverflow.spacing + 1,
+      ),
+    );
+    expect(find.byKey(const Key('tab-title-1')), findsNothing);
+    expect(find.byKey(const Key('tab-favicon-1')), findsOneWidget);
+    // Close stays available on the active tab even at 50 px.
+    expect(find.byKey(const Key('tab-close-1')), findsOneWidget);
+  });
+
+  testWidgets('favicon and title sit on the tab body vertical center', (
+    tester,
+  ) async {
+    _desktopSize(tester);
+
+    void assertCentered({
+      required int id,
+      required MorphTabPosition position,
+      required bool hasTitle,
+    }) {
+      final tab = tester.getRect(find.byKey(Key('tab-$id')));
+      final indicator = tester.getRect(find.byKey(Key('tab-indicator-$id')));
+      late Rect body;
+      switch (position) {
+        case MorphTabPosition.top:
+          body = Rect.fromLTRB(
+            tab.left,
+            tab.top + MorphTabActiveBorder.defaultStrokeWidth,
+            tab.right,
+            tab.bottom,
+          );
+        case MorphTabPosition.bottom:
+          body = Rect.fromLTRB(
+            tab.left,
+            tab.top,
+            tab.right,
+            tab.bottom - MorphTabActiveBorder.defaultStrokeWidth,
+          );
+        case MorphTabPosition.left:
+        case MorphTabPosition.right:
+          body = tab;
+      }
+      final favicon = tester.getRect(find.byKey(Key('tab-favicon-$id')));
+      expect(
+        favicon.center.dy,
+        closeTo(body.center.dy, 1),
+        reason: '$position favicon',
+      );
+      if (hasTitle) {
+        final title = tester.getRect(find.byKey(Key('tab-title-$id')));
+        expect(
+          title.center.dy,
+          closeTo(body.center.dy, 1),
+          reason: '$position title',
+        );
+      }
+      expect(indicator, isNot(equals(Rect.zero)));
+    }
+
+    for (final position in MorphTabPosition.values) {
+      final tabs = MorphTabSet()..update(1, title: 'One');
+      await tester.pumpWidget(_harness(tabs: tabs, position: position));
+      await tester.pumpAndSettle();
+      assertCentered(id: 1, position: position, hasTitle: true);
+    }
+
+    // Overflow dropdown entries are also vertically centered.
+    final tabs = _nTabs(40);
+    await tester.pumpWidget(
+      _harness(tabs: tabs, position: MorphTabPosition.top),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('tab-overflow')));
+    await tester.pumpAndSettle();
+    final visible = _visibleTabIds(tester, tabs, MorphTabPosition.top);
+    final hiddenId = tabs.tabs
+        .firstWhere((tab) => !visible.contains(tab.id))
+        .id;
+    final entry = tester.getRect(find.byKey(Key('tab-overflow-$hiddenId')));
+    final favicon = tester.getRect(
+      find.byKey(Key('tab-overflow-favicon-$hiddenId')),
+    );
+    final title = tester.getRect(
+      find.byKey(Key('tab-overflow-title-$hiddenId')),
+    );
+    expect(favicon.center.dy, closeTo(entry.center.dy, 1));
+    expect(title.center.dy, closeTo(entry.center.dy, 1));
+  });
+
+  testWidgets('inactive tabs have no active border', (tester) async {
+    _desktopSize(tester);
+    final tabs = _nTabs(2);
+    await tester.pumpWidget(
+      _harness(tabs: tabs, position: MorphTabPosition.top),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('tab-indicator-1')), findsOneWidget);
+    expect(find.byKey(const Key('tab-indicator-2')), findsNothing);
   });
 }
