@@ -43,6 +43,63 @@ abstract class MorphApi {
     String? home,
   });
 
+  /// [profileId]'s folders and bookmarks.
+  Future<MorphBookmarkTree> bookmarkTree(String profileId, {String? home});
+  Future<MorphBookmarkTree> createBookmarkFolder(
+    String profileId,
+    String name, {
+    String? parentId,
+    String? home,
+  });
+  Future<MorphBookmarkTree> renameBookmarkFolder(
+    String profileId,
+    String folderId,
+    String name, {
+    String? home,
+  });
+
+  /// Deletes the folder with everything inside it.
+  Future<MorphBookmarkTree> deleteBookmarkFolder(
+    String profileId,
+    String folderId, {
+    String? home,
+  });
+
+  /// Moves a bookmark or folder into [parentId] (null: top level) at slot
+  /// [index] among what is already there.
+  Future<MorphBookmarkTree> moveBookmarkItem(
+    String profileId,
+    String itemId, {
+    String? parentId,
+    required int index,
+    String? home,
+  });
+
+  /// Null fields stay as they are.
+  Future<MorphBookmarkTree> updateBookmark(
+    String profileId,
+    String bookmarkId, {
+    String? title,
+    String? url,
+    List<String>? tags,
+    String? home,
+  });
+  Future<MorphBookmarkTree> deleteBookmark(
+    String profileId,
+    String bookmarkId, {
+    String? home,
+  });
+
+  /// Bookmarks matching every word of [query] in title, URL or tags, and
+  /// carrying [tag] when given.
+  Future<List<MorphBookmark>> searchBookmarks(
+    String profileId, {
+    String query = '',
+    String? tag,
+    String? home,
+  });
+  Future<List<MorphBookmarkTag>> bookmarkTags(String profileId, {String? home});
+
   /// Browsing history for [profileId], newest first.
   Future<void> recordVisit(
     String profileId,
@@ -112,11 +169,157 @@ class MorphNewIdentity {
 }
 
 class MorphBookmark {
-  const MorphBookmark({required this.url, this.title = '', this.added});
+  const MorphBookmark({
+    required this.url,
+    this.id = '',
+    this.title = '',
+    this.added,
+    this.updated,
+    this.folderId,
+    this.order = '',
+    this.tags = const [],
+  });
 
+  final String id;
   final String url;
   final String title;
   final DateTime? added;
+  final DateTime? updated;
+
+  /// Containing folder; null is the top level.
+  final String? folderId;
+
+  /// Sort key among the folder's items (folders and bookmarks together).
+  final String order;
+  final List<String> tags;
+
+  MorphBookmark copyWith({
+    String? url,
+    String? title,
+    String? Function()? folderId,
+    String? order,
+    List<String>? tags,
+  }) => MorphBookmark(
+    id: id,
+    url: url ?? this.url,
+    title: title ?? this.title,
+    added: added,
+    updated: updated,
+    folderId: folderId == null ? this.folderId : folderId(),
+    order: order ?? this.order,
+    tags: tags ?? this.tags,
+  );
+}
+
+class MorphBookmarkFolder {
+  const MorphBookmarkFolder({
+    required this.id,
+    required this.name,
+    this.parentId,
+    this.order = '',
+  });
+
+  final String id;
+  final String name;
+  final String? parentId;
+  final String order;
+
+  MorphBookmarkFolder copyWith({
+    String? name,
+    String? Function()? parentId,
+    String? order,
+  }) => MorphBookmarkFolder(
+    id: id,
+    name: name ?? this.name,
+    parentId: parentId == null ? this.parentId : parentId(),
+    order: order ?? this.order,
+  );
+}
+
+/// One entry inside a folder: a folder or a bookmark.
+class MorphBookmarkNode {
+  const MorphBookmarkNode.folder(MorphBookmarkFolder this.folder)
+    : bookmark = null;
+  const MorphBookmarkNode.bookmark(MorphBookmark this.bookmark) : folder = null;
+
+  final MorphBookmarkFolder? folder;
+  final MorphBookmark? bookmark;
+
+  String get id => folder?.id ?? bookmark!.id;
+  String get order => folder?.order ?? bookmark!.order;
+  bool get isFolder => folder != null;
+}
+
+class MorphBookmarkTree {
+  const MorphBookmarkTree({this.folders = const [], this.bookmarks = const []});
+
+  static const empty = MorphBookmarkTree();
+
+  final List<MorphBookmarkFolder> folders;
+  final List<MorphBookmark> bookmarks;
+
+  MorphBookmarkFolder? folder(String? id) {
+    for (final f in folders) {
+      if (f.id == id) {
+        return f;
+      }
+    }
+    return null;
+  }
+
+  /// What sits directly in [parentId], in order.
+  List<MorphBookmarkNode> children(String? parentId) {
+    final nodes = [
+      for (final f in folders)
+        if (f.parentId == parentId) MorphBookmarkNode.folder(f),
+      for (final b in bookmarks)
+        if (b.folderId == parentId) MorphBookmarkNode.bookmark(b),
+    ];
+    nodes.sort((a, b) {
+      final byOrder = a.order.compareTo(b.order);
+      return byOrder != 0 ? byOrder : a.id.compareTo(b.id);
+    });
+    return nodes;
+  }
+
+  /// Folders from the top level down to [folderId].
+  List<MorphBookmarkFolder> path(String? folderId) {
+    final out = <MorphBookmarkFolder>[];
+    var at = folder(folderId);
+    while (at != null && !out.contains(at)) {
+      out.insert(0, at);
+      at = folder(at.parentId);
+    }
+    return out;
+  }
+
+  /// [folderId] and every folder inside it.
+  Set<String> subtree(String folderId) {
+    final out = {folderId};
+    var grew = true;
+    while (grew) {
+      grew = false;
+      for (final f in folders) {
+        if (f.parentId != null && out.contains(f.parentId) && out.add(f.id)) {
+          grew = true;
+        }
+      }
+    }
+    return out;
+  }
+
+  /// Bookmarks anywhere inside [folderId].
+  int bookmarksIn(String folderId) {
+    final ids = subtree(folderId);
+    return bookmarks.where((b) => ids.contains(b.folderId)).length;
+  }
+}
+
+class MorphBookmarkTag {
+  const MorphBookmarkTag({required this.name, required this.count});
+
+  final String name;
+  final int count;
 }
 
 class MorphHistoryEntry {

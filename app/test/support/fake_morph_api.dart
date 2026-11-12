@@ -179,6 +179,34 @@ class FakeMorphApi implements MorphApi {
     String? home,
   }) async => List.of(bookmarksByProfile[profileId] ?? const []);
 
+  final foldersByProfile = <String, List<MorphBookmarkFolder>>{};
+  var _nextBookmarkId = 1;
+
+  /// Rewrites the order keys of everything in [parent] to follow [ids].
+  void _reorder(String profileId, String? parent, List<String> ids) {
+    final bookmarks = bookmarksByProfile.putIfAbsent(profileId, () => []);
+    final folders = foldersByProfile.putIfAbsent(profileId, () => []);
+    for (var i = 0; i < ids.length; i++) {
+      final key = (i + 1).toString().padLeft(6, '0');
+      final b = bookmarks.indexWhere((b) => b.id == ids[i]);
+      if (b >= 0) {
+        bookmarks[b] = bookmarks[b].copyWith(
+          order: key,
+          folderId: () => parent,
+        );
+      }
+      final f = folders.indexWhere((f) => f.id == ids[i]);
+      if (f >= 0) {
+        folders[f] = folders[f].copyWith(order: key, parentId: () => parent);
+      }
+    }
+  }
+
+  MorphBookmarkTree _tree(String profileId) => MorphBookmarkTree(
+    folders: List.of(foldersByProfile[profileId] ?? const []),
+    bookmarks: List.of(bookmarksByProfile[profileId] ?? const []),
+  );
+
   @override
   Future<List<MorphBookmark>> addBookmark(
     String profileId,
@@ -187,8 +215,15 @@ class FakeMorphApi implements MorphApi {
     String? home,
   }) async {
     final list = bookmarksByProfile.putIfAbsent(profileId, () => []);
-    list.removeWhere((b) => b.url == url);
-    list.insert(0, MorphBookmark(url: url, title: title));
+    final existing = list.indexWhere((b) => b.url == url);
+    if (existing >= 0) {
+      list[existing] = list[existing].copyWith(title: title);
+      return List.of(list);
+    }
+    final id = 'b${_nextBookmarkId++}';
+    final root = _tree(profileId).children(null).map((n) => n.id).toList();
+    list.insert(0, MorphBookmark(id: id, url: url, title: title));
+    _reorder(profileId, null, [id, ...root]);
     return List.of(list);
   }
 
@@ -201,6 +236,147 @@ class FakeMorphApi implements MorphApi {
     final list = bookmarksByProfile.putIfAbsent(profileId, () => []);
     list.removeWhere((b) => b.url == url);
     return List.of(list);
+  }
+
+  @override
+  Future<MorphBookmarkTree> bookmarkTree(
+    String profileId, {
+    String? home,
+  }) async => _tree(profileId);
+
+  @override
+  Future<MorphBookmarkTree> createBookmarkFolder(
+    String profileId,
+    String name, {
+    String? parentId,
+    String? home,
+  }) async {
+    final id = 'f${_nextBookmarkId++}';
+    final siblings = _tree(profileId).children(parentId).map((n) => n.id);
+    foldersByProfile
+        .putIfAbsent(profileId, () => [])
+        .add(MorphBookmarkFolder(id: id, name: name, parentId: parentId));
+    _reorder(profileId, parentId, [...siblings, id]);
+    return _tree(profileId);
+  }
+
+  @override
+  Future<MorphBookmarkTree> renameBookmarkFolder(
+    String profileId,
+    String folderId,
+    String name, {
+    String? home,
+  }) async {
+    final folders = foldersByProfile[profileId] ?? [];
+    final i = folders.indexWhere((f) => f.id == folderId);
+    folders[i] = folders[i].copyWith(name: name);
+    return _tree(profileId);
+  }
+
+  @override
+  Future<MorphBookmarkTree> deleteBookmarkFolder(
+    String profileId,
+    String folderId, {
+    String? home,
+  }) async {
+    final ids = _tree(profileId).subtree(folderId);
+    foldersByProfile[profileId]?.removeWhere((f) => ids.contains(f.id));
+    bookmarksByProfile[profileId]?.removeWhere((b) => ids.contains(b.folderId));
+    return _tree(profileId);
+  }
+
+  @override
+  Future<MorphBookmarkTree> moveBookmarkItem(
+    String profileId,
+    String itemId, {
+    String? parentId,
+    required int index,
+    String? home,
+  }) async {
+    final tree = _tree(profileId);
+    if (tree.folder(itemId) != null &&
+        parentId != null &&
+        tree.subtree(itemId).contains(parentId)) {
+      throw StateError('a folder cannot move into itself');
+    }
+    final siblings = tree
+        .children(parentId)
+        .map((n) => n.id)
+        .where((id) => id != itemId)
+        .toList();
+    siblings.insert(index.clamp(0, siblings.length), itemId);
+    _reorder(profileId, parentId, siblings);
+    return _tree(profileId);
+  }
+
+  @override
+  Future<MorphBookmarkTree> updateBookmark(
+    String profileId,
+    String bookmarkId, {
+    String? title,
+    String? url,
+    List<String>? tags,
+    String? home,
+  }) async {
+    final list = bookmarksByProfile[profileId] ?? [];
+    final i = list.indexWhere((b) => b.id == bookmarkId);
+    final clean = tags == null
+        ? null
+        : <String>{
+            for (final t in tags)
+              if (t.trim().isNotEmpty) t.trim().toLowerCase(),
+          }.toList();
+    list[i] = list[i].copyWith(title: title, url: url, tags: clean);
+    return _tree(profileId);
+  }
+
+  @override
+  Future<MorphBookmarkTree> deleteBookmark(
+    String profileId,
+    String bookmarkId, {
+    String? home,
+  }) async {
+    bookmarksByProfile[profileId]?.removeWhere((b) => b.id == bookmarkId);
+    return _tree(profileId);
+  }
+
+  @override
+  Future<List<MorphBookmark>> searchBookmarks(
+    String profileId, {
+    String query = '',
+    String? tag,
+    String? home,
+  }) async {
+    final words = query.toLowerCase().split(RegExp(r'\s+'))
+      ..removeWhere((w) => w.isEmpty);
+    return [
+      for (final b in bookmarksByProfile[profileId] ?? const <MorphBookmark>[])
+        if ((tag == null || b.tags.contains(tag)) &&
+            words.every(
+              (w) =>
+                  b.title.toLowerCase().contains(w) ||
+                  b.url.toLowerCase().contains(w) ||
+                  b.tags.any((t) => t.contains(w)),
+            ))
+          b,
+    ];
+  }
+
+  @override
+  Future<List<MorphBookmarkTag>> bookmarkTags(
+    String profileId, {
+    String? home,
+  }) async {
+    final counts = <String, int>{};
+    for (final b in bookmarksByProfile[profileId] ?? const <MorphBookmark>[]) {
+      for (final t in b.tags) {
+        counts[t] = (counts[t] ?? 0) + 1;
+      }
+    }
+    final names = counts.keys.toList()..sort();
+    return [
+      for (final n in names) MorphBookmarkTag(name: n, count: counts[n]!),
+    ];
   }
 
   @override
