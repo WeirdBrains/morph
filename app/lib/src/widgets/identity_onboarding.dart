@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../api.dart';
+import '../recovery_phrase.dart';
 import '../theme/morph_theme.dart';
 import 'password_field.dart';
 
@@ -14,7 +15,8 @@ enum _Step { welcome, create, import, words }
 /// (and write down its 24 recovery words) or restore one from its words.
 ///
 /// The words and passwords only live in this widget's controllers and are
-/// never copied, logged or stored by it.
+/// never logged or stored by it. The words leave it only when the user picks
+/// Copy (cleared from the clipboard after a minute), Share or Download.
 class MorphIdentityOnboarding extends StatefulWidget {
   const MorphIdentityOnboarding({
     super.key,
@@ -45,6 +47,48 @@ class _MorphIdentityOnboardingState extends State<MorphIdentityOnboarding> {
   bool _saved = false;
   bool _busy = false;
   String? _error;
+  String? _phraseStatus;
+
+  Future<void> _phraseAction(Future<String> Function() action) async {
+    final status = await action();
+    if (mounted) {
+      setState(() => _phraseStatus = status);
+    }
+  }
+
+  String get _phraseText => morphRecoveryFileText(
+    profileName: widget.profileName,
+    userId: _created!.identity.userId,
+    words: _created!.words,
+  );
+
+  Future<String> _copyPhrase() async {
+    await MorphRecoveryPhrase.copy(_created!.words);
+    final seconds = MorphRecoveryPhrase.clipboardLifetime.inSeconds;
+    return 'Copied. The clipboard clears in $seconds seconds.';
+  }
+
+  Future<String> _sharePhrase() async {
+    final opened = await MorphRecoveryPhrase.share(
+      _phraseText,
+      subject: 'Morph recovery phrase (${widget.profileName})',
+    );
+    if (opened) {
+      return 'Only share it with somewhere you trust.';
+    }
+    final seconds = MorphRecoveryPhrase.clipboardLifetime.inSeconds;
+    return 'No share sheet here, so it was copied. '
+        'The clipboard clears in $seconds seconds.';
+  }
+
+  Future<String> _savePhrase() async {
+    final name = morphRecoveryFileName(widget.profileName);
+    return switch (await MorphRecoveryPhrase.save(name, _phraseText)) {
+      MorphPhraseSaveResult.saved => 'Saved $name. Keep it offline.',
+      MorphPhraseSaveResult.cancelled => 'Not saved.',
+      MorphPhraseSaveResult.failed => 'Could not save the file.',
+    };
+  }
 
   @override
   void dispose() {
@@ -310,6 +354,42 @@ class _MorphIdentityOnboardingState extends State<MorphIdentityOnboarding> {
             ],
           ),
         ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 4,
+          alignment: WrapAlignment.center,
+          children: [
+            TextButton.icon(
+              key: const Key('recovery-copy'),
+              onPressed: () => _phraseAction(_copyPhrase),
+              icon: const Icon(Icons.copy),
+              label: const Text('Copy'),
+            ),
+            TextButton.icon(
+              key: const Key('recovery-share'),
+              onPressed: () => _phraseAction(_sharePhrase),
+              icon: const Icon(Icons.share),
+              label: const Text('Share'),
+            ),
+            TextButton.icon(
+              key: const Key('recovery-save'),
+              onPressed: () => _phraseAction(_savePhrase),
+              icon: const Icon(Icons.download),
+              label: const Text('Download'),
+            ),
+          ],
+        ),
+        if (_phraseStatus != null)
+          Text(
+            _phraseStatus!,
+            key: const Key('recovery-status'),
+            textAlign: TextAlign.center,
+            style: MorphTheme.monoStyle(
+              color: colors.onSurface.withValues(alpha: 0.8),
+              size: 12,
+            ),
+          ),
         const SizedBox(height: 12),
         Text(
           'User ${created.identity.userId}',
