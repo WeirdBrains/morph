@@ -14,11 +14,16 @@ class MorphWebView extends StatefulWidget {
     super.key,
     required this.controller,
     this.userScript = '',
+    this.profileId = 'default',
     this.placeholder,
   });
 
   final MorphWebViewController controller;
   final String userScript;
+
+  /// Chrome-style profile that owns this view's cookies and website data.
+  /// Defaults to the catalog's `default` profile.
+  final String profileId;
 
   /// Shown in widget tests or before the texture id is available.
   final Widget? placeholder;
@@ -113,6 +118,7 @@ class _MorphWebViewState extends State<MorphWebView>
         height: height,
         devicePixelRatio: dpr,
         userScript: widget.userScript,
+        profileId: widget.profileId,
       );
       if (mounted) {
         setState(() => _error = null);

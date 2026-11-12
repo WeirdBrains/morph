@@ -57,6 +57,7 @@ class MorphWebViewInApp extends MorphWebViewPlatform {
     required int height,
     required double devicePixelRatio,
     String userScript = '',
+    String profileId = 'default',
   }) async {
     await _ensureAssets();
     final bindings = await MorphWebViewControl.ensureStarted();
@@ -66,6 +67,7 @@ class MorphWebViewInApp extends MorphWebViewPlatform {
       viewId: viewId,
       initialUrl: initialUrl,
       userScript: userScript,
+      profileId: profileId,
       shim: _shim!,
       bridgeJs: _bridgeJs!,
       client: client,
@@ -102,12 +104,14 @@ class _InAppSession extends MorphWebViewSession {
     required this.viewId,
     required this.initialUrl,
     required this.userScript,
+    required this.profileId,
     required this.shim,
     required this.bridgeJs,
     required this._client,
     required this._bindings,
     required this._onDispose,
-  }) : renderPath = MorphRenderPathInfo(
+  })  : assert(profileId.isNotEmpty),
+        renderPath = MorphRenderPathInfo(
          path: _renderPathForHost(),
          reason: 'flutter_inappwebview',
        ) {
@@ -191,6 +195,7 @@ class _InAppSession extends MorphWebViewSession {
   final int viewId;
   final String initialUrl;
   final String userScript;
+  final String profileId;
   final String shim;
   final String bridgeJs;
   final MorphControlClient _client;

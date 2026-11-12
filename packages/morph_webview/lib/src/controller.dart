@@ -44,6 +44,7 @@ class MorphWebViewController {
     required int height,
     required double devicePixelRatio,
     String userScript = '',
+    String profileId = 'default',
   }) async {
     if (_session != null) {
       await resize(
@@ -61,6 +62,7 @@ class MorphWebViewController {
       height: height,
       devicePixelRatio: devicePixelRatio,
       userScript: userScript,
+      profileId: profileId,
     );
     _session = session;
     _renderPath = session.renderPath;

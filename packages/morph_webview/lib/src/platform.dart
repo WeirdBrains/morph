@@ -26,6 +26,7 @@ abstract class MorphWebViewPlatform extends PlatformInterface {
     required int height,
     required double devicePixelRatio,
     String userScript = '',
+    String profileId = 'default',
   });
 }
 
@@ -78,6 +79,7 @@ class _UnimplementedWebViewPlatform extends MorphWebViewPlatform {
     required int height,
     required double devicePixelRatio,
     String userScript = '',
+    String profileId = 'default',
   }) {
     throw UnimplementedError(
       'MorphWebViewPlatform.create has not been set. '

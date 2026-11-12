@@ -29,6 +29,7 @@ class FakeMorphWebViewPlatform extends MorphWebViewPlatform {
     required int height,
     required double devicePixelRatio,
     String userScript = '',
+    String profileId = 'default',
   }) async {
     loadedUrls.add(initialUrl);
     final session = FakeMorphWebViewSession(
