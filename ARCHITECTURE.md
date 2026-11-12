@@ -316,6 +316,22 @@ in docs and code (for example, `morph_projects::CodeSpace`).
   in the platform keystore (Keychain, Android Keystore, DPAPI/Credential Locker, Secret
   Service) so the app opens without a password, with the password as a fallback.
 
+- _(new 2026-11-12)_ **One identity per Morph profile.** Each profile is its
+  own persona, so each gets its own user key, created or restored in a
+  first-use onboarding screen (desktop dialog, phone sheet) the first time
+  the profile is active. "Not now" waits until the next run; the Identity
+  entry in the menu or sheet starts it any time. The key lives only in
+  `profiles/<id>/identity/` (`morph-identity::profile_identity`):
+  `user.key` holds a 32-byte seed sealed with `weirdnet_keys::password_seal`
+  (Argon2id, XChaCha20-Poly1305) under a password of at least 8 characters,
+  and `identity.json` holds only the public user id and fingerprint. The
+  Ed25519 user key is derived from the seed and the seed is what the 24
+  `weirdnet_keys::words` encode, so the words alone restore the same identity
+  in another profile or device. Deleting a profile deletes its identity.
+  Muninn linking and platform-keystore unlock (above) still come in M3 and
+  will move the seal into the profile's keyring; "never a second identity"
+  applies per profile.
+
 **Trust.** A *trusted peer* is a user you completed an exchange with (invite link or
 code, short code compared out of band) and pinned. The trust list stores user id, pinned
 node ids, label, when the user was added and when they were last seen.
