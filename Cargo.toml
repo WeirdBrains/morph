@@ -26,6 +26,8 @@ flutter_rust_bridge = "=2.13.0"
 tempfile = "3"
 hkdf = "0.12"
 sha2 = "0.10"
+jni-sys = "0.4"
+ndk-context = "0.1"
 
 # Shipped builds favour size: the Android APK must stay under 25 MB.
 [profile.release]
