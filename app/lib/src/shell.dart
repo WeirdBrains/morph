@@ -22,6 +22,7 @@ import 'widgets/find_bar.dart';
 import 'widgets/identity_onboarding.dart';
 import 'widgets/library_page.dart';
 import 'widgets/mobile_gestures.dart';
+import 'widgets/page_crashed.dart';
 import 'widgets/profile_menu.dart';
 import 'widgets/settings_page.dart';
 import 'widgets/start_page.dart';
@@ -1660,13 +1661,17 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
               offstage: tab.id != tabs.activeId,
               child: TickerMode(
                 enabled: tab.id == tabs.activeId,
-                child: MorphWebView(
-                  key: Key('web-view-$_profileId-${tab.id}'),
+                child: MorphRendererFaultGate(
                   controller: _controllerFor(tab.id),
-                  profileId: _profileId,
-                  userScript: userScript,
-                  placeholder: Center(
-                    child: CircularProgressIndicator(color: colors.primary),
+                  active: tab.id == tabs.activeId,
+                  child: MorphWebView(
+                    key: Key('web-view-$_profileId-${tab.id}'),
+                    controller: _controllerFor(tab.id),
+                    profileId: _profileId,
+                    userScript: userScript,
+                    placeholder: Center(
+                      child: CircularProgressIndicator(color: colors.primary),
+                    ),
                   ),
                 ),
               ),
