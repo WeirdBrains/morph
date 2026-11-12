@@ -1,4 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+
+import '../default_browser.dart';
 
 import '../tabs/tab_position.dart';
 import '../theme/morph_theme.dart';
@@ -17,7 +21,11 @@ class MorphSettingsPage extends StatefulWidget {
     this.sidebarCollapsed,
     this.onTabPositionChanged,
     this.onSidebarCollapsedChanged,
+    this.defaultBrowser,
   });
+
+  /// Null or unsupported hides the Default browser section.
+  final MorphDefaultBrowser? defaultBrowser;
 
   final String profileName;
   final String coreVersion;
@@ -38,6 +46,79 @@ class MorphSettingsPage extends StatefulWidget {
 class _MorphSettingsPageState extends State<MorphSettingsPage> {
   late MorphTabPosition? _position = widget.tabPosition;
   late bool? _collapsed = widget.sidebarCollapsed;
+  MorphDefaultBrowserState? _browserState;
+  bool _askingDefault = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_refreshDefault());
+  }
+
+  Future<void> _refreshDefault() async {
+    final browser = widget.defaultBrowser;
+    if (browser == null || !browser.supported) {
+      return;
+    }
+    final state = await browser.status();
+    if (mounted) {
+      setState(() => _browserState = state);
+    }
+  }
+
+  Future<void> _makeDefault() async {
+    final browser = widget.defaultBrowser;
+    if (browser == null || _askingDefault) {
+      return;
+    }
+    setState(() => _askingDefault = true);
+    final outcome = await browser.makeDefault();
+    if (!mounted) {
+      return;
+    }
+    setState(() => _askingDefault = false);
+    final message = switch (outcome) {
+      MorphDefaultBrowserRequest.madeDefault =>
+        'Morph is now your default browser',
+      MorphDefaultBrowserRequest.openedSettings =>
+        'Pick Morph as the web browser in the system settings',
+      MorphDefaultBrowserRequest.declined => 'Morph was not made the default',
+      MorphDefaultBrowserRequest.failed =>
+        "This system didn't let Morph become the default",
+    };
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
+    await _refreshDefault();
+  }
+
+  Widget _defaultBrowserTile() {
+    final state = _browserState;
+    final isDefault = state == MorphDefaultBrowserState.isDefault;
+    return ListTile(
+      key: const Key('settings-default-browser'),
+      leading: Icon(isDefault ? Icons.verified_outlined : Icons.public),
+      title: const Text('Default browser'),
+      subtitle: Text(
+        key: const Key('settings-default-browser-status'),
+        switch (state) {
+          null => 'Checking…',
+          MorphDefaultBrowserState.isDefault => 'Morph opens your links',
+          MorphDefaultBrowserState.notDefault =>
+            'Another browser opens your links',
+          MorphDefaultBrowserState.unknown => "Couldn't tell which browser",
+        },
+      ),
+      trailing: isDefault
+          ? null
+          : FilledButton.tonal(
+              key: const Key('settings-make-default'),
+              onPressed: _askingDefault
+                  ? null
+                  : () => unawaited(_makeDefault()),
+              child: const Text('Make default'),
+            ),
+    );
+  }
 
   Future<void> _clearHistory() async {
     if (!await confirmClearHistory(context, widget.profileName)) {
@@ -86,6 +167,10 @@ class _MorphSettingsPageState extends State<MorphSettingsPage> {
             subtitle: Text('Only ${widget.profileName} is affected'),
             onTap: _clearHistory,
           ),
+          if (widget.defaultBrowser?.supported ?? false) ...[
+            const _Header('Browser · all profiles'),
+            _defaultBrowserTile(),
+          ],
           if (_position != null) ...[
             const _Header('Layout · all profiles'),
             ListTile(

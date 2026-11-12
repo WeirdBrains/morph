@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:morph/src/api.dart';
 import 'package:morph/src/app.dart';
+import 'package:morph/src/incoming_links.dart';
 import 'package:morph/src/widgets/tab_switcher.dart';
 import 'package:morph/src/shell.dart';
 import 'package:morph/src/tabs/tab_position.dart';
@@ -1707,6 +1708,49 @@ void main() {
         expect(find.byKey(const Key('library-page')), findsNothing);
         expect(session.history.last, url, reason: 'from $item');
       }
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('links from other apps open in the active profile', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    final view = tester.view;
+    view.physicalSize = const Size(1280, 800);
+    view.devicePixelRatio = 1.0;
+    addTearDown(view.reset);
+    try {
+      await tester.pumpWidget(
+        MorphApp(
+          api: FakeMorphApi(),
+          home: '/tmp/morph-does-not-exist',
+          subscribeToTicks: false,
+          loadPageBridgeAsset: false,
+          links: MorphIncomingLinks(
+            arguments: ['--verbose', 'https://launch.example/'],
+            channel: const MethodChannel('test/shell-links'),
+          ),
+        ),
+      );
+      await _pumpUntilIdentity(tester);
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 50)),
+      );
+      await _pumpUntilWebViewAttached(tester, fakeWebView);
+      await tester.pumpAndSettle();
+      final state = tester.state<MorphShellState>(find.byType(MorphShell));
+      // The launch link uses the empty start tab instead of adding one.
+      expect(state.tabs.tabs, hasLength(1));
+      expect(state.tabs.active.url, 'https://launch.example/');
+      expect(fakeWebView.lastSession!.history.last, 'https://launch.example/');
+
+      await state.openIncomingLink('https://later.example/');
+      await tester.pumpAndSettle();
+      expect(state.tabs.tabs, hasLength(2));
+      expect(state.tabs.active.url, 'https://later.example/');
+      expect(state.tabs.tabs.first.url, 'https://launch.example/');
     } finally {
       debugDefaultTargetPlatformOverride = null;
     }
