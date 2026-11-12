@@ -14,7 +14,8 @@ stream for navigation, input, and page-bridge handling (the method channel
 remains for create/dispose/resize and the texture id). macOS (WKWebView) and Windows (WebView2) backends now share that
 control layer through flutter_inappwebview 6.x. The Android in-app
 web view is registered on that same path (system WebView platform
-view, address-bar navigation). DMA-BUF frame-rate measurements and
+view, address-bar navigation). Each Android profile now has its own
+androidx.webkit WebView profile, verified on the API 37 emulator. DMA-BUF frame-rate measurements and
 hidden-text-layer alignment tests are still ahead in M1.
 
 1. Webview _(moved up: everything else plugs into it)_
