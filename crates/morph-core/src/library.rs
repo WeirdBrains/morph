@@ -1,4 +1,5 @@
-//! Per-profile bookmarks and browsing history.
+//! Per-profile bookmarks and browsing history (bookmark folders and tags
+//! live in [`crate::bookmarks`]).
 //!
 //! ```text
 //! <home>/profiles/<id>/bookmarks.json
@@ -20,13 +21,7 @@ use crate::profiles::{self, ProfileError};
 /// Most history entries kept per profile; the oldest are dropped first.
 pub const MAX_HISTORY: usize = 5000;
 
-/// A saved page.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Bookmark {
-    pub url: String,
-    pub title: String,
-    pub added_ms: i64,
-}
+pub use crate::bookmarks::{Bookmark, BookmarkError, add_bookmark, bookmarks, is_bookmarked, remove_bookmark};
 
 /// One visit to a page.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -34,12 +29,6 @@ pub struct HistoryEntry {
     pub url: String,
     pub title: String,
     pub visited_ms: i64,
-}
-
-#[derive(Debug, Default, Serialize, Deserialize)]
-struct BookmarkFile {
-    #[serde(default)]
-    bookmarks: Vec<Bookmark>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -62,54 +51,6 @@ pub fn history_path(home: impl AsRef<Path>, id: &str) -> PathBuf {
 pub fn is_recordable(url: &str) -> bool {
     let url = url.trim();
     !(url.is_empty() || url == "about:blank" || url.starts_with("data:") || url.starts_with("javascript:"))
-}
-
-/// Bookmarks, newest first.
-pub fn bookmarks(home: impl AsRef<Path>, id: &str) -> Result<Vec<Bookmark>, ProfileError> {
-    profiles::require(&home, id)?;
-    let mut list = read::<BookmarkFile>(&bookmarks_path(home, id))?.bookmarks;
-    list.sort_by_key(|b| std::cmp::Reverse(b.added_ms));
-    Ok(list)
-}
-
-/// Whether `url` is bookmarked in the profile.
-pub fn is_bookmarked(home: impl AsRef<Path>, id: &str, url: &str) -> Result<bool, ProfileError> {
-    Ok(bookmarks(home, id)?.iter().any(|b| same_page(&b.url, url)))
-}
-
-/// Add `url`, or update its title if it is already saved. Returns the list.
-pub fn add_bookmark(home: impl AsRef<Path>, id: &str, url: &str, title: &str, now_ms: i64) -> Result<Vec<Bookmark>, ProfileError> {
-    let home = home.as_ref();
-    profiles::require(home, id)?;
-    let path = bookmarks_path(home, id);
-    let mut file = read::<BookmarkFile>(&path)?;
-    if !is_recordable(url) {
-        return bookmarks(home, id);
-    }
-    match file.bookmarks.iter_mut().find(|b| same_page(&b.url, url)) {
-        Some(existing) => {
-            if !title.trim().is_empty() {
-                existing.title = title.trim().to_string();
-            }
-        }
-        None => file.bookmarks.push(Bookmark { url: url.trim().to_string(), title: title.trim().to_string(), added_ms: now_ms }),
-    }
-    write(&path, &file)?;
-    bookmarks(home, id)
-}
-
-/// Remove `url` from the profile's bookmarks. Returns the list.
-pub fn remove_bookmark(home: impl AsRef<Path>, id: &str, url: &str) -> Result<Vec<Bookmark>, ProfileError> {
-    let home = home.as_ref();
-    profiles::require(home, id)?;
-    let path = bookmarks_path(home, id);
-    let mut file = read::<BookmarkFile>(&path)?;
-    let before = file.bookmarks.len();
-    file.bookmarks.retain(|b| !same_page(&b.url, url));
-    if file.bookmarks.len() != before {
-        write(&path, &file)?;
-    }
-    bookmarks(home, id)
 }
 
 /// Record a visit. A repeat of the newest entry only refreshes its title and
@@ -183,11 +124,11 @@ pub fn clear_history(home: impl AsRef<Path>, id: &str) -> Result<(), ProfileErro
 }
 
 /// URLs that differ only by a trailing slash on the path are the same page.
-fn same_page(a: &str, b: &str) -> bool {
+pub(crate) fn same_page(a: &str, b: &str) -> bool {
     a.trim().trim_end_matches('/') == b.trim().trim_end_matches('/')
 }
 
-fn read<T: Default + for<'de> Deserialize<'de>>(path: &Path) -> Result<T, ProfileError> {
+pub(crate) fn read<T: Default + for<'de> Deserialize<'de>>(path: &Path) -> Result<T, ProfileError> {
     match fs::read_to_string(path) {
         Ok(raw) if raw.trim().is_empty() => Ok(T::default()),
         Ok(raw) => Ok(serde_json::from_str(&raw)?),
@@ -196,7 +137,7 @@ fn read<T: Default + for<'de> Deserialize<'de>>(path: &Path) -> Result<T, Profil
     }
 }
 
-fn write<T: Serialize>(path: &Path, value: &T) -> Result<(), ProfileError> {
+pub(crate) fn write<T: Serialize>(path: &Path, value: &T) -> Result<(), ProfileError> {
     let dir = path.parent().expect("profile file has a parent");
     fs::create_dir_all(dir)?;
     let tmp = path.with_extension("json.tmp");
@@ -236,7 +177,7 @@ mod tests {
         assert_eq!(list.len(), 2, "same page with or without slash");
         assert_eq!(list[1].title, "A2");
         assert!(is_bookmarked(&home, "default", "https://a.test").unwrap());
-        let list = remove_bookmark(&home, "default", "https://a.test/").unwrap();
+        let list = remove_bookmark(&home, "default", "https://a.test/", 5).unwrap();
         assert_eq!(list.len(), 1);
         assert!(!is_bookmarked(&home, "default", "https://a.test").unwrap());
         assert!(add_bookmark(&home, "default", "about:blank", "", 4).unwrap().len() == 1);
