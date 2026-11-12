@@ -1191,6 +1191,7 @@ void main() {
       // A blank surface with content behind it is rebuilt on the same page.
       session.surfaceVerdicts.addAll([
         MorphSurfaceVerdict.blank,
+        MorphSurfaceVerdict.blank,
         MorphSurfaceVerdict.healthy,
       ]);
       await _expectSurfaceCheck(tester, 'blank surface', () async {

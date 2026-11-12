@@ -126,14 +126,16 @@ const morphSurfaceRepaintScript = '''(function () {
   return 'ok';
 })()''';
 
-/// True when [rgba] (tightly packed RGBA8888) is a single flat colour.
+/// True when [rgba] (tightly packed RGBA8888, decoded from a lossless PNG)
+/// is a single flat colour.
 ///
-/// [tolerance] absorbs compression noise per channel; [maxOddFraction] lets a
-/// few pixels (scroll bars, a caret) differ without counting as content.
+/// A surface that is not painting is exactly uniform, so the defaults are
+/// strict: a few pixels of small text on a white page (a bare
+/// "403 Forbidden") must count as content, never as a blank surface.
 bool morphFrameIsFlat(
   Uint8List rgba, {
-  int tolerance = 6,
-  double maxOddFraction = 0.002,
+  int tolerance = 2,
+  double maxOddFraction = 0,
 }) {
   final pixels = rgba.length ~/ 4;
   if (pixels == 0) {

@@ -367,7 +367,7 @@ class _InAppSession extends MorphWebViewSession {
       final png = await controller
           .takeScreenshot(
             screenshotConfiguration: ScreenshotConfiguration(
-              snapshotWidth: 72,
+              snapshotWidth: 270,
               compressFormat: CompressFormat.PNG,
             ),
           )

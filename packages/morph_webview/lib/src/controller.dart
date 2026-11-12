@@ -179,7 +179,17 @@ class MorphWebViewController {
       return MorphSurfaceVerdict.unknown;
     }
     await session.repaintSurface();
-    final verdict = await session.checkSurface();
+    var verdict = await session.checkSurface();
+    if (verdict == MorphSurfaceVerdict.blank) {
+      // Confirm before rebuilding: nudge again, give it a moment, look again.
+      // Only a surface that stays flat while the page has content is rebuilt.
+      await session.repaintSurface();
+      await Future<void>.delayed(surfaceSettle);
+      if (!identical(_session, session)) {
+        return MorphSurfaceVerdict.unknown;
+      }
+      verdict = await session.checkSurface();
+    }
     if (verdict != MorphSurfaceVerdict.blank &&
         verdict != MorphSurfaceVerdict.rendererGone) {
       return verdict;
