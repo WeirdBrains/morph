@@ -281,7 +281,7 @@ class _InAppSession extends MorphWebViewSession {
           ? (controller, challenge) async {
               final url = morphCertificateErrorUrl(
                 challenge.protectionSpace.host,
-                [_requestedUrl, _lastUrl],
+                [_requestedUrl, _lastUrl, initialUrl],
               );
               if (url != null) {
                 _loadErrors.add(
