@@ -87,6 +87,10 @@ abstract class MorphWebViewSession {
   /// page. Safe to call often.
   Future<void> repaintSurface() async {}
 
+  /// How much the engine keeps rendered for this tab ([MorphBuffering]).
+  /// Engines without such knobs ignore it.
+  Future<void> setBuffering(MorphBuffering buffering) async {}
+
   /// Replaces the native view with a fresh one on the current URL. Returns
   /// false when the backend cannot rebuild its view.
   Future<bool> rebuildSurface() async => false;
@@ -141,4 +145,15 @@ class _UnimplementedWebViewPlatform extends MorphWebViewPlatform {
       'Widget tests should install a fake; desktop apps use a morph_webview platform package.',
     );
   }
+}
+
+/// How much of a page the engine keeps rendered ahead of what is on screen.
+enum MorphBuffering {
+  /// The visible tab: raster the page ahead of the viewport so fast flings
+  /// do not reach unpainted areas, at the renderer's highest priority.
+  full,
+
+  /// A tab hidden for a while: drop the pre-rastered tiles and the
+  /// renderer's priority, and pause the page's animations, to save memory.
+  idle,
 }

@@ -16,9 +16,14 @@ class MorphWebView extends StatefulWidget {
     this.userScript = '',
     this.profileId = 'default',
     this.placeholder,
+    this.active = true,
   });
 
   final MorphWebViewController controller;
+
+  /// Whether this tab is the one on screen. Hidden tabs give up their extra
+  /// buffering after [MorphWebViewController.idleAfter].
+  final bool active;
   final String userScript;
 
   /// Chrome-style profile that owns this view's cookies and website data.
@@ -54,6 +59,7 @@ class _MorphWebViewState extends State<MorphWebView>
     widget.controller.focusNode.addListener(_onFocusChange);
     widget.controller.cursorShape.addListener(_onCursorShape);
     _listenCursor();
+    widget.controller.setVisible(widget.active);
   }
 
   @override
@@ -66,6 +72,10 @@ class _MorphWebViewState extends State<MorphWebView>
       widget.controller.cursorShape.addListener(_onCursorShape);
       _onCursorShape();
       _listenCursor();
+    }
+    if (oldWidget.controller != widget.controller ||
+        oldWidget.active != widget.active) {
+      widget.controller.setVisible(widget.active);
     }
   }
 
