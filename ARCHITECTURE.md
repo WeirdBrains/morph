@@ -389,6 +389,19 @@ in docs and code (for example, `morph_projects::CodeSpace`).
   will move the seal into the profile's keyring; "never a second identity"
   applies per profile.
 
+- _(new 2026-11-12)_ **Identity recovery and sync (designed, not built).**
+  See [docs/identity-recovery.md](docs/identity-recovery.md). Per profile:
+  always-encrypted backups (`weirdnet-backup/v1`), restore in onboarding
+  (words, backup file, another device, peers), dark shards (Shamir split of
+  the seed, each shard password-sealed, trusted holders only, as in Muninn),
+  QR device linking (no secret in the QR, ephemeral X25519, 6-digit SAS,
+  120 s single use, Weirdnet transport), and end-to-end encrypted sync of
+  opt-in data types with per-record HLC versions, LWW plus OR-set tags,
+  kept conflicts, device revocation and key epochs. Shared logic goes into
+  new `weirdnet-backup`, `weirdnet-shards`, `weirdnet-device-link` and
+  (if `weirdnet-storage` is not enough) `weirdnet-sync` crates for Muninn
+  to adopt too.
+
 **Trust.** A *trusted peer* is a user you completed an exchange with (invite link or
 code, short code compared out of band) and pinned. The trust list stores user id, pinned
 node ids, label, when the user was added and when they were last seen.
