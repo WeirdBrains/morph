@@ -1,3 +1,4 @@
+import '../api.dart';
 import '../host_friendly_url.dart';
 
 /// Identifier and presentation state for one shell tab.
@@ -134,5 +135,46 @@ class MorphTabSet {
     if (title != null) {
       target.title = title;
     }
+  }
+
+  /// Persistable snapshot of ids, URLs, and titles (not web-view history).
+  ProfileTabSnapshot snapshot() {
+    return ProfileTabSnapshot(
+      activeId: _active,
+      nextId: _nextId,
+      tabs: [
+        for (final tab in _tabs)
+          ProfileTab(id: tab.id, url: tab.url, title: tab.title),
+      ],
+    );
+  }
+
+  /// Replace this set with a saved snapshot. An empty snapshot becomes one
+  /// fresh start-page tab.
+  void applySnapshot(ProfileTabSnapshot snapshot) {
+    if (snapshot.tabs.isEmpty) {
+      _tabs
+        ..clear()
+        ..add(MorphTab(id: 1));
+      _active = 1;
+      _nextId = 2;
+      return;
+    }
+    _tabs
+      ..clear()
+      ..addAll([
+        for (final tab in snapshot.tabs)
+          MorphTab(id: tab.id, url: tab.url, title: tab.title),
+      ]);
+    _active = tab(snapshot.activeId) != null
+        ? snapshot.activeId
+        : _tabs.first.id;
+    var next = snapshot.nextId;
+    for (final tab in _tabs) {
+      if (tab.id >= next) {
+        next = tab.id + 1;
+      }
+    }
+    _nextId = next;
   }
 }
