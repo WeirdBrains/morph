@@ -1,10 +1,12 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:morph/src/api.dart';
 import 'package:morph/src/app.dart';
 import 'package:morph/src/widgets/tab_switcher.dart';
 import 'package:morph/src/shell.dart';
+import 'package:morph/src/tabs/tab_position.dart';
 import 'package:morph/src/theme/morph_theme.dart';
 import 'package:morph/src/widgets/start_page.dart';
 import 'package:morph_webview/morph_webview.dart';
@@ -61,6 +63,7 @@ class FakeMorphApi implements MorphApi {
   final List<ProfileInfo> profiles = [
     const ProfileInfo(id: 'default', name: 'Default'),
   ];
+  final Map<String, ProfileTabSnapshot> tabsByProfile = {};
   int _nextProfile = 1;
 
   ProfileCatalog _catalog() =>
@@ -79,8 +82,17 @@ class FakeMorphApi implements MorphApi {
   Future<ProfileCatalog> listProfiles({String? home}) async => _catalog();
 
   @override
-  Future<ProfileCatalog> createProfile(String name, {String? home}) async {
-    final profile = ProfileInfo(id: 'p${_nextProfile++}', name: name);
+  @override
+  Future<ProfileCatalog> createProfile(
+    String name, {
+    String? home,
+    String? color,
+  }) async {
+    final profile = ProfileInfo(
+      id: 'p${_nextProfile++}',
+      name: name,
+      color: color ?? '',
+    );
     profiles.add(profile);
     currentProfileId = profile.id;
     return _catalog();
@@ -96,7 +108,8 @@ class FakeMorphApi implements MorphApi {
     if (index < 0) {
       throw StateError('unknown profile $id');
     }
-    profiles[index] = ProfileInfo(id: id, name: name);
+    final existing = profiles[index];
+    profiles[index] = ProfileInfo(id: id, name: name, color: existing.color);
     return _catalog();
   }
 
@@ -107,6 +120,7 @@ class FakeMorphApi implements MorphApi {
     }
     _require(id);
     profiles.removeWhere((profile) => profile.id == id);
+    tabsByProfile.remove(id);
     if (currentProfileId == id) {
       currentProfileId = profiles.any((profile) => profile.id == 'default')
           ? 'default'
@@ -136,6 +150,25 @@ class FakeMorphApi implements MorphApi {
       webkitCacheDir: '$root/webkit/cache',
       cookiesPath: '$root/webkit/cookies.sqlite',
     );
+  }
+
+  String _tabKey(String? profileId) => profileId ?? currentProfileId;
+
+  @override
+  Future<ProfileTabSnapshot> loadProfileTabs({
+    String? home,
+    String? profileId,
+  }) async {
+    return tabsByProfile[_tabKey(profileId)] ?? ProfileTabSnapshot.empty;
+  }
+
+  @override
+  Future<void> saveProfileTabs(
+    ProfileTabSnapshot snapshot, {
+    String? home,
+    String? profileId,
+  }) async {
+    tabsByProfile[_tabKey(profileId)] = snapshot;
   }
 }
 
@@ -675,4 +708,240 @@ void main() {
       debugDefaultTargetPlatformOverride = null;
     }
   });
+
+  testWidgets(
+    'desktop profile button sits at the right of the nav row under the window buttons',
+    (tester) async {
+      const missingHome = '/tmp/morph-does-not-exist';
+      for (final platform in [
+        TargetPlatform.linux,
+        TargetPlatform.macOS,
+        TargetPlatform.windows,
+      ]) {
+        debugDefaultTargetPlatformOverride = platform;
+        final view = tester.view;
+        view.physicalSize = const Size(1280, 800);
+        view.devicePixelRatio = 1.0;
+        try {
+          await tester.pumpWidget(
+            MorphApp(
+              key: ValueKey('profile-placement-$platform'),
+              api: FakeMorphApi(),
+              home: missingHome,
+              subscribeToTicks: false,
+              loadPageBridgeAsset: false,
+            ),
+          );
+          await _pumpUntilIdentity(tester);
+          await tester.pumpAndSettle();
+
+          for (final position in MorphTabPosition.values) {
+            if (position != MorphTabPosition.top) {
+              await tester.tap(find.byKey(const Key('tab-position')));
+              await tester.pumpAndSettle();
+              await tester.tap(find.byKey(Key('tab-position-${position.key}')));
+              await tester.pumpAndSettle();
+            }
+            _assertProfileAtNavTrailing(tester, platform, position);
+          }
+        } finally {
+          debugDefaultTargetPlatformOverride = null;
+          view.reset();
+        }
+      }
+    },
+  );
+
+  testWidgets('profiles isolate tabs and refuse to delete the last profile', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    final view = tester.view;
+    view.physicalSize = const Size(1280, 800);
+    view.devicePixelRatio = 1.0;
+    final api = FakeMorphApi();
+    try {
+      await tester.pumpWidget(
+        MorphApp(
+          api: api,
+          home: '/tmp/morph-does-not-exist',
+          subscribeToTicks: false,
+          loadPageBridgeAsset: false,
+        ),
+      );
+      await _pumpUntilIdentity(tester);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('profile-button')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('profile-delete-default')), findsNothing);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.byKey(const Key('address-bar')),
+        'one.example',
+      );
+      await tester.tap(find.byKey(const Key('address-go')));
+      await tester.pump();
+      await _pumpUntilWebViewAttached(tester, fakeWebView);
+      expect(find.byKey(const Key('start-page')), findsNothing);
+
+      await _addNamedProfile(tester, 'Work');
+      expect(api.profiles, hasLength(2));
+      expect(find.byKey(const Key('start-page')), findsOneWidget);
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const Key('address-bar')))
+            .controller!
+            .text,
+        isNot(contains('one.example')),
+      );
+
+      await _addNamedProfile(tester, 'Home');
+      expect(api.profiles, hasLength(3));
+
+      await tester.tap(find.byKey(const Key('profile-button')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('profile-item-default')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('start-page')), findsNothing);
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const Key('address-bar')))
+            .controller!
+            .text,
+        'one.example',
+      );
+
+      await tester.tap(find.byKey(const Key('profile-button')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('profile-item-p1')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('start-page')), findsOneWidget);
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const Key('address-bar')))
+            .controller!
+            .text,
+        isNot(contains('one.example')),
+      );
+
+      await tester.tap(find.byKey(const Key('profile-button')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('profile-delete-default')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('profile-delete-p2')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('profile-delete-confirm')));
+      await tester.pumpAndSettle();
+      expect(api.profiles, hasLength(2));
+      expect(api.profiles.any((profile) => profile.id == 'p2'), isFalse);
+
+      await tester.tap(find.byKey(const Key('profile-button')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('profile-delete-p1')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('profile-delete-confirm')));
+      await tester.pumpAndSettle();
+      expect(api.profiles, hasLength(1));
+      expect(api.currentProfileId, 'default');
+
+      await tester.tap(find.byKey(const Key('profile-button')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('profile-delete-default')), findsNothing);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+      view.reset();
+    }
+  });
+
+  testWidgets('phone address sheet lists profiles', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    final view = tester.view;
+    view.physicalSize = const Size(412, 915);
+    view.devicePixelRatio = 1.0;
+    try {
+      await tester.pumpWidget(
+        MorphApp(
+          api: FakeMorphApi(),
+          home: '/tmp/morph-does-not-exist',
+          subscribeToTicks: false,
+          loadPageBridgeAsset: false,
+        ),
+      );
+      await _pumpUntilIdentity(tester);
+      await tester.tap(find.byKey(const Key('address-bar')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('profile-sheet')), findsOneWidget);
+      expect(find.byKey(const Key('profile-add')), findsOneWidget);
+      expect(find.byKey(const Key('profile-item-default')), findsOneWidget);
+      expect(find.byKey(const Key('profile-delete-default')), findsNothing);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+      view.reset();
+    }
+  });
+}
+
+Future<void> _addNamedProfile(WidgetTester tester, String name) async {
+  await tester.tap(find.byKey(const Key('profile-button')));
+  await tester.pumpAndSettle();
+  await tester.tap(find.byKey(const Key('profile-add')));
+  await tester.pumpAndSettle();
+  expect(find.byKey(const Key('profile-add-dialog')), findsOneWidget);
+  await tester.enterText(find.byKey(const Key('profile-add-name')), name);
+  await tester.tap(find.byKey(const Key('profile-add-confirm')));
+  await tester.pumpAndSettle();
+}
+
+void _assertProfileAtNavTrailing(
+  WidgetTester tester,
+  TargetPlatform platform,
+  MorphTabPosition position,
+) {
+  final reason = '$platform $position';
+  expect(
+    find.byKey(const Key('profile-button')),
+    findsOneWidget,
+    reason: reason,
+  );
+  final nav = tester.getRect(find.byKey(const Key('nav-row')));
+  final profile = tester.getRect(find.byKey(const Key('profile-button')));
+  expect(profile.top, greaterThanOrEqualTo(nav.top - 0.5), reason: reason);
+  expect(profile.bottom, lessThanOrEqualTo(nav.bottom + 0.5), reason: reason);
+  expect(nav.right - profile.right, lessThan(24), reason: reason);
+
+  if (position == MorphTabPosition.top) {
+    final strip = tester.getRect(find.byKey(const Key('tab-strip')));
+    expect(
+      profile.top,
+      greaterThanOrEqualTo(strip.bottom - 0.5),
+      reason: reason,
+    );
+  } else {
+    final caption = tester.getRect(find.byKey(const Key('caption-bar')));
+    expect(
+      profile.top,
+      greaterThanOrEqualTo(caption.bottom - 0.5),
+      reason: reason,
+    );
+    if (position == MorphTabPosition.bottom) {
+      final strip = tester.getRect(find.byKey(const Key('tab-strip')));
+      expect(
+        profile.bottom,
+        lessThanOrEqualTo(strip.top + 0.5),
+        reason: reason,
+      );
+    }
+  }
+
+  if (find.byKey(const Key('window-close')).evaluate().isNotEmpty) {
+    final close = tester.getRect(find.byKey(const Key('window-close')));
+    expect(
+      profile.top,
+      greaterThanOrEqualTo(close.bottom - 0.5),
+      reason: reason,
+    );
+    expect((profile.right - close.right).abs(), lessThan(40), reason: reason);
+  }
 }
