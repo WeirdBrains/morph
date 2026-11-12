@@ -13,8 +13,9 @@ The Linux plugin now talks to that view over the in-process gRPC control
 stream for navigation, input, and page-bridge handling (the method channel
 remains for create/dispose/resize and the texture id). macOS (WKWebView) and Windows (WebView2) backends now share that
 control layer through flutter_inappwebview 6.x. The Android in-app
-web view, DMA-BUF frame-rate measurements, and hidden-text-layer
-alignment tests are still ahead in M1.
+web view is registered on that same path (system WebView platform
+view, address-bar navigation). DMA-BUF frame-rate measurements and
+hidden-text-layer alignment tests are still ahead in M1.
 
 1. Webview _(moved up: everything else plugs into it)_
     - System web views: WebView2 (Windows), WKWebView (Apple), WebKit (Linux: WPE + webkit2gtk), Android WebView _(changed 2026-11-11)_
