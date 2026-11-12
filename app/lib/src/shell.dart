@@ -19,6 +19,7 @@ import 'widgets/address_sheet.dart';
 import 'widgets/brand.dart';
 import 'widgets/desktop_chrome.dart';
 import 'widgets/find_bar.dart';
+import 'widgets/identity_onboarding.dart';
 import 'widgets/library_page.dart';
 import 'widgets/mobile_gestures.dart';
 import 'widgets/profile_menu.dart';
@@ -83,6 +84,9 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
   final _recorded = <int, String>{};
   bool _findOpen = false;
   Set<String> _bookmarkUrls = const {};
+  MorphIdentity? _identity;
+  final _onboardingSkipped = <String>{};
+  bool _onboardingOpen = false;
   Future<void> _libraryWrites = Future.value();
   bool _showSwitcher = false;
   final _previews = <int, Uint8List?>{};
@@ -276,6 +280,7 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
         }
         unawaited(_pruneProfileData(catalog));
         unawaited(_loadBookmarks());
+        unawaited(_checkIdentity());
       } catch (_) {
         // A missing catalog leaves the default profile and a start tab.
       }
@@ -636,6 +641,8 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
             unawaited(_openLibrary(MorphLibraryTab.history));
           case 'settings':
             unawaited(_openSettings());
+          case 'identity':
+            unawaited(_openIdentity());
         }
       },
       itemBuilder: (context) => const [
@@ -666,6 +673,14 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
           ),
         ),
         PopupMenuDivider(),
+        PopupMenuItem(
+          key: Key('menu-identity'),
+          value: 'identity',
+          child: ListTile(
+            leading: Icon(Icons.fingerprint),
+            title: Text('Identity'),
+          ),
+        ),
         PopupMenuItem(
           key: Key('menu-settings'),
           value: 'settings',
@@ -761,7 +776,9 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
     _catalog = catalog;
     _profileId = catalog.current;
     _bookmarkUrls = const {};
+    _identity = null;
     unawaited(_loadBookmarks());
+    unawaited(_checkIdentity());
     try {
       tabs.applySnapshot(
         await widget.api.loadProfileTabs(home: _home, profileId: _profileId),
@@ -956,7 +973,10 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
 
   /// Shows a full-height panel without covering the page with an opaque
   /// route, so platform web views stay composited underneath.
-  Future<void> _showPanel(WidgetBuilder builder) async {
+  Future<void> _showPanel(
+    WidgetBuilder builder, {
+    bool dismissible = true,
+  }) async {
     if (!mounted) {
       return;
     }
@@ -965,6 +985,8 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
         context: context,
         isScrollControlled: true,
         useSafeArea: true,
+        isDismissible: dismissible,
+        enableDrag: dismissible,
         builder: (context) => FractionallySizedBox(
           heightFactor: 0.94,
           child: ClipRRect(
@@ -976,6 +998,7 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
     } else {
       await showDialog<void>(
         context: context,
+        barrierDismissible: dismissible,
         builder: (context) => Dialog(
           clipBehavior: Clip.antiAlias,
           child: ConstrainedBox(
@@ -985,6 +1008,120 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
         ),
       );
     }
+    _onOverlayClosed();
+  }
+
+  String get _identityLabel {
+    final id = _identity;
+    if (id == null) {
+      return 'Set up identity';
+    }
+    final short = id.userId.length > 12
+        ? '${id.userId.substring(0, 12)}…'
+        : id.userId;
+    return 'Identity $short';
+  }
+
+  /// Looks up the active profile's identity and starts onboarding the first
+  /// time a profile without one is used (once per profile per run if skipped).
+  Future<void> _checkIdentity() async {
+    final profileId = _profileId;
+    MorphIdentity? identity;
+    try {
+      identity = await widget.api.profileIdentity(profileId, home: _home);
+    } catch (_) {
+      // No readable profile store yet: nothing to onboard into.
+      return;
+    }
+    if (!mounted || profileId != _profileId) {
+      return;
+    }
+    setState(() => _identity = identity);
+    if (identity == null && !_onboardingSkipped.contains(profileId)) {
+      await _openOnboarding();
+    }
+  }
+
+  Future<void> _openOnboarding() async {
+    if (_onboardingOpen || !mounted) {
+      return;
+    }
+    _onboardingOpen = true;
+    final profileId = _profileId;
+    final home = _home;
+    var finished = false;
+    try {
+      await _showPanel(
+        dismissible: false,
+        (panel) => MorphIdentityOnboarding(
+          profileName: _profileName,
+          onCreate: (password) =>
+              widget.api.createProfileIdentity(profileId, password, home: home),
+          onImport: (words, password) => widget.api.importProfileIdentity(
+            profileId,
+            words,
+            password,
+            home: home,
+          ),
+          onDone: (identity) {
+            finished = true;
+            if (mounted && profileId == _profileId) {
+              setState(() => _identity = identity);
+            }
+            Navigator.of(panel).pop();
+          },
+          onSkip: () => Navigator.of(panel).pop(),
+        ),
+      );
+    } finally {
+      _onboardingOpen = false;
+    }
+    if (!finished) {
+      _onboardingSkipped.add(profileId);
+    }
+  }
+
+  Future<void> _openIdentity() async {
+    final identity = _identity;
+    if (identity == null) {
+      await _openOnboarding();
+      return;
+    }
+    if (!mounted) {
+      return;
+    }
+    final colors = Theme.of(context).colorScheme;
+    final mono = MorphTheme.monoStyle(color: colors.onSurface, size: 12);
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        key: const Key('identity-dialog'),
+        title: Text('$_profileName identity'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('User id'),
+            SelectableText(identity.userId, style: mono),
+            const SizedBox(height: 8),
+            const Text('Fingerprint'),
+            SelectableText(identity.fingerprint, style: mono),
+            const SizedBox(height: 8),
+            Text(
+              identity.imported
+                  ? 'Restored from recovery words.'
+                  : 'Created in this profile.',
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
     _onOverlayClosed();
   }
 
@@ -1164,7 +1301,8 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
           canGoBack: navigation.canGoBack,
           canGoForward: navigation.canGoForward,
           desktopSite: webView.desktopSite,
-          identityLabel: userId,
+          identityLabel: _identityLabel,
+          onIdentity: () => unawaited(_openIdentity()),
           onSubmit: _submitUrl,
           onBack: () => unawaited(webView.goBack()),
           onForward: () => unawaited(webView.goForward()),

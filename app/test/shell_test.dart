@@ -811,6 +811,159 @@ void main() {
     },
   );
 
+  testWidgets('each new profile is onboarded to its own identity on desktop', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    final view = tester.view;
+    view.physicalSize = const Size(1280, 1000);
+    view.devicePixelRatio = 1.0;
+    final api = FakeMorphApi()..onboarded = false;
+    Future<void> createIdentity() async {
+      expect(find.byKey(const Key('identity-onboarding')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('onboarding-create')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('onboarding-password')),
+        'long enough',
+      );
+      await tester.enterText(
+        find.byKey(const Key('onboarding-confirm')),
+        'long enough',
+      );
+      await tester.tap(find.byKey(const Key('onboarding-submit')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('onboarding-saved')));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('onboarding-done')));
+      await tester.pumpAndSettle();
+    }
+
+    try {
+      await tester.pumpWidget(
+        MorphApp(
+          api: api,
+          home: '/tmp/morph-does-not-exist',
+          subscribeToTicks: false,
+          loadPageBridgeAsset: false,
+        ),
+      );
+      await _pumpUntilIdentity(tester);
+      await tester.pumpAndSettle();
+
+      // First use of the default profile asks, and the barrier cannot dismiss.
+      await tester.tapAt(const Offset(4, 996));
+      await tester.pumpAndSettle();
+      await createIdentity();
+      expect(find.byKey(const Key('identity-onboarding')), findsNothing);
+      final first = api.identitiesByProfile['default']!;
+
+      await _addNamedProfile(tester, 'Work');
+      await tester.pumpAndSettle();
+      await createIdentity();
+      final work = api.identitiesByProfile[api.currentProfileId]!;
+      expect(work.userId, isNot(first.userId));
+
+      // Not now on a third profile, then switching back to it in the same
+      // run does not nag again; switching to an onboarded one never asks.
+      await _addNamedProfile(tester, 'Play');
+      await tester.pumpAndSettle();
+      final play = api.currentProfileId;
+      await tester.tap(find.byKey(const Key('onboarding-skip')));
+      await tester.pumpAndSettle();
+      expect(api.identitiesByProfile.containsKey(play), isFalse);
+
+      await tester.tap(find.byKey(const Key('profile-button')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('profile-item-default')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('identity-onboarding')), findsNothing);
+
+      await tester.tap(find.byKey(const Key('nav-menu')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('menu-identity')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('identity-dialog')), findsOneWidget);
+      expect(find.text(first.userId), findsOneWidget);
+      await tester.tap(find.text('Close'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('profile-button')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(Key('profile-item-$play')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('identity-onboarding')), findsNothing);
+
+      // The menu still offers setup for the skipped profile.
+      await tester.tap(find.byKey(const Key('nav-menu')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('menu-identity')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('identity-onboarding')), findsOneWidget);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+      view.reset();
+    }
+  });
+
+  testWidgets('phone onboards the profile and shows it in the sheet', (
+    tester,
+  ) async {
+    final view = tester.view;
+    view.physicalSize = const Size(412, 915);
+    view.devicePixelRatio = 1.0;
+    addTearDown(view.reset);
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    final api = FakeMorphApi()..onboarded = false;
+    try {
+      await tester.pumpWidget(
+        MorphApp(
+          api: api,
+          home: '/tmp/morph-does-not-exist',
+          subscribeToTicks: false,
+          loadPageBridgeAsset: false,
+        ),
+      );
+      await _pumpUntilIdentity(tester);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('identity-onboarding')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('onboarding-import')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('onboarding-words')),
+        FakeMorphApi.fakeWords('phoneuser0000000'),
+      );
+      await tester.enterText(
+        find.byKey(const Key('onboarding-password')),
+        'long enough',
+      );
+      await tester.enterText(
+        find.byKey(const Key('onboarding-confirm')),
+        'long enough',
+      );
+      await tester.tap(find.byKey(const Key('onboarding-submit')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('identity-onboarding')), findsNothing);
+      expect(api.identitiesByProfile['default']!.imported, isTrue);
+
+      await tester.tap(find.byKey(const Key('address-bar')));
+      await tester.pumpAndSettle();
+      await tester.scrollUntilVisible(
+        find.byKey(const Key('sheet-identity')),
+        200,
+        scrollable: find
+            .descendant(
+              of: find.byKey(const Key('address-sheet')),
+              matching: find.byType(Scrollable),
+            )
+            .first,
+      );
+      expect(find.text('Identity phoneuser000…'), findsOneWidget);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
   testWidgets('profiles isolate tabs and refuse to delete the last profile', (
     tester,
   ) async {

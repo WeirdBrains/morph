@@ -27,6 +27,7 @@ class MorphAddressSheet extends StatefulWidget {
     this.onHistory,
     this.onBookmarks,
     this.onSettings,
+    this.onIdentity,
     this.identityLabel,
     this.profiles,
   });
@@ -47,6 +48,7 @@ class MorphAddressSheet extends StatefulWidget {
   final VoidCallback? onHistory;
   final VoidCallback? onBookmarks;
   final VoidCallback? onSettings;
+  final VoidCallback? onIdentity;
   final String? identityLabel;
 
   /// Optional profiles section (mobile). Desktop uses the nav-row button.
@@ -298,9 +300,11 @@ class _MorphAddressSheetState extends State<MorphAddressSheet> {
                 ],
                 _RowTile(
                   key: const Key('sheet-identity'),
-                  icon: Icons.person_outline,
+                  icon: Icons.fingerprint,
                   label: widget.identityLabel ?? 'Identity',
-                  onTap: widget.identityLabel == null
+                  onTap: widget.onIdentity != null
+                      ? _closeThen(widget.onIdentity, 'Identity')
+                      : widget.identityLabel == null
                       ? () => _comingSoon('Identity')
                       : null,
                 ),
