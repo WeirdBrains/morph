@@ -165,6 +165,80 @@ void main() {
       await controller.dispose();
     });
 
+    test('a check waits until the page has stopped scrolling', () async {
+      final controller = MorphWebViewController(
+        initialUrl: 'about:blank',
+        surfaceQuiet: const Duration(milliseconds: 150),
+      );
+      await controller.attach(width: 412, height: 800, devicePixelRatio: 2);
+      final session = fake.lastSession!;
+      session.lastUserScroll = DateTime.now();
+      final watch = Stopwatch()..start();
+      final verdict = controller.ensureSurfaceHealthy();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(session.surfaceChecks, 0, reason: 'no capture mid-fling');
+      expect(session.surfaceRepaints, 0);
+      expect(await verdict, MorphSurfaceVerdict.healthy);
+      expect(watch.elapsedMilliseconds, greaterThanOrEqualTo(120));
+      expect(session.surfaceChecks, 1);
+      await controller.dispose();
+    });
+
+    test('a page that keeps scrolling is never captured', () async {
+      final controller = MorphWebViewController(
+        initialUrl: 'about:blank',
+        surfaceQuiet: const Duration(milliseconds: 100),
+        surfaceQuietMax: const Duration(milliseconds: 300),
+      );
+      await controller.attach(width: 412, height: 800, devicePixelRatio: 2);
+      final session = fake.lastSession!;
+      final scrolling = Timer.periodic(
+        const Duration(milliseconds: 20),
+        (_) => session.lastUserScroll = DateTime.now(),
+      );
+      session.lastUserScroll = DateTime.now();
+      try {
+        expect(
+          await controller.ensureSurfaceHealthy(),
+          MorphSurfaceVerdict.unknown,
+        );
+      } finally {
+        scrolling.cancel();
+      }
+      expect(session.surfaceChecks, 0);
+      expect(session.surfaceRebuilds, 0);
+      await controller.dispose();
+    });
+
+    test('the confirming look also waits for scrolling to stop', () async {
+      final controller = MorphWebViewController(
+        initialUrl: 'about:blank',
+        surfaceSettle: Duration.zero,
+        surfaceQuiet: const Duration(milliseconds: 150),
+      );
+      await controller.attach(width: 412, height: 800, devicePixelRatio: 2);
+      final session = fake.lastSession!;
+      session.surfaceVerdicts.addAll([
+        MorphSurfaceVerdict.blank,
+        MorphSurfaceVerdict.healthy,
+      ]);
+      final gate = Completer<void>();
+      session.checkGate = gate;
+      final verdict = controller.ensureSurfaceHealthy();
+      await Future<void>.delayed(Duration.zero);
+      expect(session.surfaceChecks, 1);
+      // The user starts a fling while the first look is being taken.
+      session.lastUserScroll = DateTime.now();
+      session.checkGate = null;
+      gate.complete();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(session.surfaceChecks, 1, reason: 'confirm waits for the fling');
+      expect(await verdict, MorphSurfaceVerdict.healthy);
+      expect(session.surfaceChecks, 2);
+      expect(session.surfaceRebuilds, 0);
+      await controller.dispose();
+    });
+
     test('a healthy surface only gets a repaint nudge', () async {
       final controller = MorphWebViewController(initialUrl: 'about:blank');
       await controller.attach(width: 412, height: 800, devicePixelRatio: 2);

@@ -12,6 +12,8 @@ class MorphWebViewController {
   MorphWebViewController({
     this.initialUrl = 'https://example.com',
     this.surfaceSettle = const Duration(milliseconds: 600),
+    this.surfaceQuiet = const Duration(seconds: 1),
+    this.surfaceQuietMax = const Duration(seconds: 10),
     this.rebuildCooldown = const Duration(seconds: 20),
     this.unresponsiveGrace = defaultUnresponsiveGrace,
     this.idleAfter = defaultIdleAfter,
@@ -25,6 +27,8 @@ class MorphWebViewController {
     required MorphWebViewController opener,
   }) : initialUrl = '',
        surfaceSettle = opener.surfaceSettle,
+       surfaceQuiet = opener.surfaceQuiet,
+       surfaceQuietMax = opener.surfaceQuietMax,
        rebuildCooldown = opener.rebuildCooldown,
        unresponsiveGrace = opener.unresponsiveGrace,
        idleAfter = opener.idleAfter,
@@ -52,6 +56,14 @@ class MorphWebViewController {
 
   /// How long a rebuilt surface gets to paint before it is checked again.
   final Duration surfaceSettle;
+
+  /// How long the page must have been still (no scroll or fling) before a
+  /// surface check captures it.
+  final Duration surfaceQuiet;
+
+  /// How long a check waits for the page to be still before giving up; a
+  /// page the user keeps scrolling is evidently painting.
+  final Duration surfaceQuietMax;
 
   /// Minimum gap between two automatic rebuilds, so a page that really is a
   /// flat colour can never put the view into a rebuild loop.
@@ -412,6 +424,31 @@ class MorphWebViewController {
     });
   }
 
+  /// Waits until [session]'s page has gone [surfaceQuiet] without a scroll.
+  /// False when it is still being scrolled after [surfaceQuietMax] or the
+  /// session changed meanwhile.
+  Future<bool> _untilStill(MorphWebViewSession session) async {
+    final giveUp = _clock().add(surfaceQuietMax);
+    while (true) {
+      final last = session.lastUserScroll;
+      if (last == null) {
+        return true;
+      }
+      final now = _clock();
+      final still = now.difference(last);
+      if (still >= surfaceQuiet) {
+        return true;
+      }
+      if (!now.isBefore(giveUp)) {
+        return false;
+      }
+      await Future<void>.delayed(surfaceQuiet - still);
+      if (!identical(_session, session)) {
+        return false;
+      }
+    }
+  }
+
   Future<MorphSurfaceVerdict> _heal() async {
     final session = _session;
     if (session == null) {
@@ -423,6 +460,9 @@ class MorphWebViewController {
       // that crashes on load.
       return MorphSurfaceVerdict.rendererGone;
     }
+    if (!await _untilStill(session)) {
+      return MorphSurfaceVerdict.unknown;
+    }
     await session.repaintSurface();
     var verdict = await session.checkSurface();
     if (verdict == MorphSurfaceVerdict.blank) {
@@ -430,7 +470,7 @@ class MorphWebViewController {
       // Only a surface that stays flat while the page has content is rebuilt.
       await session.repaintSurface();
       await Future<void>.delayed(surfaceSettle);
-      if (!identical(_session, session)) {
+      if (!identical(_session, session) || !await _untilStill(session)) {
         return MorphSurfaceVerdict.unknown;
       }
       verdict = await session.checkSurface();

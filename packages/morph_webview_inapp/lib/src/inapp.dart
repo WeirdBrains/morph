@@ -339,8 +339,18 @@ class _InAppSession extends MorphWebViewSession {
       onTitleChanged: (controller, title) {
         unawaited(_emitNav(controller, null, title: title));
       },
+      // The plugin reports every scroll step anyway; surface checks use the
+      // last one to stay out of the way of drags and flings.
+      onScrollChanged: (controller, x, y) {
+        _lastScroll = DateTime.now();
+      },
     );
   }
+
+  DateTime? _lastScroll;
+
+  @override
+  DateTime? get lastUserScroll => _lastScroll;
 
   final int viewId;
   final String initialUrl;
@@ -523,8 +533,15 @@ class _InAppSession extends MorphWebViewSession {
       final png = await controller
           .takeScreenshot(
             screenshotConfiguration: ScreenshotConfiguration(
+              // Logical pixels: the plugin scales this by the device pixel
+              // ratio (about 800 px wide on a Pixel 9 Pro XL). JPEG because
+              // the capture is encoded on Android's main thread: a
+              // quality-100 PNG of a busy page took up to 150 ms there. A
+              // flat frame still decodes flat (within the tolerance), and
+              // any text still leaves off-colour pixels.
               snapshotWidth: 270,
-              compressFormat: CompressFormat.PNG,
+              compressFormat: CompressFormat.JPEG,
+              quality: 90,
             ),
           )
           .timeout(const Duration(seconds: 3));

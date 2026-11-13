@@ -78,6 +78,12 @@ abstract class MorphWebViewSession {
 
   bool get desktopSite => false;
 
+  /// When the user last scrolled the page (drag or fling), or null when the
+  /// backend cannot tell. Surface checks wait for the page to be still: a
+  /// capture taken mid-fling can come back flat and costs main-thread time
+  /// while the user is watching.
+  DateTime? get lastUserScroll => null;
+
   /// Whether the native surface is painting the page. Backends that cannot
   /// tell return [MorphSurfaceVerdict.unknown].
   Future<MorphSurfaceVerdict> checkSurface() async =>
