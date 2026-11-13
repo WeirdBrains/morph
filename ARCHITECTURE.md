@@ -411,7 +411,8 @@ in docs and code (for example, `morph_projects::CodeSpace`).
   will move the seal into the profile's keyring; "never a second identity"
   applies per profile.
 
-- _(new 2026-11-12)_ **Identity recovery and sync (designed, not built).**
+- _(changed 2026-11-13: identity backups and restore from a file are built)_
+  **Identity recovery and sync (mostly designed, partly built).**
   See [docs/identity-recovery.md](docs/identity-recovery.md). Per profile:
   always-encrypted backups (`weirdnet-backup/v1`), restore in onboarding
   (words, backup file, another device, peers), dark shards (Shamir split of
@@ -2006,3 +2007,44 @@ was installed.
   macOS app reading its own Keychain entry at runtime (the test binary is not
   sandboxed), and the Windows app, whose build needs `nuget.exe` for
   flutter_inappwebview_windows.
+
+### 2026-11-13 — Identity backups, the recovery phrase again, restore from a file
+
+Each profile's identity can now be backed up and restored without the words
+being typed in.
+
+- **Recovery phrase:** the identity dialog's "Recovery phrase" asks for the
+  profile password (`profile_recovery_words`) and shows the 24 words in the
+  same view as onboarding (`MorphRecoveryPhraseView`): Copy (clipboard
+  cleared after 60 s), Share (Android share sheet, else copy) and Download
+  (Android SAF, desktop save dialog).
+- **Backup:** "Back up" checks the profile password, then seals the words
+  under a separate backup password (typed twice) as an ASCII-armored age
+  file, `morph-<profile>-identity-backup.age` (`morph_identity::backup`).
+  The plaintext is the 24 words alone, as in weirdnet-keys' `words.txt.age`,
+  so Muninn's key-file inputs and `age -d` read it. age's `armor` feature is
+  turned on for this; no new crate. The Android saver takes a MIME type so a
+  backup keeps its `.age` name.
+- **Restore:** onboarding has "Restore from a backup file" next to "Link
+  from another device". `backup::kind` tells a sealed backup (armored or
+  binary age) from an unsealed phrase file (Morph's phrase file, a numbered
+  list or bare words) before any password; a sealed one asks for its backup
+  password. Either becomes the profile's identity under a new profile
+  password through the same `import_unlocked` and `adopt_new_identity` path
+  as restoring from words (library encrypted, key into the keystore). Files
+  over 64 KiB are not read; a wrong backup password or a damaged file writes
+  nothing.
+- **Not shared code yet:** this is a few lines over weirdnet-keys and age,
+  Morph-specific in its file names and phrase-file parsing, so it stays in
+  `morph-identity`. The full profile backup (`weirdnet-backup/v1`, library
+  data included) is still design; it would carry this identity part too.
+- **Dark shards:** design notes only, in `docs/dark-shards.md`: weirdnet-keys
+  0.1.0 already has the split, sealing and claim tags; Morph lacks trusted
+  connections and the holder protocol (planned `weirdnet-shards`).
+- **Tests:** Rust round trips (another profile gets the same user id and
+  library key), wrong and missing backup passwords, damaged armor, binary age
+  files, five phrase layouts, refused files; widget tests for both dialogs,
+  the onboarding restore paths and an eye toggle on every password field
+  (the existing obscured-field test still holds); a shell test opens both
+  dialogs from the identity dialog.
+

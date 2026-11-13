@@ -1,7 +1,9 @@
 # Identity backup, recovery, device linking and sync
 
 Status: design, 2026-11-12. Section 4 (login over QR) is built; see
-`qr-login.md`. The rest is not built yet. Decisions are recorded
+`qr-login.md`. Identity backups and restore from a file (a subset of
+sections 1 and 2, below) are built since 2026-11-13. Dark shards have design
+notes in `dark-shards.md`. The rest is not built yet. Decisions are recorded
 in ARCHITECTURE.md (section 5, "Identity recovery and sync").
 
 Every Morph profile has its own Weirdnet identity: a 32-byte seed, shown as
@@ -37,6 +39,19 @@ the formats below are shared and versioned (`weirdnet-…/v1`), not Morph-only.
 
 ## 1. Backups
 
+**Built (2026-11-13): identity backups.** The identity dialog's "Back up"
+makes `morph-<profile>-identity-backup.age`: an ASCII-armored age file
+(scrypt, work factor 2^16, weirdnet-keys' `agefile` settings) of the 24
+words alone, sealed under a backup password (at least 8 characters, typed
+twice, eye toggles) after the profile password is checked. It is the same
+content as weirdnet-keys' `words.txt.age` export, so Muninn's key-file
+inputs read it too, and `age -d` opens it. It holds no library data; the full
+profile backup below is still to come. "Recovery phrase" in the same dialog
+shows the words again after the profile password, with Copy, Share and
+Download.
+
+The rest of this section (full profile backups) is design:
+
 A backup is one profile, never the whole Morph install.
 
 `morph-<profile>-backup-<UTC timestamp>.wnbk` is a zstd tar (the
@@ -66,6 +81,13 @@ A backup is one profile, never the whole Morph install.
 
 ## 2. Restore in onboarding
 
+**Built (2026-11-13):** "Restore from a backup file" sits next to "Restore
+from recovery words" and "Link from another device". It takes an identity
+backup (`.age`, armored or binary; asks for its backup password) or a saved
+recovery phrase (`.txt`: Morph's phrase file, a numbered list or the bare
+words; no backup password), then a new profile password. Files over 64 KiB
+are not read. The `.wnbk` profile backups below are still design.
+
 The first-use identity screen already offers "Restore from recovery words".
 It gets three ways in:
 
@@ -83,6 +105,9 @@ If the profile already has data, restore asks "Merge into this profile" or
 "Replace". Merging uses the sync merge rules (section 5).
 
 ## 3. Dark shards
+
+Design notes against weirdnet-keys 0.1.0, and what Morph still lacks
+(trusted connections, the holder protocol), are in `dark-shards.md`.
 
 Same as Muninn's: the seed is split with Shamir (`weirdnet-keys`), one shard
 per chosen holder, any *threshold* rebuild it (default a majority, at least
