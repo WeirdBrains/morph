@@ -1833,3 +1833,28 @@ the platform thread; Hybrid Composition++ (`initHybridAndroidView`, Vulkan
 and API 34+, `EnableHcpp`) avoids that, but flutter_inappwebview 6.1 only
 creates texture-layer or hybrid views, so it needs a plugin change. On Android 9 and older, hybrid composition
 copies each Flutter frame, which is the accepted cost.
+
+### 2026-11-12 — Login over QR (device linking) is built
+
+`weirdnet-device-link` (in-tree until WeirdBrains/weirdnet-device-link
+exists) carries the protocol of `docs/identity-recovery.md` section 4;
+`morph-identity::device_link` ties it to profiles: the new device stores the
+seed as `Source::Linked` plus its own password-sealed node key and the node
+cert the user key signed. The new device checks the password and that the
+profile has no identity before it takes the transfer, so a typo does not
+spend the single-use link. UI: "Link from another device" in onboarding (QR
+from the pure-Dart `qr` package plus the link text), "Add device" in
+Identity. Android scans with CameraX and ZXing core (FOSS, in-app activity,
+no Play Services; about 0.3 MB). Transport is direct TCP/QUIC only for now:
+mDNS is off and no relays are set, so both devices need to reach each other.
+
+On Android, every real-network Weirdnet node failed with "the node did not
+start in time": libp2p's DNS transport (hickory-resolver) reads Android's DNS
+servers through ndk-context and panics when nobody initialised it, and the
+panic killed the node thread before it reported ready. MainActivity now hands
+the application Context to the bridge (`RustContext.kt`,
+`morph-bridge/src/android.rs`), and the app holds `ACCESS_NETWORK_STATE`,
+which that lookup needs. Checked end to end: emulator (existing device)
+scanned/pasted the link of a desktop bundle (new device), both showed the same
+code, and the desktop profile ended with the same user id, source "linked".
+

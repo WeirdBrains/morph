@@ -1,6 +1,7 @@
 # Identity backup, recovery, device linking and sync
 
-Status: design, 2026-11-12. Nothing here is built yet. Decisions are recorded
+Status: design, 2026-11-12. Section 4 (login over QR) is built; see
+`qr-login.md`. The rest is not built yet. Decisions are recorded
 in ARCHITECTURE.md (section 5, "Identity recovery and sync").
 
 Every Morph profile has its own Weirdnet identity: a 32-byte seed, shown as
