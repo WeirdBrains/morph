@@ -1305,6 +1305,71 @@ void main() {
     }
   });
 
+  testWidgets(
+    'phone surface checks follow real loads, not progress or same-page updates',
+    (tester) async {
+      final view = tester.view;
+      view.physicalSize = const Size(412, 915);
+      view.devicePixelRatio = 1.0;
+      addTearDown(view.reset);
+      _NativeViewProbe.reset();
+      fakeWebView = FakeMorphWebViewPlatform(
+        renderPath: const MorphRenderPathInfo(
+          path: 'android-webview',
+          reason: 'fake',
+        ),
+        platformView: const _NativeViewProbe(),
+      );
+      MorphWebViewPlatform.instance = fakeWebView;
+
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      try {
+        await tester.pumpWidget(
+          MorphApp(
+            api: FakeMorphApi(),
+            home: '/tmp/morph-does-not-exist',
+            subscribeToTicks: false,
+            loadPageBridgeAsset: false,
+          ),
+        );
+        await _pumpUntilIdentity(tester);
+        final state = tester.state<MorphShellState>(find.byType(MorphShell));
+        await _enterAndSubmitUrl(tester, 'news.example');
+        await _pumpUntilWebViewAttached(tester, fakeWebView);
+        final session = fakeWebView.lastSession!;
+        await _settleSurface(tester);
+        final before = state.surfaceCheckRequests;
+        final url = state.navigation.url;
+
+        // What Android sends while someone reads and scrolls an article: late
+        // "progress 100" reports, title changes, a same-page URL update.
+        session.emitNavigation(
+          MorphNavigationEvent(url: url, title: 'News', progress: 1),
+        );
+        session.emitNavigation(
+          MorphNavigationEvent(url: '$url#part-2', title: 'News', progress: 1),
+        );
+        session.emitNavigation(
+          MorphNavigationEvent(url: '$url#part-2', title: 'News 2'),
+        );
+        await _settleSurface(tester);
+        expect(state.surfaceCheckRequests, before);
+
+        // A real load, started and finished by the page (a link tap).
+        session.emitNavigation(
+          MorphNavigationEvent(url: url, isLoading: true, progress: 0.2),
+        );
+        session.emitNavigation(
+          MorphNavigationEvent(url: 'https://news.example/next', progress: 1),
+        );
+        await _settleSurface(tester);
+        expect(state.surfaceCheckRequests, before + 1);
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    },
+  );
+
   testWidgets('phone web view surface is checked after every view change', (
     tester,
   ) async {

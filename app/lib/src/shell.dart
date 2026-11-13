@@ -93,6 +93,11 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
   final _navSubs = <int, StreamSubscription<MorphNavigationEvent>>{};
   final _pageSubs = <int, StreamSubscription<String>>{};
   final _navEvents = <int, MorphNavigationEvent>{};
+
+  /// Whether each tab's last navigation event said it was loading, so a
+  /// finished load can be told from the page's later progress, title and
+  /// same-page URL updates.
+  final _navLoading = <int, bool>{};
   final _visited = <int, bool>{};
   MorphTabPosition _tabPosition = MorphTabPosition.top;
   bool _sidebarCollapsed = false;
@@ -176,6 +181,8 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
       return;
     }
     final hasUrl = event.url.isNotEmpty && event.url != 'about:blank';
+    final loadFinished = (_navLoading[id] ?? false) && !event.isLoading;
+    _navLoading[id] = event.isLoading;
     if (hasUrl) {
       _navEvents[id] = event;
       tabs.update(id, url: event.url, title: event.title);
@@ -190,9 +197,11 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
       setState(() {});
       return;
     }
-    if (hasUrl && !event.isLoading && event.progress >= 1) {
+    if (hasUrl && loadFinished && event.progress >= 1) {
       // A finished load (including back, forward and reload) is the moment a
-      // stale surface shows up as a white page.
+      // stale surface shows up as a white page. Android repeats "progress
+      // 100" for same-page and subframe activity while the user reads and
+      // scrolls; those are not loads and must not trigger captures.
       _scheduleSurfaceCheck(const Duration(milliseconds: 800));
     }
     setState(() {
@@ -601,6 +610,7 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
       unawaited(controller?.dispose());
       _visited.remove(id);
       _navEvents.remove(id);
+      _navLoading.remove(id);
       _recorded.remove(id);
       _previews.remove(id);
     }
@@ -629,6 +639,7 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
     unawaited(controller?.dispose());
     _visited.remove(id);
     _navEvents.remove(id);
+    _navLoading.remove(id);
     _recorded.remove(id);
     _previews.remove(id);
     tabs.close(id);
