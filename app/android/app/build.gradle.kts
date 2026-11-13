@@ -52,7 +52,10 @@ android {
         // flag during build.
         versionCode = flutter.versionCode.let { if (it > 1) it else 10000 + (commitCount ?: 0) }
         versionName = flutter.versionName
-        ndk { abiFilters += flutterAbis }
+        ndk {
+            abiFilters.clear()
+            abiFilters += flutterAbis
+        }
     }
 
     // Native libraries are compressed inside the APK (and extracted on
