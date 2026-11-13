@@ -132,7 +132,7 @@ fn write_endpoint(out: *mut c_char, len: usize, uri: &str) -> c_int {
         return -1;
     }
     unsafe {
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), out as *mut u8, bytes.len());
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), out.cast::<u8>(), bytes.len());
     }
     0
 }
