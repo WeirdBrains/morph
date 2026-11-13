@@ -155,6 +155,29 @@ abstract class MorphApi {
     String? home,
   });
 
+  /// What a file offered for restore holds, without any password.
+  Future<MorphBackupKind> identityBackupKind(List<int> contents);
+
+  /// A backup of [profileId]'s identity sealed under [backupPassword] (text:
+  /// an armored age file of the recovery words), after checking [password].
+  Future<String> exportProfileBackup(
+    String profileId,
+    String password,
+    String backupPassword, {
+    String? home,
+  });
+
+  /// Restore the identity in a backup or recovery-phrase file into
+  /// [profileId], sealed under [password]. A sealed backup needs
+  /// [backupPassword].
+  Future<MorphIdentity> restoreProfileBackup(
+    String profileId,
+    List<int> contents, {
+    String? backupPassword,
+    required String password,
+    String? home,
+  });
+
   // --- Login over a QR code (weirdnet-device-link) ---------------------
   //
   // The new device listens and shows a QR; the existing device scans it,
@@ -296,6 +319,18 @@ class MorphLibraryUnlock {
 }
 
 /// A just-created identity and its recovery words.
+/// What a file offered for identity restore holds.
+enum MorphBackupKind {
+  /// A password-sealed backup: needs its backup password.
+  sealed,
+
+  /// An unsealed recovery phrase.
+  phrase,
+
+  /// Neither.
+  unknown,
+}
+
 class MorphNewIdentity {
   const MorphNewIdentity({required this.identity, required this.words});
 
