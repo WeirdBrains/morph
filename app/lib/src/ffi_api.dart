@@ -498,6 +498,30 @@ class FfiMorphApi implements MorphApi {
       );
 
   @override
+  Future<MorphLibraryOpen> openLibrary(String profileId, {String? home}) async {
+    final v = await rust_library.openLibrary(home: home, profileId: profileId);
+    return MorphLibraryOpen(
+      ready: v.ready,
+      needsPassword: v.needsPassword,
+      reason: v.reason,
+    );
+  }
+
+  @override
+  Future<MorphLibraryUnlock> unlockLibrary(
+    String profileId,
+    String password, {
+    String? home,
+  }) async {
+    final v = await rust_library.unlockLibrary(
+      home: home,
+      profileId: profileId,
+      password: password,
+    );
+    return MorphLibraryUnlock(remembered: v.remembered, reason: v.reason);
+  }
+
+  @override
   Future<MorphIdentity?> profileIdentity(
     String profileId, {
     String? home,

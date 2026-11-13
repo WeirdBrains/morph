@@ -84,11 +84,16 @@ pub fn link_new_device_confirm(session: u64) -> Result<(), String> {
 /// New device: store the identity that arrived in `profile_id`, sealed under
 /// `password`. Ends the session on success.
 pub fn link_new_device_finish(home: Option<String>, profile_id: String, session: u64, password: String) -> Result<ProfileIdentityView, String> {
-    let dir = profile_dir(home, &profile_id)?;
+    let dir = profile_dir(home.clone(), &profile_id)?;
     let password = SecretString::from(password);
     let mut hosts = hosts();
     let identity = hosts.get(&session).ok_or(GONE)?.finish(&dir, &password, now_ms()).map_err(|e| e.to_string())?;
     hosts.remove(&session);
+    drop(hosts);
+    match morph_identity::profile_identity::library_key(&dir, &password) {
+        Ok(key) => crate::api::library::adopt_new_identity(&crate::api::identity::resolve_home(home)?, &profile_id, &dir, &identity.user_id, &key),
+        Err(e) => eprintln!("Morph: library key for linked profile {profile_id}: {e}"),
+    }
     Ok(ProfileIdentityView::from(identity))
 }
 

@@ -116,6 +116,19 @@ abstract class MorphApi {
   Future<void> deleteHistoryUrl(String profileId, String url, {String? home});
   Future<void> clearHistory(String profileId, {String? home});
 
+  /// Opens [profileId]'s encrypted bookmarks and history with the key kept in
+  /// the system keystore, without a prompt. `needsPassword` means the keystore
+  /// had no usable key: ask for the profile password ([unlockLibrary]).
+  Future<MorphLibraryOpen> openLibrary(String profileId, {String? home});
+
+  /// Unlocks [profileId]'s library with its password and keeps the key in the
+  /// system keystore for next time.
+  Future<MorphLibraryUnlock> unlockLibrary(
+    String profileId,
+    String password, {
+    String? home,
+  });
+
   /// [profileId]'s own Weirdnet identity, or null before onboarding.
   Future<MorphIdentity?> profileIdentity(String profileId, {String? home});
 
@@ -255,6 +268,31 @@ class MorphIdentity {
 
   /// Moved here from another device over a QR link.
   final bool linked;
+}
+
+/// What opening a profile's library at launch found.
+class MorphLibraryOpen {
+  const MorphLibraryOpen({
+    this.ready = true,
+    this.needsPassword = false,
+    this.reason,
+  });
+
+  /// Open, or nothing to unlock (no identity yet).
+  final bool ready;
+  final bool needsPassword;
+
+  /// Why the system keystore could not help. Never secret.
+  final String? reason;
+}
+
+/// The outcome of unlocking a library with the profile password.
+class MorphLibraryUnlock {
+  const MorphLibraryUnlock({this.remembered = true, this.reason});
+
+  /// The key is in the system keystore, so the next launch needs no password.
+  final bool remembered;
+  final String? reason;
 }
 
 /// A just-created identity and its recovery words.

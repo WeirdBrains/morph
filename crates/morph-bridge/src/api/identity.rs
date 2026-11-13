@@ -67,6 +67,11 @@ pub(crate) fn profile_dir(home: Option<String>, profile_id: &str) -> Result<Path
     Ok(morph_core::profiles::profile_dir(&home, profile_id))
 }
 
+pub(crate) fn resolve_home(home: Option<String>) -> Result<PathBuf, String> {
+    let explicit = home.filter(|h| !h.is_empty()).map(PathBuf::from);
+    Ok(Paths::resolve(explicit).map_err(|e| e.to_string())?.home)
+}
+
 pub(crate) fn now_ms() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
@@ -79,18 +84,21 @@ pub fn profile_identity(home: Option<String>, profile_id: String) -> Result<Opti
 
 /// Create `profile_id`'s identity, sealed under `password`.
 pub fn create_profile_identity(home: Option<String>, profile_id: String, password: String) -> Result<CreatedIdentityView, String> {
-    let dir = profile_dir(home, &profile_id)?;
+    let dir = profile_dir(home.clone(), &profile_id)?;
     let password = SecretString::from(password);
     let created = profile_identity::create(&dir, &password, now_ms()).map_err(|e| e.to_string())?;
+    crate::api::library::adopt_new_identity(&resolve_home(home)?, &profile_id, &dir, &created.identity.user_id, &created.library_key);
     Ok(CreatedIdentityView { identity: ProfileIdentityView::from(created.identity), words: created.words.to_string() })
 }
 
 /// Restore an identity from its recovery words into `profile_id`.
 pub fn import_profile_identity(home: Option<String>, profile_id: String, words: String, password: String) -> Result<ProfileIdentityView, String> {
-    let dir = profile_dir(home, &profile_id)?;
+    let dir = profile_dir(home.clone(), &profile_id)?;
     let words = morph_identity::profile_identity::Zeroizing::new(words);
     let password = SecretString::from(password);
-    profile_identity::import(&dir, &words, &password, now_ms()).map(ProfileIdentityView::from).map_err(|e| e.to_string())
+    let (identity, key) = profile_identity::import_unlocked(&dir, &words, &password, now_ms()).map_err(|e| e.to_string())?;
+    crate::api::library::adopt_new_identity(&resolve_home(home)?, &profile_id, &dir, &identity.user_id, &key);
+    Ok(ProfileIdentityView::from(identity))
 }
 
 /// The recovery words of `profile_id`'s identity, after checking its password.

@@ -88,7 +88,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   IdentityStatusView dco_decode_identity_status_view(dynamic raw);
 
   @protected
+  LibraryOpenView dco_decode_library_open_view(dynamic raw);
+
+  @protected
   LibraryStateView dco_decode_library_state_view(dynamic raw);
+
+  @protected
+  LibraryUnlockView dco_decode_library_unlock_view(dynamic raw);
 
   @protected
   LinkOfferView dco_decode_link_offer_view(dynamic raw);
@@ -226,7 +232,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  LibraryOpenView sse_decode_library_open_view(SseDeserializer deserializer);
+
+  @protected
   LibraryStateView sse_decode_library_state_view(SseDeserializer deserializer);
+
+  @protected
+  LibraryUnlockView sse_decode_library_unlock_view(
+    SseDeserializer deserializer,
+  );
 
   @protected
   LinkOfferView sse_decode_link_offer_view(SseDeserializer deserializer);
@@ -394,8 +408,20 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_library_open_view(
+    LibraryOpenView self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_library_state_view(
     LibraryStateView self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_library_unlock_view(
+    LibraryUnlockView self,
     SseSerializer serializer,
   );
 
