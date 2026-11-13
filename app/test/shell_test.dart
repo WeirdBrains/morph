@@ -1072,6 +1072,132 @@ void main() {
     }
   });
 
+  group('encrypted library unlock', () {
+    Future<void> launch(WidgetTester tester, FakeMorphApi api) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+      tester.view.physicalSize = const Size(1280, 1000);
+      tester.view.devicePixelRatio = 1.0;
+      await tester.pumpWidget(
+        MorphApp(
+          api: api,
+          home: '/tmp/morph-does-not-exist',
+          subscribeToTicks: false,
+          loadPageBridgeAsset: false,
+        ),
+      );
+      await _pumpUntilIdentity(tester);
+      await tester.pumpAndSettle();
+    }
+
+    void reset(WidgetTester tester) {
+      debugDefaultTargetPlatformOverride = null;
+      tester.view.reset();
+    }
+
+    testWidgets('the keystore opens the library with no prompt', (
+      tester,
+    ) async {
+      final api = FakeMorphApi();
+      try {
+        await launch(tester, api);
+        expect(api.openLibraryCalls, ['default']);
+        expect(find.byKey(const Key('library-unlock')), findsNothing);
+        expect(api.unlockLibraryCalls, isEmpty);
+      } finally {
+        reset(tester);
+      }
+    });
+
+    testWidgets('without a saved key the password unlocks once', (
+      tester,
+    ) async {
+      final api = FakeMorphApi()
+        ..libraryNeedsPassword['default'] = 'no Secret Service'
+        ..libraryPasswords['default'] = 'long enough';
+      try {
+        await launch(tester, api);
+        expect(find.byKey(const Key('library-unlock')), findsOneWidget);
+        final loadsBefore = api.listBookmarksCalls;
+        expect(
+          find.textContaining('no Secret Service'),
+          findsOneWidget,
+          reason: 'the prompt says why the keyring did not help',
+        );
+        await tester.enterText(
+          find.descendant(
+            of: find.byKey(const Key('library-unlock-password')),
+            matching: find.byType(TextField),
+          ),
+          'long enough',
+        );
+        await tester.tap(find.byKey(const Key('library-unlock-submit')));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('library-unlock')), findsNothing);
+        expect(api.unlockLibraryCalls, ['default']);
+        expect(find.byKey(const Key('library-not-remembered')), findsNothing);
+        expect(
+          api.listBookmarksCalls,
+          greaterThan(loadsBefore),
+          reason: 'bookmarks reload once the library is open',
+        );
+      } finally {
+        reset(tester);
+      }
+    });
+
+    testWidgets('a wrong password says so; Not now leaves it for this run', (
+      tester,
+    ) async {
+      final api = FakeMorphApi()
+        ..libraryNeedsPassword['default'] = null
+        ..libraryPasswords['default'] = 'long enough';
+      try {
+        await launch(tester, api);
+        expect(find.byKey(const Key('library-unlock-reason')), findsNothing);
+        await tester.enterText(
+          find.descendant(
+            of: find.byKey(const Key('library-unlock-password')),
+            matching: find.byType(TextField),
+          ),
+          'wrong one',
+        );
+        await tester.tap(find.byKey(const Key('library-unlock-submit')));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('library-unlock-error')), findsOneWidget);
+        expect(find.byKey(const Key('library-unlock')), findsOneWidget);
+        await tester.tap(find.byKey(const Key('library-unlock-skip')));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('library-unlock')), findsNothing);
+      } finally {
+        reset(tester);
+      }
+    });
+
+    testWidgets('an unlock the keyring cannot keep warns it will ask again', (
+      tester,
+    ) async {
+      final api = FakeMorphApi()
+        ..libraryNeedsPassword['default'] = null
+        ..libraryPasswords['default'] = 'long enough'
+        ..keystoreRemembers = false;
+      try {
+        await launch(tester, api);
+        await tester.enterText(
+          find.descendant(
+            of: find.byKey(const Key('library-unlock-password')),
+            matching: find.byType(TextField),
+          ),
+          'long enough',
+        );
+        await tester.tap(find.byKey(const Key('library-unlock-submit')));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('library-not-remembered')), findsOneWidget);
+      } finally {
+        reset(tester);
+      }
+    });
+  });
+
   testWidgets('desktop links a profile from another device, then adds one', (
     tester,
   ) async {

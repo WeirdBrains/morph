@@ -26,6 +26,7 @@ import 'widgets/find_bar.dart';
 import 'widgets/device_link.dart';
 import 'widgets/identity_onboarding.dart';
 import 'widgets/library_page.dart';
+import 'widgets/library_unlock.dart';
 import 'widgets/mobile_gestures.dart';
 import 'widgets/page_crashed.dart';
 import 'widgets/page_error.dart';
@@ -113,6 +114,10 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
   MorphIdentity? _identity;
   final _onboardingSkipped = <String>{};
   bool _onboardingOpen = false;
+
+  /// Profiles whose library unlock was put off this run ("Not now").
+  final _libraryUnlockSkipped = <String>{};
+  bool _libraryUnlockOpen = false;
   Future<void> _libraryWrites = Future.value();
   bool _showSwitcher = false;
   final _previews = <int, Uint8List?>{};
@@ -1102,8 +1107,80 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
       return;
     }
     setState(() => _identity = identity);
-    if (identity == null && !_onboardingSkipped.contains(profileId)) {
-      await _openOnboarding();
+    if (identity == null) {
+      if (!_onboardingSkipped.contains(profileId)) {
+        await _openOnboarding();
+      }
+      return;
+    }
+    await _unlockLibrary();
+  }
+
+  /// Opens the active profile's encrypted library: from the system keystore
+  /// with no prompt, else by asking for the profile password once per run.
+  Future<void> _unlockLibrary() async {
+    final profileId = _profileId;
+    final home = _home;
+    MorphLibraryOpen open;
+    try {
+      open = await widget.api.openLibrary(profileId, home: home);
+    } catch (e) {
+      debugPrint('Morph: opening the library of $profileId failed: $e');
+      return;
+    }
+    if (!mounted || profileId != _profileId) {
+      return;
+    }
+    if (open.ready) {
+      // The first bookmark load may have raced the unlock.
+      unawaited(_loadBookmarks());
+      return;
+    }
+    if (!open.needsPassword ||
+        _libraryUnlockOpen ||
+        _libraryUnlockSkipped.contains(profileId)) {
+      return;
+    }
+    _libraryUnlockOpen = true;
+    MorphLibraryUnlock? unlocked;
+    try {
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialog) => MorphLibraryUnlockDialog(
+          profileName: _profileName,
+          reason: open.reason,
+          onUnlock: (password) =>
+              widget.api.unlockLibrary(profileId, password, home: home),
+          onDone: (result) {
+            unlocked = result;
+            Navigator.of(dialog).pop();
+          },
+          onSkip: () => Navigator.of(dialog).pop(),
+        ),
+      );
+    } finally {
+      _libraryUnlockOpen = false;
+    }
+    final result = unlocked;
+    if (result == null) {
+      _libraryUnlockSkipped.add(profileId);
+      return;
+    }
+    if (!mounted || profileId != _profileId) {
+      return;
+    }
+    unawaited(_loadBookmarks());
+    if (!result.remembered) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          key: Key('library-not-remembered'),
+          content: Text(
+            "Unlocked. The system keyring isn't available, so Morph will "
+            'ask for this password next time.',
+          ),
+        ),
+      );
     }
   }
 
@@ -1155,6 +1232,9 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
     }
     if (!finished) {
       _onboardingSkipped.add(profileId);
+    } else if (mounted && profileId == _profileId) {
+      // A new identity encrypts the library (Rust moves it in): reload.
+      unawaited(_loadBookmarks());
     }
   }
 
