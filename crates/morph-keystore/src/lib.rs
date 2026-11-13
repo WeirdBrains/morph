@@ -11,7 +11,9 @@
 //! One entry per profile: service [`SERVICE`], account `library-key/<hash>`,
 //! where the hash is of the profile directory's path, so two profiles (or the
 //! same profile id in two Morph homes) never share an entry. The entry holds the
-//! 32-byte [`LibraryKey`] itself. The keystore is a convenience: if it is
+//! 32-byte [`LibraryKey`] after a tag of the identity it belongs to (the user
+//! id), so a key saved for an identity the profile no longer has (after a reset
+//! or re-import) is never handed out: it reads as missing and is removed. The keystore is a convenience: if it is
 //! missing, locked or unreachable (no Secret Service running, say), callers ask
 //! for the profile password and derive the key from the identity instead.
 //! Errors never include the key.
@@ -114,21 +116,42 @@ fn entry(profile_dir: &Path) -> Result<Entry> {
     Entry::new(SERVICE, &account(profile_dir)).map_err(|e| Unavailable(describe(e)))
 }
 
-/// Keep `key` for the profile at `profile_dir`, replacing any earlier one.
-pub fn save(profile_dir: &Path, key: &LibraryKey) -> Result<()> {
-    entry(profile_dir)?.set_secret(key.expose()).map_err(|e| Unavailable(describe(e)))
+/// Entry format: `MK1`, 16 bytes of SHA-256(owner), then the key.
+const MAGIC: &[u8; 3] = b"MK1";
+const TAG_LEN: usize = 16;
+
+fn owner_tag(owner: &str) -> [u8; TAG_LEN] {
+    let digest = Sha256::digest(owner.as_bytes());
+    let mut tag = [0u8; TAG_LEN];
+    tag.copy_from_slice(&digest[..TAG_LEN]);
+    tag
 }
 
-/// The profile's saved key, or `None` if there is none (or what is there is
-/// not a key, which is then removed).
-pub fn load(profile_dir: &Path) -> Result<Option<LibraryKey>> {
+/// Keep `key` for the profile at `profile_dir`, owned by the identity `owner`
+/// (its user id), replacing any earlier entry.
+pub fn save(profile_dir: &Path, owner: &str, key: &LibraryKey) -> Result<()> {
+    let mut secret = Zeroizing::new(Vec::with_capacity(MAGIC.len() + TAG_LEN + 32));
+    secret.extend_from_slice(MAGIC);
+    secret.extend_from_slice(&owner_tag(owner));
+    secret.extend_from_slice(key.expose());
+    entry(profile_dir)?.set_secret(&secret).map_err(|e| Unavailable(describe(e)))
+}
+
+/// The profile's saved key for identity `owner`, or `None` if there is none.
+/// An entry for another identity, or one that is not a key, is removed.
+pub fn load(profile_dir: &Path, owner: &str) -> Result<Option<LibraryKey>> {
     let entry = entry(profile_dir)?;
     match entry.get_secret() {
         Ok(bytes) => {
             let bytes = Zeroizing::new(bytes);
-            match <[u8; 32]>::try_from(bytes.as_slice()) {
-                Ok(raw) => Ok(Some(LibraryKey::from_bytes(raw))),
-                Err(_) => {
+            let tag = owner_tag(owner);
+            let key = bytes
+                .strip_prefix(MAGIC.as_slice())
+                .and_then(|rest| rest.strip_prefix(tag.as_slice()))
+                .and_then(|raw| <[u8; 32]>::try_from(raw).ok());
+            match key {
+                Some(raw) => Ok(Some(LibraryKey::from_bytes(raw))),
+                None => {
                     let _ = entry.delete_credential();
                     Ok(None)
                 }
@@ -156,13 +179,13 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("p1");
         std::fs::create_dir_all(&dir).unwrap();
-        assert!(load(&dir).unwrap().is_none());
-        save(&dir, &LibraryKey::from_bytes([3; 32])).unwrap();
-        assert_eq!(load(&dir).unwrap().unwrap().expose(), &[3; 32]);
-        save(&dir, &LibraryKey::from_bytes([4; 32])).unwrap();
-        assert_eq!(load(&dir).unwrap().unwrap().expose(), &[4; 32], "a save replaces the key");
+        assert!(load(&dir, "u1").unwrap().is_none());
+        save(&dir, "u1", &LibraryKey::from_bytes([3; 32])).unwrap();
+        assert_eq!(load(&dir, "u1").unwrap().unwrap().expose(), &[3; 32]);
+        save(&dir, "u1", &LibraryKey::from_bytes([4; 32])).unwrap();
+        assert_eq!(load(&dir, "u1").unwrap().unwrap().expose(), &[4; 32], "a save replaces the key");
         forget(&dir).unwrap();
-        assert!(load(&dir).unwrap().is_none());
+        assert!(load(&dir, "u1").unwrap().is_none());
         forget(&dir).unwrap();
     }
 
@@ -173,19 +196,27 @@ mod tests {
         std::fs::create_dir_all(&a).unwrap();
         std::fs::create_dir_all(&b).unwrap();
         assert_ne!(account(&a), account(&b), "same profile id, different homes");
-        save(&a, &LibraryKey::from_bytes([1; 32])).unwrap();
-        assert!(load(&b).unwrap().is_none());
-        save(&b, &LibraryKey::from_bytes([2; 32])).unwrap();
+        save(&a, "u", &LibraryKey::from_bytes([1; 32])).unwrap();
+        assert!(load(&b, "u").unwrap().is_none());
+        save(&b, "u", &LibraryKey::from_bytes([2; 32])).unwrap();
         forget(&a).unwrap();
-        assert_eq!(load(&b).unwrap().unwrap().expose(), &[2; 32]);
+        assert_eq!(load(&b, "u").unwrap().unwrap().expose(), &[2; 32]);
     }
 
     #[test]
     fn something_that_is_not_a_key_reads_as_none_and_goes() {
         let tmp = tempfile::tempdir().unwrap();
         entry(tmp.path()).unwrap().set_secret(b"short").unwrap();
-        assert!(load(tmp.path()).unwrap().is_none());
+        assert!(load(tmp.path(), "u").unwrap().is_none());
         assert!(matches!(entry(tmp.path()).unwrap().get_secret(), Err(Error::NoEntry)));
+    }
+
+    #[test]
+    fn a_key_for_another_identity_is_never_handed_out() {
+        let tmp = tempfile::tempdir().unwrap();
+        save(tmp.path(), "old-identity", &LibraryKey::from_bytes([5; 32])).unwrap();
+        assert!(load(tmp.path(), "new-identity").unwrap().is_none());
+        assert!(load(tmp.path(), "old-identity").unwrap().is_none(), "the stale entry was removed");
     }
 
     #[test]
