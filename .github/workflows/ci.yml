@@ -107,9 +107,14 @@ jobs:
           channel: stable
           flutter-version: 3.47.9
           cache: true
+      # Caches the bridge build and target/ (the aarch64 Android clippy run),
+      # under a key of its own so it never mixes with the host jobs' caches.
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: crates/morph-bridge -> ../../app/.dart_tool/hooks_runner
+          key: aarch64-linux-android
+          workspaces: |
+            crates/morph-bridge -> ../../app/.dart_tool/hooks_runner
+            . -> target
       - run: flutter pub get
       - run: flutter build apk --debug
       # c_char is u8 on aarch64 Android, so casts that are fine on x86_64
