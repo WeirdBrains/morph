@@ -39,7 +39,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.13.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 253538829;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1940431703;
 
 // Section: executor
 
@@ -608,6 +608,33 @@ fn wire__crate__api__identity__import_profile_identity_impl(
         },
     )
 }
+fn wire__crate__api__library__library_state_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "library_state",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe { flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(ptr_, rust_vec_len_, data_len_) };
+            let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_home = <Option<String>>::sse_decode(&mut deserializer);
+            let api_profile_id = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::library::library_state(api_home, api_profile_id)?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__device_link__link_add_device_cancel_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -930,6 +957,33 @@ fn wire__crate__api__settings__load_settings_impl(
             move |context| {
                 transform_result_sse::<_, String>((move || {
                     let output_ok = crate::api::settings::load_settings(api_home)?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__library__lock_library_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "lock_library",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe { flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(ptr_, rust_vec_len_, data_len_) };
+            let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_home = <Option<String>>::sse_decode(&mut deserializer);
+            let api_profile_id = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::library::lock_library(api_home, api_profile_id)?;
                     std::result::Result::Ok(output_ok)
                 })())
             }
@@ -1427,6 +1481,34 @@ fn wire__crate__api__control__stop_webview_control_impl(
         },
     )
 }
+fn wire__crate__api__library__unlock_library_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "unlock_library",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe { flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(ptr_, rust_vec_len_, data_len_) };
+            let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_home = <Option<String>>::sse_decode(&mut deserializer);
+            let api_profile_id = <String>::sse_decode(&mut deserializer);
+            let api_password = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::library::unlock_library(api_home, api_profile_id, api_password)?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__library__update_bookmark_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -1671,6 +1753,19 @@ impl SseDecode for crate::api::identity::IdentityStatusView {
         let mut var_homeExists = <bool>::sse_decode(deserializer);
         let mut var_profile = <String>::sse_decode(deserializer);
         return crate::api::identity::IdentityStatusView { home: var_home, home_exists: var_homeExists, profile: var_profile };
+    }
+}
+
+impl SseDecode for crate::api::library::LibraryStateView {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <i32>::sse_decode(deserializer);
+        return match inner {
+            0 => crate::api::library::LibraryStateView::Plain,
+            1 => crate::api::library::LibraryStateView::Locked,
+            2 => crate::api::library::LibraryStateView::Unlocked,
+            _ => unreachable!("Invalid variant for LibraryStateView: {}", inner),
+        };
     }
 }
 
@@ -1940,37 +2035,40 @@ fn pde_ffi_dispatcher_primary_impl(
         18 => wire__crate__api__page__handle_page_message_impl(port, ptr, rust_vec_len, data_len),
         19 => wire__crate__api__identity__identity_dir_info_impl(port, ptr, rust_vec_len, data_len),
         20 => wire__crate__api__identity__import_profile_identity_impl(port, ptr, rust_vec_len, data_len),
-        21 => wire__crate__api__device_link__link_add_device_cancel_impl(port, ptr, rust_vec_len, data_len),
-        22 => wire__crate__api__device_link__link_add_device_send_impl(port, ptr, rust_vec_len, data_len),
-        23 => wire__crate__api__device_link__link_add_device_start_impl(port, ptr, rust_vec_len, data_len),
-        24 => wire__crate__api__device_link__link_new_device_cancel_impl(port, ptr, rust_vec_len, data_len),
-        25 => wire__crate__api__device_link__link_new_device_confirm_impl(port, ptr, rust_vec_len, data_len),
-        26 => wire__crate__api__device_link__link_new_device_finish_impl(port, ptr, rust_vec_len, data_len),
-        27 => wire__crate__api__device_link__link_new_device_start_impl(port, ptr, rust_vec_len, data_len),
-        28 => wire__crate__api__device_link__link_new_device_status_impl(port, ptr, rust_vec_len, data_len),
-        29 => wire__crate__api__library__list_bookmarks_impl(port, ptr, rust_vec_len, data_len),
-        30 => wire__crate__api__library__list_history_impl(port, ptr, rust_vec_len, data_len),
-        31 => wire__crate__api__profiles__list_profiles_impl(port, ptr, rust_vec_len, data_len),
-        32 => wire__crate__api__settings__load_settings_impl(port, ptr, rust_vec_len, data_len),
-        33 => wire__crate__api__library__move_bookmark_item_impl(port, ptr, rust_vec_len, data_len),
-        34 => wire__crate__api__identity__new_ephemeral_user_impl(port, ptr, rust_vec_len, data_len),
-        35 => wire__crate__api__identity__profile_identity_impl(port, ptr, rust_vec_len, data_len),
-        36 => wire__crate__api__profiles__profile_paths_impl(port, ptr, rust_vec_len, data_len),
-        37 => wire__crate__api__identity__profile_recovery_words_impl(port, ptr, rust_vec_len, data_len),
-        38 => wire__crate__api__library__record_visit_impl(port, ptr, rust_vec_len, data_len),
-        39 => wire__crate__api__library__remove_bookmark_impl(port, ptr, rust_vec_len, data_len),
-        40 => wire__crate__api__library__rename_bookmark_folder_impl(port, ptr, rust_vec_len, data_len),
-        41 => wire__crate__api__profiles__rename_profile_impl(port, ptr, rust_vec_len, data_len),
-        42 => wire__crate__api__library__search_bookmarks_impl(port, ptr, rust_vec_len, data_len),
-        43 => wire__crate__api__profiles__set_current_profile_impl(port, ptr, rust_vec_len, data_len),
-        44 => wire__crate__api__settings__set_sidebar_collapsed_impl(port, ptr, rust_vec_len, data_len),
-        45 => wire__crate__api__settings__set_sidebar_width_impl(port, ptr, rust_vec_len, data_len),
-        46 => wire__crate__api__settings__set_tab_position_impl(port, ptr, rust_vec_len, data_len),
-        47 => wire__crate__api__control__start_webview_control_impl(port, ptr, rust_vec_len, data_len),
-        48 => wire__crate__api__control__start_webview_control_in_impl(port, ptr, rust_vec_len, data_len),
-        49 => wire__crate__api__control__start_webview_control_loopback_impl(port, ptr, rust_vec_len, data_len),
-        50 => wire__crate__api__control__stop_webview_control_impl(port, ptr, rust_vec_len, data_len),
-        51 => wire__crate__api__library__update_bookmark_impl(port, ptr, rust_vec_len, data_len),
+        21 => wire__crate__api__library__library_state_impl(port, ptr, rust_vec_len, data_len),
+        22 => wire__crate__api__device_link__link_add_device_cancel_impl(port, ptr, rust_vec_len, data_len),
+        23 => wire__crate__api__device_link__link_add_device_send_impl(port, ptr, rust_vec_len, data_len),
+        24 => wire__crate__api__device_link__link_add_device_start_impl(port, ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__device_link__link_new_device_cancel_impl(port, ptr, rust_vec_len, data_len),
+        26 => wire__crate__api__device_link__link_new_device_confirm_impl(port, ptr, rust_vec_len, data_len),
+        27 => wire__crate__api__device_link__link_new_device_finish_impl(port, ptr, rust_vec_len, data_len),
+        28 => wire__crate__api__device_link__link_new_device_start_impl(port, ptr, rust_vec_len, data_len),
+        29 => wire__crate__api__device_link__link_new_device_status_impl(port, ptr, rust_vec_len, data_len),
+        30 => wire__crate__api__library__list_bookmarks_impl(port, ptr, rust_vec_len, data_len),
+        31 => wire__crate__api__library__list_history_impl(port, ptr, rust_vec_len, data_len),
+        32 => wire__crate__api__profiles__list_profiles_impl(port, ptr, rust_vec_len, data_len),
+        33 => wire__crate__api__settings__load_settings_impl(port, ptr, rust_vec_len, data_len),
+        34 => wire__crate__api__library__lock_library_impl(port, ptr, rust_vec_len, data_len),
+        35 => wire__crate__api__library__move_bookmark_item_impl(port, ptr, rust_vec_len, data_len),
+        36 => wire__crate__api__identity__new_ephemeral_user_impl(port, ptr, rust_vec_len, data_len),
+        37 => wire__crate__api__identity__profile_identity_impl(port, ptr, rust_vec_len, data_len),
+        38 => wire__crate__api__profiles__profile_paths_impl(port, ptr, rust_vec_len, data_len),
+        39 => wire__crate__api__identity__profile_recovery_words_impl(port, ptr, rust_vec_len, data_len),
+        40 => wire__crate__api__library__record_visit_impl(port, ptr, rust_vec_len, data_len),
+        41 => wire__crate__api__library__remove_bookmark_impl(port, ptr, rust_vec_len, data_len),
+        42 => wire__crate__api__library__rename_bookmark_folder_impl(port, ptr, rust_vec_len, data_len),
+        43 => wire__crate__api__profiles__rename_profile_impl(port, ptr, rust_vec_len, data_len),
+        44 => wire__crate__api__library__search_bookmarks_impl(port, ptr, rust_vec_len, data_len),
+        45 => wire__crate__api__profiles__set_current_profile_impl(port, ptr, rust_vec_len, data_len),
+        46 => wire__crate__api__settings__set_sidebar_collapsed_impl(port, ptr, rust_vec_len, data_len),
+        47 => wire__crate__api__settings__set_sidebar_width_impl(port, ptr, rust_vec_len, data_len),
+        48 => wire__crate__api__settings__set_tab_position_impl(port, ptr, rust_vec_len, data_len),
+        49 => wire__crate__api__control__start_webview_control_impl(port, ptr, rust_vec_len, data_len),
+        50 => wire__crate__api__control__start_webview_control_in_impl(port, ptr, rust_vec_len, data_len),
+        51 => wire__crate__api__control__start_webview_control_loopback_impl(port, ptr, rust_vec_len, data_len),
+        52 => wire__crate__api__control__stop_webview_control_impl(port, ptr, rust_vec_len, data_len),
+        53 => wire__crate__api__library__unlock_library_impl(port, ptr, rust_vec_len, data_len),
+        54 => wire__crate__api__library__update_bookmark_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -2145,6 +2243,23 @@ impl flutter_rust_bridge::IntoDart for crate::api::identity::IdentityStatusView 
 impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::identity::IdentityStatusView {}
 impl flutter_rust_bridge::IntoIntoDart<crate::api::identity::IdentityStatusView> for crate::api::identity::IdentityStatusView {
     fn into_into_dart(self) -> crate::api::identity::IdentityStatusView {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::library::LibraryStateView {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self {
+            Self::Plain => 0.into_dart(),
+            Self::Locked => 1.into_dart(),
+            Self::Unlocked => 2.into_dart(),
+            _ => unreachable!(),
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::library::LibraryStateView {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::library::LibraryStateView> for crate::api::library::LibraryStateView {
+    fn into_into_dart(self) -> crate::api::library::LibraryStateView {
         self
     }
 }
@@ -2416,6 +2531,23 @@ impl SseEncode for crate::api::identity::IdentityStatusView {
         <String>::sse_encode(self.home, serializer);
         <bool>::sse_encode(self.home_exists, serializer);
         <String>::sse_encode(self.profile, serializer);
+    }
+}
+
+impl SseEncode for crate::api::library::LibraryStateView {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(
+            match self {
+                crate::api::library::LibraryStateView::Plain => 0,
+                crate::api::library::LibraryStateView::Locked => 1,
+                crate::api::library::LibraryStateView::Unlocked => 2,
+                _ => {
+                    unimplemented!("");
+                }
+            },
+            serializer,
+        );
     }
 }
 

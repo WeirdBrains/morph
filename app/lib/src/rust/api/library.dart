@@ -196,6 +196,34 @@ Future<void> clearHistory({String? home, required String profileId}) => RustLib
     .api
     .crateApiLibraryClearHistory(home: home, profileId: profileId);
 
+/// Whether `profile_id`'s library is plaintext, locked or unlocked.
+Future<LibraryStateView> libraryState({
+  String? home,
+  required String profileId,
+}) => RustLib.instance.api.crateApiLibraryLibraryState(
+  home: home,
+  profileId: profileId,
+);
+
+/// Unlock `profile_id`'s encrypted library with the profile password (its key
+/// comes from the profile's Weirdnet identity and never leaves Rust). The first
+/// unlock moves the plaintext library into the encrypted database.
+Future<void> unlockLibrary({
+  String? home,
+  required String profileId,
+  required String password,
+}) => RustLib.instance.api.crateApiLibraryUnlockLibrary(
+  home: home,
+  profileId: profileId,
+  password: password,
+);
+
+/// Close `profile_id`'s library and forget its key until the next unlock.
+Future<void> lockLibrary({String? home, required String profileId}) => RustLib
+    .instance
+    .api
+    .crateApiLibraryLockLibrary(home: home, profileId: profileId);
+
 /// A bookmark folder.
 class BookmarkFolderView {
   final String id;
@@ -349,4 +377,16 @@ class HistoryEntryView {
           url == other.url &&
           title == other.title &&
           visitedMs == other.visitedMs;
+}
+
+/// Where a profile's bookmarks and history are kept right now.
+enum LibraryStateView {
+  /// Plaintext files, before the profile was first unlocked.
+  plain,
+
+  /// Encrypted, waiting for the profile password.
+  locked,
+
+  /// Encrypted and open.
+  unlocked,
 }
