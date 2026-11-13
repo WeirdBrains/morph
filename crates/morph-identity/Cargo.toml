@@ -11,6 +11,8 @@ description = "Morph identity helpers over weirdnet-keys and weirdnet-net."
 publish = false
 
 [dependencies]
+# Same age as weirdnet-keys; armor keeps backups text.
+age = { version = "0.11", features = ["armor"] }
 dirs.workspace = true
 hkdf.workspace = true
 serde = { version = "1", features = ["derive"] }

@@ -3221,6 +3221,7 @@ dependencies = [
 name = "morph-identity"
 version = "0.1.0"
 dependencies = [
+ "age",
  "dirs",
  "hkdf 0.12.4",
  "serde",
