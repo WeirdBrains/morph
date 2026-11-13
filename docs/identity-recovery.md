@@ -45,9 +45,11 @@ makes `morph-<profile>-identity-backup.age`: an ASCII-armored age file
 words alone, sealed under a backup password (at least 8 characters, typed
 twice, eye toggles) after the profile password is checked. It is the same
 content as weirdnet-keys' `words.txt.age` export, and `age -d` opens it.
-Muninn reads only binary age today (`agefile::is_age` checks the binary
-header), so it takes a Morph backup after `age -d`, or directly once
-weirdnet-keys learns to detect armor; Morph reads Muninn's binary files. It holds no library data; the full
+Muninn's weirdnet-keys 0.1.0 reads only binary age (`agefile::is_age`
+checks the binary header), so it takes a Morph backup after `age -d`.
+weirdnet-keys main (1a607d7, 2026-11-13) reads armored files too; Muninn reads
+Morph backups directly once that is released and Muninn pins it. Morph reads
+Muninn's binary files. It holds no library data; the full
 profile backup below is still to come. "Recovery phrase" in the same dialog
 shows the words again after the profile password, with Copy, Share and
 Download.
