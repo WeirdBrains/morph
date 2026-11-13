@@ -24,6 +24,7 @@ import 'widgets/brand.dart';
 import 'widgets/desktop_chrome.dart';
 import 'widgets/find_bar.dart';
 import 'widgets/device_link.dart';
+import 'widgets/identity_backup.dart';
 import 'widgets/identity_onboarding.dart';
 import 'widgets/library_page.dart';
 import 'widgets/library_unlock.dart';
@@ -1205,6 +1206,15 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
             password,
             home: home,
           ),
+          backupKind: widget.api.identityBackupKind,
+          onRestoreBackup: (contents, backupPassword, password) =>
+              widget.api.restoreProfileBackup(
+                profileId,
+                contents,
+                backupPassword: backupPassword,
+                password: password,
+                home: home,
+              ),
           onDone: (identity) {
             finished = true;
             if (mounted && profileId == _profileId) {
@@ -1268,7 +1278,7 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
               identity.linked
                   ? 'Linked from another device.'
                   : identity.imported
-                  ? 'Restored from recovery words.'
+                  ? 'Restored from recovery words or a backup.'
                   : 'Created in this profile.',
             ),
           ],
@@ -1283,11 +1293,70 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
             icon: const Icon(Icons.qr_code_scanner),
             label: const Text('Add device'),
           ),
+          TextButton.icon(
+            key: const Key('identity-recovery-phrase'),
+            onPressed: () {
+              Navigator.of(context).pop();
+              unawaited(_openRecoveryPhrase(identity));
+            },
+            icon: const Icon(Icons.key),
+            label: const Text('Recovery phrase'),
+          ),
+          TextButton.icon(
+            key: const Key('identity-backup'),
+            onPressed: () {
+              Navigator.of(context).pop();
+              unawaited(_openIdentityBackup());
+            },
+            icon: const Icon(Icons.save_alt),
+            label: const Text('Back up'),
+          ),
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
             child: const Text('Close'),
           ),
         ],
+      ),
+    );
+    _onOverlayClosed();
+  }
+
+  /// The active profile's recovery phrase, after its password.
+  Future<void> _openRecoveryPhrase(MorphIdentity identity) async {
+    if (!mounted) {
+      return;
+    }
+    final profileId = _profileId;
+    final home = _home;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => MorphRecoveryPhraseDialog(
+        profileName: _profileName,
+        userId: identity.userId,
+        reveal: (password) =>
+            widget.api.profileRecoveryWords(profileId, password, home: home),
+      ),
+    );
+    _onOverlayClosed();
+  }
+
+  /// A password-sealed backup of the active profile's identity.
+  Future<void> _openIdentityBackup() async {
+    if (!mounted) {
+      return;
+    }
+    final profileId = _profileId;
+    final home = _home;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => MorphIdentityBackupDialog(
+        profileName: _profileName,
+        export: (password, backupPassword) => widget.api.exportProfileBackup(
+          profileId,
+          password,
+          backupPassword,
+          home: home,
+        ),
       ),
     );
     _onOverlayClosed();

@@ -1,18 +1,20 @@
 import 'package:flutter/material.dart';
 
 import '../api.dart';
-import '../recovery_phrase.dart';
+import '../identity_files.dart';
 import '../theme/morph_theme.dart';
 import 'password_field.dart';
+import 'recovery_phrase_view.dart';
 
 /// Shortest password Morph accepts for sealing a profile's user key. Mirrors
 /// `morph_identity::profile_identity::MIN_PASSWORD_LEN`.
 const morphMinPasswordLength = 8;
 
-enum _Step { welcome, create, import, words, link }
+enum _Step { welcome, create, import, backup, words, link }
 
 /// First-use onboarding for one profile's Weirdnet identity: create a new one
-/// (and write down its 24 recovery words) or restore one from its words.
+/// (and write down its 24 recovery words), restore one from its words or
+/// from a backup file, or link one from another device.
 ///
 /// The words and passwords only live in this widget's controllers and are
 /// never logged or stored by it. The words leave it only when the user picks
@@ -26,6 +28,8 @@ class MorphIdentityOnboarding extends StatefulWidget {
     required this.onDone,
     required this.onSkip,
     this.linkFromDevice,
+    this.backupKind,
+    this.onRestoreBackup,
   });
 
   final String profileName;
@@ -38,6 +42,18 @@ class MorphIdentityOnboarding extends StatefulWidget {
   /// The built widget calls [onDone] itself when the identity is stored.
   final WidgetBuilder? linkFromDevice;
 
+  /// What a picked file holds. With [onRestoreBackup], shows "Restore from a
+  /// backup file"; null hides it.
+  final Future<MorphBackupKind> Function(List<int> contents)? backupKind;
+
+  /// Restores from a backup (with its [backupPassword]) or phrase file.
+  final Future<MorphIdentity> Function(
+    List<int> contents,
+    String? backupPassword,
+    String password,
+  )?
+  onRestoreBackup;
+
   @override
   State<MorphIdentityOnboarding> createState() =>
       _MorphIdentityOnboardingState();
@@ -48,59 +64,22 @@ class _MorphIdentityOnboardingState extends State<MorphIdentityOnboarding> {
   final _password = TextEditingController();
   final _confirm = TextEditingController();
   final _words = TextEditingController();
+  final _backupPassword = TextEditingController();
   MorphNewIdentity? _created;
+  MorphPickedFile? _backupFile;
+  MorphBackupKind? _backupFileKind;
   bool _saved = false;
   bool _busy = false;
   String? _error;
-  String? _phraseStatus;
-
-  Future<void> _phraseAction(Future<String> Function() action) async {
-    final status = await action();
-    if (mounted) {
-      setState(() => _phraseStatus = status);
-    }
-  }
-
-  String get _phraseText => morphRecoveryFileText(
-    profileName: widget.profileName,
-    userId: _created!.identity.userId,
-    words: _created!.words,
-  );
-
-  Future<String> _copyPhrase() async {
-    await MorphRecoveryPhrase.copy(_created!.words);
-    final seconds = MorphRecoveryPhrase.clipboardLifetime.inSeconds;
-    return 'Copied. The clipboard clears in $seconds seconds.';
-  }
-
-  Future<String> _sharePhrase() async {
-    final opened = await MorphRecoveryPhrase.share(
-      _phraseText,
-      subject: 'Morph recovery phrase (${widget.profileName})',
-    );
-    if (opened) {
-      return 'Only share it with somewhere you trust.';
-    }
-    final seconds = MorphRecoveryPhrase.clipboardLifetime.inSeconds;
-    return 'No share sheet here, so it was copied. '
-        'The clipboard clears in $seconds seconds.';
-  }
-
-  Future<String> _savePhrase() async {
-    final name = morphRecoveryFileName(widget.profileName);
-    return switch (await MorphRecoveryPhrase.save(name, _phraseText)) {
-      MorphPhraseSaveResult.saved => 'Saved $name. Keep it offline.',
-      MorphPhraseSaveResult.cancelled => 'Not saved.',
-      MorphPhraseSaveResult.failed => 'Could not save the file.',
-    };
-  }
 
   @override
   void dispose() {
     _password.dispose();
     _confirm.dispose();
     _words.dispose();
+    _backupPassword.dispose();
     _created = null;
+    _backupFile = null;
     super.dispose();
   }
 
@@ -118,11 +97,55 @@ class _MorphIdentityOnboardingState extends State<MorphIdentityOnboarding> {
     setState(() {
       _step = step;
       _error = null;
+      if (step != _Step.backup) {
+        _backupFile = null;
+        _backupFileKind = null;
+        _backupPassword.clear();
+      }
+    });
+  }
+
+  Future<void> _chooseBackup() async {
+    setState(() => _error = null);
+    MorphPickedFile? file;
+    try {
+      file = await MorphIdentityFiles.pick();
+    } on FormatException {
+      setState(() => _error = 'That file is too large to be a Morph backup.');
+      return;
+    } catch (_) {
+      setState(() => _error = 'Could not open the file.');
+      return;
+    }
+    if (file == null || !mounted) {
+      return;
+    }
+    final kind = await widget.backupKind!(file.bytes);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _backupFile = kind == MorphBackupKind.unknown ? null : file;
+      _backupFileKind = kind;
+      _backupPassword.clear();
+      if (kind == MorphBackupKind.unknown) {
+        _error = '${file!.name} is not a Morph backup or recovery phrase.';
+      }
     });
   }
 
   Future<void> _submit() async {
     final problem = _passwordProblem();
+    if (_step == _Step.backup && _backupFile == null) {
+      setState(() => _error = 'Choose a backup or recovery phrase file.');
+      return;
+    }
+    if (_step == _Step.backup &&
+        _backupFileKind == MorphBackupKind.sealed &&
+        _backupPassword.text.isEmpty) {
+      setState(() => _error = 'Enter the backup password.');
+      return;
+    }
     if (_step == _Step.import &&
         _words.text.trim().split(RegExp(r'\s+')).length != 24) {
       setState(() => _error = 'Enter all 24 recovery words.');
@@ -146,6 +169,17 @@ class _MorphIdentityOnboardingState extends State<MorphIdentityOnboarding> {
           _created = created;
           _step = _Step.words;
         });
+      } else if (_step == _Step.backup) {
+        final identity = await widget.onRestoreBackup!(
+          _backupFile!.bytes,
+          _backupFileKind == MorphBackupKind.sealed
+              ? _backupPassword.text
+              : null,
+          _password.text,
+        );
+        _backupPassword.clear();
+        _backupFile = null;
+        widget.onDone(identity);
       } else {
         final identity = await widget.onImport(
           _words.text.trim(),
@@ -169,6 +203,9 @@ class _MorphIdentityOnboardingState extends State<MorphIdentityOnboarding> {
 
   static String _friendly(Object e) {
     final text = '$e';
+    if (text.contains('backup password')) {
+      return 'Wrong backup password, or the backup is damaged.';
+    }
     if (text.contains('word')) {
       return 'Those recovery words are not valid. Check each word and try again.';
     }
@@ -185,6 +222,7 @@ class _MorphIdentityOnboardingState extends State<MorphIdentityOnboarding> {
         leading:
             _step == _Step.create ||
                 _step == _Step.import ||
+                _step == _Step.backup ||
                 _step == _Step.link
             ? IconButton(
                 tooltip: 'Back',
@@ -198,7 +236,7 @@ class _MorphIdentityOnboardingState extends State<MorphIdentityOnboarding> {
           padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
           child: switch (_step) {
             _Step.welcome => _welcome(context),
-            _Step.create || _Step.import => _form(context),
+            _Step.create || _Step.import || _Step.backup => _form(context),
             _Step.words => _wordsStep(context),
             _Step.link => widget.linkFromDevice!(context),
           },
@@ -241,6 +279,15 @@ class _MorphIdentityOnboardingState extends State<MorphIdentityOnboarding> {
           icon: const Icon(Icons.restore),
           label: const Text('Restore from recovery words'),
         ),
+        if (widget.backupKind != null && widget.onRestoreBackup != null) ...[
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
+            key: const Key('onboarding-backup'),
+            onPressed: () => _go(_Step.backup),
+            icon: const Icon(Icons.file_open_outlined),
+            label: const Text('Restore from a backup file'),
+          ),
+        ],
         if (widget.linkFromDevice != null) ...[
           const SizedBox(height: 12),
           OutlinedButton.icon(
@@ -262,12 +309,18 @@ class _MorphIdentityOnboardingState extends State<MorphIdentityOnboarding> {
 
   Widget _form(BuildContext context) {
     final importing = _step == _Step.import;
+    final fromBackup = _step == _Step.backup;
+    final sealed = _backupFileKind == MorphBackupKind.sealed;
     return AutofillGroup(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(
-            importing
+            fromBackup
+                ? 'Choose a Morph identity backup (.age) or a saved recovery '
+                      'phrase (.txt), then a password for it in '
+                      '${widget.profileName}.'
+                : importing
                 ? 'Enter the 24 recovery words of the identity to restore, '
                       'then choose a password for it in ${widget.profileName}.'
                 : 'Choose a password. It seals ${widget.profileName}\'s keys '
@@ -293,6 +346,34 @@ class _MorphIdentityOnboardingState extends State<MorphIdentityOnboarding> {
                 alignLabelWithHint: true,
               ),
             ),
+            const SizedBox(height: 12),
+          ],
+          if (fromBackup) ...[
+            OutlinedButton.icon(
+              key: const Key('onboarding-backup-choose'),
+              onPressed: _busy ? null : _chooseBackup,
+              icon: const Icon(Icons.folder_open),
+              label: Text(_backupFile?.name ?? 'Choose file'),
+            ),
+            if (_backupFile != null) ...[
+              const SizedBox(height: 6),
+              Text(
+                sealed
+                    ? 'A password-sealed backup. Enter the password it was '
+                          'made with.'
+                    : 'A recovery phrase file.',
+                key: const Key('onboarding-backup-kind'),
+              ),
+            ],
+            if (sealed) ...[
+              const SizedBox(height: 12),
+              MorphPasswordField(
+                key: const Key('onboarding-backup-password'),
+                controller: _backupPassword,
+                label: 'Backup password',
+                textInputAction: TextInputAction.next,
+              ),
+            ],
             const SizedBox(height: 12),
           ],
           MorphPasswordField(
@@ -327,7 +408,11 @@ class _MorphIdentityOnboardingState extends State<MorphIdentityOnboarding> {
                     height: 18,
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
-                : Text(importing ? 'Restore identity' : 'Create identity'),
+                : Text(
+                    importing || fromBackup
+                        ? 'Restore identity'
+                        : 'Create identity',
+                  ),
           ),
         ],
       ),
@@ -336,7 +421,6 @@ class _MorphIdentityOnboardingState extends State<MorphIdentityOnboarding> {
 
   Widget _wordsStep(BuildContext context) {
     final created = _created!;
-    final words = created.words.split(RegExp(r'\s+'));
     final colors = Theme.of(context).colorScheme;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -347,67 +431,11 @@ class _MorphIdentityOnboardingState extends State<MorphIdentityOnboarding> {
           'show them again without the password.',
         ),
         const SizedBox(height: 16),
-        Container(
-          key: const Key('onboarding-word-grid'),
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            border: Border.all(color: MorphColors.cyan.withValues(alpha: 0.6)),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (var i = 0; i < words.length; i++)
-                SizedBox(
-                  width: 120,
-                  child: Text(
-                    '${(i + 1).toString().padLeft(2)}. ${words[i]}',
-                    style: MorphTheme.monoStyle(
-                      color: colors.onSurface,
-                      size: 13,
-                    ),
-                  ),
-                ),
-            ],
-          ),
+        MorphRecoveryPhraseView(
+          profileName: widget.profileName,
+          userId: created.identity.userId,
+          words: created.words,
         ),
-        const SizedBox(height: 8),
-        Wrap(
-          spacing: 8,
-          runSpacing: 4,
-          alignment: WrapAlignment.center,
-          children: [
-            TextButton.icon(
-              key: const Key('recovery-copy'),
-              onPressed: () => _phraseAction(_copyPhrase),
-              icon: const Icon(Icons.copy),
-              label: const Text('Copy'),
-            ),
-            TextButton.icon(
-              key: const Key('recovery-share'),
-              onPressed: () => _phraseAction(_sharePhrase),
-              icon: const Icon(Icons.share),
-              label: const Text('Share'),
-            ),
-            TextButton.icon(
-              key: const Key('recovery-save'),
-              onPressed: () => _phraseAction(_savePhrase),
-              icon: const Icon(Icons.download),
-              label: const Text('Download'),
-            ),
-          ],
-        ),
-        if (_phraseStatus != null)
-          Text(
-            _phraseStatus!,
-            key: const Key('recovery-status'),
-            textAlign: TextAlign.center,
-            style: MorphTheme.monoStyle(
-              color: colors.onSurface.withValues(alpha: 0.8),
-              size: 12,
-            ),
-          ),
         const SizedBox(height: 12),
         Text(
           'User ${created.identity.userId}',

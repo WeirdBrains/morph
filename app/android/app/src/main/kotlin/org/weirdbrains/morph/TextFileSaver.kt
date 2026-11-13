@@ -30,7 +30,7 @@ object TextFileSaver {
             }
             val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE)
-                type = "text/plain"
+                type = call.argument<String>("mimeType") ?: "text/plain"
                 putExtra(Intent.EXTRA_TITLE, call.argument<String>("fileName") ?: "morph.txt")
             }
             pendingText = call.argument<String>("text").orEmpty()

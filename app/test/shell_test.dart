@@ -1072,6 +1072,88 @@ void main() {
     }
   });
 
+  testWidgets('the identity dialog offers the recovery phrase and a backup', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    final view = tester.view;
+    view.physicalSize = const Size(1280, 1000);
+    view.devicePixelRatio = 1.0;
+    final api = FakeMorphApi()..onboarded = false;
+    try {
+      await tester.pumpWidget(
+        MorphApp(
+          api: api,
+          home: '/tmp/morph-does-not-exist',
+          subscribeToTicks: false,
+          loadPageBridgeAsset: false,
+        ),
+      );
+      await _pumpUntilIdentity(tester);
+      await tester.pumpAndSettle();
+      // Onboarding offers restore from a backup file next to linking.
+      expect(find.byKey(const Key('onboarding-backup')), findsOneWidget);
+      expect(find.byKey(const Key('onboarding-link')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('onboarding-create')));
+      await tester.pumpAndSettle();
+      for (final key in ['onboarding-password', 'onboarding-confirm']) {
+        await tester.enterText(find.byKey(Key(key)), 'long enough');
+      }
+      await tester.tap(find.byKey(const Key('onboarding-submit')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('onboarding-saved')));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('onboarding-done')));
+      await tester.pumpAndSettle();
+
+      Future<void> identityAction(String key) async {
+        await tester.tap(find.byKey(const Key('nav-menu')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('menu-identity')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(Key(key)));
+        await tester.pumpAndSettle();
+      }
+
+      await identityAction('identity-recovery-phrase');
+      await tester.enterText(
+        find.byKey(const Key('recovery-phrase-password')),
+        'long enough',
+      );
+      await tester.tap(find.byKey(const Key('recovery-phrase-show')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('recovery-word-grid')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('recovery-phrase-close')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('recovery-phrase-dialog')), findsNothing);
+
+      await identityAction('identity-backup');
+      expect(find.byKey(const Key('identity-backup-dialog')), findsOneWidget);
+      await tester.enterText(
+        find.byKey(const Key('backup-profile-password')),
+        'long enough',
+      );
+      await tester.enterText(
+        find.byKey(const Key('backup-password')),
+        'backup pass',
+      );
+      await tester.enterText(
+        find.byKey(const Key('backup-confirm')),
+        'backup pass',
+      );
+      await tester.tap(find.byKey(const Key('backup-create')));
+      await tester.pumpAndSettle();
+      expect(api.exportBackupCalls, 1);
+      expect(find.byKey(const Key('backup-save')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('backup-close')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('identity-backup-dialog')), findsNothing);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+      view.reset();
+    }
+  });
+
   group('encrypted library unlock', () {
     Future<void> launch(WidgetTester tester, FakeMorphApi api) async {
       debugDefaultTargetPlatformOverride = TargetPlatform.linux;
