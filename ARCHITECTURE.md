@@ -1881,3 +1881,20 @@ which that lookup needs. Checked end to end: emulator (existing device)
 scanned/pasted the link of a desktop bundle (new device), both showed the same
 code, and the desktop profile ended with the same user id, source "linked".
 
+### 2026-11-12 — Android: surface checks stay out of scrolling
+
+After hybrid composition (5adb4a2) a Pixel 9 Pro XL scroll had 22 janky
+frames in 4,001 (0.55%, p99 14 ms) and a handful of 73-200 ms frames. Every
+one lined up with `Bitmap.compress` on the main thread, which in hybrid
+composition also draws the web view: the blank-surface check's screenshot.
+The checks came in pairs: a first capture that encoded in 3-5 ms (a flat
+frame, taken mid-fling) and, after the confirm delay, a second that took
+29-153 ms as a quality-100 PNG of the real page. Three changes: a check waits
+until the page has gone 1 s without a scroll step (`onScrollChanged`, which
+the plugin sends anyway) before each look, and gives up on a page that keeps
+scrolling (it is evidently painting); the shell only asks for a check after
+a real load (a loading event, then the finished page), not for the repeated
+"progress 100", title and same-page URL updates Android sends while reading;
+the capture is a JPEG, which keeps a flat frame flat within the tolerance
+and any text visible. The flat-frame test itself stays strict.
+
