@@ -38,6 +38,20 @@ flutter test
 Data for tests and manual runs goes in a temp directory or `MORPH_HOME`, never
 in a user's real `~/.morph`.
 
+Windows (on a Windows machine with Visual Studio 2022's C++ workload,
+Strawberry Perl, and `nuget.exe` on `PATH`):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/build-windows.ps1
+```
+
+That builds `app/build/windows/x64/runner/Release/morph.exe` and zips it to
+`dist/morph-<version>-x86_64-pc-windows-msvc.zip`. The script points `TEMP`
+at `C:\t\morph` for the build. SQLCipher compiles OpenSSL with `nmake`, and
+the default user temp directory is long enough that `cl` cannot write the
+object files (`C1083`). Running the app needs the WebView2 Runtime installed;
+the build only needs the WebView2 SDK, which `nuget.exe` downloads.
+
 ## Layout
 
 - `crates/morph-core` — version, event ticks, page-bridge message contract

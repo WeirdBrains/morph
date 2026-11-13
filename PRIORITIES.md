@@ -11,7 +11,9 @@ Linux `morph_webview` plugin loads pages through the webkit2gtk-4.1 snapshot tex
 fallback (WPE DMA-BUF is feature-detected and compiled when the libraries are present).
 The Linux plugin now talks to that view over the in-process gRPC control
 stream for navigation, input, and page-bridge handling (the method channel
-remains for create/dispose/resize and the texture id). macOS (WKWebView) and Windows (WebView2) backends now share that
+remains for create/dispose/resize and the texture id). The Windows app builds
+with `scripts/build-windows.ps1` (short `TEMP`, `nuget.exe` for the WebView2 SDK).
+macOS (WKWebView) and Windows (WebView2) backends now share that
 control layer through flutter_inappwebview 6.x. The Android in-app
 web view is registered on that same path (system WebView platform
 view, address-bar navigation). Each Android profile now has its own

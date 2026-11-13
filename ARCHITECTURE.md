@@ -1939,8 +1939,9 @@ nothing but a state (`plain`, `locked`, `unlocked`).
   from source, with no system libraries on Android, Linux, macOS or Windows.
   Building needs `perl` and `make` (Windows: Strawberry Perl, which GitHub's
   runners have). Checked here for x86_64 Linux and aarch64 Android (NDK r28).
-  The arm64 APK grew from 14.7 to 17.3 MB. CI builds Linux and Android only;
-  macOS and Windows are not built in CI yet.
+  The arm64 APK grew from 14.7 to 17.3 MB. CI builds Linux, Android, and the
+  Windows app (`scripts/build-windows.ps1` on `windows-latest`). The macOS
+  app is still not built in CI.
 - **Not wired into the UI yet:** nothing calls `unlock_library`, so every
   profile still uses JSON. Turning it on needs an unlock step at launch, either
   asking for the profile password or keeping the key in the platform keystore
@@ -2003,10 +2004,21 @@ was installed.
   Keyring above, leaving no entries. The `rust (macos-latest)` and
   `rust (windows-latest)` CI jobs run clippy over the workspace and the
   core, store and keystore unit tests; SQLCipher's vendored OpenSSL needs Perl on
-  Windows (the runners have Strawberry Perl). Not yet checked: the sandboxed
-  macOS app reading its own Keychain entry at runtime (the test binary is not
-  sandboxed), and the Windows app, whose build needs `nuget.exe` for
-  flutter_inappwebview_windows.
+  Windows (the runners have Strawberry Perl). The Windows app builds with
+  `scripts/build-windows.ps1` (Visual Studio 2022 C++, Strawberry Perl, and
+  `nuget.exe` so flutter_inappwebview_windows can fetch the WebView2 SDK).
+  flutter_rust_bridge_hooks puts the Cargo target under `TEMP`. The default
+  user temp path is long enough that OpenSSL's `cl` object paths exceed
+  MAX_PATH and the compile fails with C1083; the script sets `TEMP` and
+  `TMP` to `C:\t\morph` for the build. Checked on the Windows 11 VM
+  (WIN-R0LRC6FBTOM, x64, Flutter 3.47.8, rustc 1.99.1): release `morph.exe`
+  is an x64 Windows GUI binary, `morph_bridge.dll` and `WebView2Loader.dll`
+  sit beside it, and those three plus the web view plugin load. The GUI was
+  not started. The WebView2 Runtime was already installed on that VM
+  (157.0.4341.46); it is required to show pages and is not part of the zip.
+  Not yet checked: the sandboxed macOS app reading its own Keychain entry
+  at runtime (the test binary is not sandboxed), and launching `morph.exe`
+  on Windows.
 
 ### 2026-11-13 — Identity backups, the recovery phrase again, restore from a file
 

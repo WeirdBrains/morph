@@ -159,3 +159,33 @@ jobs:
           name: morph-android-debug
           path: app/build/app/outputs/flutter-apk/app-debug.apk
           if-no-files-found: error
+
+  # The Flutter Windows app. Rust tests already run on windows-latest; this
+  # job produces morph.exe. OpenSSL's nmake build needs the short TEMP that
+  # scripts/build-windows.ps1 sets, plus nuget.exe for WebView2.
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.9
+          cache: true
+      - name: Build the Windows release zip
+        shell: pwsh
+        run: |
+          if (-not (Get-Command nuget -ErrorAction SilentlyContinue)) {
+            throw "nuget.exe is not on PATH. flutter_inappwebview_windows needs it for the WebView2 SDK."
+          }
+          if (-not (Get-Command perl -ErrorAction SilentlyContinue)) {
+            throw "perl is not on PATH. SQLCipher's vendored OpenSSL needs Strawberry Perl."
+          }
+          .\scripts\build-windows.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: morph-windows-x64
+          path: dist/morph-*-x86_64-pc-windows-msvc.zip
+          if-no-files-found: error
