@@ -577,6 +577,44 @@ class FfiMorphApi implements MorphApi {
   );
 
   @override
+  Future<MorphBackupKind> identityBackupKind(List<int> contents) async =>
+      switch (await rust_identity.identityBackupKind(contents: contents)) {
+        rust_identity.IdentityBackupKind.sealed => MorphBackupKind.sealed,
+        rust_identity.IdentityBackupKind.phrase => MorphBackupKind.phrase,
+        rust_identity.IdentityBackupKind.unknown => MorphBackupKind.unknown,
+      };
+
+  @override
+  Future<String> exportProfileBackup(
+    String profileId,
+    String password,
+    String backupPassword, {
+    String? home,
+  }) => rust_identity.exportProfileBackup(
+    home: home,
+    profileId: profileId,
+    password: password,
+    backupPassword: backupPassword,
+  );
+
+  @override
+  Future<MorphIdentity> restoreProfileBackup(
+    String profileId,
+    List<int> contents, {
+    String? backupPassword,
+    required String password,
+    String? home,
+  }) async => _identity(
+    await rust_identity.restoreProfileBackup(
+      home: home,
+      profileId: profileId,
+      contents: contents,
+      backupPassword: backupPassword,
+      password: password,
+    ),
+  );
+
+  @override
   Future<void> clearHistory(String profileId, {String? home}) =>
       rust_library.clearHistory(home: home, profileId: profileId);
 

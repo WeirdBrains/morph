@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:morph/src/api.dart';
 
 /// In-memory [MorphApi] for widget tests.
@@ -565,6 +567,68 @@ class FakeMorphApi implements MorphApi {
       throw StateError('wrong password');
     }
     return sealed.words;
+  }
+
+  // --- Identity backups ----------------------------------------------
+  //
+  // A fake backup is `FAKE-BACKUP <backup password>\n<words>`; a phrase is
+  // the 24 words. Real sealing is tested in Rust.
+
+  static const fakeBackupTag = 'FAKE-BACKUP ';
+  int exportBackupCalls = 0;
+
+  @override
+  Future<MorphBackupKind> identityBackupKind(List<int> contents) async {
+    final text = utf8.decode(contents, allowMalformed: true);
+    if (text.startsWith(fakeBackupTag)) {
+      return MorphBackupKind.sealed;
+    }
+    return text.trim().split(RegExp(r'\s+')).length == 24
+        ? MorphBackupKind.phrase
+        : MorphBackupKind.unknown;
+  }
+
+  @override
+  Future<String> exportProfileBackup(
+    String profileId,
+    String password,
+    String backupPassword, {
+    String? home,
+  }) async {
+    exportBackupCalls++;
+    final words = await profileRecoveryWords(profileId, password);
+    if (backupPassword.length < 8) {
+      throw StateError('password must be at least 8 characters');
+    }
+    return '$fakeBackupTag$backupPassword\n$words';
+  }
+
+  @override
+  Future<MorphIdentity> restoreProfileBackup(
+    String profileId,
+    List<int> contents, {
+    String? backupPassword,
+    required String password,
+    String? home,
+  }) async {
+    final text = utf8.decode(contents, allowMalformed: true);
+    switch (await identityBackupKind(contents)) {
+      case MorphBackupKind.sealed:
+        final newline = text.indexOf('\n');
+        final sealedWith = text.substring(fakeBackupTag.length, newline);
+        if (backupPassword != sealedWith) {
+          throw StateError('wrong backup password, or the backup is damaged');
+        }
+        return importProfileIdentity(
+          profileId,
+          text.substring(newline + 1),
+          password,
+        );
+      case MorphBackupKind.phrase:
+        return importProfileIdentity(profileId, text, password);
+      case MorphBackupKind.unknown:
+        throw StateError('this file is not a Morph backup or recovery phrase');
+    }
   }
 
   // --- QR device linking ---------------------------------------------
