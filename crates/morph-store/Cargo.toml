@@ -1,0 +1,21 @@
+[package]
+name = "morph-store"
+description = "Morph's per-profile library database: SQLCipher, keyed from the profile's identity"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+
+[dependencies]
+morph-identity.workspace = true
+serde = { version = "1", features = ["derive"] }
+thiserror.workspace = true
+# SQLCipher and OpenSSL are compiled from source (no system libraries on any platform).
+weirdnet-storage = { version = "=0.1.0", default-features = false }
+
+[dev-dependencies]
+tempfile.workspace = true
