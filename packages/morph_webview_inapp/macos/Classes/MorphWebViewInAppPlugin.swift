@@ -86,7 +86,7 @@ extension WKWebView {
   @objc func morph_init(frame: CGRect, configuration: WKWebViewConfiguration) -> WKWebView {
     if #available(macOS 14.0, *),
        let identifier = MorphWebViewInAppPlugin.takeNextStoreIdentifier() {
-      configuration.websiteDataStore = WKWebsiteDataStore.forIdentifier(identifier)
+      configuration.websiteDataStore = WKWebsiteDataStore(forIdentifier: identifier)
     }
     return self.morph_init(frame: frame, configuration: configuration)
   }
