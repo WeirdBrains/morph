@@ -339,4 +339,26 @@ void main() {
       debugDefaultTargetPlatformOverride = null;
     });
   });
+
+  test('Android picks drop the .bin the picker puts on backups', () {
+    expect(
+      MorphIdentityFiles.shownName(
+        'morph-a-identity-backup.bin',
+        android: true,
+      ),
+      'morph-a-identity-backup',
+    );
+    expect(
+      MorphIdentityFiles.shownName(
+        'morph-a-identity-backup.age',
+        android: true,
+      ),
+      'morph-a-identity-backup.age',
+    );
+    expect(MorphIdentityFiles.shownName('.bin', android: true), '.bin');
+    expect(
+      MorphIdentityFiles.shownName('notes.bin', android: false),
+      'notes.bin',
+    );
+  });
 }
