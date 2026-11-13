@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Windows: `scripts/build-windows.ps1` builds the release app and zips it.
   The build uses a short `TEMP` so vendored OpenSSL's object files fit
   under Windows' path limit, and `nuget.exe` fetches the WebView2 SDK.
+  MSVC 14.51's removal of `<experimental/coroutine>` is silenced so the
+  WebView2 plugin still compiles.
 - Linux: on NVIDIA Wayland, start through XWayland so Flutter Impeller can
   create a GL context. This now also overrides session defaults such as
   Omarchy/Hyprland's `GDK_BACKEND=wayland,x11,*`, which previously left

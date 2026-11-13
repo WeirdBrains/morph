@@ -2007,6 +2007,9 @@ was installed.
   Windows (the runners have Strawberry Perl). The Windows app builds with
   `scripts/build-windows.ps1` (Visual Studio 2022 C++, Strawberry Perl, and
   `nuget.exe` so flutter_inappwebview_windows can fetch the WebView2 SDK).
+  MSVC 14.51 (Visual Studio 18 on `windows-latest`) rejects
+  `<experimental/coroutine>`, which that plugin still includes; the Windows
+  CMakeLists defines `_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS`.
   flutter_rust_bridge_hooks puts the Cargo target under `TEMP`. The default
   user temp path is long enough that OpenSSL's `cl` object paths exceed
   MAX_PATH and the compile fails with C1083; the script sets `TEMP` and
