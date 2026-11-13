@@ -6,6 +6,7 @@
 
 pub mod bookmarks;
 pub mod library;
+pub mod library_db;
 pub mod page_bridge;
 pub mod profiles;
 pub mod settings;

@@ -156,28 +156,33 @@ impl Library {
     /// transaction. Ids must be unique within each list.
     pub fn save_bookmark_set(&mut self, set: &BookmarkSet) -> Result<()> {
         let tx = self.conn.transaction()?;
-        tx.execute_batch("DELETE FROM bookmark_tags; DELETE FROM bookmarks; DELETE FROM folders; DELETE FROM tombstones;")?;
-        {
-            let mut f = tx.prepare("INSERT INTO folders (id, name, parent_id, sort_key, created_ms, updated_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")?;
-            for x in &set.folders {
-                f.execute(params![x.id, x.name, x.parent_id, x.order, x.created_ms, x.updated_ms])?;
-            }
-            let mut b =
-                tx.prepare("INSERT INTO bookmarks (id, url, title, folder_id, sort_key, added_ms, updated_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)")?;
-            let mut t = tx.prepare("INSERT INTO bookmark_tags (bookmark_id, position, tag) VALUES (?1, ?2, ?3)")?;
-            for x in &set.bookmarks {
-                b.execute(params![x.id, x.url, x.title, x.folder_id, x.order, x.added_ms, x.updated_ms])?;
-                for (i, tag) in x.tags.iter().enumerate() {
-                    t.execute(params![x.id, i as i64, tag])?;
-                }
-            }
-            let mut d = tx.prepare("INSERT INTO tombstones (id, deleted_ms) VALUES (?1, ?2)")?;
-            for x in &set.deleted {
-                d.execute(params![x.id, x.deleted_ms])?;
-            }
-        }
+        replace_bookmarks(&tx, set)?;
         tx.commit()?;
         Ok(())
+    }
+
+    /// Whether the database holds no bookmarks, folders, tombstones or history.
+    pub fn is_empty(&self) -> Result<bool> {
+        Ok(self.conn.query_row(
+            "SELECT NOT EXISTS (SELECT 1 FROM bookmarks) AND NOT EXISTS (SELECT 1 FROM folders)
+                AND NOT EXISTS (SELECT 1 FROM tombstones) AND NOT EXISTS (SELECT 1 FROM history)",
+            [],
+            |r| r.get(0),
+        )?)
+    }
+
+    /// Bring in a library kept elsewhere (the old JSON files), all or nothing,
+    /// and only into an empty database. Returns whether anything was written:
+    /// `false` means the database already had records and was left alone.
+    pub fn import(&mut self, set: &BookmarkSet, visits: &[HistoryEntry], cap: usize) -> Result<bool> {
+        if !self.is_empty()? {
+            return Ok(false);
+        }
+        let tx = self.conn.transaction()?;
+        replace_bookmarks(&tx, set)?;
+        append_visits(&tx, visits, cap)?;
+        tx.commit()?;
+        Ok(true)
     }
 
     // --- History ---------------------------------------------------------
@@ -210,15 +215,7 @@ impl Library {
     /// Append visits, oldest first, then keep only the newest `cap` (0 keeps all).
     pub fn append_visits(&mut self, entries: &[HistoryEntry], cap: usize) -> Result<()> {
         let tx = self.conn.transaction()?;
-        {
-            let mut add = tx.prepare("INSERT INTO history (url, title, visited_ms) VALUES (?1, ?2, ?3)")?;
-            for e in entries {
-                add.execute(params![e.url, e.title, e.visited_ms])?;
-            }
-        }
-        if cap > 0 {
-            tx.execute("DELETE FROM history WHERE seq NOT IN (SELECT seq FROM history ORDER BY seq DESC LIMIT ?1)", [cap as i64])?;
-        }
+        append_visits(&tx, entries, cap)?;
         tx.commit()?;
         Ok(())
     }
@@ -253,6 +250,39 @@ impl Library {
         self.conn.execute("DELETE FROM history", [])?;
         Ok(())
     }
+}
+
+fn replace_bookmarks(tx: &rusqlite::Transaction, set: &BookmarkSet) -> Result<()> {
+    tx.execute_batch("DELETE FROM bookmark_tags; DELETE FROM bookmarks; DELETE FROM folders; DELETE FROM tombstones;")?;
+    let mut f = tx.prepare("INSERT INTO folders (id, name, parent_id, sort_key, created_ms, updated_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")?;
+    for x in &set.folders {
+        f.execute(params![x.id, x.name, x.parent_id, x.order, x.created_ms, x.updated_ms])?;
+    }
+    let mut b =
+        tx.prepare("INSERT INTO bookmarks (id, url, title, folder_id, sort_key, added_ms, updated_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)")?;
+    let mut t = tx.prepare("INSERT INTO bookmark_tags (bookmark_id, position, tag) VALUES (?1, ?2, ?3)")?;
+    for x in &set.bookmarks {
+        b.execute(params![x.id, x.url, x.title, x.folder_id, x.order, x.added_ms, x.updated_ms])?;
+        for (i, tag) in x.tags.iter().enumerate() {
+            t.execute(params![x.id, i as i64, tag])?;
+        }
+    }
+    let mut d = tx.prepare("INSERT INTO tombstones (id, deleted_ms) VALUES (?1, ?2)")?;
+    for x in &set.deleted {
+        d.execute(params![x.id, x.deleted_ms])?;
+    }
+    Ok(())
+}
+
+fn append_visits(tx: &rusqlite::Transaction, entries: &[HistoryEntry], cap: usize) -> Result<()> {
+    let mut add = tx.prepare("INSERT INTO history (url, title, visited_ms) VALUES (?1, ?2, ?3)")?;
+    for e in entries {
+        add.execute(params![e.url, e.title, e.visited_ms])?;
+    }
+    if cap > 0 {
+        tx.execute("DELETE FROM history WHERE seq NOT IN (SELECT seq FROM history ORDER BY seq DESC LIMIT ?1)", [cap as i64])?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
