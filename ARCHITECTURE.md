@@ -1990,5 +1990,19 @@ was installed.
   throwaway GNOME Keyring on a private D-Bus bus (temp HOME and XDG dirs, with
   none of the user's session variables): save, load and forget round-trip in
   about 50 ms. With no Secret Service or no bus it fails in under 20 ms and the
-  password path takes over. The Windows and Android stores pass clippy for their
-  targets here. macOS is unchecked: there is no macOS target or CI job.
+  password path takes over.
+- **The real stores** are covered by `crates/morph-keystore/tests/system_keystore.rs`,
+  ignored by default. It runs under a test service name set in
+  `MORPH_KEYSTORE_SERVICE` (it must start with `org.weirdbrains.morph.test`, or the
+  variable is ignored), so it never meets a real profile's entry, and it forgets
+  everything it saved:
+  `MORPH_KEYSTORE_SERVICE=org.weirdbrains.morph.test cargo test -p morph-keystore --test system_keystore -- --ignored`.
+  It passed on the macOS login Keychain (MacBook Air, macOS 26.5, arm64), the
+  Windows Credential Manager (Windows 11 VM, x64, MSVC) and the throwaway GNOME
+  Keyring above, leaving no entries. The `rust (macos-latest)` and
+  `rust (windows-latest)` CI jobs run clippy over the workspace and the
+  core, store and keystore unit tests; SQLCipher's vendored OpenSSL needs Perl on
+  Windows (the runners have Strawberry Perl). Not yet checked: the sandboxed
+  macOS app reading its own Keychain entry at runtime (the test binary is not
+  sandboxed), and the Windows app, whose build needs `nuget.exe` for
+  flutter_inappwebview_windows.
