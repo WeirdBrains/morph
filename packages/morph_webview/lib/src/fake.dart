@@ -116,12 +116,39 @@ class FakeMorphWebViewSession extends MorphWebViewSession {
   void emitCursor(String shape) =>
       _cursorController.add(MorphCursorEvent(shape: shape));
 
+  /// Like a real engine, every load reports itself loading before it
+  /// reports the finished page.
+  void _emitLoading(String url) {
+    _navController.add(
+      MorphNavigationEvent(
+        url: url,
+        title: _nav.title,
+        canGoBack: _nav.canGoBack,
+        canGoForward: _nav.canGoForward,
+        isLoading: true,
+        progress: 0.1,
+      ),
+    );
+  }
+
+  /// Emits [event] as if the page produced it (a title change, a same-page
+  /// URL update, a late progress report).
+  void emitNavigation(MorphNavigationEvent event) {
+    _nav = event;
+    _navController.add(event);
+  }
+
+  /// When the user last scrolled this page; tests set it.
+  @override
+  DateTime? lastUserScroll;
+
   void _push(String url, {String title = 'Fake'}) {
     if (historyIndex < history.length - 1) {
       history.removeRange(historyIndex + 1, history.length);
     }
     history.add(url);
     historyIndex = history.length - 1;
+    _emitLoading(url);
     _nav = MorphNavigationEvent(
       url: url,
       title: title,
@@ -152,6 +179,7 @@ class FakeMorphWebViewSession extends MorphWebViewSession {
   Future<void> goBack() async {
     if (historyIndex > 0) {
       historyIndex--;
+      _emitLoading(history[historyIndex]);
       _nav = MorphNavigationEvent(
         url: history[historyIndex],
         title: 'Fake',
@@ -167,6 +195,7 @@ class FakeMorphWebViewSession extends MorphWebViewSession {
   Future<void> goForward() async {
     if (historyIndex < history.length - 1) {
       historyIndex++;
+      _emitLoading(history[historyIndex]);
       _nav = MorphNavigationEvent(
         url: history[historyIndex],
         title: 'Fake',
@@ -183,6 +212,7 @@ class FakeMorphWebViewSession extends MorphWebViewSession {
   @override
   Future<void> reload() async {
     reloads++;
+    _emitLoading(_nav.url);
     _navController.add(_nav);
   }
 

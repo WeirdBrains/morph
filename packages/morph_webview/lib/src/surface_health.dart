@@ -126,8 +126,8 @@ const morphSurfaceRepaintScript = '''(function () {
   return 'ok';
 })()''';
 
-/// True when [rgba] (tightly packed RGBA8888, decoded from a lossless PNG)
-/// is a single flat colour.
+/// True when [rgba] (tightly packed RGBA8888, decoded from the capture) is
+/// a single flat colour. [tolerance] absorbs JPEG rounding of a flat frame.
 ///
 /// A surface that is not painting is exactly uniform, so the defaults are
 /// strict: a few pixels of small text on a white page (a bare
