@@ -1898,3 +1898,40 @@ a real load (a loading event, then the finished page), not for the repeated
 the capture is a JPEG, which keeps a flat frame flat within the tolerance
 and any text visible. The flat-frame test itself stays strict.
 
+
+### 2026-11-12 — Encrypted library database (bookmarks, folders, tags, history)
+
+Each profile's library lives in `<home>/profiles/<id>/library.db`, a SQLCipher
+file opened through `weirdnet-storage` 0.1.0 by the new `morph-store` crate.
+Its key is the profile's `LibraryKey`: HKDF-SHA256 over the Weirdnet identity
+seed with info `morph/library-db/v1` (`profile_identity.rs`). The seed is sealed
+under the profile password, so the database opens only while that identity is
+unlocked, and only for that profile (each has its own seed). The key is held
+only inside the open connection (`morph_core::library_db`), never logged and
+never sent to Dart: Dart passes the password to `unlock_library` and gets back
+nothing but a state (`plain`, `locked`, `unlocked`).
+
+- **Schema v1:** `folders`, `bookmarks`, `bookmark_tags` (ordered),
+  `tombstones`, `history`. Migrations go through `weirdnet_storage::migrate`
+  (append only). `morph-store` only stores records; the rules (same page,
+  5,000-visit cap, tree tidying, 90-day tombstones) stay in `morph-core`, so
+  JSON and database behave the same and share one set of tests.
+- **Migration:** the first unlock moves `bookmarks.json` and `history.json` in,
+  all in one transaction and only into an empty database (a crash between the
+  commit and deleting the files cannot duplicate anything), then deletes the
+  JSON. From then on a locked profile refuses library calls (`Locked`) rather
+  than ever writing plaintext again. Deleting a file does not scrub flash or
+  SSD blocks; that needs full-disk encryption, which phones have by default.
+- **Before onboarding** (no identity, so no key) the library stays plaintext
+  JSON, as before.
+- **Cross-platform:** `weirdnet-storage` turns on rusqlite's
+  `bundled-sqlcipher-vendored-openssl`, so SQLCipher and OpenSSL are compiled
+  from source, with no system libraries on Android, Linux, macOS or Windows.
+  Building needs `perl` and `make` (Windows: Strawberry Perl, which GitHub's
+  runners have). Checked here for x86_64 Linux and aarch64 Android (NDK r28).
+  The arm64 APK grew from 14.7 to 17.3 MB. CI builds Linux and Android only;
+  macOS and Windows are not built in CI yet.
+- **Not wired into the UI yet:** nothing calls `unlock_library`, so every
+  profile still uses JSON. Turning it on needs an unlock step at launch, either
+  asking for the profile password or keeping the key in the platform keystore
+  (section 3's `morph-store` keyring plan). That choice is open.
