@@ -2022,7 +2022,9 @@ being typed in.
   under a separate backup password (typed twice) as an ASCII-armored age
   file, `morph-<profile>-identity-backup.age` (`morph_identity::backup`).
   The plaintext is the 24 words alone, as in weirdnet-keys' `words.txt.age`,
-  so Muninn's key-file inputs and `age -d` read it. age's `armor` feature is
+  and `age -d` opens it. Morph restores Muninn's binary `words.txt.age`;
+  Muninn needs armor detection in weirdnet-keys (`agefile::is_age` checks
+  only the binary header) before it reads Morph's armored file directly. age's `armor` feature is
   turned on for this; no new crate. The Android saver takes a MIME type so a
   backup keeps its `.age` name.
 - **Restore:** onboarding has "Restore from a backup file" next to "Link
