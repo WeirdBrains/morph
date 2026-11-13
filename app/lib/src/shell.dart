@@ -1263,6 +1263,8 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
       context: context,
       builder: (context) => AlertDialog(
         key: const Key('identity-dialog'),
+        // Short (tiled) windows: the details and the four actions scroll.
+        scrollable: true,
         title: Text('$_profileName identity'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
