@@ -1,6 +1,6 @@
 # Handoff
 
-Updated 2026-11-13. Michael's usage was at 88.1% of the weekly limit and still climbing. This file is the resume point.
+Updated 2026-11-13, after `aa02ea6`. Michael's usage was at 88.1% of the weekly limit and still climbing. This file is the resume point. The task in progress is finishing the Linux `Isolate.create` fix (tests, Rust quality bar, commit). The popup bug is not started.
 
 ## Where things stand
 
@@ -72,6 +72,8 @@ Not investigated yet. Do not sign into a real account. A local page that opens a
 - Local dependency bump to `window_manager` 0.7 / `nativeapi` 0.6, and two successful `flutter build linux` runs on Flutter 3.50.0.
 
 ## Next
+
+The handoff itself is `aa02ea65f971f7b29a640d98cb58a4cec8d85640` on `main`. Resume at the Linux fix:
 
 1. Let the in-progress `flutter test` finish. If it failed, fix the test or the window API call.
 2. Run the repo quality bar (`cargo fmt --check`, `cargo build`, `cargo clippy --all-targets -- -D warnings`, `cargo test`) with `CARGO_TARGET_DIR` under `/mnt/ext1` and stdin from `/dev/null`. Clean that target, `app/build`, and `app/.dart_tool` afterward.
