@@ -61,6 +61,40 @@ Future<String> profileRecoveryWords({
   password: password,
 );
 
+/// What `contents` is (a sealed backup, a phrase file, or neither), without any password.
+Future<IdentityBackupKind> identityBackupKind({required List<int> contents}) =>
+    RustLib.instance.api.crateApiIdentityIdentityBackupKind(contents: contents);
+
+/// A backup of `profile_id`'s identity sealed under `backup_password` (an
+/// armored age file of its recovery words), after checking the profile password.
+Future<String> exportProfileBackup({
+  String? home,
+  required String profileId,
+  required String password,
+  required String backupPassword,
+}) => RustLib.instance.api.crateApiIdentityExportProfileBackup(
+  home: home,
+  profileId: profileId,
+  password: password,
+  backupPassword: backupPassword,
+);
+
+/// Restore the identity in a backup or recovery-phrase file into `profile_id`,
+/// sealed under its new `password`. A sealed backup needs `backup_password`.
+Future<ProfileIdentityView> restoreProfileBackup({
+  String? home,
+  required String profileId,
+  required List<int> contents,
+  String? backupPassword,
+  required String password,
+}) => RustLib.instance.api.crateApiIdentityRestoreProfileBackup(
+  home: home,
+  profileId: profileId,
+  contents: contents,
+  backupPassword: backupPassword,
+  password: password,
+);
+
 /// A new identity and the 24 recovery words to show the user once.
 class CreatedIdentityView {
   final ProfileIdentityView identity;
@@ -97,6 +131,18 @@ class EphemeralUser {
           runtimeType == other.runtimeType &&
           userId == other.userId &&
           fingerprint == other.fingerprint;
+}
+
+/// What a file offered for restore holds.
+enum IdentityBackupKind {
+  /// A password-sealed backup: ask for its backup password.
+  sealed,
+
+  /// An unsealed recovery phrase: no backup password.
+  phrase,
+
+  /// Not a backup or recovery phrase.
+  unknown,
 }
 
 /// Public identity status for a Morph home. Never creates the directory.

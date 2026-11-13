@@ -39,7 +39,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.13.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1309887953;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 263466014;
 
 // Section: executor
 
@@ -527,6 +527,35 @@ fn wire__crate__api__events__event_ticks_impl(
         },
     )
 }
+fn wire__crate__api__identity__export_profile_backup_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "export_profile_backup",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe { flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(ptr_, rust_vec_len_, data_len_) };
+            let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_home = <Option<String>>::sse_decode(&mut deserializer);
+            let api_profile_id = <String>::sse_decode(&mut deserializer);
+            let api_password = <String>::sse_decode(&mut deserializer);
+            let api_backup_password = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::identity::export_profile_backup(api_home, api_profile_id, api_password, api_backup_password)?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__page__handle_page_message_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -547,6 +576,32 @@ fn wire__crate__api__page__handle_page_message_impl(
             move |context| {
                 transform_result_sse::<_, String>((move || {
                     let output_ok = crate::api::page::handle_page_message(api_json)?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__identity__identity_backup_kind_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "identity_backup_kind",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe { flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(ptr_, rust_vec_len_, data_len_) };
+            let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_contents = <Vec<u8>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok = Ok::<_, ()>(crate::api::identity::identity_backup_kind(api_contents))?;
                     std::result::Result::Ok(output_ok)
                 })())
             }
@@ -1268,6 +1323,37 @@ fn wire__crate__api__profiles__rename_profile_impl(
         },
     )
 }
+fn wire__crate__api__identity__restore_profile_backup_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "restore_profile_backup",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe { flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(ptr_, rust_vec_len_, data_len_) };
+            let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_home = <Option<String>>::sse_decode(&mut deserializer);
+            let api_profile_id = <String>::sse_decode(&mut deserializer);
+            let api_contents = <Vec<u8>>::sse_decode(&mut deserializer);
+            let api_backup_password = <Option<String>>::sse_decode(&mut deserializer);
+            let api_password = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok =
+                        crate::api::identity::restore_profile_backup(api_home, api_profile_id, api_contents, api_backup_password, api_password)?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__library__search_bookmarks_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -1773,6 +1859,19 @@ impl SseDecode for i64 {
     }
 }
 
+impl SseDecode for crate::api::identity::IdentityBackupKind {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <i32>::sse_decode(deserializer);
+        return match inner {
+            0 => crate::api::identity::IdentityBackupKind::Sealed,
+            1 => crate::api::identity::IdentityBackupKind::Phrase,
+            2 => crate::api::identity::IdentityBackupKind::Unknown,
+            _ => unreachable!("Invalid variant for IdentityBackupKind: {}", inner),
+        };
+    }
+}
+
 impl SseDecode for crate::api::identity::IdentityStatusView {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -2078,44 +2177,47 @@ fn pde_ffi_dispatcher_primary_impl(
         15 => wire__crate__api__library__delete_history_url_impl(port, ptr, rust_vec_len, data_len),
         16 => wire__crate__api__profiles__delete_profile_impl(port, ptr, rust_vec_len, data_len),
         17 => wire__crate__api__events__event_ticks_impl(port, ptr, rust_vec_len, data_len),
-        18 => wire__crate__api__page__handle_page_message_impl(port, ptr, rust_vec_len, data_len),
-        19 => wire__crate__api__identity__identity_dir_info_impl(port, ptr, rust_vec_len, data_len),
-        20 => wire__crate__api__identity__import_profile_identity_impl(port, ptr, rust_vec_len, data_len),
-        21 => wire__crate__api__library__library_state_impl(port, ptr, rust_vec_len, data_len),
-        22 => wire__crate__api__device_link__link_add_device_cancel_impl(port, ptr, rust_vec_len, data_len),
-        23 => wire__crate__api__device_link__link_add_device_send_impl(port, ptr, rust_vec_len, data_len),
-        24 => wire__crate__api__device_link__link_add_device_start_impl(port, ptr, rust_vec_len, data_len),
-        25 => wire__crate__api__device_link__link_new_device_cancel_impl(port, ptr, rust_vec_len, data_len),
-        26 => wire__crate__api__device_link__link_new_device_confirm_impl(port, ptr, rust_vec_len, data_len),
-        27 => wire__crate__api__device_link__link_new_device_finish_impl(port, ptr, rust_vec_len, data_len),
-        28 => wire__crate__api__device_link__link_new_device_start_impl(port, ptr, rust_vec_len, data_len),
-        29 => wire__crate__api__device_link__link_new_device_status_impl(port, ptr, rust_vec_len, data_len),
-        30 => wire__crate__api__library__list_bookmarks_impl(port, ptr, rust_vec_len, data_len),
-        31 => wire__crate__api__library__list_history_impl(port, ptr, rust_vec_len, data_len),
-        32 => wire__crate__api__profiles__list_profiles_impl(port, ptr, rust_vec_len, data_len),
-        33 => wire__crate__api__settings__load_settings_impl(port, ptr, rust_vec_len, data_len),
-        34 => wire__crate__api__library__lock_library_impl(port, ptr, rust_vec_len, data_len),
-        35 => wire__crate__api__library__move_bookmark_item_impl(port, ptr, rust_vec_len, data_len),
-        36 => wire__crate__api__identity__new_ephemeral_user_impl(port, ptr, rust_vec_len, data_len),
-        37 => wire__crate__api__library__open_library_impl(port, ptr, rust_vec_len, data_len),
-        38 => wire__crate__api__identity__profile_identity_impl(port, ptr, rust_vec_len, data_len),
-        39 => wire__crate__api__profiles__profile_paths_impl(port, ptr, rust_vec_len, data_len),
-        40 => wire__crate__api__identity__profile_recovery_words_impl(port, ptr, rust_vec_len, data_len),
-        41 => wire__crate__api__library__record_visit_impl(port, ptr, rust_vec_len, data_len),
-        42 => wire__crate__api__library__remove_bookmark_impl(port, ptr, rust_vec_len, data_len),
-        43 => wire__crate__api__library__rename_bookmark_folder_impl(port, ptr, rust_vec_len, data_len),
-        44 => wire__crate__api__profiles__rename_profile_impl(port, ptr, rust_vec_len, data_len),
-        45 => wire__crate__api__library__search_bookmarks_impl(port, ptr, rust_vec_len, data_len),
-        46 => wire__crate__api__profiles__set_current_profile_impl(port, ptr, rust_vec_len, data_len),
-        47 => wire__crate__api__settings__set_sidebar_collapsed_impl(port, ptr, rust_vec_len, data_len),
-        48 => wire__crate__api__settings__set_sidebar_width_impl(port, ptr, rust_vec_len, data_len),
-        49 => wire__crate__api__settings__set_tab_position_impl(port, ptr, rust_vec_len, data_len),
-        50 => wire__crate__api__control__start_webview_control_impl(port, ptr, rust_vec_len, data_len),
-        51 => wire__crate__api__control__start_webview_control_in_impl(port, ptr, rust_vec_len, data_len),
-        52 => wire__crate__api__control__start_webview_control_loopback_impl(port, ptr, rust_vec_len, data_len),
-        53 => wire__crate__api__control__stop_webview_control_impl(port, ptr, rust_vec_len, data_len),
-        54 => wire__crate__api__library__unlock_library_impl(port, ptr, rust_vec_len, data_len),
-        55 => wire__crate__api__library__update_bookmark_impl(port, ptr, rust_vec_len, data_len),
+        18 => wire__crate__api__identity__export_profile_backup_impl(port, ptr, rust_vec_len, data_len),
+        19 => wire__crate__api__page__handle_page_message_impl(port, ptr, rust_vec_len, data_len),
+        20 => wire__crate__api__identity__identity_backup_kind_impl(port, ptr, rust_vec_len, data_len),
+        21 => wire__crate__api__identity__identity_dir_info_impl(port, ptr, rust_vec_len, data_len),
+        22 => wire__crate__api__identity__import_profile_identity_impl(port, ptr, rust_vec_len, data_len),
+        23 => wire__crate__api__library__library_state_impl(port, ptr, rust_vec_len, data_len),
+        24 => wire__crate__api__device_link__link_add_device_cancel_impl(port, ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__device_link__link_add_device_send_impl(port, ptr, rust_vec_len, data_len),
+        26 => wire__crate__api__device_link__link_add_device_start_impl(port, ptr, rust_vec_len, data_len),
+        27 => wire__crate__api__device_link__link_new_device_cancel_impl(port, ptr, rust_vec_len, data_len),
+        28 => wire__crate__api__device_link__link_new_device_confirm_impl(port, ptr, rust_vec_len, data_len),
+        29 => wire__crate__api__device_link__link_new_device_finish_impl(port, ptr, rust_vec_len, data_len),
+        30 => wire__crate__api__device_link__link_new_device_start_impl(port, ptr, rust_vec_len, data_len),
+        31 => wire__crate__api__device_link__link_new_device_status_impl(port, ptr, rust_vec_len, data_len),
+        32 => wire__crate__api__library__list_bookmarks_impl(port, ptr, rust_vec_len, data_len),
+        33 => wire__crate__api__library__list_history_impl(port, ptr, rust_vec_len, data_len),
+        34 => wire__crate__api__profiles__list_profiles_impl(port, ptr, rust_vec_len, data_len),
+        35 => wire__crate__api__settings__load_settings_impl(port, ptr, rust_vec_len, data_len),
+        36 => wire__crate__api__library__lock_library_impl(port, ptr, rust_vec_len, data_len),
+        37 => wire__crate__api__library__move_bookmark_item_impl(port, ptr, rust_vec_len, data_len),
+        38 => wire__crate__api__identity__new_ephemeral_user_impl(port, ptr, rust_vec_len, data_len),
+        39 => wire__crate__api__library__open_library_impl(port, ptr, rust_vec_len, data_len),
+        40 => wire__crate__api__identity__profile_identity_impl(port, ptr, rust_vec_len, data_len),
+        41 => wire__crate__api__profiles__profile_paths_impl(port, ptr, rust_vec_len, data_len),
+        42 => wire__crate__api__identity__profile_recovery_words_impl(port, ptr, rust_vec_len, data_len),
+        43 => wire__crate__api__library__record_visit_impl(port, ptr, rust_vec_len, data_len),
+        44 => wire__crate__api__library__remove_bookmark_impl(port, ptr, rust_vec_len, data_len),
+        45 => wire__crate__api__library__rename_bookmark_folder_impl(port, ptr, rust_vec_len, data_len),
+        46 => wire__crate__api__profiles__rename_profile_impl(port, ptr, rust_vec_len, data_len),
+        47 => wire__crate__api__identity__restore_profile_backup_impl(port, ptr, rust_vec_len, data_len),
+        48 => wire__crate__api__library__search_bookmarks_impl(port, ptr, rust_vec_len, data_len),
+        49 => wire__crate__api__profiles__set_current_profile_impl(port, ptr, rust_vec_len, data_len),
+        50 => wire__crate__api__settings__set_sidebar_collapsed_impl(port, ptr, rust_vec_len, data_len),
+        51 => wire__crate__api__settings__set_sidebar_width_impl(port, ptr, rust_vec_len, data_len),
+        52 => wire__crate__api__settings__set_tab_position_impl(port, ptr, rust_vec_len, data_len),
+        53 => wire__crate__api__control__start_webview_control_impl(port, ptr, rust_vec_len, data_len),
+        54 => wire__crate__api__control__start_webview_control_in_impl(port, ptr, rust_vec_len, data_len),
+        55 => wire__crate__api__control__start_webview_control_loopback_impl(port, ptr, rust_vec_len, data_len),
+        56 => wire__crate__api__control__stop_webview_control_impl(port, ptr, rust_vec_len, data_len),
+        57 => wire__crate__api__library__unlock_library_impl(port, ptr, rust_vec_len, data_len),
+        58 => wire__crate__api__library__update_bookmark_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -2278,6 +2380,23 @@ impl flutter_rust_bridge::IntoDart for crate::api::library::HistoryEntryView {
 impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::library::HistoryEntryView {}
 impl flutter_rust_bridge::IntoIntoDart<crate::api::library::HistoryEntryView> for crate::api::library::HistoryEntryView {
     fn into_into_dart(self) -> crate::api::library::HistoryEntryView {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::identity::IdentityBackupKind {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self {
+            Self::Sealed => 0.into_dart(),
+            Self::Phrase => 1.into_dart(),
+            Self::Unknown => 2.into_dart(),
+            _ => unreachable!(),
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::identity::IdentityBackupKind {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::identity::IdentityBackupKind> for crate::api::identity::IdentityBackupKind {
+    fn into_into_dart(self) -> crate::api::identity::IdentityBackupKind {
         self
     }
 }
@@ -2594,6 +2713,23 @@ impl SseEncode for i64 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         serializer.cursor.write_i64::<NativeEndian>(self).unwrap();
+    }
+}
+
+impl SseEncode for crate::api::identity::IdentityBackupKind {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(
+            match self {
+                crate::api::identity::IdentityBackupKind::Sealed => 0,
+                crate::api::identity::IdentityBackupKind::Phrase => 1,
+                crate::api::identity::IdentityBackupKind::Unknown => 2,
+                _ => {
+                    unimplemented!("");
+                }
+            },
+            serializer,
+        );
     }
 }
 

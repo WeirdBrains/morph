@@ -87,6 +87,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PlatformInt64 dco_decode_i_64(dynamic raw);
 
   @protected
+  IdentityBackupKind dco_decode_identity_backup_kind(dynamic raw);
+
+  @protected
   IdentityStatusView dco_decode_identity_status_view(dynamic raw);
 
   @protected
@@ -121,6 +124,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<HistoryEntryView> dco_decode_list_history_entry_view(dynamic raw);
+
+  @protected
+  List<int> dco_decode_list_prim_u_8_loose(dynamic raw);
 
   @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
@@ -229,6 +235,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PlatformInt64 sse_decode_i_64(SseDeserializer deserializer);
 
   @protected
+  IdentityBackupKind sse_decode_identity_backup_kind(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   IdentityStatusView sse_decode_identity_status_view(
     SseDeserializer deserializer,
   );
@@ -275,6 +286,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<HistoryEntryView> sse_decode_list_history_entry_view(
     SseDeserializer deserializer,
   );
+
+  @protected
+  List<int> sse_decode_list_prim_u_8_loose(SseDeserializer deserializer);
 
   @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
@@ -404,6 +418,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_i_64(PlatformInt64 self, SseSerializer serializer);
 
   @protected
+  void sse_encode_identity_backup_kind(
+    IdentityBackupKind self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_identity_status_view(
     IdentityStatusView self,
     SseSerializer serializer,
@@ -468,6 +488,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     List<HistoryEntryView> self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_list_prim_u_8_loose(List<int> self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_prim_u_8_strict(

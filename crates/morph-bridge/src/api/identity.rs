@@ -108,6 +108,53 @@ pub fn profile_recovery_words(home: Option<String>, profile_id: String, password
     profile_identity::recovery_words(&dir, &password).map(|w| w.to_string()).map_err(|e| e.to_string())
 }
 
+/// What a file offered for restore holds.
+pub enum IdentityBackupKind {
+    /// A password-sealed backup: ask for its backup password.
+    Sealed,
+    /// An unsealed recovery phrase: no backup password.
+    Phrase,
+    /// Not a backup or recovery phrase.
+    Unknown,
+}
+
+/// What `contents` is (a sealed backup, a phrase file, or neither), without any password.
+pub fn identity_backup_kind(contents: Vec<u8>) -> IdentityBackupKind {
+    match morph_identity::backup::kind(&contents) {
+        morph_identity::backup::Kind::Sealed => IdentityBackupKind::Sealed,
+        morph_identity::backup::Kind::Phrase => IdentityBackupKind::Phrase,
+        morph_identity::backup::Kind::Unknown => IdentityBackupKind::Unknown,
+    }
+}
+
+/// A backup of `profile_id`'s identity sealed under `backup_password` (an
+/// armored age file of its recovery words), after checking the profile password.
+pub fn export_profile_backup(home: Option<String>, profile_id: String, password: String, backup_password: String) -> Result<String, String> {
+    let dir = profile_dir(home, &profile_id)?;
+    let password = SecretString::from(password);
+    let backup_password = SecretString::from(backup_password);
+    morph_identity::backup::export(&dir, &password, &backup_password).map(|b| b.to_string()).map_err(|e| e.to_string())
+}
+
+/// Restore the identity in a backup or recovery-phrase file into `profile_id`,
+/// sealed under its new `password`. A sealed backup needs `backup_password`.
+pub fn restore_profile_backup(
+    home: Option<String>,
+    profile_id: String,
+    contents: Vec<u8>,
+    backup_password: Option<String>,
+    password: String,
+) -> Result<ProfileIdentityView, String> {
+    let dir = profile_dir(home.clone(), &profile_id)?;
+    let contents = morph_identity::profile_identity::Zeroizing::new(contents);
+    let backup_password = backup_password.map(SecretString::from);
+    let password = SecretString::from(password);
+    let (identity, key) =
+        morph_identity::backup::restore(&dir, &contents, backup_password.as_ref(), &password, now_ms()).map_err(|e| e.to_string())?;
+    crate::api::library::adopt_new_identity(&resolve_home(home)?, &profile_id, &dir, &identity.user_id, &key);
+    Ok(ProfileIdentityView::from(identity))
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -152,6 +199,36 @@ mod tests {
         let imported = super::import_profile_identity(Some(home.clone()), "default".into(), made.words, "other pass".into()).unwrap();
         assert!(imported.imported);
         assert_eq!(imported.user_id, made.identity.user_id);
+    }
+
+    #[test]
+    fn a_backup_restores_into_another_profile() {
+        let (_tmp, home, work) = home_with_profile();
+        let made = super::create_profile_identity(Some(home.clone()), work.clone(), "long enough".into()).unwrap();
+        assert!(super::export_profile_backup(Some(home.clone()), work.clone(), "wrong one".into(), "backup pass".into()).is_err());
+        let backup = super::export_profile_backup(Some(home.clone()), work, "long enough".into(), "backup pass".into()).unwrap();
+        assert!(matches!(super::identity_backup_kind(backup.clone().into_bytes()), super::IdentityBackupKind::Sealed));
+        assert!(matches!(super::identity_backup_kind(made.words.clone().into_bytes()), super::IdentityBackupKind::Phrase));
+        assert!(matches!(super::identity_backup_kind(b"hello".to_vec()), super::IdentityBackupKind::Unknown));
+
+        let err = super::restore_profile_backup(
+            Some(home.clone()),
+            "default".into(),
+            backup.clone().into_bytes(),
+            Some("nope nope".into()),
+            "other pass".into(),
+        )
+        .err()
+        .unwrap();
+        assert!(err.contains("backup password"), "{err}");
+        assert!(super::profile_identity(Some(home.clone()), "default".into()).unwrap().is_none());
+        let restored =
+            super::restore_profile_backup(Some(home.clone()), "default".into(), backup.into_bytes(), Some("backup pass".into()), "other pass".into())
+                .unwrap();
+        assert!(restored.imported);
+        assert_eq!(restored.user_id, made.identity.user_id);
+        // The restored profile opens with its new password.
+        assert_eq!(super::profile_recovery_words(Some(home), "default".into(), "other pass".into()).unwrap(), made.words);
     }
 
     #[test]
