@@ -42,10 +42,25 @@ class MorphDesktopWindow {
   static bool get usesNativeMacTrafficLights =>
       isDesktop && defaultTargetPlatform == TargetPlatform.macOS;
 
+  /// The smallest window Morph asks for.
+  static const minimumSize = Size(640, 300);
+
+  /// Whether [applyChromeless] asks window_manager to hide the title bar.
+  ///
+  /// Not on Linux: the GTK runner already makes the window undecorated, and
+  /// window_manager's hidden title bar there (nativeapi) puts its own shadow
+  /// in a transparent border around the content, about 180 px a side. It
+  /// leaves the border out only when the window manager reports the window
+  /// tiled, maximized or full screen. Through XWayland, Hyprland reports none
+  /// of these but still fits the whole window to its tile, so Morph drew in
+  /// a small strip in the middle of a blank frame (2026-11-13).
+  static bool hidesTitleBarNatively({TargetPlatform? platform}) =>
+      (platform ?? defaultTargetPlatform) != TargetPlatform.linux;
+
   /// Hide the native title bar. On macOS the traffic lights stay visible and
   /// content draws under the title bar so the tab strip can pad around them.
-  /// On Windows and Linux the frame is removed and Morph draws its own
-  /// buttons.
+  /// On Windows the frame is removed; on Linux the runner never adds one
+  /// (see [hidesTitleBarNatively]). Morph draws its own buttons on both.
   static void applyChromeless() {
     final window = current;
     if (window == null) {
@@ -53,22 +68,29 @@ class MorphDesktopWindow {
     }
     try {
       window.title = 'Morph';
-      window.titleBarStyle = TitleBarStyle.hidden;
-      final isMac = defaultTargetPlatform == TargetPlatform.macOS;
-      if (isMac) {
-        window.isWindowControlButtonsVisible = true;
-        if (Window.isContentUnderTitleBarSupported()) {
-          window.setContentUnderTitleBar(true);
+      if (hidesTitleBarNatively()) {
+        window.titleBarStyle = TitleBarStyle.hidden;
+        final isMac = defaultTargetPlatform == TargetPlatform.macOS;
+        if (isMac) {
+          window.isWindowControlButtonsVisible = true;
+          if (Window.isContentUnderTitleBarSupported()) {
+            window.setContentUnderTitleBar(true);
+          }
+        } else {
+          window.isWindowControlButtonsVisible = false;
+          // setFrameless last: changing the title-bar style would restore a
+          // frame.
+          window.setFrameless(true);
         }
-      } else {
-        window.isWindowControlButtonsVisible = false;
-        // setFrameless last: changing the title-bar style would restore a frame.
-        window.setFrameless(true);
+        window.hasShadow = true;
       }
       window.isResizable = true;
       window.isMovable = true;
-      window.hasShadow = true;
-      window.minimumSize = const Size(640, 480).toNative();
+      // Tiling window managers give windows shorter than 480 px (Hyprland's
+      // half tiles on a laptop); a taller minimum makes GTK lay out past the
+      // bottom of the window. The shell and dialogs fit 640x300
+      // (short_window_test).
+      window.minimumSize = minimumSize.toNative();
     } catch (_) {
       // Incomplete native backends or a test FFI load must not crash the shell.
     }
