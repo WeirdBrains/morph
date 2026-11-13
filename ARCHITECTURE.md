@@ -1845,7 +1845,9 @@ profile has no identity before it takes the transfer, so a typo does not
 spend the single-use link. UI: "Link from another device" in onboarding (QR
 from the pure-Dart `qr` package plus the link text), "Add device" in
 Identity. Android scans with CameraX and ZXing core (FOSS, in-app activity,
-no Play Services; about 0.3 MB). Transport is direct TCP/QUIC only for now:
+no Play Services; about 0.3 MB). The bigger cost is the
+network stack: libp2p in `libmorph_bridge.so` took the arm64 APK from
+11.6 MB (5adb4a2) to 14.8 MB, still under the 25 MB limit. Transport is direct TCP/QUIC only for now:
 mDNS is off and no relays are set, so both devices need to reach each other.
 
 On Android, every real-network Weirdnet node failed with "the node did not
