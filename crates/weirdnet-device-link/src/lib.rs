@@ -44,7 +44,9 @@ pub enum Error {
     Expired,
     #[error("the other device refused: {0}")]
     Refused(String),
-    #[error("network: {0}")]
+    /// Already reads "network: …" (or "crypto: …"); weirdnet-net errors
+    /// carry their own category, so it is not prefixed again.
+    #[error("{0}")]
     Net(String),
     #[error("keys: {0}")]
     Keys(String),
@@ -63,3 +65,14 @@ impl From<weirdnet_net::NetError> for Error {
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+#[cfg(test)]
+mod error_tests {
+    use super::*;
+
+    #[test]
+    fn network_errors_are_not_prefixed_twice() {
+        let e = Error::from(weirdnet_net::NetError::Network("the node did not start in time".into()));
+        assert_eq!(e.to_string(), "network: the node did not start in time");
+    }
+}

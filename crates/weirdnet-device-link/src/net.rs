@@ -46,7 +46,7 @@ impl HostNode {
             }
             if Instant::now() > deadline {
                 node.halt();
-                return Err(Error::Net("could not listen for the other device".into()));
+                return Err(Error::Net("network: could not listen for the other device".into()));
             }
             std::thread::sleep(Duration::from_millis(20));
         };
