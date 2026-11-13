@@ -115,3 +115,17 @@ fn the_file_is_private_to_the_user() {
     Library::open(tmp.path(), &key(1)).unwrap();
     assert_eq!(std::fs::metadata(path(tmp.path())).unwrap().permissions().mode() & 0o777, 0o600);
 }
+
+#[test]
+fn import_fills_only_an_empty_database_all_at_once() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut lib = Library::open(tmp.path(), &key(1)).unwrap();
+    assert!(lib.is_empty().unwrap());
+    let visits = [visit("a", 1), visit("b", 2), visit("c", 3)];
+    assert!(lib.import(&sample(), &visits, 2).unwrap());
+    assert_eq!(lib.bookmark_set().unwrap(), sample());
+    assert_eq!(lib.history().unwrap(), vec![visit("c", 3), visit("b", 2)]);
+    assert!(!lib.is_empty().unwrap());
+    assert!(!lib.import(&BookmarkSet::default(), &[visit("z", 9)], 0).unwrap(), "never over existing records");
+    assert_eq!(lib.history().unwrap().len(), 2);
+}

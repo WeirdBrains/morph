@@ -7,7 +7,8 @@
 //! ```
 //!
 //! Both live in the profile directory, so deleting a profile deletes them and
-//! no profile can read another's. Times are Unix milliseconds supplied by the
+//! no profile can read another's. Once a profile is unlocked they move into its
+//! encrypted `library.db` (see [`crate::library_db`]) and these files go away. Times are Unix milliseconds supplied by the
 //! caller, which keeps this module deterministic under test.
 
 use std::fs;
@@ -16,6 +17,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::library_db;
 use crate::profiles::{self, ProfileError};
 
 /// Most history entries kept per profile; the oldest are dropped first.
@@ -23,13 +25,7 @@ pub const MAX_HISTORY: usize = 5000;
 
 pub use crate::bookmarks::{Bookmark, BookmarkError, add_bookmark, bookmarks, is_bookmarked, remove_bookmark};
 
-/// One visit to a page.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct HistoryEntry {
-    pub url: String,
-    pub title: String,
-    pub visited_ms: i64,
-}
+pub use morph_store::HistoryEntry;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct HistoryFile {
@@ -64,9 +60,22 @@ fn record_visit_capped(home: &Path, id: &str, url: &str, title: &str, now_ms: i6
         return Ok(());
     }
     profiles::require(home, id)?;
+    let title = title.trim();
+    let in_db = library_db::with(home, id, |lib| match lib.newest_visit()? {
+        Some(mut last) if same_page(&last.url, url) => {
+            if !title.is_empty() {
+                last.title = title.to_string();
+            }
+            last.visited_ms = now_ms;
+            lib.replace_newest_visit(&last)
+        }
+        _ => lib.append_visits(&[HistoryEntry { url: url.trim().to_string(), title: title.to_string(), visited_ms: now_ms }], cap),
+    })?;
+    if in_db.is_some() {
+        return Ok(());
+    }
     let path = history_path(home, id);
     let mut file = read::<HistoryFile>(&path)?;
-    let title = title.trim();
     match file.entries.last_mut() {
         Some(last) if same_page(&last.url, url) => {
             if !title.is_empty() {
@@ -86,12 +95,15 @@ fn record_visit_capped(home: &Path, id: &str, url: &str, title: &str, now_ms: i6
 /// History, newest first. A non-empty `query` keeps entries whose URL or title
 /// contains it (case-insensitive). `limit` 0 means no limit.
 pub fn history(home: impl AsRef<Path>, id: &str, query: &str, limit: usize) -> Result<Vec<HistoryEntry>, ProfileError> {
-    profiles::require(&home, id)?;
+    let home = home.as_ref();
+    profiles::require(home, id)?;
     let needle = query.trim().to_lowercase();
-    let mut list: Vec<HistoryEntry> = read::<HistoryFile>(&history_path(home, id))?
-        .entries
+    let newest_first = match library_db::with(home, id, |lib| lib.history())? {
+        Some(list) => list,
+        None => read::<HistoryFile>(&history_path(home, id))?.entries.into_iter().rev().collect(),
+    };
+    let mut list: Vec<HistoryEntry> = newest_first
         .into_iter()
-        .rev()
         .filter(|e| needle.is_empty() || e.url.to_lowercase().contains(&needle) || e.title.to_lowercase().contains(&needle))
         .collect();
     if limit > 0 {
@@ -102,7 +114,11 @@ pub fn history(home: impl AsRef<Path>, id: &str, query: &str, limit: usize) -> R
 
 /// Remove every visit to `url`.
 pub fn delete_history_url(home: impl AsRef<Path>, id: &str, url: &str) -> Result<(), ProfileError> {
-    profiles::require(&home, id)?;
+    let home = home.as_ref();
+    profiles::require(home, id)?;
+    if library_db::with(home, id, |lib| lib.delete_visits(|e| same_page(&e.url, url)))?.is_some() {
+        return Ok(());
+    }
     let path = history_path(home, id);
     let mut file = read::<HistoryFile>(&path)?;
     let before = file.entries.len();
@@ -115,12 +131,21 @@ pub fn delete_history_url(home: impl AsRef<Path>, id: &str, url: &str) -> Result
 
 /// Forget the profile's whole history.
 pub fn clear_history(home: impl AsRef<Path>, id: &str) -> Result<(), ProfileError> {
-    profiles::require(&home, id)?;
+    let home = home.as_ref();
+    profiles::require(home, id)?;
+    if library_db::with(home, id, |lib| lib.clear_history())?.is_some() {
+        return Ok(());
+    }
     let path = history_path(home, id);
     if path.exists() {
         fs::remove_file(path)?;
     }
     Ok(())
+}
+
+/// The JSON history, oldest first (for the move into the encrypted database).
+pub(crate) fn json_history(home: &Path, id: &str) -> Result<Vec<HistoryEntry>, ProfileError> {
+    Ok(read::<HistoryFile>(&history_path(home, id))?.entries)
 }
 
 /// URLs that differ only by a trailing slash on the path are the same page.

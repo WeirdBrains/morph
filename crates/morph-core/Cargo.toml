@@ -12,6 +12,7 @@ publish = false
 
 [dependencies]
 morph-identity.workspace = true
+morph-store.workspace = true
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror.workspace = true

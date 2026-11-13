@@ -2900,6 +2900,7 @@ name = "morph-core"
 version = "0.1.0"
 dependencies = [
  "morph-identity",
+ "morph-store",
  "serde",
  "serde_json",
  "tempfile",

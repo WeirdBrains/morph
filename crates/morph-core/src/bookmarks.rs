@@ -16,7 +16,9 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::library::{bookmarks_path, is_recordable, read, same_page, write};
+use crate::library_db;
 use crate::profiles::{self, ProfileError};
+use morph_store::BookmarkSet;
 
 /// Tombstones older than this are forgotten.
 pub const TOMBSTONE_MS: i64 = 90 * 24 * 60 * 60 * 1000;
@@ -24,43 +26,7 @@ pub const TOMBSTONE_MS: i64 = 90 * 24 * 60 * 60 * 1000;
 /// Longest tag kept, in characters.
 pub const MAX_TAG_LEN: usize = 40;
 
-/// A saved page.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Bookmark {
-    #[serde(default)]
-    pub id: String,
-    pub url: String,
-    pub title: String,
-    pub added_ms: i64,
-    #[serde(default)]
-    pub updated_ms: i64,
-    /// Containing folder; `None` is the root.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub folder_id: Option<String>,
-    #[serde(default)]
-    pub order: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tags: Vec<String>,
-}
-
-/// A bookmark folder.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Folder {
-    pub id: String,
-    pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent_id: Option<String>,
-    pub order: String,
-    pub created_ms: i64,
-    pub updated_ms: i64,
-}
-
-/// A deleted bookmark or folder, kept so sync can tell delete from absent.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Tombstone {
-    pub id: String,
-    pub deleted_ms: i64,
-}
+pub use morph_store::{Bookmark, Folder, Tombstone};
 
 /// Folders and bookmarks, each sorted by parent then `order`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -191,7 +157,10 @@ fn legacy_id(url: &str, added_ms: i64) -> String {
 
 fn load(home: &Path, id: &str) -> Result<File, BookmarkError> {
     profiles::require(home, id)?;
-    let mut file = read::<File>(&bookmarks_path(home, id))?;
+    let mut file = match library_db::with(home, id, |lib| lib.bookmark_set())? {
+        Some(set) => File { version: VERSION, bookmarks: set.bookmarks, folders: set.folders, deleted: set.deleted },
+        None => read::<File>(&bookmarks_path(home, id))?,
+    };
     normalize(&mut file);
     Ok(file)
 }
@@ -199,8 +168,19 @@ fn load(home: &Path, id: &str) -> Result<File, BookmarkError> {
 fn save(home: &Path, id: &str, file: &mut File, now_ms: i64) -> Result<(), BookmarkError> {
     file.version = VERSION;
     file.deleted.retain(|t| now_ms - t.deleted_ms < TOMBSTONE_MS);
-    write(&bookmarks_path(home, id), file)?;
+    let set = || BookmarkSet { bookmarks: file.bookmarks.clone(), folders: file.folders.clone(), deleted: file.deleted.clone() };
+    if library_db::with(home, id, |lib| lib.save_bookmark_set(&set()))?.is_none() {
+        write(&bookmarks_path(home, id), file)?;
+    }
     Ok(())
+}
+
+/// The JSON bookmark file, tidied as every load tidies it (for the move into
+/// the encrypted database).
+pub(crate) fn json_set(home: &Path, id: &str) -> Result<BookmarkSet, ProfileError> {
+    let mut file = read::<File>(&bookmarks_path(home, id))?;
+    normalize(&mut file);
+    Ok(BookmarkSet { bookmarks: file.bookmarks, folders: file.folders, deleted: file.deleted })
 }
 
 /// Fills in what older files lack: ids, update times, order keys, and moves

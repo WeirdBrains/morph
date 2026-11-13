@@ -73,6 +73,10 @@ pub enum ProfileError {
     EmptyName,
     #[error("cannot delete the last profile")]
     LastProfile,
+    #[error("this profile's library is locked; unlock it with the profile password")]
+    Locked,
+    #[error("library database: {0}")]
+    Store(#[from] morph_store::StoreError),
 }
 
 /// `<home>/profiles.json`.
@@ -232,6 +236,7 @@ pub fn delete(home: impl AsRef<Path>, id: &str) -> Result<Catalog, ProfileError>
         catalog.current = preferred_current(&catalog.profiles);
     }
     save_catalog(home, &catalog)?;
+    crate::library_db::lock(home, id);
     let dir = profile_dir(home, id);
     if dir.exists() {
         fs::remove_dir_all(dir)?;
