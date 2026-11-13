@@ -1,10 +1,10 @@
 # Handoff
 
-Updated 2026-11-13, after `aa02ea6`. Michael's usage was at 88.1% of the weekly limit and still climbing. This file is the resume point. The task in progress is finishing the Linux `Isolate.create` fix (tests, Rust quality bar, commit). The popup bug is not started.
+Updated 2026-11-13, after `005d01c`. Michael's usage was at 88.1% of the weekly limit and still climbing. This file is the resume point. The Linux `Isolate.create` fix is on main. The next task is the popup typing and repaint bug. It is not started.
 
 ## Where things stand
 
-`main` on origin is `e6c0c5e` (`Windows: silence MSVC 14.51's experimental coroutine error`). The working tree on alien-blue also has uncommitted Linux-build edits (not pushed yet): `app/pubspec.yaml`, `app/pubspec.lock`, `.github/workflows/ci.yml`, `README.md`, `CHANGELOG.md`. A `flutter test` of the app was still running when this note was written. Do not throw those edits away.
+`main` on origin is `005d01c` (`Linux: build on Flutter 3.50 with nativeapi 0.6`). The working tree is clean aside from this handoff edit. Earlier Windows commits `d30a211` and `e6c0c5e` are still on main.
 
 ### Windows build (done, on main)
 
@@ -26,7 +26,23 @@ Not verified: launching the GUI, loading a page, the frameless window, or WebVie
 
 A stash is still present and was not applied: `stash@{0}` on `302020b`, two lines adding `morph_webview_inapp` to `app/macos/Flutter/GeneratedPluginRegistrant.swift`. Current main already registers that plugin. Branches `gpu-fix` and `linux-persistent-webview-session` were left alone.
 
-### Linux `flutter build linux` / `Isolate.create` (fix written locally, not committed)
+### Linux `flutter build linux` / `Isolate.create` (done, on main)
+
+Commit `005d01c4ad7b2f415dd592c299dd1473c6e126e0` (`Linux: build on Flutter 3.50 with nativeapi 0.6`). `app/pubspec.yaml` requires Dart `^3.14.0` and Flutter `>=3.50.0`, and `window_manager` `>=0.7.0 <0.8.0`. The lockfile has `nativeapi` 0.6.0. CI `flutter-version` is `3.50.0`. Package lockfiles picked up `test_api` 0.7.14 and `listen` 1.0.1 from that SDK.
+
+What Michael should run, already on Flutter 3.50 / Dart 3.14:
+
+```sh
+cd morph
+git pull
+cd app
+flutter pub get
+flutter build linux
+```
+
+Do not downgrade Flutter. `flutter clean` does not fix this.
+
+### Linux `flutter build linux` / `Isolate.create` (investigation, kept for the evidence)
 
 Michael, on Flutter stable with Dart 3.14.0, ran `flutter build linux` from `morph/app`. `flutter clean` did not help. The failure is:
 
@@ -43,16 +59,11 @@ Verified, not guessed:
 - `nativeapi` 0.5.11 and 0.6.0 require Dart `^3.14.0`. Their changelogs say Dart 3.14 removed those VM APIs, and they moved `runNativeApp()` to `package:nativeapi/standalone.dart` so a normal import does not compile it. Checked: 0.6.0 `lib/nativeapi.dart` exports only `src/generated.dart`.
 - `window_manager` 0.7.0 requires Flutter `>=3.50.0`, Dart `^3.14.0`, and `nativeapi` `^0.6.0`. Morph's window code uses `Window`, `WindowManager`, `TitleBarStyle`, `setFrameless`, and `setContentUnderTitleBar`. Those members are still on `nativeapi` 0.6.0's `Window`.
 
-Local edits, not committed:
-
-- `app/pubspec.yaml`: SDK `^3.14.0`, Flutter `>=3.50.0`, `window_manager` `>=0.7.0 <0.8.0`.
-- `flutter pub get` resolved `window_manager` 0.7.0, `nativeapi` 0.6.0, `nativeapi_flutter` 0.6.0, `cnativeapi` 0.6.0. Lockfile updated.
-- CI `flutter-version` set to `3.50.0` in `.github/workflows/ci.yml` (four jobs). README and CHANGELOG updated to match.
-- `flutter build linux` on this tree, with `WAYLAND_DISPLAY` unset, exited 0 twice and wrote `app/build/linux/x64/release/bundle/morph`. Both runs also printed `ERROR: File modified during build. Build must be rerun.` and then `Built`.
+Those edits are what `005d01c` committed. `flutter build linux`, with `WAYLAND_DISPLAY` unset, exited 0 twice and wrote `app/build/linux/x64/release/bundle/morph`. Both runs also printed `ERROR: File modified during build. Build must be rerun.` and then `Built`.
 
 That line is from `hooks_runner` 1.6.4 `build_runner.dart`: if a hook dependency's mtime is after `DateTime.now()` taken at the start of the hook, it logs that string at severe and still returns `Success`. It is not the `Isolate.create` failure, and `flutter clean` cannot fix the missing member. After the successful build, `app/.dart_tool/hooks_runner/morph/87f123bf01/dependencies.dependencies_hash_file.json` records `crates/morph-webview-control/proto` with hash `1`, which is `hooks_runner`'s sentinel for "modified after the cutoff". The directory's on-disk mtime is 2026-11-12. The message repeated on the second build. The bundle was still produced both times.
 
-`flutter test` in `app/` was started with stdin from `/dev/null` and `WAYLAND_DISPLAY` unset, and had not finished when this note was written. Cargo fmt/clippy/test for the Linux commit had not been run yet. Build caches (`app/build`, `app/.dart_tool`, `/mnt/ext1/cargo-target/morph-linux-314`) were still present.
+Verified on this machine (Flutter 3.50.0, Dart 3.14.0), `WAYLAND_DISPLAY` unset, stdin from `/dev/null`: `flutter build linux` exited 0 twice and wrote `app/build/linux/x64/release/bundle/morph`. `flutter test` in `app/` passed (186). Package tests for `morph_webview`, `morph_webview_inapp`, and `morph_webview_linux` passed. `cargo fmt --check`, `cargo build`, `cargo clippy --all-targets -- -D warnings`, and `cargo test` passed. Those build directories were removed afterward. CI for `005d01c` had not been checked when this note was updated.
 
 ### Popup / Google sign-in (not started)
 
@@ -69,28 +80,19 @@ Not investigated yet. Do not sign into a real account. A local page that opens a
 
 - Windows release zip built on the VM and inspected (`LoadLibrary`, PE headers, DLL dependencies). CI on `e6c0c5e` is green, including the Windows job.
 - Cause of the Linux `Isolate.create` error identified against the Dart 3.13.7 and 3.14.0 SDKs and the nativeapi 0.5.10 / 0.6.0 sources.
-- Local dependency bump to `window_manager` 0.7 / `nativeapi` 0.6, and two successful `flutter build linux` runs on Flutter 3.50.0.
+- Linux fix committed as `005d01c`: `window_manager` 0.7 / `nativeapi` 0.6, `flutter build linux` succeeded twice, app and package tests passed, Rust quality bar passed.
 
 ## Next
 
-The handoff itself is `aa02ea65f971f7b29a640d98cb58a4cec8d85640` on `main`. Resume at the Linux fix:
-
-1. Let the in-progress `flutter test` finish. If it failed, fix the test or the window API call.
-2. Run the repo quality bar (`cargo fmt --check`, `cargo build`, `cargo clippy --all-targets -- -D warnings`, `cargo test`) with `CARGO_TARGET_DIR` under `/mnt/ext1` and stdin from `/dev/null`. Clean that target, `app/build`, and `app/.dart_tool` afterward.
-3. Commit and push the Linux fix to `main` (no PR, no force-push, no rebase, no tag).
-4. Update this file, then investigate and fix popup typing, repaint, and passkey/WebAuthn fallback. Check WebView2 as well as Linux.
+The Linux fix is `005d01c4ad7b2f415dd592c299dd1473c6e126e0` on `main`. Next, and not started: the popup bug below. Find why a popup's text field accepts a caret but not visible text, and why a later DOM change updates only the heading. Fix typing and page updates. Make passkey/WebAuthn work or fall back cleanly. Check WebView2 as well as the Linux web view. Test on Xvfb with `WAYLAND_DISPLAY` unset. Never sign into a real account.
 
 ## How to resume
 
 ```sh
 cd /mnt/ext1/Projects/WeirdBrains/morph
-git status
 git pull --ff-only origin main
-# uncommitted Linux fix should still be in the tree if it was not committed
-cd app
-unset WAYLAND_DISPLAY WAYLAND_SOCKET
-flutter pub get
-flutter build linux
+# Linux fix is 005d01c. Working tree should be clean.
+# Next work is the popup bug described above.
 ```
 
 Windows, on a Windows host:
