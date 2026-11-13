@@ -2051,3 +2051,30 @@ being typed in.
   (the existing obscured-field test still holds); a shell test opens both
   dialogs from the identity dialog.
 
+
+### 2026-11-13 — Linux: no nativeapi shadow border; short windows
+
+On Hyprland with NVIDIA, where Morph runs through XWayland (d460ccb), the
+window showed Morph in a small strip in the middle of a blank light frame.
+window_manager's hidden title bar on Linux (nativeapi 0.5.10) draws its own
+shadow in a transparent border, about 180 px a side, set as the GtkWindow's
+border width. It leaves the border out only when the window manager reports
+the window tiled, maximized or full screen. Through XWayland Hyprland
+reports none of these, refuses the bigger size nativeapi asks for, and fits
+the whole window to its tile, so the content got the tile less the border.
+Without an RGBA visual the border shows the window background. Every bundle
+since Morph started under XWayland had it, not only bd4c4ff.
+
+- On Linux `applyChromeless` no longer sets the title-bar style, frameless
+  or shadow (`MorphDesktopWindow.hidesTitleBarNatively`). The GTK runner
+  already makes the window undecorated. Resizable, movable and the minimum
+  size still go through window_manager; macOS and Windows are unchanged.
+- The minimum window size drops from 640x480 to 640x300: tiles can be
+  shorter than 480 px, and GTK then lays out past the bottom of the window.
+- The identity dialog scrolls (`scrollable: true`); `short_window_test`
+  walks onboarding (every entry, the create and restore forms, the words
+  step), the identity dialog, the recovery phrase and the backup at
+  1024x469, 800x360 and 640x300 and fails on any overflow.
+- Reproduced and checked in Xvfb with a minimal tiling window manager that
+  fits the window to a tile, refuses client resizes and sets no
+  `_NET_WM_STATE`, as Hyprland does for XWayland windows.
