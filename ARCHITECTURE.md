@@ -110,6 +110,13 @@ backend per platform.
         [bug 280210](https://bugs.webkit.org/show_bug.cgi?id=280210),
         [bug 281279](https://bugs.webkit.org/show_bug.cgi?id=281279),
         [Tauri Linux graphics](https://v2.tauri.app/develop/debug/linux-graphics/)).
+        The Flutter shell has a separate NVIDIA Wayland issue: GTK 3's
+        Wayland backend cannot create the GL context Impeller needs, and
+        Morph aborts at startup ("The current backend does not support
+        OpenGL"). When the proprietary driver is present and an X11 display
+        is available, the runner sets `GDK_BACKEND=x11` so the window runs
+        on XWayland. An explicit `GDK_BACKEND` is left alone. Wayland stays
+        the default on other GPUs.
     - *Hidden text layer:* an invisible mirror of the page's text, positioned over the
       texture from layout boxes the page bridge reports. Native selection and copying
       work on it, and it doubles as the accessibility tree. It is updated as the page
@@ -1748,6 +1755,20 @@ Crash pages were also 3-9 s late: the web process is only gone once
 systemd-coredump has written its core (gigabytes for a video page). The plugin
 sets `RLIMIT_CORE` to 0 at startup, inherited by web processes;
 `MORPH_KEEP_CORE_DUMPS=1` keeps them.
+
+### 2026-11-12 — Linux: NVIDIA Wayland startup abort
+
+On a Hyprland/NVIDIA session, Morph aborted during `FlView` realize:
+
+`GDK is not able to create a GL context: The current backend does not
+support OpenGL`. Flutter 3.47 Impeller (OpenGLES) needs that context;
+GTK 3's Wayland backend on the proprietary driver does not provide one.
+The runner now, before `gtk_init`, sets `GDK_BACKEND=x11` when
+`WAYLAND_DISPLAY` and `DISPLAY` are both set, the NVIDIA proprietary
+driver is present (`/proc/driver/nvidia`), and `GDK_BACKEND` is unset.
+X11-only sessions and non-NVIDIA Wayland are unchanged. Override with
+`GDK_BACKEND`. `run-morph.sh` stays in the foreground and restores the
+tty if Morph aborts.
 
 ### 2026-11-12 — Linux: passkeys fail fast
 
