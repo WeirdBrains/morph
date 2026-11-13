@@ -7,7 +7,7 @@ import '../frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `from`, `now_ms`, `profile_dir`
+// These functions are ignored because they are not marked as `pub`: `from`, `now_ms`, `profile_dir`, `resolve_home`
 
 /// Resolve the data dir (`home`, else `MORPH_HOME`, else `~/.morph`) without creating it.
 Future<IdentityStatusView> identityDirInfo({String? home}) =>

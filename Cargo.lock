@@ -3198,6 +3198,7 @@ dependencies = [
  "jni-sys 0.4.1",
  "morph-core",
  "morph-identity",
+ "morph-keystore",
  "morph-webview-control",
  "ndk-context",
  "tempfile",

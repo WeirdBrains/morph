@@ -7,7 +7,7 @@ import '../frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `now_ms`, `resolve_home`, `tree_view`, `view`, `views`
+// These functions are ignored because they are not marked as `pub`: `adopt_new_identity`, `needs_password`, `now_ms`, `ready`, `resolve_home`, `tree_view`, `view`, `views`
 
 /// The profile's bookmark tree.
 Future<BookmarkTreeView> bookmarkTree({
@@ -205,10 +205,23 @@ Future<LibraryStateView> libraryState({
   profileId: profileId,
 );
 
+/// At launch or on a profile switch: open `profile_id`'s encrypted library
+/// with the key kept in the system keystore, without a prompt. If there is no
+/// usable key there, say so, and the shell asks for the password
+/// ([`unlock_library`]).
+Future<LibraryOpenView> openLibrary({
+  String? home,
+  required String profileId,
+}) => RustLib.instance.api.crateApiLibraryOpenLibrary(
+  home: home,
+  profileId: profileId,
+);
+
 /// Unlock `profile_id`'s encrypted library with the profile password (its key
-/// comes from the profile's Weirdnet identity and never leaves Rust). The first
-/// unlock moves the plaintext library into the encrypted database.
-Future<void> unlockLibrary({
+/// comes from the profile's Weirdnet identity and never leaves Rust), then keep
+/// the key in the system keystore. The first unlock moves the plaintext
+/// library into the encrypted database.
+Future<LibraryUnlockView> unlockLibrary({
   String? home,
   required String profileId,
   required String password,
@@ -379,6 +392,36 @@ class HistoryEntryView {
           visitedMs == other.visitedMs;
 }
 
+/// What opening a profile's library at launch found.
+class LibraryOpenView {
+  /// The library is open, or there is nothing to unlock (no identity yet).
+  final bool ready;
+
+  /// The system keystore had no usable key: ask for the profile password.
+  final bool needsPassword;
+
+  /// Why the keystore could not help, for the prompt. Never secret.
+  final String? reason;
+
+  const LibraryOpenView({
+    required this.ready,
+    required this.needsPassword,
+    this.reason,
+  });
+
+  @override
+  int get hashCode => ready.hashCode ^ needsPassword.hashCode ^ reason.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is LibraryOpenView &&
+          runtimeType == other.runtimeType &&
+          ready == other.ready &&
+          needsPassword == other.needsPassword &&
+          reason == other.reason;
+}
+
 /// Where a profile's bookmarks and history are kept right now.
 enum LibraryStateView {
   /// Plaintext files, before the profile was first unlocked.
@@ -389,4 +432,26 @@ enum LibraryStateView {
 
   /// Encrypted and open.
   unlocked,
+}
+
+/// The outcome of unlocking with the password.
+class LibraryUnlockView {
+  /// The key is now in the system keystore, so the next launch needs no password.
+  final bool remembered;
+
+  /// Why it could not be kept, if it was not. Never secret.
+  final String? reason;
+
+  const LibraryUnlockView({required this.remembered, this.reason});
+
+  @override
+  int get hashCode => remembered.hashCode ^ reason.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is LibraryUnlockView &&
+          runtimeType == other.runtimeType &&
+          remembered == other.remembered &&
+          reason == other.reason;
 }

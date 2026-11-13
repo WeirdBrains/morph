@@ -73,8 +73,26 @@ pub fn rename_profile(home: Option<String>, id: String, name: String) -> Result<
 /// Delete a profile and its storage. Refuses to delete the last profile.
 pub fn delete_profile(home: Option<String>, id: String) -> Result<CatalogView, String> {
     let home = resolve_home(home)?;
+    forget_library_key(&home, &id);
     profiles::delete(&home, &id).map_err(|e| e.to_string())?;
     load_view(&home)
+}
+
+/// Drop the profile's library key from the system keystore before its files go
+/// (the entry is found by the profile's directory). Only profiles that ever had
+/// an identity or an encrypted library can have one.
+fn forget_library_key(home: &std::path::Path, id: &str) {
+    if profiles::require(home, id).is_err() {
+        return;
+    }
+    let dir = profiles::profile_dir(home, id);
+    let encrypted = morph_core::library_db::state(home, id).is_ok_and(|s| s != morph_core::library_db::LibraryState::Plain);
+    let had_identity = morph_identity::profile_identity::identity_dir(&dir).exists();
+    if (had_identity || encrypted)
+        && let Err(e) = morph_keystore::forget(&dir)
+    {
+        eprintln!("Morph: library key of deleted profile {id} not removed: {e}");
+    }
 }
 
 /// Switch the current profile. Existing web views should be recreated by the shell.

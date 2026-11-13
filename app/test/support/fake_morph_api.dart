@@ -177,7 +177,12 @@ class FakeMorphApi implements MorphApi {
   Future<List<MorphBookmark>> listBookmarks(
     String profileId, {
     String? home,
-  }) async => List.of(bookmarksByProfile[profileId] ?? const []);
+  }) async {
+    listBookmarksCalls++;
+    return List.of(bookmarksByProfile[profileId] ?? const []);
+  }
+
+  int listBookmarksCalls = 0;
 
   final foldersByProfile = <String, List<MorphBookmarkFolder>>{};
   var _nextBookmarkId = 1;
@@ -440,6 +445,50 @@ class FakeMorphApi implements MorphApi {
   /// When true, a profile without a stored identity reports a stock one, so
   /// shell tests that are not about onboarding never see it.
   bool onboarded = true;
+
+  /// Profiles whose library the keystore cannot open (they need the password),
+  /// with the reason to report.
+  final libraryNeedsPassword = <String, String?>{};
+
+  /// The password that unlocks each locked library.
+  final libraryPasswords = <String, String>{};
+
+  /// Whether an unlock keeps the key in the (fake) keystore.
+  bool keystoreRemembers = true;
+  final openLibraryCalls = <String>[];
+  final unlockLibraryCalls = <String>[];
+
+  @override
+  Future<MorphLibraryOpen> openLibrary(String profileId, {String? home}) async {
+    openLibraryCalls.add(profileId);
+    if (!libraryNeedsPassword.containsKey(profileId)) {
+      return const MorphLibraryOpen();
+    }
+    return MorphLibraryOpen(
+      ready: false,
+      needsPassword: true,
+      reason: libraryNeedsPassword[profileId],
+    );
+  }
+
+  @override
+  Future<MorphLibraryUnlock> unlockLibrary(
+    String profileId,
+    String password, {
+    String? home,
+  }) async {
+    unlockLibraryCalls.add(profileId);
+    if (libraryPasswords[profileId] != password) {
+      throw StateError('wrong password');
+    }
+    if (keystoreRemembers) {
+      libraryNeedsPassword.remove(profileId);
+    }
+    return MorphLibraryUnlock(
+      remembered: keystoreRemembers,
+      reason: keystoreRemembers ? null : 'no keyring',
+    );
+  }
 
   @override
   Future<MorphIdentity?> profileIdentity(

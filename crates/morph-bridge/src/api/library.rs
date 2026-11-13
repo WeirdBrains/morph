@@ -1,8 +1,10 @@
 //! Per-profile bookmarks (folders, tags) and history for the Flutter shell.
 
+use morph_core::profiles::ProfileError;
 use morph_core::{bookmarks, library, library_db};
 use morph_identity::Paths;
-use std::path::PathBuf;
+use morph_identity::profile_identity;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// A saved page.
@@ -227,14 +229,88 @@ pub fn library_state(home: Option<String>, profile_id: String) -> Result<Library
     })
 }
 
-/// Unlock `profile_id`'s encrypted library with the profile password (its key
-/// comes from the profile's Weirdnet identity and never leaves Rust). The first
-/// unlock moves the plaintext library into the encrypted database.
-pub fn unlock_library(home: Option<String>, profile_id: String, password: String) -> Result<(), String> {
+/// What opening a profile's library at launch found.
+pub struct LibraryOpenView {
+    /// The library is open, or there is nothing to unlock (no identity yet).
+    pub ready: bool,
+    /// The system keystore had no usable key: ask for the profile password.
+    pub needs_password: bool,
+    /// Why the keystore could not help, for the prompt. Never secret.
+    pub reason: Option<String>,
+}
+
+impl LibraryOpenView {
+    fn ready() -> Self {
+        Self { ready: true, needs_password: false, reason: None }
+    }
+
+    fn needs_password(reason: Option<String>) -> Self {
+        Self { ready: false, needs_password: true, reason }
+    }
+}
+
+/// At launch or on a profile switch: open `profile_id`'s encrypted library
+/// with the key kept in the system keystore, without a prompt. If there is no
+/// usable key there, say so, and the shell asks for the password
+/// ([`unlock_library`]).
+pub fn open_library(home: Option<String>, profile_id: String) -> Result<LibraryOpenView, String> {
     let dir = crate::api::identity::profile_dir(home.clone(), &profile_id)?;
-    let password = morph_identity::profile_identity::SecretString::from(password);
-    let key = morph_identity::profile_identity::library_key(&dir, &password).map_err(|e| e.to_string())?;
-    library_db::unlock(resolve_home(home)?, &profile_id, &key).map_err(|e| e.to_string())
+    let home = resolve_home(home)?;
+    let Some(identity) = profile_identity::load(&dir).map_err(|e| e.to_string())? else {
+        return Ok(LibraryOpenView::ready());
+    };
+    if library_db::state(&home, &profile_id).map_err(|e| e.to_string())? == library_db::LibraryState::Unlocked {
+        return Ok(LibraryOpenView::ready());
+    }
+    match morph_keystore::load(&dir, &identity.user_id) {
+        Ok(Some(key)) => match library_db::unlock(&home, &profile_id, &key) {
+            Ok(()) => Ok(LibraryOpenView::ready()),
+            Err(ProfileError::Store(e)) if e.is_wrong_key() => {
+                let _ = morph_keystore::forget(&dir);
+                Ok(LibraryOpenView::needs_password(Some("the saved key no longer opens this library".into())))
+            }
+            Err(e) => Err(e.to_string()),
+        },
+        Ok(None) => Ok(LibraryOpenView::needs_password(None)),
+        Err(e) => Ok(LibraryOpenView::needs_password(Some(e.to_string()))),
+    }
+}
+
+/// The outcome of unlocking with the password.
+pub struct LibraryUnlockView {
+    /// The key is now in the system keystore, so the next launch needs no password.
+    pub remembered: bool,
+    /// Why it could not be kept, if it was not. Never secret.
+    pub reason: Option<String>,
+}
+
+/// Unlock `profile_id`'s encrypted library with the profile password (its key
+/// comes from the profile's Weirdnet identity and never leaves Rust), then keep
+/// the key in the system keystore. The first unlock moves the plaintext
+/// library into the encrypted database.
+pub fn unlock_library(home: Option<String>, profile_id: String, password: String) -> Result<LibraryUnlockView, String> {
+    let dir = crate::api::identity::profile_dir(home.clone(), &profile_id)?;
+    let identity = profile_identity::load(&dir).map_err(|e| e.to_string())?.ok_or("this profile has no identity yet")?;
+    let password = profile_identity::SecretString::from(password);
+    let key = profile_identity::library_key(&dir, &password).map_err(|e| e.to_string())?;
+    library_db::unlock(resolve_home(home)?, &profile_id, &key).map_err(|e| e.to_string())?;
+    Ok(match morph_keystore::save(&dir, &identity.user_id, &key) {
+        Ok(()) => LibraryUnlockView { remembered: true, reason: None },
+        Err(e) => LibraryUnlockView { remembered: false, reason: Some(e.to_string()) },
+    })
+}
+
+/// A profile just got an identity (created, imported or linked) and its key is
+/// in hand: encrypt the library now and keep the key in the keystore. Neither
+/// failing undoes the identity; the next launch asks for the password instead.
+pub(crate) fn adopt_new_identity(home: &Path, profile_id: &str, dir: &Path, user_id: &str, key: &profile_identity::LibraryKey) {
+    if let Err(e) = library_db::unlock_new_identity(home, profile_id, key, now_ms()) {
+        eprintln!("Morph: could not open the library of profile {profile_id}: {e}");
+        return;
+    }
+    if let Err(e) = morph_keystore::save(dir, user_id, key) {
+        eprintln!("Morph: library key not kept for profile {profile_id}: {e}");
+    }
 }
 
 /// Close `profile_id`'s library and forget its key until the next unlock.
@@ -289,25 +365,91 @@ mod tests {
         assert!(delete_bookmark(home, "default".into(), x).unwrap().bookmarks.is_empty());
     }
 
+    fn profile_dir(home: &str, id: &str) -> PathBuf {
+        morph_core::profiles::profile_dir(home, id)
+    }
+
+    fn user_id(home: &str, id: &str) -> String {
+        profile_identity::load(&profile_dir(home, id)).unwrap().unwrap().user_id
+    }
+
     #[test]
-    fn the_library_unlocks_with_the_profile_password_and_moves_in() {
+    fn a_new_identity_encrypts_the_library_and_keeps_its_key() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("h").display().to_string();
-        crate::api::profiles::create_profile(Some(home.clone()), "Work".into()).unwrap();
         let h = || Some(home.clone());
+        crate::api::profiles::create_profile(h(), "Work".into()).unwrap();
         add_bookmark(h(), "p1".into(), "https://w.test".into(), "W".into()).unwrap();
-        assert!(matches!(library_state(h(), "p1".into()).unwrap(), LibraryStateView::Plain));
-        assert!(unlock_library(h(), "p1".into(), "long enough".into()).is_err(), "no identity yet");
-        crate::api::identity::create_profile_identity(h(), "p1".into(), "long enough".into()).unwrap();
-        assert!(unlock_library(h(), "p1".into(), "wrong password".into()).is_err());
+        let open = open_library(h(), "p1".into()).unwrap();
+        assert!(open.ready && !open.needs_password, "no identity: nothing to unlock");
         assert!(matches!(library_state(h(), "p1".into()).unwrap(), LibraryStateView::Plain));
 
+        crate::api::identity::create_profile_identity(h(), "p1".into(), "long enough".into()).unwrap();
+        assert!(matches!(library_state(h(), "p1".into()).unwrap(), LibraryStateView::Unlocked));
+        assert_eq!(list_bookmarks(h(), "p1".into()).unwrap().len(), 1, "moved in");
+        assert!(morph_keystore::load(&profile_dir(&home, "p1"), &user_id(&home, "p1")).unwrap().is_some());
+
+        // Next launch: the keystore opens it with no password.
+        lock_library(h(), "p1".into()).unwrap();
+        let open = open_library(h(), "p1".into()).unwrap();
+        assert!(open.ready && !open.needs_password);
+        assert_eq!(list_bookmarks(h(), "p1".into()).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn without_a_saved_key_the_password_unlocks_and_the_key_is_kept_again() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("h").display().to_string();
+        let h = || Some(home.clone());
+        crate::api::profiles::create_profile(h(), "Work".into()).unwrap();
+        crate::api::identity::create_profile_identity(h(), "p1".into(), "long enough".into()).unwrap();
+        add_bookmark(h(), "p1".into(), "https://w.test".into(), "W".into()).unwrap();
+        lock_library(h(), "p1".into()).unwrap();
+        morph_keystore::forget(&profile_dir(&home, "p1")).unwrap();
+
+        let open = open_library(h(), "p1".into()).unwrap();
+        assert!(!open.ready && open.needs_password);
+        let err = list_bookmarks(h(), "p1".into()).err().expect("a locked library refuses");
+        assert!(err.contains("locked"), "{err}");
+        assert!(unlock_library(h(), "p1".into(), "wrong password".into()).is_err());
+        assert!(matches!(library_state(h(), "p1".into()).unwrap(), LibraryStateView::Locked));
+
+        let unlocked = unlock_library(h(), "p1".into(), "long enough".into()).unwrap();
+        assert!(unlocked.remembered && unlocked.reason.is_none());
+        assert_eq!(list_bookmarks(h(), "p1".into()).unwrap().len(), 1);
+        lock_library(h(), "p1".into()).unwrap();
+        assert!(open_library(h(), "p1".into()).unwrap().ready, "kept again");
+    }
+
+    #[test]
+    fn an_onboarded_profile_from_before_encryption_moves_in_on_first_unlock() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("h").display().to_string();
+        let h = || Some(home.clone());
+        crate::api::profiles::create_profile(h(), "Work".into()).unwrap();
+        // An identity made by an older Morph: no library.db, no keystore entry.
+        profile_identity::create(&profile_dir(&home, "p1"), &profile_identity::SecretString::from("long enough".to_string()), 1).unwrap();
+        add_bookmark(h(), "p1".into(), "https://w.test".into(), "W".into()).unwrap();
+        assert!(open_library(h(), "p1".into()).unwrap().needs_password);
         unlock_library(h(), "p1".into(), "long enough".into()).unwrap();
         assert!(matches!(library_state(h(), "p1".into()).unwrap(), LibraryStateView::Unlocked));
         assert_eq!(list_bookmarks(h(), "p1".into()).unwrap().len(), 1);
-        lock_library(h(), "p1".into()).unwrap();
-        assert!(matches!(library_state(h(), "p1".into()).unwrap(), LibraryStateView::Locked));
-        let err = list_bookmarks(h(), "p1".into()).err().expect("a locked library refuses");
-        assert!(err.contains("locked"), "{err}");
+    }
+
+    #[test]
+    fn deleting_a_profile_removes_its_saved_key_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("h").display().to_string();
+        let h = || Some(home.clone());
+        crate::api::profiles::create_profile(h(), "Work".into()).unwrap();
+        crate::api::identity::create_profile_identity(h(), "p1".into(), "long enough".into()).unwrap();
+        crate::api::identity::create_profile_identity(h(), "default".into(), "other enough".into()).unwrap();
+        let (work, default) = (profile_dir(&home, "p1"), profile_dir(&home, "default"));
+        let (work_user, default_user) = (user_id(&home, "p1"), user_id(&home, "default"));
+        assert_ne!(morph_keystore::account(&work), morph_keystore::account(&default));
+        crate::api::profiles::delete_profile(h(), "p1".into()).unwrap();
+        std::fs::create_dir_all(&work).unwrap();
+        assert!(morph_keystore::load(&work, &work_user).unwrap().is_none());
+        assert!(morph_keystore::load(&default, &default_user).unwrap().is_some());
     }
 }
