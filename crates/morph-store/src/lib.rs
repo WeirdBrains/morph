@@ -74,6 +74,13 @@ pub enum StoreError {
     Sqlite(#[from] rusqlite::Error),
 }
 
+impl StoreError {
+    /// The key does not open the file (or it is not a library database).
+    pub fn is_wrong_key(&self) -> bool {
+        matches!(self, StoreError::Storage(weirdnet_storage::StorageError::WrongKey { .. }))
+    }
+}
+
 pub type Result<T> = std::result::Result<T, StoreError>;
 
 /// `<profile_dir>/library.db`.

@@ -85,6 +85,7 @@ fn the_file_is_encrypted_and_needs_its_key() {
     }
     let err = Library::open(tmp.path(), &key(2)).unwrap_err();
     assert!(err.to_string().contains("wrong key"), "{err}");
+    assert!(err.is_wrong_key());
     assert_eq!(Library::open(tmp.path(), &key(1)).unwrap().history().unwrap().len(), 1, "a wrong key leaves the file alone");
 }
 
