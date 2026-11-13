@@ -28,6 +28,21 @@ use zeroize::Zeroizing;
 /// The keystore service name for every Morph entry.
 pub const SERVICE: &str = "org.weirdbrains.morph";
 
+/// Set `MORPH_KEYSTORE_SERVICE` to keep entries under another service name,
+/// which must start with `org.weirdbrains.morph.test`: the system keystore
+/// tests use it so they never touch a real profile's entry.
+pub const ENV_SERVICE: &str = "MORPH_KEYSTORE_SERVICE";
+
+/// The service name entries are kept under: [`SERVICE`], or a test service
+/// from [`ENV_SERVICE`]. Anything else in that variable is ignored.
+pub fn service() -> &'static str {
+    static NAME: OnceLock<String> = OnceLock::new();
+    NAME.get_or_init(|| match std::env::var(ENV_SERVICE) {
+        Ok(name) if name.starts_with("org.weirdbrains.morph.test") => name,
+        _ => SERVICE.to_owned(),
+    })
+}
+
 /// Set `MORPH_KEYSTORE=off` to never use the OS keystore (always ask for the
 /// password). For debugging and isolated test runs.
 pub const ENV_OFF: &str = "MORPH_KEYSTORE";
@@ -113,7 +128,7 @@ pub fn account(profile_dir: &Path) -> String {
 
 fn entry(profile_dir: &Path) -> Result<Entry> {
     ready()?;
-    Entry::new(SERVICE, &account(profile_dir)).map_err(|e| Unavailable(describe(e)))
+    Entry::new(service(), &account(profile_dir)).map_err(|e| Unavailable(describe(e)))
 }
 
 /// Entry format: `MK1`, 16 bytes of SHA-256(owner), then the key.
