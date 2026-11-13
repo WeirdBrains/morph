@@ -128,6 +128,7 @@ jobs:
           CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$N/aarch64-linux-android24-clang" \
           CC_aarch64_linux_android="$N/aarch64-linux-android24-clang" \
           AR_aarch64_linux_android="$N/llvm-ar" \
+          RANLIB_aarch64_linux_android="$N/llvm-ranlib" \
             cargo clippy --locked -p morph-bridge --target aarch64-linux-android -- -D warnings
       - name: Android unit tests (QR decoder)
         working-directory: app/android
