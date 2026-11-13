@@ -17,6 +17,18 @@ val commitCount: Int? = try {
     null
 }
 
+// Package only the ABIs Flutter built (`flutter build apk --target-platform`
+// passes them as -Ptarget-platform). CameraX ships native libraries for every
+// ABI; an arm64 APK that also carries x86_64 or armeabi-v7a folders makes
+// those devices pick that ABI and then fail to find libflutter.so.
+val flutterAbis: List<String> = (findProperty("target-platform") as String?)
+    ?.split(",")
+    ?.mapNotNull {
+        mapOf("android-arm" to "armeabi-v7a", "android-arm64" to "arm64-v8a", "android-x64" to "x86_64")[it.trim()]
+    }
+    ?.takeIf { it.isNotEmpty() }
+    ?: listOf("armeabi-v7a", "arm64-v8a", "x86_64")
+
 android {
     namespace = "org.weirdbrains.morph"
     compileSdk = flutter.compileSdkVersion
@@ -40,6 +52,7 @@ android {
         // flag during build.
         versionCode = flutter.versionCode.let { if (it > 1) it else 10000 + (commitCount ?: 0) }
         versionName = flutter.versionName
+        ndk { abiFilters += flutterAbis }
     }
 
     // Native libraries are compressed inside the APK (and extracted on
