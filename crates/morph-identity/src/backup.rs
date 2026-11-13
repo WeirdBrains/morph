@@ -49,8 +49,7 @@ pub fn kind(contents: &[u8]) -> Kind {
 }
 
 fn is_sealed(contents: &[u8]) -> bool {
-    let start = contents.iter().position(|b| !b.is_ascii_whitespace()).unwrap_or(contents.len());
-    let head = &contents[start..];
+    let head = contents.trim_ascii_start();
     agefile::is_age(head) || head.starts_with(ARMOR_BEGIN)
 }
 
@@ -77,7 +76,12 @@ pub fn words(contents: &[u8], backup_password: Option<&SecretString>) -> Result<
             let password = backup_password
                 .filter(|p| !p.expose_secret().is_empty())
                 .ok_or_else(|| Error::Message("this backup needs its backup password".into()))?;
-            let plain = agefile::decrypt(password, contents).map_err(|_| Error::Message("wrong backup password, or the backup is damaged".into()))?;
+            // age's armor reader wants the marker at the first byte, and a
+            // pasted or edited backup may start with a blank line.
+            // weirdnet-keys after 0.1.0 accepts both itself; this and
+            // ARMOR_BEGIN can go once Morph pins that release.
+            let plain = agefile::decrypt(password, contents.trim_ascii_start())
+                .map_err(|_| Error::Message("wrong backup password, or the backup is damaged".into()))?;
             let text = std::str::from_utf8(&plain).map_err(|_| Error::Message("the backup does not hold recovery words".into()))?;
             phrase_words(text).ok_or_else(|| Error::Message("the backup does not hold recovery words".into()))
         }
@@ -181,6 +185,16 @@ mod tests {
         damaged[at] = if damaged[at] == b'A' { b'B' } else { b'A' };
         assert!(restore(b.path(), &damaged, Some(&pw("backup-password")), &pw("new-password"), 2).is_err());
         assert!(load(b.path()).unwrap().is_none());
+    }
+
+    #[test]
+    fn whitespace_around_the_armor_and_crlf_are_fine() {
+        let (a, words) = created();
+        let backup = export(a.path(), &pw("profile-password"), &pw("backup-password")).unwrap();
+        for variant in [format!("\n \n{}\n\n", *backup), backup.replace('\n', "\r\n")] {
+            assert_eq!(kind(variant.as_bytes()), Kind::Sealed);
+            assert_eq!(*super::words(variant.as_bytes(), Some(&pw("backup-password"))).unwrap(), *words);
+        }
     }
 
     #[test]
