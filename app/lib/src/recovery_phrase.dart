@@ -7,18 +7,22 @@ import 'package:flutter/services.dart';
 
 import 'share.dart';
 
-/// `morph-<profile>-recovery-phrase.txt`, with the profile name reduced to
-/// lowercase letters, digits and dashes.
-String morphRecoveryFileName(String profileName) {
-  var slug = profileName
+String _profileSlug(String profileName) {
+  final slug = profileName
       .toLowerCase()
       .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
       .replaceAll(RegExp(r'^-+|-+$'), '');
-  if (slug.isEmpty) {
-    slug = 'profile';
-  }
-  return 'morph-$slug-recovery-phrase.txt';
+  return slug.isEmpty ? 'profile' : slug;
 }
+
+/// `morph-<profile>-recovery-phrase.txt`, with the profile name reduced to
+/// lowercase letters, digits and dashes.
+String morphRecoveryFileName(String profileName) =>
+    'morph-${_profileSlug(profileName)}-recovery-phrase.txt';
+
+/// `morph-<profile>-identity-backup.age`: a password-sealed identity backup.
+String morphBackupFileName(String profileName) =>
+    'morph-${_profileSlug(profileName)}-identity-backup.age';
 
 /// Plain-text body of a saved or shared recovery phrase.
 String morphRecoveryFileText({
@@ -58,12 +62,18 @@ abstract final class MorphRecoveryPhrase {
   /// Picks where a desktop save goes; null means cancelled. Tests replace it.
   @visibleForTesting
   static Future<String?> Function(String suggestedName) pickSavePath =
-      (name) async => (await getSaveLocation(
-        suggestedName: name,
-        acceptedTypeGroups: const [
-          XTypeGroup(label: 'Text', extensions: ['txt']),
-        ],
-      ))?.path;
+      (name) async {
+        final extension = name.contains('.') ? name.split('.').last : 'txt';
+        return (await getSaveLocation(
+          suggestedName: name,
+          acceptedTypeGroups: [
+            XTypeGroup(
+              label: extension == 'age' ? 'Morph backup' : 'Text',
+              extensions: [extension],
+            ),
+          ],
+        ))?.path;
+      };
 
   /// Copies [text] and clears the clipboard after [clipboardLifetime] if it
   /// still holds it.
@@ -89,16 +99,19 @@ abstract final class MorphRecoveryPhrase {
   }
 
   /// Saves [text] as [fileName]: the Android document picker, or a desktop
-  /// save dialog.
+  /// save dialog. [mimeType] tells Android what it is (a backup is not
+  /// `text/plain`, or the picker would add `.txt` to its name).
   static Future<MorphPhraseSaveResult> save(
     String fileName,
-    String text,
-  ) async {
+    String text, {
+    String mimeType = 'text/plain',
+  }) async {
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
       try {
         final saved = await saveChannel.invokeMethod<bool>('saveText', {
           'fileName': fileName,
           'text': text,
+          'mimeType': mimeType,
         });
         return saved == true
             ? MorphPhraseSaveResult.saved

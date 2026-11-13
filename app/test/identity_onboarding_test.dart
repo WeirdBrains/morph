@@ -93,7 +93,7 @@ void main() {
     );
     await tester.tap(find.byKey(const Key('onboarding-submit')));
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('onboarding-word-grid')), findsOneWidget);
+    expect(find.byKey(const Key('recovery-word-grid')), findsOneWidget);
     expect(find.textContaining('24. word23'), findsOneWidget);
     final done = tester.widget<FilledButton>(
       find.byKey(const Key('onboarding-done')),

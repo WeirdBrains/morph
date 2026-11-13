@@ -57,6 +57,7 @@ void main() {
       'morph-my-bank-2026-recovery-phrase.txt',
     );
     expect(morphRecoveryFileName('  '), 'morph-profile-recovery-phrase.txt');
+    expect(morphBackupFileName('My Bank'), 'morph-my-bank-identity-backup.age');
   });
 
   test('the file text numbers all 24 words and repeats them on one line', () {
@@ -111,6 +112,21 @@ void main() {
       expect(calls.single.arguments, {
         'fileName': 'morph-work-recovery-phrase.txt',
         'text': 'text',
+        'mimeType': 'text/plain',
+      });
+      calls.clear();
+      expect(
+        await MorphRecoveryPhrase.save(
+          morphBackupFileName('Work'),
+          'sealed',
+          mimeType: 'application/octet-stream',
+        ),
+        MorphPhraseSaveResult.saved,
+      );
+      expect(calls.single.arguments, {
+        'fileName': 'morph-work-identity-backup.age',
+        'text': 'sealed',
+        'mimeType': 'application/octet-stream',
       });
     },
   );
