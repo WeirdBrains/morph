@@ -1,6 +1,6 @@
 //! Per-profile bookmarks (folders, tags) and history for the Flutter shell.
 
-use morph_core::{bookmarks, library};
+use morph_core::{bookmarks, library, library_db};
 use morph_identity::Paths;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -207,6 +207,42 @@ pub fn clear_history(home: Option<String>, profile_id: String) -> Result<(), Str
     library::clear_history(&home, &profile_id).map_err(|e| e.to_string())
 }
 
+/// Where a profile's bookmarks and history are kept right now.
+pub enum LibraryStateView {
+    /// Plaintext files, before the profile was first unlocked.
+    Plain,
+    /// Encrypted, waiting for the profile password.
+    Locked,
+    /// Encrypted and open.
+    Unlocked,
+}
+
+/// Whether `profile_id`'s library is plaintext, locked or unlocked.
+pub fn library_state(home: Option<String>, profile_id: String) -> Result<LibraryStateView, String> {
+    let home = resolve_home(home)?;
+    Ok(match library_db::state(&home, &profile_id).map_err(|e| e.to_string())? {
+        library_db::LibraryState::Plain => LibraryStateView::Plain,
+        library_db::LibraryState::Locked => LibraryStateView::Locked,
+        library_db::LibraryState::Unlocked => LibraryStateView::Unlocked,
+    })
+}
+
+/// Unlock `profile_id`'s encrypted library with the profile password (its key
+/// comes from the profile's Weirdnet identity and never leaves Rust). The first
+/// unlock moves the plaintext library into the encrypted database.
+pub fn unlock_library(home: Option<String>, profile_id: String, password: String) -> Result<(), String> {
+    let dir = crate::api::identity::profile_dir(home.clone(), &profile_id)?;
+    let password = morph_identity::profile_identity::SecretString::from(password);
+    let key = morph_identity::profile_identity::library_key(&dir, &password).map_err(|e| e.to_string())?;
+    library_db::unlock(resolve_home(home)?, &profile_id, &key).map_err(|e| e.to_string())
+}
+
+/// Close `profile_id`'s library and forget its key until the next unlock.
+pub fn lock_library(home: Option<String>, profile_id: String) -> Result<(), String> {
+    library_db::lock(resolve_home(home)?, &profile_id);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,5 +287,27 @@ mod tests {
         add_bookmark(home.clone(), "default".into(), "https://x.test".into(), "X".into()).unwrap();
         let x = bookmark_tree(home.clone(), "default".into()).unwrap().bookmarks[0].id.clone();
         assert!(delete_bookmark(home, "default".into(), x).unwrap().bookmarks.is_empty());
+    }
+
+    #[test]
+    fn the_library_unlocks_with_the_profile_password_and_moves_in() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("h").display().to_string();
+        crate::api::profiles::create_profile(Some(home.clone()), "Work".into()).unwrap();
+        let h = || Some(home.clone());
+        add_bookmark(h(), "p1".into(), "https://w.test".into(), "W".into()).unwrap();
+        assert!(matches!(library_state(h(), "p1".into()).unwrap(), LibraryStateView::Plain));
+        assert!(unlock_library(h(), "p1".into(), "long enough".into()).is_err(), "no identity yet");
+        crate::api::identity::create_profile_identity(h(), "p1".into(), "long enough".into()).unwrap();
+        assert!(unlock_library(h(), "p1".into(), "wrong password".into()).is_err());
+        assert!(matches!(library_state(h(), "p1".into()).unwrap(), LibraryStateView::Plain));
+
+        unlock_library(h(), "p1".into(), "long enough".into()).unwrap();
+        assert!(matches!(library_state(h(), "p1".into()).unwrap(), LibraryStateView::Unlocked));
+        assert_eq!(list_bookmarks(h(), "p1".into()).unwrap().len(), 1);
+        lock_library(h(), "p1".into()).unwrap();
+        assert!(matches!(library_state(h(), "p1".into()).unwrap(), LibraryStateView::Locked));
+        let err = list_bookmarks(h(), "p1".into()).err().expect("a locked library refuses");
+        assert!(err.contains("locked"), "{err}");
     }
 }
