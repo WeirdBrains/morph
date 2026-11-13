@@ -6,6 +6,7 @@
 //! SQLCipher unlock and device linking are milestone M3.
 #![forbid(unsafe_code)]
 
+pub mod backup;
 pub mod device_link;
 pub mod profile_identity;
 
