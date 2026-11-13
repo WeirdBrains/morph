@@ -3,9 +3,10 @@
 # Data: $MORPH_HOME if set, else ~/.morph (your normal Morph profiles).
 #
 # The Morph binary picks a GL-capable GDK backend before GTK starts. On
-# NVIDIA Wayland it uses XWayland (GDK_BACKEND=x11) unless you already set
-# GDK_BACKEND. This launcher does not exec, so it can restore the terminal
-# if Morph aborts or is interrupted.
+# NVIDIA Wayland it uses XWayland (GDK_BACKEND=x11), including when the
+# session already set GDK_BACKEND=wayland,x11,*. MORPH_ALLOW_WAYLAND=1
+# skips that; MORPH_GDK_BACKEND forces a backend. This launcher does not
+# exec, so it can restore the terminal if Morph aborts or is interrupted.
 
 here="$(cd "$(dirname "$0")" && pwd)"
 

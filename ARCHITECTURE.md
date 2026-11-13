@@ -115,8 +115,11 @@ backend per platform.
         Morph aborts at startup ("The current backend does not support
         OpenGL"). When the proprietary driver is present and an X11 display
         is available, the runner sets `GDK_BACKEND=x11` so the window runs
-        on XWayland. An explicit `GDK_BACKEND` is left alone. Wayland stays
-        the default on other GPUs.
+        on XWayland, including when the session already set a list that
+        prefers Wayland (Omarchy/Hyprland: `GDK_BACKEND=wayland,x11,*`).
+        A backend whose first token is already `x11` is left alone.
+        `MORPH_ALLOW_WAYLAND=1` skips the override; `MORPH_GDK_BACKEND`
+        forces a backend. Wayland stays the default on other GPUs.
     - *Hidden text layer:* an invisible mirror of the page's text, positioned over the
       texture from layout boxes the page bridge reports. Native selection and copying
       work on it, and it doubles as the accessibility tree. It is updated as the page
@@ -1763,12 +1766,18 @@ On a Hyprland/NVIDIA session, Morph aborted during `FlView` realize:
 `GDK is not able to create a GL context: The current backend does not
 support OpenGL`. Flutter 3.47 Impeller (OpenGLES) needs that context;
 GTK 3's Wayland backend on the proprietary driver does not provide one.
-The runner now, before `gtk_init`, sets `GDK_BACKEND=x11` when
-`WAYLAND_DISPLAY` and `DISPLAY` are both set, the NVIDIA proprietary
-driver is present (`/proc/driver/nvidia`), and `GDK_BACKEND` is unset.
-X11-only sessions and non-NVIDIA Wayland are unchanged. Override with
-`GDK_BACKEND`. `run-morph.sh` stays in the foreground and restores the
-tty if Morph aborts.
+The runner now, before `gtk_init`, sets `GDK_BACKEND=x11` when an
+X11 display is available, the NVIDIA proprietary driver is present
+(`/proc/driver/nvidia`), and Wayland would otherwise be used: unset
+`GDK_BACKEND` on a Wayland session, `GDK_BACKEND=wayland`, or a list
+that puts Wayland first. Omarchy/Hyprland exports
+`GDK_BACKEND=wayland,x11,*` (`/usr/share/omarchy/default/hypr/envs.lua`);
+the first 04d5465 fallback treated that as an explicit choice and left
+Wayland first, so Morph still aborted — sometimes after Impeller had
+presented a first frame and a resize requested another GL context.
+X11-only sessions and non-NVIDIA Wayland are unchanged. Skip with
+`MORPH_ALLOW_WAYLAND=1`, or set `MORPH_GDK_BACKEND`. `run-morph.sh`
+stays in the foreground and restores the tty if Morph aborts.
 
 ### 2026-11-12 — Linux: passkeys fail fast
 
