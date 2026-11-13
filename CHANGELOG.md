@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Linux builds on Flutter 3.50 / Dart 3.14. `window_manager` 0.7 brings
+  `nativeapi` 0.6, whose ordinary import no longer compiles `Isolate.create`
+  (removed in Dart 3.14). `nativeapi` 0.5.10, locked for Flutter 3.47, does.
 - Windows: `scripts/build-windows.ps1` builds the release app and zips it.
   The build uses a short `TEMP` so vendored OpenSSL's object files fit
   under Windows' path limit, and `nuget.exe` fetches the WebView2 SDK.

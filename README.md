@@ -14,7 +14,7 @@ to reflect progress, but do not restructure it.
 
 ## Build
 
-Rust 1.99+ and Flutter 3.47+ are required. On alien-blue, point cargo at scratch
+Rust 1.99+ and Flutter 3.50+ (Dart 3.14) are required. On alien-blue, point cargo at scratch
 storage so `target/` never lands in `~/Projects`:
 
 ```sh

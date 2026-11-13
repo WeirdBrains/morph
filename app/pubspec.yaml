@@ -6,7 +6,8 @@ homepage: https://github.com/WeirdBrains/morph
 repository: https://github.com/WeirdBrains/morph
 
 environment:
-  sdk: ^3.13.7
+  sdk: ^3.14.0
+  flutter: ">=3.50.0"
 
 dependencies:
   flutter:
@@ -16,8 +17,9 @@ dependencies:
   flutter_rust_bridge_hooks: 2.13.0
   morph_webview:
     path: ../packages/morph_webview
-  # 0.6.x matches Flutter 3.47 / Dart 3.13; 0.7 requires 3.50.
-  window_manager: '>=0.6.0 <0.7.0'
+  # 0.7 matches Flutter 3.50 / Dart 3.14. 0.6 pulls nativeapi 0.5.10,
+  # whose main library calls Isolate.create, which Dart 3.14 removed.
+  window_manager: '>=0.7.0 <0.8.0'
   path_provider: ^2.1.5
   # 2.3.x pulls package:jni into desktop FFI plugin lists.
   path_provider_android: '>=2.2.5 <2.3.0'
