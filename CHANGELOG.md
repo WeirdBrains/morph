@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Linux: on NVIDIA Wayland, start through XWayland so Flutter Impeller can
+  create a GL context. Without this, Morph aborted at startup with "GDK is
+  not able to create a GL context: The current backend does not support
+  OpenGL". Set `GDK_BACKEND` to keep a different backend. `run-morph.sh`
+  also restores the terminal if Morph aborts.
 - Start the Morph workspace: Rust core, identity integration with Weirdnet 0.1.0,
   a Flutter shell wired through flutter_rust_bridge, and CI for the first M1 slice.
 - Linux `morph_webview` / `morph_webview_linux`: webkit2gtk-4.1 offscreen

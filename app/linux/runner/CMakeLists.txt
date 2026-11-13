@@ -9,6 +9,7 @@ project(runner LANGUAGES CXX)
 add_executable(${BINARY_NAME}
   "main.cc"
   "my_application.cc"
+  "display_backend.cc"
   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.cc"
 )
 
@@ -24,3 +25,15 @@ target_link_libraries(${BINARY_NAME} PRIVATE flutter)
 target_link_libraries(${BINARY_NAME} PRIVATE PkgConfig::GTK)
 
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
+
+# Pure unit test of GDK backend selection; no display required.
+add_executable(display_backend_check
+  "display_backend.cc"
+  "display_backend_check.cc"
+)
+apply_standard_settings(display_backend_check)
+target_link_libraries(display_backend_check PRIVATE PkgConfig::GTK)
+add_custom_command(TARGET display_backend_check POST_BUILD
+  COMMAND display_backend_check
+  COMMENT "Running display_backend_check")
+add_dependencies(${BINARY_NAME} display_backend_check)
