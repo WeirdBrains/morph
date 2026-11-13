@@ -112,6 +112,18 @@ jobs:
           workspaces: crates/morph-bridge -> ../../app/.dart_tool/hooks_runner
       - run: flutter pub get
       - run: flutter build apk --debug
+      # c_char is u8 on aarch64 Android, so casts that are fine on x86_64
+      # Linux can fail clippy there.
+      - name: Clippy for aarch64 Android
+        working-directory: .
+        run: |
+          rustup target add aarch64-linux-android
+          rustup component add clippy
+          N="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$N/aarch64-linux-android24-clang" \
+          CC_aarch64_linux_android="$N/aarch64-linux-android24-clang" \
+          AR_aarch64_linux_android="$N/llvm-ar" \
+            cargo clippy --locked -p morph-bridge --target aarch64-linux-android -- -D warnings
       - name: Android unit tests (QR decoder)
         working-directory: app/android
         run: ./gradlew :app:testDebugUnitTest
