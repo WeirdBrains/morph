@@ -32,6 +32,12 @@ if(MORPH_WEBVIEW_WPE)
   endif()
   pkg_check_modules(WPE_FDO QUIET IMPORTED_TARGET wpebackend-fdo-1.0)
   pkg_check_modules(WPE_PLATFORM QUIET IMPORTED_TARGET wpe-platform-2.0)
+else()
+  # A stale CMake cache from a previous configure can leave WPE_FOUND true
+  # while this branch skipped pkg_check_modules, so PkgConfig::WPE is missing.
+  unset(WPE_FOUND)
+  unset(WPE_FDO_FOUND)
+  unset(WPE_PLATFORM_FOUND)
 endif()
 
 list(APPEND PLUGIN_SOURCES
@@ -54,13 +60,15 @@ set_target_properties(${PLUGIN_NAME} PROPERTIES
   CXX_VISIBILITY_PRESET hidden)
 target_compile_definitions(${PLUGIN_NAME} PRIVATE FLUTTER_PLUGIN_IMPL)
 
-if(WPE_FOUND AND (WPE_FDO_FOUND OR WPE_PLATFORM_FOUND))
+# Require the imported targets, not just cached *_FOUND: the option-OFF
+# path above does not call pkg_check_modules, so PkgConfig::WPE may not exist.
+if(MORPH_WEBVIEW_WPE AND WPE_FOUND AND TARGET PkgConfig::WPE AND (TARGET PkgConfig::WPE_FDO OR TARGET PkgConfig::WPE_PLATFORM))
   target_compile_definitions(${PLUGIN_NAME} PRIVATE MORPH_HAS_WPE=1)
   target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::WPE)
-  if(WPE_FDO_FOUND)
+  if(TARGET PkgConfig::WPE_FDO)
     target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::WPE_FDO)
   endif()
-  if(WPE_PLATFORM_FOUND)
+  if(TARGET PkgConfig::WPE_PLATFORM)
     target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::WPE_PLATFORM)
   endif()
   message(STATUS "morph_webview_linux: building WPE DMA-BUF path")
