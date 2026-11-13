@@ -1,0 +1,41 @@
+[package]
+name = "morph-keystore"
+description = "Keeps each Morph profile's library key in the operating system's keystore"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+
+[features]
+# An in-memory store instead of the OS keystore, for other crates' tests.
+mock = []
+
+[dependencies]
+keyring-core = "1"
+morph-identity.workspace = true
+sha2.workspace = true
+zeroize.workspace = true
+
+# Android Keystore (an AES key that never leaves the keystore encrypts the entry,
+# kept in SharedPreferences). Needs ndk-context, which morph-bridge initializes.
+[target.'cfg(target_os = "android")'.dependencies]
+android-native-keyring-store = "1"
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+apple-native-keyring-store = { version = "1", features = ["keychain"] }
+
+# Credential Manager (DPAPI-protected, per user).
+[target.'cfg(windows)'.dependencies]
+windows-native-keyring-store = "1"
+
+# Secret Service over D-Bus (GNOME Keyring, KWallet, KeePassXC). zbus and the
+# Rust crypto are pure Rust: no libdbus or libsecret headers.
+[target.'cfg(all(unix, not(any(target_os = "android", target_os = "macos", target_os = "ios"))))'.dependencies]
+zbus-secret-service-keyring-store = { version = "1", features = ["rt-async-io-crypto-rust"] }
+
+[dev-dependencies]
+tempfile.workspace = true
