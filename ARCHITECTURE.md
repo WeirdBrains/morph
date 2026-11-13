@@ -1944,3 +1944,51 @@ nothing but a state (`plain`, `locked`, `unlocked`).
   profile still uses JSON. Turning it on needs an unlock step at launch, either
   asking for the profile password or keeping the key in the platform keystore
   (section 3's `morph-store` keyring plan). That choice is open.
+
+### 2026-11-12 — The library key lives in the system keystore
+
+Decided by Michael (option B): the encrypted library opens at launch from the
+operating system's keystore, with no password prompt. New crate
+`morph-keystore`, over `keyring-core` 1 and one store per platform:
+
+| Platform | Store | Crate |
+|---|---|---|
+| Android | Android Keystore: a non-exportable AES-GCM key wraps the entry, which lives in SharedPreferences | `android-native-keyring-store` (uses the ndk-context `RustContext` already sets up) |
+| macOS, iOS | Keychain | `apple-native-keyring-store` (`keychain`) |
+| Windows | Credential Manager (DPAPI, per user) | `windows-native-keyring-store` |
+| Linux, BSD | Secret Service over D-Bus (GNOME Keyring, KWallet, KeePassXC) | `zbus-secret-service-keyring-store` (`rt-async-io-crypto-rust`) |
+
+All are pure Rust or use only OS frameworks. The Linux one speaks D-Bus through
+zbus, so neither libdbus nor libsecret headers are needed to build, and nothing
+was installed.
+
+- **Entry:** service `org.weirdbrains.morph`, account `library-key/<16 bytes of
+  SHA-256 of the profile directory>`, so profiles (and the same id in two Morph
+  homes) never share an entry and the account name says nothing about the profile.
+  The secret is `MK1`, 16 bytes of SHA-256(user id), then the 32-byte
+  `LibraryKey`. A key saved for another identity (after a reset or re-import)
+  reads as missing and is removed, so a stale key can never open or create a
+  database. Errors never include key bytes.
+- **Flow:** creating, importing or linking an identity encrypts the library at
+  once (moving the JSON in) and saves the key. At launch and on a profile switch
+  the shell calls `open_library`, which unlocks from the keystore. If there is no
+  usable key (missing, keyring locked or absent, no Secret Service running,
+  restored from a backup without the keystore key, or `MORPH_KEYSTORE=off`), the
+  shell asks for the profile password once per run (`unlock_library`), which
+  derives the key from the identity and saves it again. If saving fails, a
+  notice says the password will be asked again next time. "Not now" leaves the
+  library locked for the run: bookmarks and history stay empty and nothing is
+  written in plaintext.
+- **Cleanup:** deleting a profile removes its entry first. A new identity on a
+  profile whose old `library.db` it cannot open sets that file aside as
+  `library.db.unreadable-<ms>` and starts fresh (`unlock_new_identity`).
+- **Profiles from before this change** (identity, JSON library, no entry) are
+  asked for their password once; the library moves in and the key is saved.
+- **Tests** never touch a real keystore: `morph-keystore`'s own tests and its
+  `mock` feature (a dev-dependency of `morph-bridge`) use keyring-core's
+  in-memory store. The real Secret Service path was checked on Linux against a
+  throwaway GNOME Keyring on a private D-Bus bus (temp HOME and XDG dirs, with
+  none of the user's session variables): save, load and forget round-trip in
+  about 50 ms. With no Secret Service or no bus it fails in under 20 ms and the
+  password path takes over. The Windows and Android stores pass clippy for their
+  targets here. macOS is unchecked: there is no macOS target or CI job.
