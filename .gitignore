@@ -33,6 +33,9 @@ app/android/app/release
 # Local assistant context (never committed)
 .agent-context/
 
+# Windows release zip from scripts/build-windows.ps1
+/dist/
+
 # Secrets and local data
 .env
 .env.*
