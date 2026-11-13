@@ -65,6 +65,29 @@ pub fn unlock(home: impl AsRef<Path>, id: &str, key: &LibraryKey) -> Result<(), 
     Ok(())
 }
 
+/// [`unlock`] for a profile that just got a new identity. A `library.db` left
+/// by an earlier identity cannot open with the new key; it is renamed to
+/// `library.db.unreadable-<now_ms>` (kept, in case the old recovery words turn
+/// up) and a fresh library starts.
+pub fn unlock_new_identity(home: impl AsRef<Path>, id: &str, key: &LibraryKey, now_ms: i64) -> Result<(), ProfileError> {
+    let home = home.as_ref();
+    match unlock(home, id, key) {
+        Err(ProfileError::Store(e)) if e.is_wrong_key() => {
+            let db = morph_store::path(&profiles::profile_dir(home, id));
+            let aside = |suffix: &str| PathBuf::from(format!("{}{suffix}.unreadable-{now_ms}", db.display()));
+            fs::rename(&db, aside(""))?;
+            for side in ["-wal", "-shm"] {
+                let p = PathBuf::from(format!("{}{side}", db.display()));
+                if p.exists() {
+                    fs::rename(&p, aside(side))?;
+                }
+            }
+            unlock(home, id, key)
+        }
+        other => other,
+    }
+}
+
 /// Close `id`'s library and forget its key. Does nothing if it is not open.
 pub fn lock(home: impl AsRef<Path>, id: &str) {
     open_map().remove(&profiles::profile_dir(home, id));
@@ -192,6 +215,21 @@ mod tests {
         bookmarks::remove_bookmark(&home, &id, "https://c.example/", 6).unwrap();
         assert!(bookmarks::bookmarks(&home, &id).unwrap().is_empty());
         assert_eq!(bookmarks::tombstones(&home, &id).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_new_identity_sets_an_unreadable_library_aside() {
+        let (_tmp, home, id) = home_with_profile();
+        unlock(&home, &id, &key(1)).unwrap();
+        bookmarks::add_bookmark(&home, &id, "https://old.example/", "Old", 1).unwrap();
+        lock(&home, &id);
+        unlock_new_identity(&home, &id, &key(2), 77).unwrap();
+        assert!(bookmarks::bookmarks(&home, &id).unwrap().is_empty());
+        let dir = profiles::profile_dir(&home, &id);
+        assert!(dir.join("library.db.unreadable-77").exists(), "the old file is kept");
+        lock(&home, &id);
+        unlock_new_identity(&home, &id, &key(2), 78).unwrap();
+        assert!(!dir.join("library.db.unreadable-78").exists(), "a readable library stays");
     }
 
     #[test]
