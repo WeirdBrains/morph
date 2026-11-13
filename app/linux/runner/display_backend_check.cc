@@ -21,10 +21,10 @@ static void expect_streq(const char* name, const char* got, const char* want) {
 }
 
 int main() {
-  expect_null("explicit wayland", morph_preferred_gdk_backend(
-                                      "wayland", "wayland-1", ":0", 1));
   expect_null("explicit x11",
               morph_preferred_gdk_backend("x11", "wayland-1", ":0", 1));
+  expect_null("x11 first in list",
+              morph_preferred_gdk_backend("x11,wayland", "wayland-1", ":0", 1));
   expect_null("no wayland session",
               morph_preferred_gdk_backend(nullptr, nullptr, ":0", 1));
   expect_null("empty wayland display",
@@ -35,11 +35,26 @@ int main() {
               morph_preferred_gdk_backend(nullptr, "wayland-1", "", 1));
   expect_null("non-NVIDIA wayland",
               morph_preferred_gdk_backend(nullptr, "wayland-1", ":0", 0));
+  expect_null("non-NVIDIA session list",
+              morph_preferred_gdk_backend("wayland,x11,*", "wayland-1", ":0", 0));
   expect_streq("NVIDIA wayland with XWayland",
                morph_preferred_gdk_backend(nullptr, "wayland-1", ":0", 1),
                "x11");
   expect_streq("empty GDK_BACKEND is unset",
                morph_preferred_gdk_backend("", "wayland-1", ":0", 1), "x11");
+  // Omarchy / Hyprland session default used to skip the fallback because
+  // GDK_BACKEND was already set.
+  expect_streq("Omarchy session list",
+               morph_preferred_gdk_backend("wayland,x11,*", "wayland-1", ":0",
+                                           1),
+               "x11");
+  expect_streq("explicit wayland still needs X11 on NVIDIA",
+               morph_preferred_gdk_backend("wayland", "wayland-1", ":0", 1),
+               "x11");
+  expect_streq("spaces around first token",
+               morph_preferred_gdk_backend(" wayland , x11 , *", "wayland-1",
+                                           ":0", 1),
+               "x11");
 
   if (failures != 0) {
     fprintf(stderr, "display_backend_check: %d failure(s)\n", failures);
