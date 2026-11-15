@@ -261,7 +261,7 @@ def find_in_page(m, r, win, top):
     h2 = wait_for(lambda: (st() or {}).get("h", 0) == h0 and (st() or {}).get("h"))
     r.check("find", "Escape closes the find bar (page grows back)", h2 == h0, f"{h1} -> {(st() or {}).get('h')}")
     m.key("x")
-    r.check("find", "after Escape the page has the keyboard again", (st() or {}).get("c") == "KeyX", str(st()))
+    r.check("find", "after Escape the page has the keyboard again", wait_for(lambda: (st() or {}).get("c") == "KeyX", 3), str(st()))
     n1 = (st() or {}).get("n")
     m.key("ctrl+g", delay=0.8)
     h3 = wait_for(lambda: (st() or {}).get("h", 0) < h0 and (st() or {}).get("h"))
@@ -311,9 +311,42 @@ def library_panel(m, r, win, top):
     w3 = wait_for(lambda: (st() or {}).get("w") == w0 and w0)
     r.check("library", "Escape in the library closes it", w3 == w0, f"{(st() or {}).get('w')}")
     m.key("q")
-    r.check("library", "after closing, the page has the keyboard", (st() or {}).get("c") == "KeyQ", str(st()))
+    r.check("library", "after closing, the page has the keyboard", wait_for(lambda: (st() or {}).get("c") == "KeyQ", 3), str(st()))
     m.key("ctrl+d", delay=0.8)
     r.check("library", "Ctrl+D again removes the bookmark", wait_for(lambda: url not in bookmarks_file(m)), bookmarks_file(m)[:200])
+
+
+def catalog(m):
+    try:
+        return json.loads((m.home / "profiles.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def profiles_panel(m, r, win, top):
+    """Ctrl+Shift+M opens the profiles panel ready for a new name; Enter
+    creates the profile and switches the window to it (a fresh blank tab
+    whose address bar takes typing); Ctrl+Shift+M again switches back."""
+    m.xdo("windowactivate", "--sync", win)
+    m.click(win, 300, top + 300)
+    w0 = (state(m) or {}).get("w", 0)
+    m.key("ctrl+shift+m", delay=0.8)
+    narrowed = wait_for(lambda: (state(m) or {}).get("w", 0) < w0)
+    r.check("profile", "Ctrl+Shift+M opens the profiles panel beside the page", narrowed, f"{w0} -> {(state(m) or {}).get('w')}")
+    m.type("Work")
+    m.key("Return", delay=2.0)
+    cat = catalog(m)
+    new = [p["id"] for p in cat.get("profiles", []) if p.get("name") == "Work"]
+    r.check("profile", "Enter creates the profile", new, str(cat))
+    r.check("profile", "and the window switches to it", new and cat.get("current") == new[0], str(cat))
+    r.check("profile", "the new profile starts with a blank tab", wait_for(lambda: m.xdo("getwindowname", win) == "Morph"), m.xdo("getwindowname", win))
+    before = len(m.events())
+    m.type(PAGE.as_uri() + "?work")
+    m.key("Return", delay=1.5)
+    loaded = wait_for(lambda: any(n == "TitleChanged" and "M{" in (a or "") for _, n, a in m.events()[before:]))
+    r.check("profile", "its address bar takes typing and loads pages", loaded, m.xdo("getwindowname", win))
+    data = m.home / "profiles" / (new[0] if new else "?") / "webkit" / "data"
+    r.check("profile", "its web data lives in its own directory", wait_for(lambda: data.exists()), str(data))
 
 
 def error_page(m, r, win, top):
@@ -415,6 +448,7 @@ def main():
             r.check("popup", "popup state reached the shell", seen)
             m.key("ctrl+w", delay=1.0)
             r.check("popup", "Ctrl+W closes the popup", not m.window(r"^P\{"), "still open")
+        profiles_panel(m, r, win, top)
     finally:
         m.stop()
         if wm:

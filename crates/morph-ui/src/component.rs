@@ -57,12 +57,16 @@ pub const BROWSER: &str = "morph.browser";
 /// Bookmarks and history, with the library's password prompt.
 pub const LIBRARY: &str = "morph.library";
 
+/// Switching, creating, renaming and deleting profiles.
+pub const PROFILES: &str = "morph.profiles";
+
 /// Kinds that ship with Morph. Later phases add chat, notes and projects
 /// here as they are built.
 pub fn builtin() -> Vec<ComponentKind> {
     vec![
         ComponentKind::new(BROWSER, "Browser", "globe", &[Needs::WebView, Needs::Library]),
         ComponentKind::new(LIBRARY, "Library", "bookmark", &[Needs::Library]),
+        ComponentKind::new(PROFILES, "Profiles", "person", &[]),
     ]
 }
 

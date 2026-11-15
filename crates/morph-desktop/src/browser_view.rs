@@ -40,6 +40,7 @@ pub struct BrowserView {
     find_input: Entity<TextInput>,
     /// The active page is bookmarked (the star), as the shell reports it.
     marked: bool,
+    profile_label: String,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -67,6 +68,7 @@ impl BrowserView {
             mirrored_focus: false,
             find_input,
             marked: false,
+            profile_label: String::new(),
             _subscriptions: vec![find_events],
         }
     }
@@ -142,6 +144,11 @@ impl BrowserView {
             self.browser.load(url);
         }
         self.sync_focus(window, cx);
+        cx.notify();
+    }
+
+    pub fn set_profile_label(&mut self, name: &str, cx: &mut Context<Self>) {
+        self.profile_label = name.to_string();
         cx.notify();
     }
 
@@ -422,6 +429,25 @@ impl BrowserView {
                         .text_color(rgb(if marked { t.accent } else { t.text_primary }))
                         .on_click(cx.listener(|_, _, window, cx| {
                             window.dispatch_action(Box::new(crate::shell::Bookmark), cx);
+                        })),
+                )
+            })
+            .when(!self.profile_label.is_empty(), |d| {
+                let label: SharedString = self.profile_label.clone().into();
+                d.child(
+                    div()
+                        .id("profile")
+                        .px(px(10.))
+                        .h(px(28.))
+                        .flex()
+                        .items_center()
+                        .rounded(px(14.))
+                        .bg(rgb(t.surface_variant))
+                        .text_size(px(12.))
+                        .cursor_pointer()
+                        .child(label)
+                        .on_click(cx.listener(|_, _, window, cx| {
+                            window.dispatch_action(Box::new(crate::shell::ShowProfiles), cx);
                         })),
                 )
             })

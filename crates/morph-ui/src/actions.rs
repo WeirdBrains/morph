@@ -30,6 +30,8 @@ pub enum Action {
     ShowBookmarks,
     /// Open or close the library on its history.
     ShowHistory,
+    /// Open or close the profiles panel.
+    ShowProfiles,
 }
 
 impl Action {
@@ -55,6 +57,7 @@ impl Action {
             Action::Bookmark => "library.bookmark".into(),
             Action::ShowBookmarks => "library.show_bookmarks".into(),
             Action::ShowHistory => "library.show_history".into(),
+            Action::ShowProfiles => "shell.show_profiles".into(),
         }
     }
 
@@ -79,6 +82,7 @@ impl Action {
             Action::Bookmark,
             Action::ShowBookmarks,
             Action::ShowHistory,
+            Action::ShowProfiles,
         ];
         if let Some(action) = fixed.into_iter().find(|a| a.name() == name) {
             return Some(action);
@@ -126,6 +130,7 @@ impl Default for Keymap {
             ("ctrl-d", Action::Bookmark),
             ("ctrl-shift-o", Action::ShowBookmarks),
             ("ctrl-h", Action::ShowHistory),
+            ("ctrl-shift-m", Action::ShowProfiles),
         ];
         let mut bindings: Vec<Binding> = fixed.into_iter().map(|(k, a)| Binding { keystroke: k.into(), action: a }).collect();
         bindings.extend((1..=8).map(|n| Binding { keystroke: format!("ctrl-{n}"), action: Action::SelectTab(n - 1) }));
@@ -180,6 +185,7 @@ mod tests {
         assert_eq!(keys.action_for("ctrl-d"), Some(Action::Bookmark));
         assert_eq!(keys.action_for("ctrl-shift-o"), Some(Action::ShowBookmarks));
         assert_eq!(keys.action_for("ctrl-h"), Some(Action::ShowHistory));
+        assert_eq!(keys.action_for("ctrl-shift-m"), Some(Action::ShowProfiles));
         assert_eq!(keys.action_for("ctrl-x"), None);
     }
 
