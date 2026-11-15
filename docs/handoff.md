@@ -402,6 +402,11 @@ through XWayland (needs `xorg-xwayland`, which Hyprland normally has).
 
 - Pre-release `v0.2.0-alpha.5` on GitHub, from `main`, with the tarball, the
   zip, the four debs/rpms and `SHA256SUMS`.
+  GitHub turns `~` in asset names into `.`, so the release's debs and rpms are
+  `…0.2.0.alpha.5…` and its `SHA256SUMS` uses those names (the package
+  versions inside are still `0.2.0~alpha.5`). Container-checked: `morph-bin`
+  built from the release tarball (sha256 matched), installed, `morph
+  --version`, desktop entry; both `.SRCINFO` match `makepkg --printsrcinfo`.
 - `packaging/arch/morph-bin` and `packaging/arch/morph` are `0.2.0alpha5`
   (`morph-bin` with the tarball's sha256), `packaging/nix/release.json` names
   the same tarball. The recipe archive is `morph-bin-0.2.0alpha5.tar.gz`
