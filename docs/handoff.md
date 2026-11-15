@@ -1,14 +1,16 @@
 # Handoff
 
 Updated 2026-11-15. This file is the resume point for moving Morph's desktop shell to
-GPUI. **Phases 1 to 5 are done and pushed to `main`** (native Wayland left for later): pre-releases `v0.2.0-alpha.1`
+GPUI. **Phases 1 to 6 are done and pushed to `main`** (phase 6: native Wayland): pre-releases `v0.2.0-alpha.1`
 (https://github.com/WeirdBrains/morph/releases/tag/v0.2.0-alpha.1), `v0.2.0-alpha.2`
 (https://github.com/WeirdBrains/morph/releases/tag/v0.2.0-alpha.2), `v0.2.0-alpha.3`
 (https://github.com/WeirdBrains/morph/releases/tag/v0.2.0-alpha.3), `v0.2.0-alpha.4`
-(https://github.com/WeirdBrains/morph/releases/tag/v0.2.0-alpha.4) and `v0.2.0-alpha.5`
-(https://github.com/WeirdBrains/morph/releases/tag/v0.2.0-alpha.5), each with a
-`morph-bin` recipe for TAUR. m3talsmith said to keep going through the phases without
-waiting for him; native Wayland and macOS/Windows are next.
+(https://github.com/WeirdBrains/morph/releases/tag/v0.2.0-alpha.4), `v0.2.0-alpha.5`
+(https://github.com/WeirdBrains/morph/releases/tag/v0.2.0-alpha.5) and `v0.2.0-alpha.6`
+(https://github.com/WeirdBrains/morph/releases/tag/v0.2.0-alpha.6), each with a
+`morph-bin` recipe for TAUR. m3talsmith installs with
+`yay --aururl https://pkg.taur.weirdbrains.com -S morph-bin`. m3talsmith said to keep
+going through the phases without waiting for him; macOS/Windows are next.
 
 ## Where things stand
 
@@ -32,6 +34,68 @@ waiting for him; native Wayland and macOS/Windows are next.
   phase 2 (a password-field widget test, and the Android Gradle Plugin 9.1.0
   being below Flutter's 9.1.1 minimum); phase 2 fixed both. The Flutter `linux`
   and `windows` jobs are gone with their targets.
+
+## Phase 6 result: what changed and how it was checked
+
+Native Wayland (`v0.2.0-alpha.6`).
+
+- **Backend choice** (`crates/morph-desktop/src/backend.rs`): on a Wayland
+  session GPUI runs natively and pages come from `morph_webview::offscreen`;
+  on X11 nothing changed (child windows). `MORPH_BACKEND=x11|wayland`
+  overrides; if GTK cannot open Wayland the shell falls back to XWayland.
+- **Off-screen pages** (`crates/morph-webview/src/offscreen.rs`): each page is
+  a WebKitGTK view in a `gtk::OffscreenWindow`, embedded in one realized,
+  never-shown `gtk::Window` so it gets the monitor's scale (devicePixelRatio
+  matches the shell). Damage marks the frame dirty; the shell copies it (BGRA,
+  device pixels) into a GPUI image only then. Overlay scrollbars are off on
+  Wayland (`GTK_OVERLAY_SCROLLING=0`): their fade animation redrew idle pages
+  about 12 times a second. Pages are built inside the embedder window and
+  then moved, hidden from WebKit, into their offscreen window, because WebKit
+  loads media only for pages whose top-level widget is an on-screen
+  `GtkWindow` (every `<video>` stayed empty before).
+- **Input:** pointer, wheel and keys become synthetic GDK events; keys carry the
+  real XKB keycode, keysym and state from a vendored `gpui_linux`
+  (`third_party/gpui_linux`, `raw_key::current()`). Input-method commits come
+  through a GPUI `InputHandler` (no inline preedit yet).
+- **m3talsmith's bugs, fixed in alpha.6:** pages twice the shell's size with
+  `GDK_SCALE=2` (GDK_SCALE/GDK_DPI_SCALE are removed before GTK starts and
+  pages zoom by the shell's scale); the LinkedIn sign-in popup staying open
+  after `window.close()` (wry's `close` handler destroys the web view and
+  drops ours; the window now follows the web view's `destroy`); videos not
+  playing on Wayland (above). On X11 the bundled clips already played.
+- **No vendor checks (m3talsmith, 2026-11-15).** The NVIDIA detection pushed in
+  `b706629` is removed (`3261b1c`). Instead `morph --probe-dmabuf` runs as a
+  child at start and makes the allocation WebKit's DMA-BUF renderer makes (2x2
+  ARGB8888 GBM buffer for rendering, with the EGL display's modifiers, on the
+  first render node). Only if it fails does Morph set
+  `WEBKIT_DMABUF_RENDERER_DISABLE_GBM=1` (GL-texture export, still GPU) or,
+  without `EGL_MESA_image_dma_buf_export`, `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1`.
+  Any user-set WebKit renderer variable, or `MORPH_DMABUF_PROBE=0`, skips it.
+  GL compositing stays on; the hardware-acceleration policy is never set
+  (`Never` gave blank off-screen pages). **Not verified on NVIDIA** (the box
+  has no GPU: the probe says "unavailable" and changes nothing). WebKit has no
+  knob to pick modifiers (`WEBKIT_DMABUF_RENDERER_BUFFER_FORMAT` picks the
+  format), so true modifier negotiation would need a WebKit change.
+- **VA-API:** `GST_PLUGIN_FEATURE_RANK` ranks the `va` plugin's decoders
+  (H.264, H.265, VP8, VP9, AV1, MPEG-2) first unless the user set the variable
+  or `MORPH_VAAPI=0`. The `va` plugin (gst-plugins-bad) registers only what the
+  VA driver can decode, so it is a no-op without VA-API. Not verified on real
+  hardware here.
+- **Checks:** `scripts/xvfb-check.py --wayland [--scale 2]` runs the same
+  suite on a headless sway (`WLR_BACKENDS=headless`, pixman renderer),
+  driven by `morph-wl-input` (virtual keyboard with the standard evdev/us
+  keymap, virtual pointer, input-method commits); CI runs Xvfb, Wayland and
+  Wayland scale 2. New checks on both: popup posts to its opener and calls
+  `window.close()` (window gone, PopupOpened/PopupClosed balanced), bundled
+  VP8 WebM and H.264 MP4 play (`currentTime` advances), `GDK_SCALE=2` does not
+  change the page size. Last local run: Xvfb 160/160, Wayland 155/155, Wayland
+  scale 2 155/155. No key behaves differently between Wayland and X11; the
+  Wayland run lacks only the X11-only frameless-window checks (xprop/xfwm4).
+- **m3talsmith tests:** alpha.6 on Hyprland natively (no XWayland): page
+  sharpness at his scale, typing (IME too), LinkedIn sign-in popup closing,
+  YouTube/video playback, whether pages are black (if so, the probe's log
+  line and whether `MORPH_DMABUF_PROBE=0` or `WEBKIT_DISABLE_DMABUF_RENDERER=1`
+  changes it), CPU while idle, and `MORPH_BACKEND=x11` for comparison.
 
 ## Phase 5 result: what changed and how it was checked
 
@@ -354,6 +418,17 @@ my-desktop), NVIDIA, HiDPI scaling, IME input, window resizing by hand, real
 sites and real sign-in popups, a long session's CPU cost of pumping GTK every
 8 ms, and m3talsmith's Arch box itself (packages were checked in a container only).
 
+### How the keys are routed (Wayland)
+
+- The page has no window of its own on screen; the shell owns the keyboard.
+  GPUI's keybindings run first, so shell shortcuts never reach the page. Any
+  other key, while the page has focus, becomes a GDK key event for the page's
+  offscreen window with the keyboard's own keycode, keysym, modifiers and XKB
+  group (`raw_key::current()` from the vendored `gpui_linux`), so
+  `KeyboardEvent.key`/`code` match X11, keypad and dead keys included. Text
+  from an input method arrives as committed text. Focus in/out is sent as GDK
+  focus-change events when the page gains or loses focus.
+
 ### How the keys are routed (X11)
 
 - The page is a child X window of the shell's window. X11 gives a key to the
@@ -386,17 +461,31 @@ export CARGO_TARGET_DIR=<scratch-dir>/cargo-target/morph
 MORPH_HOME=$(mktemp -d) cargo run -p morph-desktop --release
 
 # 2. Or build and install the Arch package from the checkout:
-cd packaging/arch/morph && makepkg -si      # morph 0.2.0alpha5-1
+cd packaging/arch/morph && makepkg -si      # morph 0.2.0alpha6-1
 morph                                        # or "Morph" in the launcher
 
-# 3. Or the prebuilt release from TAUR (once uploaded):
-#    install morph-bin from the WeirdBrains TAUR repo; it conflicts with morph.
+# 3. Or the prebuilt release from TAUR (conflicts with morph):
+yay --aururl https://pkg.taur.weirdbrains.com -S morph-bin
 ```
 
 `makepkg` builds into `packaging/arch/morph/src/target` (its own target dir, not
 `<scratch-dir>`), so the first build takes a while. Without `MORPH_HOME` the
 installed `morph` uses the normal profile directory. On Hyprland it runs
-through XWayland (needs `xorg-xwayland`, which Hyprland normally has).
+natively on Wayland since alpha.6 (`MORPH_BACKEND=x11` for XWayland).
+
+## Release and TAUR (phase 6)
+
+- Pre-release `v0.2.0-alpha.6` on GitHub, from `main`, with the tarball, the
+  zip, the four debs/rpms and `SHA256SUMS` (dotted asset names, as in alpha.5).
+  Container-checked: `morph-bin` built from the release tarball (sha256
+  matched), installed, `morph --version` = 0.2.0-alpha.6, desktop entry; both
+  `.SRCINFO` regenerated with `makepkg --printsrcinfo`.
+- `packaging/arch/morph-bin` and `packaging/arch/morph` are `0.2.0alpha6`
+  (new optdepends `gst-plugins-bad` for VA-API), `packaging/nix/release.json`
+  names the same tarball. Recipe archive: `/workspace/dist/morph-bin-0.2.0alpha6.tar.gz`
+  (older `SHA256SUMS-0.2.0-alpha.N` kept beside it). m3talsmith installs with
+  `yay --aururl https://pkg.taur.weirdbrains.com -S morph-bin` once it is in
+  TAUR (`taurctl` is his side).
 
 ## Release and TAUR (phase 5)
 
@@ -638,6 +727,13 @@ format with and without the `.desktop` entry), the shared release script
 on open decision 1, the native Wayland web view work.
 - **m3talsmith tests:** a release-style Arch package and the other formats.
 
+### Phase 6 — Native Wayland (done, `v0.2.0-alpha.6`)
+
+Off-screen WebKit pages drawn by GPUI, the key suite on headless sway, no
+vendor checks (DMA-BUF probe, VA-API ranks), GDK_SCALE, popup-close and video
+fixes. Details in "Phase 6 result" above.
+- **m3talsmith tests:** see "Phase 6 result".
+
 ### Later — macOS, Windows, more components
 
 macOS (WKWebView child) and Windows (WebView2 child) through the same
@@ -649,7 +745,8 @@ crates land.
 Listed in full in `ARCHITECTURE.md` (2026-11-14 — Open decisions from the GPUI
 switch). Decided for phase 1 (`ARCHITECTURE.md`, 2026-11-14 — Phase 1 decisions):
 
-1. Native Wayland: **XWayland for now**; native Wayland stays future work.
+1. Native Wayland: **native since phase 6** (off-screen pages drawn by GPUI;
+   XWayland is the fallback). No GPU-vendor checks (m3talsmith, 2026-11-15).
 2. GPUI pin: **Zed repository by commit** (`703b5ac`).
 8. GPUI cannot draw over the page: **popovers beside it**.
 10. Phase builds: **pre-releases from `main`**, `v0.2.0-alpha.N`, `pkgver`
@@ -673,7 +770,8 @@ cd /workspace/morph            # or ~/src/WeirdBrains/morph
 git switch main && git pull --rebase origin main
 ```
 
-Next: native Wayland (offscreen web view drawn by GPUI, see phase 5), then macOS and Windows. Commit as m3talsmith, run the quality bar before each commit,
+Next: macOS and Windows; on Wayland, inline IME preedit, `<select>` menus and
+the context menu for off-screen pages. Commit as m3talsmith, run the quality bar before each commit,
 `git pull --rebase origin main` before each push, push to `origin/main`; no pull
 requests, no force-push, leave the remote `gpui` branch alone. Do not modify
 `PLAN.md`; `PRIORITIES.md` gets dated progress notes only. Do not touch

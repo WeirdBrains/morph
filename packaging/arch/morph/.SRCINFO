@@ -1,6 +1,6 @@
 pkgbase = morph
 	pkgdesc = Distributed web browser with local AI (GPUI desktop shell)
-	pkgver = 0.2.0alpha5
+	pkgver = 0.2.0alpha6
 	pkgrel = 1
 	url = https://github.com/WeirdBrains/morph
 	arch = x86_64
@@ -25,6 +25,7 @@ pkgbase = morph
 	depends = glibc
 	depends = gcc-libs
 	optdepends = vulkan-driver: GPU rendering (mesa or the vendor driver)
+	optdepends = gst-plugins-bad: VA-API video decoding (the va plugin)
 	options = !lto
 	options = !debug
 

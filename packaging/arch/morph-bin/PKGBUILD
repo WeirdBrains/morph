@@ -5,9 +5,9 @@
 # downloadable (public repo). The upstream tarball is not code-signed; this
 # package is likewise unsigned. To build from a checkout, see ../morph.
 pkgname=morph-bin
-pkgver=0.2.0alpha5
+pkgver=0.2.0alpha6
 # pacman sorts 0.2.0alpha2 before 0.2.0; the release tag is v0.2.0-alpha.2.
-_ver=0.2.0-alpha.5
+_ver=0.2.0-alpha.6
 pkgrel=1
 pkgdesc="Distributed web browser with local AI (GPUI desktop shell), prebuilt"
 arch=('x86_64')
@@ -15,13 +15,14 @@ url="https://github.com/WeirdBrains/morph"
 license=('BSD-3-Clause')
 depends=('webkit2gtk-4.1' 'gtk3' 'glib2' 'libxkbcommon-x11' 'libxcb' 'vulkan-icd-loader'
          'fontconfig' 'freetype2' 'openssl' 'hicolor-icon-theme' 'glibc' 'gcc-libs')
-optdepends=('vulkan-driver: GPU rendering (mesa or the vendor driver)')
+optdepends=('vulkan-driver: GPU rendering (mesa or the vendor driver)'
+            'gst-plugins-bad: VA-API video decoding (the va plugin)')
 provides=('morph')
 conflicts=('morph')
 options=('!strip' '!debug')
 source_x86_64=("$url/releases/download/v$_ver/morph-$_ver-x86_64-unknown-linux-gnu.tar.gz")
 # From the release's SHA256SUMS.
-sha256sums_x86_64=('981394b5642225d011f43eb44df4310fef9020e0e18c9010f84554149a637af7')
+sha256sums_x86_64=('1fb835979eed9c0a50fb7531c67e53fec399fbfbf86cbf2761833913722286f7')
 
 package() {
   local bundle="$srcdir/morph-$_ver-$CARCH-unknown-linux-gnu"
