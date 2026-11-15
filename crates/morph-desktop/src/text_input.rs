@@ -94,6 +94,14 @@ impl TextInput {
         self.field.text()
     }
 
+    /// Reuse the input for another field: its hint and whether it hides
+    /// what is typed.
+    pub fn configure(&mut self, placeholder: impl Into<SharedString>, masked: bool, cx: &mut Context<Self>) {
+        self.placeholder = placeholder.into();
+        self.masked = masked;
+        cx.notify();
+    }
+
     /// Replace the text, all of it selected. Does not emit `Changed`.
     pub fn set_text(&mut self, text: &str, cx: &mut Context<Self>) {
         self.field.set_text_selected(text);

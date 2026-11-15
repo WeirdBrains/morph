@@ -478,7 +478,8 @@ impl Browser {
             | Action::ShowBookmarks
             | Action::ShowHistory
             | Action::ShowProfiles
-            | Action::ShowSettings => {
+            | Action::ShowSettings
+            | Action::ShowIdentity => {
                 return false;
             }
         }

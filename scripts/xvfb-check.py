@@ -81,6 +81,11 @@ class Morph:
         ids = self.xdo("search", "--onlyvisible", "--name", name).split()
         return ids[0] if ids else None
 
+    def own_window(self):
+        """This process's visible window (two Morphs share a display)."""
+        ids = self.xdo("search", "--onlyvisible", "--pid", str(self.proc.pid)).split()
+        return ids[-1] if ids else None
+
     def geometry(self, win):
         out = self.xdo("getwindowgeometry", "--shell", win)
         vals = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
@@ -472,6 +477,131 @@ def single_instance(m, r, binary):
     r.check("single", "the first Morph keeps running", m.proc.poll() is None)
 
 
+def identity_file(m, profile=None):
+    profile = profile or catalog(m).get("current", "default")
+    try:
+        return json.loads((m.home / "profiles" / profile / "identity" / "identity.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def open_identity(m, r, area):
+    """Ctrl+Shift+L opens the identity panel beside the page."""
+    win = wait_for(m.own_window, 20)
+    m.xdo("windowactivate", "--sync", win)
+    m.click(win, 300, 76 + 300)
+    w0 = (state(m) or {}).get("w", 0)
+    m.key("ctrl+shift+l", delay=1.0)
+    r.check(area, "Ctrl+Shift+L opens the identity panel beside the page", wait_for(lambda: (state(m) or {}).get("w", 0) < w0), f"{w0} -> {(state(m) or {}).get('w')}")
+    return win, w0
+
+
+def fill(m, *values):
+    """Type each value into the panel's fields; Enter moves to the next, the
+    last Enter submits."""
+    for value in values:
+        m.key("ctrl+a", delay=0.2)
+        m.type(value)
+        m.key("Return", delay=0.8)
+
+
+PASSWORD = "xvfb-profile-pass"
+BACKUP_PASSWORD = "xvfb-backup-pass"
+
+
+def identity_panel(m, r):
+    """Onboarding and backups on the running Morph: 1 creates an identity
+    (password twice), Enter past the recovery words, b saves a backup,
+    Escape closes the panel and the page has the keyboard again."""
+    win, w0 = open_identity(m, r, "identity")
+    m.key("1", delay=0.8)
+    fill(m, PASSWORD, PASSWORD)
+    made = wait_for(lambda: identity_file(m).get("user_id"))
+    r.check("identity", "1, a password twice: the profile has an identity", made, str(identity_file(m)))
+    m.key("Return", delay=0.8)
+    backup = m.home / "identity-backup.txt"
+    m.key("b", delay=0.8)
+    fill(m, PASSWORD, BACKUP_PASSWORD, str(backup))
+    r.check("identity", "b saves a backup file", wait_for(lambda: backup.exists()), str(backup))
+    r.check("identity", "only its owner can read it", backup.exists() and (backup.stat().st_mode & 0o777) == 0o600, oct(backup.stat().st_mode) if backup.exists() else "")
+    r.check("identity", "it does not hold the profile password", backup.exists() and PASSWORD not in backup.read_text(errors="replace"))
+    m.key("Escape", delay=0.8)
+    r.check("identity", "Escape closes the panel", wait_for(lambda: (state(m) or {}).get("w") == w0), f"{w0} vs {(state(m) or {}).get('w')}")
+    r.check("identity", "after closing, the page has the keyboard", page_takes_key(m, "z", "KeyZ"), str(state(m)))
+    return made, backup
+
+
+def identity_relaunch(m, r):
+    """With an identity the library is encrypted; without a keyring (as
+    under Xvfb) the next launch opens the library asking for the password.
+    The password unlocks it; Escape closes it; the page has the keyboard."""
+    win = wait_for(m.own_window, 20)
+    r.check("identity", "after a relaunch the page loads", wait_for(lambda: state(m), 20))
+    w = (state(m) or {}).get("w", 0)
+    m.xdo("windowactivate", "--sync", win)
+    r.check("identity", "the locked library asks for the password beside the page", w and w < 1190, str(w))
+    m.type(PASSWORD)
+    m.key("Return", delay=1.0)
+    r.check("identity", "the identity's password unlocks it", wait_for(lambda: m.lines(r"morph-event library unlocked")), "not unlocked")
+    m.key("Escape", delay=1.0)
+    r.check("identity", "Escape closes it", wait_for(lambda: (state(m) or {}).get("w", 0) > w), str((state(m) or {}).get("w")))
+    r.check("identity", "and the page has the keyboard", page_takes_key(m, "z", "KeyZ"), str(state(m)))
+
+
+def identity_restore(r, binary, display, user_id, backup):
+    """A second home restores the backup: 3, the file, its password and a
+    new password give it the same identity."""
+    m2 = Morph(binary, display, tempfile.mkdtemp(prefix="morph-xvfb-restore-"))
+    try:
+        r.check("restore", "a Morph with another home opens its own window", wait_for(lambda: state(m2), 20))
+        open_identity(m2, r, "restore")
+        m2.key("3", delay=0.8)
+        fill(m2, str(backup), BACKUP_PASSWORD, PASSWORD)
+        got = wait_for(lambda: identity_file(m2, "default").get("user_id"))
+        r.check("restore", "3, the backup and its password restore the same identity", got and got == user_id, f"{got} vs {user_id}")
+    finally:
+        m2.stop()
+
+
+def identity_link(m, r, binary, display, user_id):
+    """Device linking: a fresh Morph (another home) offers a link with 4; the
+    first adds it (a, password, link); both show the same code, Enter on
+    each confirms, and the new one chooses its password and gets the
+    identity."""
+    m3 = Morph(binary, display, tempfile.mkdtemp(prefix="morph-xvfb-link-"))
+    win, w0 = None, 0
+    try:
+        r.check("link", "a new device (another home) opens", wait_for(lambda: state(m3), 20))
+        new_win, _ = open_identity(m3, r, "link")
+        m3.key("4", delay=1.5)
+        offer = wait_for(lambda: [line.split("offer=", 1)[1].strip() for line in m3.lines(r"morph-event link offer=")])
+        r.check("link", "4 shows a link (and its QR code)", offer, "no offer logged")
+        if not offer:
+            return
+        win, w0 = open_identity(m, r, "link")
+        m.key("a", delay=0.8)
+        fill(m, PASSWORD, offer[0])
+        time.sleep(3.0)
+        m.key("Return", delay=1.0)
+        m3.xdo("windowactivate", "--sync", new_win)
+        m3.key("Return", delay=3.0)
+        fill(m3, PASSWORD)
+        got = wait_for(lambda: identity_file(m3, "default").get("user_id"), 20)
+        r.check("link", "after both confirm, the new device has the same identity", got and got == user_id, f"{got} vs {user_id}")
+        r.check("link", "and it knows it came over a link", "link" in json.dumps(identity_file(m3, "default").get("source", "")).lower(), str(identity_file(m3, "default").get("source")))
+    finally:
+        m3.stop()
+    if not win:
+        return
+    # Escape backs out of the finished link, then closes the panel.
+    m.xdo("windowactivate", "--sync", win)
+    for _ in range(3):
+        if (state(m) or {}).get("w") == w0:
+            break
+        m.key("Escape", delay=0.8)
+    r.check("link", "Escape closes the panel on the first device", wait_for(lambda: (state(m) or {}).get("w") == w0), f"{w0} vs {(state(m) or {}).get('w')}")
+
+
 def error_page(m, r, win, top):
     """A load that fails shows Morph's error page (the web view is hidden)
     and keeps the shell's keys working: F5 tries again, Alt+Left goes back."""
@@ -587,6 +717,18 @@ def main():
             time.sleep(3.0)
             m = Morph(args.bin, display, home)
             frameless(m, r)
+        # Identity on a home of its own (an identity locks the library at
+        # the next launch, which would change the windows checked above).
+        m.stop()
+        m = Morph(args.bin, display, tempfile.mkdtemp(prefix="morph-xvfb-identity-"))
+        r.check("identity", "a fresh home opens", wait_for(lambda: state(m), 20))
+        user_id, backup = identity_panel(m, r)
+        if user_id:
+            identity_restore(r, args.bin, display, user_id, backup)
+            identity_link(m, r, args.bin, display, user_id)
+            m.stop()
+            m = Morph(args.bin, display, str(m.home))
+            identity_relaunch(m, r)
     finally:
         m.stop()
         if wm:
