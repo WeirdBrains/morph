@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:morph_webview/morph_webview.dart';
 
 import 'src/app.dart';

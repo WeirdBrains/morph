@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import '../api.dart';
 import '../profiles/profile_color.dart';
@@ -387,7 +387,7 @@ class _AddProfileDialog extends StatefulWidget {
 class _AddProfileDialogState extends State<_AddProfileDialog> {
   final _name = TextEditingController();
   late String _color = MorphProfileColors.token(
-    MorphProfileColors.palette.first,
+    MorphColors.profilePalette.first,
   );
 
   @override
@@ -419,7 +419,7 @@ class _AddProfileDialogState extends State<_AddProfileDialog> {
             spacing: 8,
             runSpacing: 8,
             children: [
-              for (final color in MorphProfileColors.palette)
+              for (final color in MorphColors.profilePalette)
                 _ColorDot(
                   key: Key(
                     'profile-add-color-${MorphProfileColors.token(color)}',

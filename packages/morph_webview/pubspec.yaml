@@ -22,6 +22,7 @@ dependencies:
   morph_webview_inapp:
     path: ../morph_webview_inapp
 
+  material_ui: any
 dev_dependencies:
   flutter_test:
     sdk: flutter
