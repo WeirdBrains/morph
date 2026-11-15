@@ -1,0 +1,62 @@
+# Build the Jaspr project site, and deploy it to GitHub Pages from main.
+name: Site
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - ".github/workflows/site.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    defaults:
+      run:
+        working-directory: site
+    steps:
+      - uses: actions/checkout@v5
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: "3.50.0"
+          cache: true
+      - name: Activate jaspr CLI
+        run: dart pub global activate jaspr_cli 0.24.0-beta.1
+      - run: dart pub get
+      - run: dart analyze
+      - name: Build the static site
+        run: jaspr build --sitemap-domain https://morph.weirdbrains.com
+      - name: Confirm CNAME and pages
+        run: |
+          test -f build/jaspr/index.html
+          if ! grep -qx 'morph.weirdbrains.com' build/jaspr/CNAME; then
+            printf 'morph.weirdbrains.com\n' > build/jaspr/CNAME
+          fi
+          grep -qx 'morph.weirdbrains.com' build/jaspr/CNAME
+      - name: Upload GitHub Pages artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/build/jaspr
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
