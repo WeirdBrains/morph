@@ -907,6 +907,8 @@ fn paint_page(view: &Entity<BrowserView>, bounds: Bounds<Pixels>, hitbox: Hitbox
         PageCursor::Text => CursorStyle::IBeam,
     };
     window.set_cursor_style(style, &hitbox);
+    let focus = view.read(cx).page_focus.clone();
+    window.handle_input(&focus, PageIme { view: view.clone(), bounds }, cx);
     let origin = bounds.origin;
     let (v, h) = (view.clone(), hitbox.clone());
     window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
@@ -935,6 +937,45 @@ fn paint_page(view: &Entity<BrowserView>, bounds: Bounds<Pixels>, hitbox: Hitbox
             cx.stop_propagation();
         }
     });
+}
+
+/// Text from an input method for a page the shell draws. Typed keys reach
+/// the page as keys (`page_key_down`); what arrives here is an input
+/// method's committed text, inserted where the page's caret is. The
+/// composition itself is the input method's to show (WebKit gets no
+/// preedit), and its candidates open at the page's corner.
+struct PageIme {
+    view: Entity<BrowserView>,
+    bounds: Bounds<Pixels>,
+}
+
+impl gpui::InputHandler for PageIme {
+    fn selected_text_range(&mut self, _: bool, _: &mut Window, _: &mut App) -> Option<UTF16Selection> {
+        Some(UTF16Selection { range: 0..0, reversed: false })
+    }
+    fn marked_text_range(&mut self, _: &mut Window, _: &mut App) -> Option<Range<usize>> {
+        None
+    }
+    fn text_for_range(&mut self, _: Range<usize>, _: &mut Option<Range<usize>>, _: &mut Window, _: &mut App) -> Option<String> {
+        None
+    }
+    fn replace_text_in_range(&mut self, _: Option<Range<usize>>, text: &str, _: &mut Window, cx: &mut App) {
+        if !text.is_empty() {
+            self.view.update(cx, |view, _| {
+                if view.browser.page_has_keyboard() {
+                    view.browser.page_input(Input::Text(text.to_string()));
+                }
+            });
+        }
+    }
+    fn replace_and_mark_text_in_range(&mut self, _: Option<Range<usize>>, _: &str, _: Option<Range<usize>>, _: &mut Window, _: &mut App) {}
+    fn unmark_text(&mut self, _: &mut Window, _: &mut App) {}
+    fn bounds_for_range(&mut self, _: Range<usize>, _: &mut Window, _: &mut App) -> Option<Bounds<Pixels>> {
+        Some(Bounds::new(self.bounds.origin, size(px(1.), px(20.))))
+    }
+    fn character_index_for_point(&mut self, _: Point<Pixels>, _: &mut Window, _: &mut App) -> Option<usize> {
+        None
+    }
 }
 
 impl Focusable for BrowserView {
