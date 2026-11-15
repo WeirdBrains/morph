@@ -26,7 +26,10 @@ Copy-Item README.md $dir
 New-Item -ItemType Directory -Force -Path dist | Out-Null
 $zip = "dist\$name.zip"
 if (Test-Path $zip) { Remove-Item $zip }
-Compress-Archive -Path $dir -DestinationPath $zip
+# bsdtar (Windows 10+) writes "/" separators; Compress-Archive in Windows
+# PowerShell 5 writes "\", which unzip and other tools reject.
+tar.exe -a -c -f $zip -C $stage $name
+if ($LASTEXITCODE -ne 0) { throw "tar failed" }
 $outputs = @($zip)
 
 if (Get-Command wix -ErrorAction SilentlyContinue) {
