@@ -63,6 +63,14 @@ and Arch packages. The shared release script is vendored with Morph's `release.t
 does not cut pre-releases yet. Native Wayland is not in yet (XWayland, checked under a
 headless sway). Build `v0.2.0-alpha.5`.
 
+2026-11-15, phase 6: the GPUI shell runs natively on Wayland. Pages render off screen and
+the shell draws them, with pointer, wheel, keys (the keyboard's own keycodes) and input
+method text forwarded; `MORPH_BACKEND=x11|wayland` overrides the choice, XWayland stays
+the fallback. The key suite runs on headless sway (scale 1 and 2) as well as Xvfb. Also:
+a start-up DMA-BUF check with WebKit's own fallbacks (black pages on some GPUs), pages at
+the shell's scale whatever GDK_SCALE says, popups that close themselves, VA-API video
+decoders first. Build `v0.2.0-alpha.6`.
+
 1. Webview _(moved up: everything else plugs into it)_
     - System web views: WebView2 (Windows), WKWebView (Apple), WebKit (Linux: WPE + webkit2gtk), Android WebView _(changed 2026-11-11)_
         - Linux: build our own WebKit plugin _(changed 2026-11-11)_
