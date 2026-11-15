@@ -3,7 +3,7 @@
 # repository this PKGBUILD lives in) with cargo, so `makepkg -si` here
 # installs what is checked out. For the prebuilt release, see ../morph-bin.
 pkgname=morph
-pkgver=0.2.0alpha5
+pkgver=0.2.0alpha6
 pkgrel=1
 pkgdesc="Distributed web browser with local AI (GPUI desktop shell)"
 arch=('x86_64' 'aarch64')
@@ -12,7 +12,8 @@ license=('BSD-3-Clause')
 depends=('webkit2gtk-4.1' 'gtk3' 'glib2' 'libxkbcommon-x11' 'libxcb' 'vulkan-icd-loader'
          'fontconfig' 'freetype2' 'openssl' 'hicolor-icon-theme' 'glibc' 'gcc-libs')
 makedepends=('cargo' 'git' 'clang' 'cmake' 'pkgconf' 'python')
-optdepends=('vulkan-driver: GPU rendering (mesa or the vendor driver)')
+optdepends=('vulkan-driver: GPU rendering (mesa or the vendor driver)'
+            'gst-plugins-bad: VA-API video decoding (the va plugin)')
 options=('!lto' '!debug')
 
 _repo() {
