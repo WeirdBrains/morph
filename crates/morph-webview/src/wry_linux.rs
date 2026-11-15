@@ -14,12 +14,13 @@ use std::rc::Rc;
 use gtk::glib::Propagation;
 use gtk::glib::translate::ToGlibPtr;
 use gtk::prelude::*;
+use javascriptcore::ValueExt;
 use raw_window_handle::{HandleError, HasWindowHandle, RawWindowHandle, WindowHandle, XlibWindowHandle};
-use webkit2gtk::{FindControllerExt, FindOptions, LoadEvent, WebViewExt};
+use webkit2gtk::{FindControllerExt, FindOptions, LoadEvent, UserContentManagerExt, WebViewExt};
 use wry::dpi::{LogicalPosition, LogicalSize};
 use wry::{NewWindowFeatures, NewWindowResponse, WebContext, WebViewBuilder, WebViewBuilderExtUnix, WebViewExtUnix};
 
-use crate::{Backend, Error, Event, LoadError, Rect, Result, Spec, ViewId, WebView, errors};
+use crate::{Backend, Error, Event, LoadError, PageBridge, Rect, Result, Spec, ViewId, WebView, deliver_script, errors};
 
 /// Start GTK on this thread. Call once, before [`WryBackend::new`].
 pub fn init() -> Result<()> {
@@ -87,6 +88,7 @@ pub struct WryBackend {
     contexts: HashMap<Option<PathBuf>, WebContext>,
     shortcuts: Rc<RefCell<HashSet<String>>>,
     keys: HostKeys,
+    bridge: Option<PageBridge>,
 }
 
 /// An Xlib connection of the backend's own, for focus changes and forwarded
@@ -294,6 +296,7 @@ impl WryBackend {
             contexts: HashMap::new(),
             shortcuts: Rc::default(),
             keys: HostKeys { conn: XConn::open().map(Rc::new), host: window, active: Rc::default(), pending: Rc::default(), seen: Rc::default() },
+            bridge: None,
         }
     }
 }
@@ -423,11 +426,56 @@ fn watch(view: &webkit2gtk::WebView, id: ViewId, queue: &Queue, shortcuts: &Rc<R
     });
 }
 
+/// Maps the bridge's `window.morphRust.postMessage` onto a WebKit script
+/// message handler of Morph's own. (wry's IPC drops messages from pages whose
+/// URL is not a valid `http::Uri`, such as `file://` pages.)
+const BRIDGE_SHIM: &str = r#"(() => {
+  if (window.morphRust && typeof window.morphRust.postMessage === "function") return;
+  const handler = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.morphBridge;
+  if (!handler) return;
+  window.morphRust = Object.freeze({ postMessage: (payload) => handler.postMessage(String(payload)) });
+})();"#;
+
+/// Inject the page bridge's scripts (if any).
+fn with_bridge<'a>(builder: WebViewBuilder<'a>, bridge: &Option<PageBridge>) -> WebViewBuilder<'a> {
+    match bridge {
+        Some(bridge) => builder.with_initialization_script(BRIDGE_SHIM).with_initialization_script(&*bridge.script),
+        None => builder,
+    }
+}
+
+/// Answer the bridge's messages from `engine`'s pages in the page that sent
+/// them.
+fn attach_bridge(engine: &webkit2gtk::WebView, bridge: &Option<PageBridge>) {
+    let Some(bridge) = bridge.clone() else {
+        return;
+    };
+    let Some(manager) = engine.user_content_manager() else {
+        return;
+    };
+    let target = engine.downgrade();
+    manager.connect_script_message_received(Some("morphBridge"), move |_, message| {
+        let Some(body) = message.js_value().map(|v| v.to_str().to_string()) else {
+            return;
+        };
+        let (Some(reply), Some(engine)) = ((bridge.handler)(&body), target.upgrade()) else {
+            return;
+        };
+        engine.run_javascript(&deliver_script(&reply), None::<&webkit2gtk::gio::Cancellable>, |_| {});
+    });
+    manager.register_script_message_handler("morphBridge");
+}
+
 /// Handles `window.open` from a page of tab `tab`: Morph makes the popup
 /// itself, a GTK window holding a web view related to the opener (same
 /// process and storage, so `window.opener` and `postMessage` work). wry's
 /// default response would panic for a child web view.
-fn popup_handler(tab: ViewId, queue: Queue, popups: Popups) -> impl Fn(String, NewWindowFeatures) -> NewWindowResponse + 'static {
+fn popup_handler(
+    tab: ViewId,
+    queue: Queue,
+    popups: Popups,
+    bridge: Option<PageBridge>,
+) -> impl Fn(String, NewWindowFeatures) -> NewWindowResponse + 'static {
     move |url, features| {
         let window = gtk::Window::new(gtk::WindowType::Toplevel);
         let (w, h) = features.size.map(|s| (s.width as i32, s.height as i32)).unwrap_or((800, 600));
@@ -435,11 +483,11 @@ fn popup_handler(tab: ViewId, queue: Queue, popups: Popups) -> impl Fn(String, N
         window.set_title("Morph");
         let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
         window.add(&vbox);
-        let built = WebViewBuilder::new()
+        let builder = WebViewBuilder::new()
             .with_related_view(features.opener.webview.clone())
             .with_initialization_script(UNDO_REDO_SCRIPT)
-            .with_new_window_req_handler(popup_handler(tab, queue.clone(), popups.clone()))
-            .build_gtk(&vbox);
+            .with_new_window_req_handler(popup_handler(tab, queue.clone(), popups.clone(), bridge.clone()));
+        let built = with_bridge(builder, &bridge).build_gtk(&vbox);
         let view = match built {
             Ok(view) => view,
             Err(_) => {
@@ -449,6 +497,7 @@ fn popup_handler(tab: ViewId, queue: Queue, popups: Popups) -> impl Fn(String, N
             }
         };
         let engine = view.webview();
+        attach_bridge(&engine, &bridge);
         let title_window = window.clone();
         let q = queue.clone();
         engine.connect_title_notify(move |v| {
@@ -500,15 +549,15 @@ impl Backend for WryBackend {
         let id = ViewId(self.next);
         let context = self.contexts.entry(spec.data_dir.clone()).or_insert_with(|| WebContext::new(spec.data_dir.clone()));
         let url = if spec.url.is_empty() { "about:blank".to_string() } else { spec.url.clone() };
-        let view = WebViewBuilder::new_with_web_context(context)
+        let builder = WebViewBuilder::new_with_web_context(context)
             .with_url(url)
             .with_bounds(wry_rect(spec.bounds))
             .with_initialization_script(UNDO_REDO_SCRIPT)
             .with_visible(spec.visible)
-            .with_new_window_req_handler(popup_handler(id, self.queue.clone(), self.popups.clone()))
-            .build_as_child(&self.parent)
-            .map_err(backend_err)?;
+            .with_new_window_req_handler(popup_handler(id, self.queue.clone(), self.popups.clone(), self.bridge.clone()));
+        let view = with_bridge(builder, &self.bridge).build_as_child(&self.parent).map_err(backend_err)?;
         let engine = view.webview();
+        attach_bridge(&engine, &self.bridge);
         watch(&engine, id, &self.queue, &self.shortcuts);
         let keys = self.keys.clone();
         engine.connect_button_press_event(move |engine, _| {
@@ -549,6 +598,10 @@ impl Backend for WryBackend {
 
     fn set_shortcuts(&mut self, keystrokes: &[String]) {
         *self.shortcuts.borrow_mut() = keystrokes.iter().cloned().collect();
+    }
+
+    fn set_page_bridge(&mut self, bridge: PageBridge) {
+        self.bridge = Some(bridge);
     }
 }
 

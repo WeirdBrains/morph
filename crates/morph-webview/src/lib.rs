@@ -7,6 +7,7 @@
 //! desktop shell's window.
 
 use std::path::PathBuf;
+use std::rc::Rc;
 
 pub mod fake;
 #[cfg(target_os = "linux")]
@@ -258,6 +259,25 @@ pub trait WebView {
     }
 }
 
+/// The page bridge a backend injects into every page: `script` runs at
+/// document start and exposes `window.MorphBridge`; a message the page posts
+/// goes to `handler`, and the reply it returns (JSON) is handed back to the
+/// page with `MorphBridge.deliver`. Rust never touches the DOM.
+#[derive(Clone)]
+pub struct PageBridge {
+    pub script: Rc<str>,
+    pub handler: BridgeHandler,
+}
+
+/// Answers one page message (JSON) with a reply (JSON), or nothing.
+pub type BridgeHandler = Rc<dyn Fn(&str) -> Option<String>>;
+
+/// The script that hands `reply` (a JSON object) to the page's bridge.
+/// JSON is a JavaScript expression, so it goes in as it is.
+pub fn deliver_script(reply: &str) -> String {
+    format!("window.MorphBridge && window.MorphBridge.deliver({reply});")
+}
+
 /// Makes web views and collects their events.
 pub trait Backend {
     fn create(&mut self, spec: Spec) -> Result<Box<dyn WebView>>;
@@ -272,4 +292,22 @@ pub trait Backend {
     /// away from the shell reports them as [`Event::Shortcut`] instead of
     /// passing them to the page.
     fn set_shortcuts(&mut self, _keystrokes: &[String]) {}
+    /// Inject `bridge` into the pages of views created from now on.
+    fn set_page_bridge(&mut self, _bridge: PageBridge) {}
+}
+
+#[cfg(test)]
+mod bridge_tests {
+    use super::*;
+
+    #[test]
+    fn a_reply_is_delivered_as_an_object() {
+        assert_eq!(deliver_script(r#"{"id":"1","type":"pong"}"#), r#"window.MorphBridge && window.MorphBridge.deliver({"id":"1","type":"pong"});"#);
+    }
+
+    #[test]
+    fn backends_without_a_bridge_ignore_it() {
+        let mut backend = fake::FakeBackend::default();
+        backend.set_page_bridge(PageBridge { script: "".into(), handler: Rc::new(|_| None) });
+    }
 }
