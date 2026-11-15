@@ -20,8 +20,8 @@ provides=('morph')
 conflicts=('morph')
 options=('!strip' '!debug')
 source_x86_64=("$url/releases/download/v$_ver/morph-$_ver-x86_64-unknown-linux-gnu.tar.gz")
-# Filled from the release's SHA256SUMS when published.
-sha256sums_x86_64=('SKIP')
+# From the release's SHA256SUMS.
+sha256sums_x86_64=('2a3f04d01eee06d5e297eb812e254c7adf0e6fa367b500a8d9f705d413fcd552')
 
 package() {
   local bundle="$srcdir/morph-$_ver-$CARCH-unknown-linux-gnu"

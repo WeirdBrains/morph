@@ -132,8 +132,10 @@ Mesa lavapipe Vulkan, Rust 1.100), release build of `v0.2.0-alpha.1`:
   `packaging/arch/morph` built it from the checkout (`cargo build --locked
   --release`), `pacman -U` installed it, `morph --version` printed `morph
   0.2.0-alpha.1`, `pacman -Ql` listed the binary, desktop file, icons, licence and
-  readme, and the installed `morph` opened its window under Xvfb. `morph-bin` was
-  checked the same way against the published release (see the release section).
+  readme, and the installed `morph` opened its window under Xvfb. `morph-bin`
+  was checked against the published release: the download passed its sha256,
+  `makepkg` and `pacman -U` worked, `morph --version` printed `0.2.0-alpha.1`, and
+  the window opened under Xvfb.
 - **Quality bar** before each commit: `cargo fmt --check`, `cargo build`,
   `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`.
   New tests: `morph-ui` (layout, keymap, text field), `morph-core::omnibox`,
