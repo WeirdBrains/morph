@@ -85,7 +85,6 @@ impl TextInput {
     }
 
     /// A password input: bullets, no copy or cut.
-    #[allow(dead_code)] // The library's password prompt uses it.
     pub fn masked(mut self) -> Self {
         self.masked = true;
         self
@@ -98,6 +97,12 @@ impl TextInput {
     /// Replace the text, all of it selected. Does not emit `Changed`.
     pub fn set_text(&mut self, text: &str, cx: &mut Context<Self>) {
         self.field.set_text_selected(text);
+        cx.notify();
+    }
+
+    /// Select all of the text, so typing replaces it.
+    pub fn select_all(&mut self, cx: &mut Context<Self>) {
+        self.field.select_all();
         cx.notify();
     }
 

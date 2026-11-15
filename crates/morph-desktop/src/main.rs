@@ -12,9 +12,13 @@ mod cli;
 #[cfg(target_os = "linux")]
 mod library;
 #[cfg(target_os = "linux")]
+mod library_view;
+#[cfg(target_os = "linux")]
 mod shell;
 #[cfg(target_os = "linux")]
 mod text_input;
+#[cfg(target_os = "linux")]
+mod widgets;
 
 use std::process::ExitCode;
 

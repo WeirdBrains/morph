@@ -24,6 +24,12 @@ pub enum Action {
     Forward,
     ToggleFullscreen,
     Quit,
+    /// Bookmark the page, or remove its bookmark.
+    Bookmark,
+    /// Open or close the library on its bookmarks.
+    ShowBookmarks,
+    /// Open or close the library on its history.
+    ShowHistory,
 }
 
 impl Action {
@@ -46,6 +52,9 @@ impl Action {
             Action::Forward => "browser.forward".into(),
             Action::ToggleFullscreen => "shell.toggle_fullscreen".into(),
             Action::Quit => "shell.quit".into(),
+            Action::Bookmark => "library.bookmark".into(),
+            Action::ShowBookmarks => "library.show_bookmarks".into(),
+            Action::ShowHistory => "library.show_history".into(),
         }
     }
 
@@ -67,6 +76,9 @@ impl Action {
             Action::Forward,
             Action::ToggleFullscreen,
             Action::Quit,
+            Action::Bookmark,
+            Action::ShowBookmarks,
+            Action::ShowHistory,
         ];
         if let Some(action) = fixed.into_iter().find(|a| a.name() == name) {
             return Some(action);
@@ -111,6 +123,9 @@ impl Default for Keymap {
             ("alt-right", Action::Forward),
             ("f11", Action::ToggleFullscreen),
             ("ctrl-q", Action::Quit),
+            ("ctrl-d", Action::Bookmark),
+            ("ctrl-shift-o", Action::ShowBookmarks),
+            ("ctrl-h", Action::ShowHistory),
         ];
         let mut bindings: Vec<Binding> = fixed.into_iter().map(|(k, a)| Binding { keystroke: k.into(), action: a }).collect();
         bindings.extend((1..=8).map(|n| Binding { keystroke: format!("ctrl-{n}"), action: Action::SelectTab(n - 1) }));
@@ -162,6 +177,9 @@ mod tests {
         assert_eq!(keys.action_for("ctrl-1"), Some(Action::SelectTab(0)));
         assert_eq!(keys.action_for("ctrl-8"), Some(Action::SelectTab(7)));
         assert_eq!(keys.action_for("ctrl-9"), Some(Action::SelectLastTab));
+        assert_eq!(keys.action_for("ctrl-d"), Some(Action::Bookmark));
+        assert_eq!(keys.action_for("ctrl-shift-o"), Some(Action::ShowBookmarks));
+        assert_eq!(keys.action_for("ctrl-h"), Some(Action::ShowHistory));
         assert_eq!(keys.action_for("ctrl-x"), None);
     }
 

@@ -38,6 +38,8 @@ pub struct BrowserView {
     /// Address-bar focus as last mirrored into GPUI's focus.
     mirrored_focus: bool,
     find_input: Entity<TextInput>,
+    /// The active page is bookmarked (the star), as the shell reports it.
+    marked: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -64,12 +66,13 @@ impl BrowserView {
             selecting: false,
             mirrored_focus: false,
             find_input,
+            marked: false,
             _subscriptions: vec![find_events],
         }
     }
 
     /// A browser on the real web view backend, children of `window`.
-    pub fn create(home: &Path, profile: &str, start: &str, history: bool, window: &Window, keystrokes: &[String]) -> Result<Browser, String> {
+    pub fn create(home: &Path, profile: &str, start: &str, window: &Window, keystrokes: &[String]) -> Result<Browser, String> {
         use raw_window_handle::HasWindowHandle;
         let raw = HasWindowHandle::window_handle(window).map_err(|e| format!("no window handle: {e}"))?.as_raw();
         let xid = morph_webview::wry_linux::x11_window_id(raw).ok_or(
@@ -78,17 +81,14 @@ impl BrowserView {
         let backend = morph_webview::wry_linux::WryBackend::new(xid);
         let home_for_history = home.to_path_buf();
         let profile_id = profile.to_string();
-        let sink: Option<morph_browser::HistorySink> = history.then(|| {
-            Box::new(move |url: &str, title: &str| {
-                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
-                // A locked library simply records nothing until it is unlocked.
-                let _ = morph_core::library::record_visit(&home_for_history, &profile_id, url, title, now);
-            }) as morph_browser::HistorySink
+        let sink: morph_browser::HistorySink = Box::new(move |url: &str, title: &str| {
+            // A locked library records nothing until the library panel unlocks it.
+            let _ = morph_core::library::record_visit(&home_for_history, &profile_id, url, title, crate::library::now_ms());
         });
         let config = Config {
             data_dir: Some(morph_core::profiles::webkit_data_dir(home, profile)),
             start_url: start.to_string(),
-            history: sink,
+            history: Some(sink),
             log_events: std::env::var_os("MORPH_LOG_EVENTS").is_some_and(|v| v == "1"),
         };
         let mut browser = Browser::new(Box::new(backend), config).map_err(|e| e.to_string())?;
@@ -132,6 +132,31 @@ impl BrowserView {
             cx.notify();
         }
         handled
+    }
+
+    /// Open `url` (from a bookmark or history) in the active tab or a new one.
+    pub fn open_url(&mut self, url: &str, new_tab: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if new_tab {
+            self.browser.new_tab(url);
+        } else {
+            self.browser.load(url);
+        }
+        self.sync_focus(window, cx);
+        cx.notify();
+    }
+
+    pub fn set_marked(&mut self, marked: bool, cx: &mut Context<Self>) {
+        if self.marked != marked {
+            self.marked = marked;
+            cx.notify();
+        }
+    }
+
+    /// Give the page the keyboard (a panel beside it closed).
+    pub fn focus_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.browser.focus_page();
+        self.sync_focus(window, cx);
+        cx.notify();
     }
 
     /// Put the keyboard in the find bar with its text selected.
@@ -390,6 +415,16 @@ impl BrowserView {
                     .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_address_mouse_up))
                     .child(AddressElement { view: cx.entity() }),
             )
+            .when(!self.browser.active_url().is_empty(), |d| {
+                let marked = self.marked;
+                d.child(
+                    self.button("bookmark", if marked { "★" } else { "☆" }, true)
+                        .text_color(rgb(if marked { t.accent } else { t.text_primary }))
+                        .on_click(cx.listener(|_, _, window, cx| {
+                            window.dispatch_action(Box::new(crate::shell::Bookmark), cx);
+                        })),
+                )
+            })
             .when(state.popups > 0, |d| {
                 let label: SharedString = if state.popups == 1 { "1 popup".into() } else { format!("{} popups", state.popups).into() };
                 d.child(div().px(px(8.)).text_size(px(12.)).text_color(rgb(t.accent_alt)).child(label))

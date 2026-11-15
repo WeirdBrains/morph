@@ -54,10 +54,16 @@ impl ComponentKind {
 /// The browser: tabs, address bar and pages.
 pub const BROWSER: &str = "morph.browser";
 
-/// Kinds that ship with Morph. Later phases add the library, settings, chat,
-/// notes and projects here as they are built.
+/// Bookmarks and history, with the library's password prompt.
+pub const LIBRARY: &str = "morph.library";
+
+/// Kinds that ship with Morph. Later phases add chat, notes and projects
+/// here as they are built.
 pub fn builtin() -> Vec<ComponentKind> {
-    vec![ComponentKind::new(BROWSER, "Browser", "globe", &[Needs::WebView, Needs::Library])]
+    vec![
+        ComponentKind::new(BROWSER, "Browser", "globe", &[Needs::WebView, Needs::Library]),
+        ComponentKind::new(LIBRARY, "Library", "bookmark", &[Needs::Library]),
+    ]
 }
 
 /// A set of kinds the host knows how to make, in registration order.
@@ -97,6 +103,8 @@ mod tests {
         let kinds = builtin();
         let browser = kinds.iter().find(|k| k.id.as_str() == BROWSER).expect("browser kind");
         assert!(browser.needs.contains(&Needs::WebView));
+        let library = kinds.iter().find(|k| k.id.as_str() == LIBRARY).expect("library kind");
+        assert_eq!(library.needs, [Needs::Library]);
     }
 
     #[test]
