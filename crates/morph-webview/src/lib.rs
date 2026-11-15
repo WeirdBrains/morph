@@ -16,6 +16,8 @@ pub mod keys;
 #[cfg(target_os = "linux")]
 pub mod offscreen;
 #[cfg(target_os = "linux")]
+pub mod render_probe;
+#[cfg(target_os = "linux")]
 pub mod wry_linux;
 
 /// Identifies a web view for the life of its backend.

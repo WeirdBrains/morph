@@ -8,13 +8,15 @@
 //! `WAYLAND_DISPLAY` is set, and GTK follows `GDK_BACKEND`, so the choice
 //! is made in the environment before either starts.
 //!
-//! Nothing here is chosen by hardware vendor: the DMA-BUF fallback follows
-//! a probe of the allocation WebKit makes (`crate::dmabuf`), VA-API decode
+//! Nothing here is chosen by hardware vendor: WebKit's renderer settings
+//! (and, when pages cannot paint natively, XWayland) follow start-up tries
+//! in child processes (`crate::render_check`), VA-API decode
 //! follows the GStreamer decoders that registered, and pages follow the
 //! shell's own scale (GDK_SCALE and GDK_DPI_SCALE are the shell's business,
 //! not WebKit's: with GDK_SCALE=2 under a scale-1 compositor pages came out
 //! twice the shell's size).
 
+use crate::render_check;
 use std::ffi::OsStr;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,7 +59,8 @@ pub fn va_ranks(current: Option<&OsStr>, morph_vaapi: Option<&OsStr>) -> Option<
 /// environment).
 pub fn start() -> Result<Backend, String> {
     // SAFETY (every `set_var`/`remove_var` below): no other thread exists
-    // yet; the web processes WebKit starts inherit the result.
+    // yet, apart from the render check's pipe readers, which never read the
+    // environment; the web processes WebKit starts inherit the result.
     unsafe {
         std::env::remove_var("GDK_SCALE");
         std::env::remove_var("GDK_DPI_SCALE");
@@ -65,16 +68,19 @@ pub fn start() -> Result<Backend, String> {
     if let Some(ranks) = va_ranks(std::env::var_os("GST_PLUGIN_FEATURE_RANK").as_deref(), std::env::var_os("MORPH_VAAPI").as_deref()) {
         unsafe { std::env::set_var("GST_PLUGIN_FEATURE_RANK", ranks) };
     }
-    let chosen = crate::dmabuf::USER_CHOICES.iter().any(|v| std::env::var_os(v).is_some());
-    if !chosen && std::env::var_os("MORPH_DMABUF_PROBE").is_none_or(|v| v != "0") {
-        let probe = crate::dmabuf::probe_in_child();
-        if let Some(var) = crate::dmabuf::fallback(probe) {
-            eprintln!("morph: this GPU refused the DMA-BUF buffers WebKit renders into; setting {var}=1 (MORPH_DMABUF_PROBE=0 skips this check)");
-            unsafe { std::env::set_var(var, "1") };
-        }
-    }
     let (backend, fallback) =
         choose(std::env::var_os("MORPH_BACKEND").as_deref(), std::env::var_os("WAYLAND_DISPLAY").as_deref(), std::env::var_os("DISPLAY").as_deref())?;
+    let user_chose = render_check::USER_CHOICES.iter().any(|v| std::env::var_os(v).is_some());
+    let probe = std::env::var("MORPH_DMABUF_PROBE").ok();
+    let checks = render_check::checks(probe.as_deref(), user_chose, render_check::has_drm_device());
+    let decision = render_check::decide(backend, fallback, checks, render_check::run_child);
+    if let Some(note) = &decision.note {
+        eprintln!("morph: {note} (MORPH_DMABUF_PROBE=0 skips the page check)");
+    }
+    for (var, value) in decision.env {
+        unsafe { std::env::set_var(var, value) };
+    }
+    let backend = decision.backend;
     if backend == Backend::Wayland {
         unsafe {
             std::env::set_var("GDK_BACKEND", "wayland");
