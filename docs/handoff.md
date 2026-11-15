@@ -12,7 +12,8 @@ GPUI. **Phases 1 to 6 are done and pushed to `main`** (phase 6: native Wayland):
 m3talsmith's GPU), each with a
 `morph-bin` recipe for TAUR. m3talsmith installs with
 `yay --aururl https://pkg.taur.weirdbrains.com -S morph-bin`. m3talsmith said to keep
-going through the phases without waiting for him; macOS/Windows are next.
+going through the phases without waiting for him. Phase 7 (macOS and Windows
+builds, `v0.2.0-alpha.8`) is below.
 
 ## Where things stand
 
@@ -36,6 +37,39 @@ going through the phases without waiting for him; macOS/Windows are next.
   phase 2 (a password-field widget test, and the Android Gradle Plugin 9.1.0
   being below Flutter's 9.1.1 minimum); phase 2 fixed both. The Flutter `linux`
   and `windows` jobs are gone with their targets.
+
+## Phase 7: macOS and Windows builds of the GPUI shell
+
+- **What changed:** `morph-desktop` builds on macOS and Windows; the Linux-only
+  parts (`backend`, `render_check`, the raw-key patch) stay behind
+  `cfg(target_os = "linux")`. `morph_webview::wry_native` places wry's
+  WKWebView (macOS) and WebView2 (Windows) as child views of the GPUI window
+  behind the same `Backend`/`WebView` traits; `morph_webview::native_page` is
+  the page script those engines need (address changes the page makes itself,
+  focus, shell shortcuts while the page has the keyboard, the page bridge,
+  find in page over wry's IPC) and is unit-tested on every OS. macOS: system
+  title bar, every Ctrl shortcut also takes Cmd, single instance over the Unix
+  socket. Windows: GUI subsystem (attaches to the parent console for
+  `--version`), single instance over a loopback TCP port named in the socket
+  file. Default-browser registration says "not on this system yet".
+- **Packaging:** `scripts/macos-dist.sh` (universal `Morph.app`, arm64 +
+  x86_64 via lipo, ad-hoc signed, zip + dmg), `scripts/windows-dist.ps1`
+  (zip with `morph.exe`, MSI from `packaging/windows/morph.wxs`, WiX 5).
+  Unsigned: Gatekeeper and SmartScreen steps in `docs/install-macos-windows.md`.
+- **CI:** `desktop-macos` and `desktop-windows` run clippy and the shell's
+  tests, build the artifacts and run `scripts/desktop-smoke.py` (a window,
+  a page from a local server, the bridge ping/pong, a `pushState` address,
+  a screenshot artifact); Windows also installs the MSI, runs
+  `morph --version` from Program Files, checks the Start menu shortcut and
+  uninstalls. The macOS smoke screenshot shows the tab strip, address bar and
+  the page in place.
+- **Not verified:** real use by a person on either OS (typing into pages,
+  IME, Retina scaling, multi-monitor, dark mode), popups (`window.open`
+  opens the engine's own window, not counted on the tab), crash/hang panels
+  (WebView2 reports no crash; no hang detection on either), links from other
+  apps on macOS (Apple Events not wired), default-browser registration,
+  per-profile storage on macOS older than 14, Windows on ARM, signing and
+  notarization.
 
 ## alpha.7: alpha.6 on a real GPU, and the render check
 
@@ -790,11 +824,19 @@ vendor checks (DMA-BUF probe, VA-API ranks), GDK_SCALE, popup-close and video
 fixes. Details in "Phase 6 result" above.
 - **m3talsmith tests:** see "Phase 6 result".
 
-### Later — macOS, Windows, more components
+### Phase 7 — macOS and Windows (done, `v0.2.0-alpha.8`)
 
-macOS (WKWebView child) and Windows (WebView2 child) through the same
-`morph-webview` trait; chat, notes, projects and AI components as their domain
-crates land.
+WKWebView and WebView2 child views through the same `morph-webview` trait,
+universal Morph.app (zip, dmg), Windows zip and MSI, CI smoke tests. Details in
+"Phase 7" above.
+- **m3talsmith tests:** the mac and Windows downloads (unsigned; see
+  `docs/install-macos-windows.md`).
+
+### Later — more components
+
+Chat, notes, projects and AI components as their domain crates land; on
+macOS/Windows: default-browser registration, Apple Events links, popups as
+tracked windows, signing.
 
 ## Open decisions for m3talsmith
 
@@ -826,7 +868,7 @@ cd /workspace/morph            # or ~/src/WeirdBrains/morph
 git switch main && git pull --rebase origin main
 ```
 
-Next: macOS and Windows; on Wayland, inline IME preedit, `<select>` menus and
+Next: the macOS/Windows gaps in "Phase 7"; on Wayland, inline IME preedit, `<select>` menus and
 the context menu for off-screen pages. Commit as m3talsmith, run the quality bar before each commit,
 `git pull --rebase origin main` before each push, push to `origin/main`; no pull
 requests, no force-push, leave the remote `gpui` branch alone. Do not modify

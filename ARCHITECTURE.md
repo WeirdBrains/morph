@@ -19,8 +19,8 @@ longer an extension language.
 _(changed 2026-11-14, GPUI switch)_ Morph has two shells over one Rust 2024 core.
 The **desktop** shell (Linux, macOS, Windows) is written in Rust with
 [GPUI](https://gpui.rs), Zed's GPU-accelerated UI framework. The **mobile** shell
-(Android, iOS, F-Droid) stays Flutter. Linux comes first; macOS and Windows on
-GPUI are planned, not started. Pages render in the system web view on every
+(Android, iOS, F-Droid) stays Flutter. Linux came first; macOS and Windows
+builds of the GPUI shell exist since phase 7 (2026-11-15, section 2.0). Pages render in the system web view on every
 platform. Morph's own value (identity, AI, notes, projects, peers) lives in the Rust
 core, which both shells share. Until the 2026-11-14 decision every platform used the
 Flutter shell; `main` still does.
@@ -81,9 +81,30 @@ window system, and popups are real windows.
     view on Wayland. GTK must be initialised and its main loop pumped on the GPUI
     thread (the spike pumps it from a GPUI timer every 8 ms; folding the GLib
     main context into GPUI's event loop is planned).
-  - *macOS (planned, not started):* WKWebView as a child `NSView`, same wry call.
-  - *Windows (planned, not started):* WebView2 as a child `HWND`, same wry call.
-    The WebView2 Runtime stays a requirement, as on main.
+  - *macOS (since phase 7, 2026-11-15):* WKWebView as a child `NSView` of the
+    GPUI window, same wry call (`morph_webview::wry_native`).
+  - *Windows (since phase 7, 2026-11-15):* WebView2 as a child `HWND`, same wry
+    call. The WebView2 Runtime stays a requirement (it ships with Windows 11
+    and current Windows 10).
+  - *macOS and Windows details.* The engines run on GPUI's own event loop
+    (AppKit, Win32), so `poll` only delivers what the handlers queued. Their
+    wry handlers report less than WebKitGTK, so a script in each page
+    (`morph_webview::native_page`) reports address changes the page makes
+    itself (`pushState`, hash changes), focus, and the shell's shortcuts
+    while the page has the keyboard (the page swallows them and posts them
+    over wry's IPC, as one letter and a payload). The page bridge uses the
+    same IPC. Find in page counts matches in the page's text and selects
+    them with `window.find`. Profiles get their own WebView2 user data
+    folder; on macOS a data store named from the profile directory (macOS
+    14+, older systems share one). Popups open as the engine's own windows
+    and are not counted on the tab; a renderer crash is reported on macOS
+    only. The window keeps the system title bar (no client decorations),
+    and on macOS every Ctrl shortcut also takes Cmd. Single instance: the
+    Unix socket on macOS, a loopback TCP port named in the same file on
+    Windows. Making Morph the default browser is Linux-only so far.
+    Packaging: a universal `Morph.app` (zip, dmg; ad-hoc signed) and a
+    Windows zip and MSI (WiX v5), all unsigned
+    (`docs/install-macos-windows.md`).
 - **Wayland (since phase 6, 2026-11-15).** On a Wayland session the shell runs
   natively and pages come from `morph_webview::offscreen`: each page is a
   WebKitGTK view in a GTK offscreen window (GDK's Wayland backend), embedded in
@@ -352,7 +373,7 @@ backend per platform.
     overwrites one the user or a package installed.
   - **macOS:** `CFBundleURLTypes` for http/https and
     `NSWorkspace.setDefaultApplication`, which shows the system prompt.
-    Not compiled in CI (no macOS job yet).
+    (Flutter-era design; the GPUI shell on macOS does not register yet.)
   - **Windows:** Morph registers capabilities under HKCU
     (`Software\Clients\StartMenuInternet\Morph`, `RegisteredApplications`,
     a `MorphURL` ProgId) and opens `ms-settings:defaultapps`; Windows does
