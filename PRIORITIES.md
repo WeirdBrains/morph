@@ -43,6 +43,13 @@ identity onboarding, library unlock, device linking) is in the `morph-services` 
 mobile app uses the Rust address-bar rule, and the desktop opens an encrypted library from
 the system keystore. Build `v0.2.0-alpha.2`.
 
+2026-11-15, later: phase 3 is in. The GPUI desktop shell has find in page, Morph error
+pages, a crash and hang panel per tab, bookmarks (folders, tags, search) and history with
+the library's password prompt, profiles (switch, create, rename, delete), settings (tab
+position, side tab list) and a frameless window (close only on tiling window managers), each
+a component beside the page. Downloads to a chosen folder are not in yet. Build
+`v0.2.0-alpha.3`.
+
 1. Webview _(moved up: everything else plugs into it)_
     - System web views: WebView2 (Windows), WKWebView (Apple), WebKit (Linux: WPE + webkit2gtk), Android WebView _(changed 2026-11-11)_
         - Linux: build our own WebKit plugin _(changed 2026-11-11)_

@@ -472,7 +472,13 @@ impl Browser {
             Action::FindNext | Action::FindPrevious if self.find.is_none() => self.open_find(),
             Action::FindNext => self.find_next(true),
             Action::FindPrevious => self.find_next(false),
-            Action::ToggleFullscreen | Action::Quit | Action::Bookmark | Action::ShowBookmarks | Action::ShowHistory | Action::ShowProfiles => {
+            Action::ToggleFullscreen
+            | Action::Quit
+            | Action::Bookmark
+            | Action::ShowBookmarks
+            | Action::ShowHistory
+            | Action::ShowProfiles
+            | Action::ShowSettings => {
                 return false;
             }
         }

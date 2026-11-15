@@ -10,6 +10,7 @@
 #![forbid(unsafe_code)]
 
 pub mod actions;
+pub mod chrome;
 pub mod component;
 pub mod layout;
 pub mod text;

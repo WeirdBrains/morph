@@ -7,10 +7,11 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui::{
-    AnyView, App, Bounds, Context, Entity, FocusHandle, KeyBinding, Subscription, Window, WindowBounds, WindowOptions, actions, div, prelude::*, px,
-    rgb, size,
+    AnyView, App, Bounds, Context, CursorStyle, Decorations, Entity, FocusHandle, KeyBinding, MouseButton, ResizeEdge, Subscription, Window,
+    WindowBounds, WindowDecorations, WindowOptions, actions, div, prelude::*, px, rgb, size,
 };
 use morph_ui::actions::{Action, Keymap};
+use morph_ui::chrome::{self, WindowButtons};
 use morph_ui::component::{self, Catalog, KindId};
 use morph_ui::layout::{self, Layout, Slot};
 use morph_ui::theme::Theme;
@@ -20,6 +21,7 @@ use crate::cli::Args;
 use crate::library::Tab;
 use crate::library_view::LibraryView;
 use crate::profiles_view::ProfilesView;
+use crate::settings_view::SettingsView;
 
 actions!(
     morph,
@@ -50,7 +52,8 @@ actions!(
         Bookmark,
         ShowBookmarks,
         ShowHistory,
-        ShowProfiles
+        ShowProfiles,
+        ShowSettings
     ]
 );
 
@@ -84,6 +87,7 @@ fn gpui_action(action: Action) -> Box<dyn gpui::Action> {
         Action::ShowBookmarks => Box::new(ShowBookmarks),
         Action::ShowHistory => Box::new(ShowHistory),
         Action::ShowProfiles => Box::new(ShowProfiles),
+        Action::ShowSettings => Box::new(ShowSettings),
     }
 }
 
@@ -109,6 +113,8 @@ pub enum ShellRequest {
     SwitchProfile(String),
     /// A profile's name changed.
     ProfileRenamed,
+    /// The settings panel saved new settings.
+    SettingsChanged,
 }
 
 /// Components each profile has its own of; rebuilt on a profile switch.
@@ -141,6 +147,11 @@ pub trait Hosted {
     fn focus_content(&self, _window: &mut Window, _cx: &mut App) {}
     /// The profile's name, for a component that shows it.
     fn set_profile_label(&self, _name: &str, _cx: &mut App) {}
+    /// The profile's settings, at start and whenever they change.
+    fn apply_settings(&self, _settings: &morph_core::settings::Settings, _cx: &mut App) {}
+    /// The window is frameless (`Some`, with the buttons to draw) and this
+    /// component, in the main slot, should act as its caption.
+    fn set_caption(&self, _caption: Option<WindowButtons>, _cx: &mut App) {}
 }
 
 impl Hosted for Entity<BrowserView> {
@@ -182,6 +193,32 @@ impl Hosted for Entity<BrowserView> {
     }
     fn set_profile_label(&self, name: &str, cx: &mut App) {
         self.update(cx, |view, cx| view.set_profile_label(name, cx));
+    }
+    fn apply_settings(&self, settings: &morph_core::settings::Settings, cx: &mut App) {
+        self.update(cx, |view, cx| view.apply_settings(settings, cx));
+    }
+    fn set_caption(&self, caption: Option<WindowButtons>, cx: &mut App) {
+        self.update(cx, |view, cx| view.set_caption(caption, cx));
+    }
+}
+
+impl Hosted for Entity<SettingsView> {
+    fn kind(&self) -> KindId {
+        KindId::new(component::SETTINGS)
+    }
+    fn view(&self) -> AnyView {
+        self.clone().into()
+    }
+    fn dispatch(&self, _action: Action, _window: &mut Window, _cx: &mut App) -> bool {
+        false
+    }
+    fn tick(&self, _window: &mut Window, _cx: &mut App) -> Vec<String> {
+        Vec::new()
+    }
+    fn set_shown(&self, _shown: bool, _cx: &mut App) {}
+    fn focus_shell(&self, _cx: &App) {}
+    fn title(&self, _cx: &App) -> String {
+        "Settings".into()
     }
 }
 
@@ -243,11 +280,16 @@ pub struct Shell {
     focus: FocusHandle,
     library: Option<Entity<LibraryView>>,
     profiles: Option<Entity<ProfilesView>>,
+    settings: Option<Entity<SettingsView>>,
     /// Subscriptions to the profile's own components, dropped on a switch.
     profile_subscriptions: Vec<Subscription>,
     /// The main component's page as last passed to the panels.
     last_page: Option<Page>,
     last_marked: Option<bool>,
+    /// Which window buttons to draw when the window is frameless.
+    buttons: WindowButtons,
+    /// The caption last passed to the main component.
+    last_caption: Option<Option<WindowButtons>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -268,7 +310,11 @@ impl Shell {
             catalog.register(kind);
         }
         let profiles = cx.new(|cx| ProfilesView::new(&home, &profile, theme, window, cx));
-        let subscriptions = vec![cx.subscribe_in(&profiles, window, |shell, _, request, window, cx| shell.request(request, window, cx))];
+        let settings = cx.new(|cx| SettingsView::new(&home, theme, cx));
+        let subscriptions = vec![
+            cx.subscribe_in(&profiles, window, |shell, _, request, window, cx| shell.request(request, window, cx)),
+            cx.subscribe_in(&settings, window, |shell, _, request, window, cx| shell.request(request, window, cx)),
+        ];
         let mut shell = Self {
             home,
             profile,
@@ -276,14 +322,17 @@ impl Shell {
             keymap,
             catalog,
             layout,
-            components: vec![Box::new(profiles.clone())],
+            components: vec![Box::new(profiles.clone()), Box::new(settings.clone())],
             error: None,
             last_title: String::new(),
             focus: cx.focus_handle(),
             library: None,
             profiles: Some(profiles),
+            settings: Some(settings),
             last_page: None,
             last_marked: None,
+            buttons: chrome::window_buttons(&|k| std::env::var(k).ok()),
+            last_caption: None,
             _subscriptions: subscriptions,
             profile_subscriptions: Vec::new(),
         };
@@ -321,14 +370,30 @@ impl Shell {
         self.library = Some(library);
         self.last_page = None;
         self.last_marked = None;
+        self.last_caption = None;
         // Components outside a visible slot keep their pages hidden.
         for c in &self.components {
             let shown = Slot::ALL.iter().any(|s| self.layout.shown(*s) == Some(&c.kind()));
             c.set_shown(shown, cx);
         }
         self.update_profile_label(cx);
+        if let Some(settings) = &self.settings {
+            settings.update(cx, |view, _| view.reload());
+        }
+        self.apply_settings(cx);
         if locked {
             self.show_library(Tab::Bookmarks, window, cx);
+        }
+    }
+
+    /// Pass the shown profile's settings to every component.
+    fn apply_settings(&self, cx: &mut App) {
+        let Some(settings) = &self.settings else {
+            return;
+        };
+        let current = settings.read(cx).settings().clone();
+        for c in &self.components {
+            c.apply_settings(&current, cx);
         }
     }
 
@@ -382,6 +447,7 @@ impl Shell {
             ShellRequest::LibraryUnlocked => self.last_marked = None,
             ShellRequest::SwitchProfile(id) => self.switch_profile(id, window, cx),
             ShellRequest::ProfileRenamed => self.update_profile_label(cx),
+            ShellRequest::SettingsChanged => self.apply_settings(cx),
         }
         cx.notify();
     }
@@ -436,6 +502,21 @@ impl Shell {
         cx.notify();
     }
 
+    /// Open or close the settings panel.
+    fn show_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(settings) = self.settings.clone() else {
+            return;
+        };
+        if !self.layout.toggle_kind(Slot::Sidebar, KindId::new(component::SETTINGS)) {
+            self.request(&ShellRequest::ClosePanel, window, cx);
+            return;
+        }
+        self.save_layout();
+        settings.update(cx, |view, cx| view.focus(window, cx));
+        self.focus_shell(cx);
+        cx.notify();
+    }
+
     fn component(&self, kind: &KindId) -> Option<&dyn Hosted> {
         self.components.iter().find(|c| &c.kind() == kind).map(|c| c.as_ref())
     }
@@ -455,6 +536,7 @@ impl Shell {
             Action::ShowBookmarks => return self.show_library(Tab::Bookmarks, window, cx),
             Action::ShowHistory => return self.show_library(Tab::History, window, cx),
             Action::ShowProfiles => return self.show_profiles(window, cx),
+            Action::ShowSettings => return self.show_settings(window, cx),
             _ => {}
         }
         let main = self.layout.shown(Slot::Main).cloned();
@@ -483,6 +565,18 @@ impl Shell {
             if let Some(action) = self.keymap.action_for(&key) {
                 self.run(action, window, cx);
             }
+        }
+        // Frameless: our own caption and buttons. Tiling window managers
+        // draw no frame either, so they get the close button regardless.
+        let caption = match window.window_decorations() {
+            Decorations::Client { .. } => Some(self.buttons),
+            Decorations::Server => (self.buttons == WindowButtons::CloseOnly).then_some(WindowButtons::CloseOnly),
+        };
+        if self.last_caption != Some(caption) {
+            if let Some(main) = self.main() {
+                main.set_caption(caption, cx);
+            }
+            self.last_caption = Some(caption);
         }
         let title = match self.main() {
             Some(c) => c.title(cx),
@@ -542,8 +636,36 @@ macro_rules! on_actions {
     };
 }
 
+/// Width of the frameless window's resize border, in logical pixels.
+const RESIZE_BORDER: f32 = 4.;
+
+/// Grab handles along the edges and corners of a frameless window, in the
+/// border kept free of the page (the page's own window would take the
+/// clicks otherwise).
+fn resize_handles() -> Vec<gpui::AnyElement> {
+    let b = px(RESIZE_BORDER);
+    let corner = px(RESIZE_BORDER * 3.);
+    let handle = |id: &'static str, edge: ResizeEdge, cursor: CursorStyle| {
+        div().id(id).absolute().cursor(cursor).on_mouse_down(MouseButton::Left, move |_, window, cx| {
+            cx.stop_propagation();
+            window.start_window_resize(edge);
+        })
+    };
+    use CursorStyle::*;
+    vec![
+        handle("resize-top", ResizeEdge::Top, ResizeUpDown).top_0().left_0().w_full().h(b).into_any_element(),
+        handle("resize-bottom", ResizeEdge::Bottom, ResizeUpDown).bottom_0().left_0().w_full().h(b).into_any_element(),
+        handle("resize-left", ResizeEdge::Left, ResizeLeftRight).top_0().left_0().h_full().w(b).into_any_element(),
+        handle("resize-right", ResizeEdge::Right, ResizeLeftRight).top_0().right_0().h_full().w(b).into_any_element(),
+        handle("resize-top-left", ResizeEdge::TopLeft, ResizeUpLeftDownRight).top_0().left_0().size(corner).into_any_element(),
+        handle("resize-top-right", ResizeEdge::TopRight, ResizeUpRightDownLeft).top_0().right_0().size(corner).into_any_element(),
+        handle("resize-bottom-left", ResizeEdge::BottomLeft, ResizeUpRightDownLeft).bottom_0().left_0().size(corner).into_any_element(),
+        handle("resize-bottom-right", ResizeEdge::BottomRight, ResizeUpLeftDownRight).bottom_0().right_0().size(corner).into_any_element(),
+    ]
+}
+
 impl Render for Shell {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = self.theme;
         let root = div()
             .track_focus(&self.focus)
@@ -581,12 +703,24 @@ impl Render for Shell {
             ShowBookmarks => Action::ShowBookmarks,
             ShowHistory => Action::ShowHistory,
             ShowProfiles => Action::ShowProfiles,
+            ShowSettings => Action::ShowSettings,
         ]);
         let root = root.on_any_mouse_down(cx.listener(|this, _, _, cx| this.focus_shell(cx)));
         if let Some(error) = &self.error {
             return root.items_center().justify_center().child(div().max_w(px(640.)).p(px(24.)).child(error.clone()));
         }
         let middle = div().flex().flex_row().flex_1().min_h(px(0.)).children(self.slot(Slot::Sidebar, cx)).children(self.slot(Slot::Main, cx));
+        // A frameless window that is not maximized or tiled keeps a thin
+        // border to resize it by.
+        let floating = match window.window_decorations() {
+            Decorations::Client { tiling } => !(tiling.top && tiling.bottom && tiling.left && tiling.right),
+            Decorations::Server => false,
+        };
+        let root = if floating {
+            root.relative().p(px(RESIZE_BORDER)).border_1().border_color(rgb(t.surface_variant)).children(resize_handles())
+        } else {
+            root
+        };
         root.child(middle).children(self.slot(Slot::Bottom, cx))
     }
 }
@@ -658,6 +792,10 @@ pub fn run(home: PathBuf, args: Args) {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             app_id: Some("morph".into()),
             window_min_size: Some(size(px(480.), px(320.))),
+            // Frameless where the desktop can draw it (a compositor runs):
+            // the tab row is the caption. GPUI keeps server decorations
+            // otherwise.
+            window_decorations: Some(WindowDecorations::Client),
             ..Default::default()
         };
         let start = args.open.clone().unwrap_or_default();
@@ -712,6 +850,7 @@ mod tests {
             "shift-f3",
             "ctrl-g",
             "ctrl-shift-g",
+            "ctrl-,",
         ] {
             assert!(keys.iter().any(|k| k == taken), "{taken}");
         }

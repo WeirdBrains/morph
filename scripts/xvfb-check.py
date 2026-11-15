@@ -103,6 +103,17 @@ def state(morph, popup=False, tab=None):
     return None
 
 
+def page_takes_key(m, key, code, **kw):
+    """Press `key` until the page reports `code` (at most twice). Right after a
+    panel closes, WebKit sometimes drops the first key under xdotool's
+    synthetic chords (see docs/handoff.md); the second one must arrive."""
+    for _ in range(2):
+        m.key(key)
+        if wait_for(lambda: (state(m, **kw) or {}).get("c") == code, 2):
+            return True
+    return False
+
+
 def wait_for(fn, timeout=6.0):
     end = time.time() + timeout
     value = fn()
@@ -260,8 +271,7 @@ def find_in_page(m, r, win, top):
     m.key("Escape", delay=0.8)
     h2 = wait_for(lambda: (st() or {}).get("h", 0) == h0 and (st() or {}).get("h"))
     r.check("find", "Escape closes the find bar (page grows back)", h2 == h0, f"{h1} -> {(st() or {}).get('h')}")
-    m.key("x")
-    r.check("find", "after Escape the page has the keyboard again", wait_for(lambda: (st() or {}).get("c") == "KeyX", 3), str(st()))
+    r.check("find", "after Escape the page has the keyboard again", page_takes_key(m, "x", "KeyX", tab=1), str(st()))
     n1 = (st() or {}).get("n")
     m.key("ctrl+g", delay=0.8)
     h3 = wait_for(lambda: (st() or {}).get("h", 0) < h0 and (st() or {}).get("h"))
@@ -310,8 +320,7 @@ def library_panel(m, r, win, top):
     m.key("Escape", delay=0.8)
     w3 = wait_for(lambda: (st() or {}).get("w") == w0 and w0)
     r.check("library", "Escape in the library closes it", w3 == w0, f"{(st() or {}).get('w')}")
-    m.key("q")
-    r.check("library", "after closing, the page has the keyboard", wait_for(lambda: (st() or {}).get("c") == "KeyQ", 3), str(st()))
+    r.check("library", "after closing, the page has the keyboard", page_takes_key(m, "q", "KeyQ", tab=1), str(st()))
     m.key("ctrl+d", delay=0.8)
     r.check("library", "Ctrl+D again removes the bookmark", wait_for(lambda: url not in bookmarks_file(m)), bookmarks_file(m)[:200])
 
@@ -347,6 +356,92 @@ def profiles_panel(m, r, win, top):
     r.check("profile", "its address bar takes typing and loads pages", loaded, m.xdo("getwindowname", win))
     data = m.home / "profiles" / (new[0] if new else "?") / "webkit" / "data"
     r.check("profile", "its web data lives in its own directory", wait_for(lambda: data.exists()), str(data))
+
+
+def settings_file(m):
+    cur = catalog(m).get("current", "default")
+    path = m.home / "profiles" / cur / "settings.json"
+    return path.read_text(errors="replace") if path.exists() else ""
+
+
+def settings_panel(m, r, win, top):
+    """Ctrl+, opens the settings beside the page and takes the keyboard:
+    Left moves the tabs into a list left of the page (saved for the profile),
+    Escape closes the panel and the page has the keyboard again."""
+    m.xdo("windowactivate", "--sync", win)
+    m.click(win, 300, top + 300)
+    s0 = state(m) or {}
+    w0, h0 = s0.get("w", 0), s0.get("h", 0)
+    m.key("ctrl+comma", delay=0.8)
+    r.check("settings", "Ctrl+, opens the settings beside the page", wait_for(lambda: (state(m) or {}).get("w", 0) < w0), f"{w0} -> {(state(m) or {}).get('w')}")
+    m.key("Left", delay=0.8)
+    r.check("settings", "Left moves the tabs to the left (saved)", wait_for(lambda: '"left"' in settings_file(m)), settings_file(m))
+    r.check("settings", "the page grows taller without the tab row", wait_for(lambda: (state(m) or {}).get("h", 0) == h0 + 34), f"{h0} -> {(state(m) or {}).get('h')}")
+    m.key("Escape", delay=0.8)
+    side = wait_for(lambda: (state(m) or {}).get("w") == w0 - 220 and w0 - 220)
+    r.check("settings", "Escape closes it; the tab list takes 220 px", side, f"{w0} -> {(state(m) or {}).get('w')}")
+    r.check("settings", "after closing, the page has the keyboard", page_takes_key(m, "z", "KeyZ"), str(state(m)))
+    return w0, h0
+
+
+def settings_relaunch(m, r, w0, h0):
+    """The profile's settings apply at start; Ctrl+, then Up puts the tabs
+    back on top."""
+    win = wait_for(lambda: m.window("Morph"), 20)
+    r.check("settings", "relaunch opens the window", win)
+    ok = wait_for(lambda: (state(m) or {}).get("w") == w0 - 220 and (state(m) or {}).get("h") == h0 + 34, 20)
+    r.check("settings", "the saved left tab list applies at start", ok, str(state(m)))
+    if not win:
+        return
+    m.xdo("windowactivate", "--sync", win)
+    m.click(win, 600, 300)
+    m.key("ctrl+comma", delay=0.8)
+    m.key("Up", delay=0.8)
+    m.key("Escape", delay=0.8)
+    back = wait_for(lambda: (state(m) or {}).get("w") == w0 and (state(m) or {}).get("h") == h0)
+    r.check("settings", "Up puts the tabs back on top", back and '"top"' in settings_file(m), f"{state(m)} {settings_file(m)}")
+
+
+def frameless(m, r):
+    """With a compositor running, the window is frameless: no WM frame, a
+    thin resize border, the tab row drags the window and a double click on
+    it maximizes; the page keeps the keyboard; the close button closes."""
+    win = wait_for(lambda: m.window("Morph"), 20)
+    r.check("frame", "window opens with a compositor", win)
+    if not win or not wait_for(lambda: state(m), 20):
+        r.check("frame", "page loads", False)
+        return
+    hints = m.xdo("getwindowname", win) and subprocess.run(["xprop", "-id", win, "_MOTIF_WM_HINTS"], env=m.env, capture_output=True, text=True).stdout
+    r.check("frame", "asks the window manager for no frame", "0x2, 0x0, 0x0" in hints, hints.strip())
+    s0 = state(m) or {}
+    r.check("frame", "a resize border surrounds the page", s0.get("w") == 1190 and s0.get("h") == 714, str(s0))
+    m.click(win, 300, 300)
+    m.key("k")
+    r.check("frame", "the page has the keyboard", wait_for(lambda: (state(m) or {}).get("c") == "KeyK", 3), str(state(m)))
+    x0, y0, _, _ = m.geometry(win)
+    m.xdo("mousemove", "--window", win, "700", "20")
+    time.sleep(0.2)
+    m.xdo("mousedown", "1")
+    time.sleep(0.3)
+    for step in range(1, 6):
+        m.xdo("mousemove", "--window", win, str(700 + step * 10), str(20 + step * 8))
+        time.sleep(0.1)
+    m.xdo("mouseup", "1")
+    time.sleep(0.8)
+    x1, y1, _, _ = m.geometry(win)
+    r.check("frame", "dragging the tab row moves the window", (x1, y1) != (x0, y0), f"{(x0, y0)} -> {(x1, y1)}")
+    m.xdo("mousemove", "--window", win, "700", "20")
+    time.sleep(0.2)
+    m.xdo("click", "--repeat", "2", "--delay", "80", "1")
+    grown = wait_for(lambda: (state(m) or {}).get("w", 0) > 1300)
+    r.check("frame", "double-clicking the tab row maximizes", grown, str(state(m)))
+    m.xdo("mousemove", "--window", win, "700", "18")
+    time.sleep(0.2)
+    m.xdo("click", "--repeat", "2", "--delay", "80", "1")
+    r.check("frame", "double-clicking again restores", wait_for(lambda: (state(m) or {}).get("w") == 1190), str(state(m)))
+    _, _, w, _ = m.geometry(win)
+    m.click(win, w - 22, 18)
+    r.check("frame", "the close button closes the window", wait_for(lambda: m.proc.poll() is not None, 5), "still running")
 
 
 def error_page(m, r, win, top):
@@ -449,6 +544,20 @@ def main():
             m.key("ctrl+w", delay=1.0)
             r.check("popup", "Ctrl+W closes the popup", not m.window(r"^P\{"), "still open")
         profiles_panel(m, r, win, top)
+        w0, h0 = settings_panel(m, r, win, top)
+        m.stop()
+        m = Morph(args.bin, display, home)
+        settings_relaunch(m, r, w0, h0)
+        # GPUI draws the frame itself only where the window manager supports
+        # _GTK_FRAME_EXTENTS and a compositor runs; xfwm4 has both.
+        if wm and shutil.which("xfwm4"):
+            m.stop()
+            wm.terminate()
+            wm.wait(5)
+            wm = subprocess.Popen(["xfwm4", "--compositor=on", "--replace"], env=dict(os.environ, DISPLAY=display), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(3.0)
+            m = Morph(args.bin, display, home)
+            frameless(m, r)
     finally:
         m.stop()
         if wm:

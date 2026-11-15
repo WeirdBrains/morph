@@ -7,7 +7,9 @@ The desktop shell (Linux first, then macOS and Windows) is
 [GPUI](https://gpui.rs), Zed's Rust UI framework; Flutter stays the mobile shell
 (Android, iOS, F-Droid). Both shells sit on the same Rust crates. Linux has a
 working GPUI shell since phase 1 (`v0.2.0-alpha.1`); phase 2 (`v0.2.0-alpha.2`)
-removed the Flutter desktop app, so `app/` is mobile only. See `ARCHITECTURE.md` (sections 1,
+removed the Flutter desktop app, so `app/` is mobile only; phase 3
+(`v0.2.0-alpha.3`) added find in page, error and crash pages, bookmarks and
+history, profiles, settings and a frameless window. See `ARCHITECTURE.md` (sections 1,
 2.0 and 2a, and the 2026-11-14 decisions) and `docs/handoff.md` for the phases.
 
 Planning documents: `PLAN.md`, `PRIORITIES.md`, and `ARCHITECTURE.md`.
@@ -64,8 +66,10 @@ Packages and tests:
   (on the WeirdBrains TAUR server as `morph-bin`).
 - `scripts/linux-dist.sh` builds the release tarball and `SHA256SUMS` in `dist/`.
 - `scripts/xvfb-check.py --bin <path to morph>` drives the shell in Xvfb with
-  xdotool (needs `Xvfb`, `xdotool`, and `openbox` for the F11 check): keys in
-  pages and popups, tabs, the address bar, popups.
+  xdotool (needs `Xvfb`, `xdotool`, `openbox` for the F11 check and `xfwm4`
+  for the frameless-window check): keys in pages and popups, tabs, the address
+  bar, popups, find in page, error pages, the library, profiles and settings
+  panels, and the frameless window.
 
 ## Layout
 
@@ -86,5 +90,5 @@ Packages and tests:
 - `tests/xvfb/` — the page `scripts/xvfb-check.py` drives
 
 Crate versions are `0.1.0` (BSD-3-Clause, edition 2024), except `morph-desktop`,
-which carries the desktop build's version (`0.2.0-alpha.2`). They are not published
+which carries the desktop build's version (`0.2.0-alpha.3`). They are not published
 in this pass.

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- `v0.2.0-alpha.3` (phase 3), GPUI desktop shell: find in page (a find bar
+  beside the page, Ctrl+F, F3/Ctrl+G), Morph error pages for failed loads, a
+  crash and hang panel per tab, the library panel (bookmarks with folders, tags
+  and search; history; Ctrl+D, Ctrl+Shift+O, Ctrl+H; the password prompt for a
+  locked library), the profiles panel (switch, create, rename, delete;
+  Ctrl+Shift+M), the settings panel (tab position, side tab list width and
+  collapse, per profile; Ctrl+,) and a frameless window with its own caption and
+  buttons (close only on tiling window managers; `MORPH_WINDOW_BUTTONS`).
 - `v0.2.0-alpha.2` (phase 2): the Flutter desktop app (Linux, macOS, Windows
   runners, `morph_webview_linux`, window chrome, `window_manager`,
   `scripts/build-windows.ps1`) is removed; the desktop is the GPUI shell and

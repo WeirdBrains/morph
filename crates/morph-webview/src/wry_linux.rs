@@ -131,8 +131,9 @@ struct HostKeys {
     pending: Rc<Cell<Option<(u64, u8)>>>,
 }
 
-/// Polls (8 ms apart) to keep re-checking a page's focus.
-const FOCUS_RETRIES: u8 = 40;
+/// Polls (8 ms apart, so about a second) to keep re-checking a page's focus;
+/// a resize or a panel closing beside it can take it back meanwhile.
+const FOCUS_RETRIES: u8 = 125;
 
 impl HostKeys {
     fn set_active(&self, active: bool) {
