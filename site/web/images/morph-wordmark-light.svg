@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Morph wordmark for light backgrounds. Transparent canvas, charcoal word.
+  Horizontal lockup: rounded-square glitch icon + geometric mono "morph".
+  Letter grid: width 400, stroke 80, gap 80, x-height 400, cap-height 560,
+  descender 160. Cap line at y=152 so the x-height is optically centred
+  on the 1024 icon. ViewBox 0 0 3584 1024.
+-->
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 3584 1024"
+     width="3584"
+     height="1024"
+     fill="none"
+     role="img"
+     aria-label="Morph">
+  <g id="icon">
+  <rect width="1024" height="1024" rx="224" fill="#0D0D12"/>
+  <path fill="#FFFFFF" fill-rule="evenodd"
+        d="M192 192h192L512 448 640 192h192v640H640V448H384v384H192Z"/>
+  <g id="glitch">
+    <rect fill="#00E5FF" x="128" y="320" width="224" height="64"/>
+    <rect fill="#FF2BD6" x="288" y="320" width="112" height="64"/>
+    <rect fill="#00E5FF" x="656" y="320" width="112" height="64"/>
+    <rect fill="#FF2BD6" x="672" y="320" width="224" height="64"/>
+    <rect fill="#00E5FF" x="96"  y="400" width="160" height="32"/>
+    <rect fill="#FF2BD6" x="320" y="400" width="96"  height="32"/>
+    <rect fill="#00E5FF" x="624" y="400" width="80"  height="32"/>
+    <rect fill="#FF2BD6" x="768" y="400" width="144" height="32"/>
+    <rect fill="#00E5FF" x="64"  y="448" width="288" height="64"/>
+    <rect fill="#FF2BD6" x="304" y="448" width="128" height="64"/>
+    <rect fill="#00E5FF" x="592" y="448" width="128" height="64"/>
+    <rect fill="#FF2BD6" x="672" y="448" width="288" height="64"/>
+    <rect fill="#00E5FF" x="160" y="544" width="176" height="32"/>
+    <rect fill="#FF2BD6" x="256" y="544" width="80"  height="32"/>
+    <rect fill="#00E5FF" x="704" y="544" width="64"  height="32"/>
+    <rect fill="#FF2BD6" x="800" y="544" width="112" height="32"/>
+    <rect fill="#00E5FF" x="80"  y="608" width="272" height="64"/>
+    <rect fill="#FF2BD6" x="336" y="608" width="80"  height="64"/>
+    <rect fill="#00E5FF" x="608" y="608" width="80"  height="64"/>
+    <rect fill="#FF2BD6" x="672" y="608" width="272" height="64"/>
+    <rect fill="#00E5FF" x="128" y="688" width="192" height="32"/>
+    <rect fill="#FF2BD6" x="352" y="688" width="64"  height="32"/>
+    <rect fill="#00E5FF" x="640" y="688" width="96"  height="32"/>
+    <rect fill="#FF2BD6" x="736" y="688" width="160" height="32"/>
+  </g>
+  </g>
+  <g id="word" aria-label="morph">
+    <rect fill="#0D0D12" x="1184" y="312" width="80" height="400"/>
+    <rect fill="#0D0D12" x="1344" y="312" width="80" height="400"/>
+    <rect fill="#0D0D12" x="1504" y="312" width="80" height="400"/>
+    <rect fill="#0D0D12" x="1184" y="312" width="240" height="80"/>
+    <rect fill="#0D0D12" x="1344" y="312" width="240" height="80"/>
+    <path fill="#0D0D12" fill-rule="evenodd" d="M1664 312h400v400H1664Z M1744 392h240v240H1744Z"/>
+    <rect fill="#0D0D12" x="2144" y="312" width="80" height="400"/>
+    <rect fill="#0D0D12" x="2144" y="312" width="400" height="80"/>
+    <rect fill="#0D0D12" x="2464" y="312" width="80" height="200"/>
+    <path fill="#0D0D12" fill-rule="evenodd" d="M2624 312h400v400H2624Z M2704 392h240v240H2704Z"/>
+    <rect fill="#0D0D12" x="2624" y="712" width="80" height="160"/>
+    <rect fill="#0D0D12" x="3104" y="152" width="80" height="560"/>
+    <rect fill="#0D0D12" x="3424" y="312" width="80" height="400"/>
+    <rect fill="#0D0D12" x="3104" y="472" width="400" height="80"/>
+  </g>
+</svg>

@@ -1,0 +1,19 @@
+name: morph_site
+description: Project website for Morph, a private decentralized browser with local AI.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.13.0
+
+dependencies:
+  jaspr: 0.24.0-beta.1
+
+dev_dependencies:
+  build_runner: ^2.15.1
+  build_web_compilers: ^4.8.11
+  jaspr_builder: 0.24.0-beta.1
+  lints: ^6.0.0
+
+jaspr:
+  mode: static

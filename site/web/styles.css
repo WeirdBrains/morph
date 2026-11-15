@@ -1,0 +1,422 @@
+/* Morph colour tokens. Dark is the brand default; light follows
+   prefers-color-scheme. Neon cyan and magenta are brand fills;
+   use --morph-primary / --morph-secondary for text and links. */
+
+:root {
+  --morph-charcoal: #0d0d12;
+  --morph-white: #ffffff;
+  --morph-cyan: #00e5ff;
+  --morph-magenta: #ff2bd6;
+
+  --morph-background: #0d0d12;
+  --morph-surface: #16161d;
+  --morph-surface-variant: #1e1e28;
+  --morph-text-primary: #f5f6fa;
+  --morph-text-secondary: #a8aab8;
+  --morph-primary: #00e5ff;
+  --morph-on-primary: #0d0d12;
+  --morph-secondary: #ff2bd6;
+  --morph-on-secondary: #0d0d12;
+  --morph-border: #707284;
+  --morph-selection: #0a434d;
+  --morph-focus: #00e5ff;
+  --morph-shadow: 0 16px 40px rgb(0 0 0 / 0.28);
+
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --morph-background: #f4f5f8;
+    --morph-surface: #ffffff;
+    --morph-surface-variant: #e8e9f0;
+    --morph-text-primary: #0d0d12;
+    --morph-text-secondary: #4a4c5a;
+    --morph-primary: #006e8a;
+    --morph-on-primary: #ffffff;
+    --morph-secondary: #b0008a;
+    --morph-on-secondary: #ffffff;
+    --morph-border: #7a7c8a;
+    --morph-selection: #bff8ff;
+    --morph-focus: #006e8a;
+    --morph-shadow: 0 16px 40px rgb(13 13 18 / 0.08);
+
+    color-scheme: light;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+  background: var(--morph-background);
+  color: var(--morph-text-primary);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  font-size: 1rem;
+  line-height: 1.6;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--morph-selection);
+  color: var(--morph-text-primary);
+}
+
+:focus-visible {
+  outline: 2px solid var(--morph-focus);
+  outline-offset: 3px;
+}
+
+img {
+  max-width: 100%;
+  height: auto;
+}
+
+a {
+  color: var(--morph-primary);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+}
+
+a:hover {
+  color: var(--morph-secondary);
+}
+
+code,
+pre {
+  font-family: ui-monospace, "SFMono-Regular", "Cascadia Code", "Cascadia Mono",
+    Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.9em;
+}
+
+code {
+  background: var(--morph-surface-variant);
+  border-radius: 0.3rem;
+  padding: 0.1em 0.35em;
+}
+
+pre {
+  margin: 0;
+  padding: 1rem 1.1rem;
+  overflow-x: auto;
+  background: var(--morph-surface-variant);
+  border: 1px solid var(--morph-border);
+  border-radius: 0.75rem;
+  color: var(--morph-text-primary);
+  line-height: 1.5;
+}
+
+pre code {
+  background: none;
+  padding: 0;
+  font-size: 0.85rem;
+}
+
+.skip-link {
+  position: absolute;
+  left: 1rem;
+  top: -3.5rem;
+  z-index: 20;
+  padding: 0.5rem 0.85rem;
+  background: var(--morph-primary);
+  color: var(--morph-on-primary);
+  text-decoration: none;
+  border-radius: 0.4rem;
+  font-weight: 600;
+}
+
+.skip-link:focus {
+  top: 0.75rem;
+  color: var(--morph-on-primary);
+}
+
+.wrap {
+  width: min(72rem, calc(100% - 2rem));
+  margin-inline: auto;
+}
+
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  backdrop-filter: blur(16px);
+  background: color-mix(in srgb, var(--morph-background) 84%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--morph-border) 55%, transparent);
+}
+
+.site-header::before {
+  content: "";
+  display: block;
+  height: 3px;
+  background: linear-gradient(90deg, var(--morph-cyan), var(--morph-magenta));
+}
+
+.header-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 0;
+}
+
+.logo {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
+.wordmark {
+  display: block;
+  height: 2rem;
+  width: auto;
+}
+
+.site-nav {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.2rem 1.1rem;
+}
+
+.site-nav a {
+  color: var(--morph-text-secondary);
+  text-decoration: none;
+  font-size: 0.95rem;
+}
+
+.site-nav a:hover,
+.site-nav a:focus-visible {
+  color: var(--morph-primary);
+}
+
+.hero {
+  padding: 4.5rem 0 3.5rem;
+}
+
+.hero-inner {
+  max-width: 40rem;
+}
+
+.status {
+  display: inline-block;
+  margin: 0 0 1.25rem;
+  padding: 0.25rem 0.7rem;
+  border: 1px solid var(--morph-border);
+  border-radius: 999px;
+  background: var(--morph-surface);
+  color: var(--morph-text-secondary);
+  font-size: 0.85rem;
+  letter-spacing: 0.01em;
+}
+
+.hero h1 {
+  margin: 0 0 0.85rem;
+  font-size: clamp(2.4rem, 6vw, 4rem);
+  font-weight: 650;
+  letter-spacing: -0.04em;
+  line-height: 1.1;
+}
+
+.lede {
+  margin: 0 0 1rem;
+  font-size: 1.25rem;
+  line-height: 1.5;
+  color: var(--morph-text-primary);
+}
+
+.hero .support {
+  margin: 0 0 1.75rem;
+  color: var(--morph-text-secondary);
+  font-size: 1.05rem;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.65rem 1.15rem;
+  border-radius: 0.6rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.button-primary {
+  background: var(--morph-primary);
+  color: var(--morph-on-primary);
+}
+
+.button-primary:hover {
+  background: var(--morph-secondary);
+  color: var(--morph-on-secondary);
+}
+
+.button-ghost {
+  background: var(--morph-surface);
+  color: var(--morph-text-primary);
+  border: 1px solid var(--morph-border);
+}
+
+.button-ghost:hover {
+  color: var(--morph-primary);
+  border-color: var(--morph-primary);
+}
+
+.band {
+  padding: 3.25rem 0;
+}
+
+.band + .band {
+  border-top: 1px solid color-mix(in srgb, var(--morph-border) 55%, transparent);
+}
+
+.band h2 {
+  margin: 0 0 1rem;
+  font-size: clamp(1.6rem, 3vw, 2.1rem);
+  letter-spacing: -0.03em;
+  line-height: 1.2;
+}
+
+.band .intro,
+.prose p {
+  max-width: 42rem;
+  color: var(--morph-text-secondary);
+}
+
+.prose p {
+  margin: 0 0 1rem;
+}
+
+.prose p:last-child {
+  margin-bottom: 0;
+}
+
+.feature-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+  margin-top: 1.75rem;
+}
+
+.card {
+  padding: 1.25rem 1.3rem 1.35rem;
+  background: var(--morph-surface);
+  border: 1px solid color-mix(in srgb, var(--morph-border) 70%, transparent);
+  border-radius: 0.9rem;
+  box-shadow: var(--morph-shadow);
+}
+
+.card h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1.1rem;
+  letter-spacing: -0.02em;
+}
+
+.card p {
+  margin: 0;
+  color: var(--morph-text-secondary);
+}
+
+.facts {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1.75rem;
+}
+
+.facts dt {
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.facts dd {
+  margin: 0.25rem 0 0;
+  color: var(--morph-text-secondary);
+}
+
+.install-block {
+  margin-top: 1.75rem;
+}
+
+.install-block h3 {
+  margin: 0 0 0.6rem;
+  font-size: 1.15rem;
+}
+
+.install-block p {
+  max-width: 42rem;
+  color: var(--morph-text-secondary);
+}
+
+.install-block pre {
+  margin: 0.85rem 0 0;
+}
+
+.site-footer {
+  padding: 2rem 0 2.5rem;
+  border-top: 1px solid color-mix(in srgb, var(--morph-border) 55%, transparent);
+  color: var(--morph-text-secondary);
+  font-size: 0.95rem;
+}
+
+.footer-inner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem 1.5rem;
+}
+
+.footer-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+}
+
+@media (min-width: 640px) {
+  .feature-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .facts {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (min-width: 960px) {
+  .feature-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .hero {
+    padding: 6rem 0 4.5rem;
+  }
+}
+
+@media (max-width: 720px) {
+  .header-inner {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .site-nav {
+    justify-content: flex-start;
+  }
+}
