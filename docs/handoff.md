@@ -1,104 +1,261 @@
 # Handoff
 
-Updated 2026-11-13, after `005d01c`. m3talsmith's usage was at 88.1% of the weekly limit and still climbing. This file is the resume point. The Linux `Isolate.create` fix is on main. The next task is the popup typing and repaint bug. It is not started.
+Updated 2026-11-14 on the `gpui` branch. This file is the resume point for moving
+Morph's desktop shell to GPUI. m3talsmith's usage was under 1% of the weekly limit.
+**Stage 1 (plan and docs) is done and pushed. Nothing else is started: m3talsmith asked
+to stop here and wait for his go-ahead before any Flutter code is removed or any
+GPUI code is written.**
 
 ## Where things stand
 
-`main` on origin is `005d01c` (`Linux: build on Flutter 3.50 with nativeapi 0.6`). The working tree is clean aside from this handoff edit. Earlier Windows commits `d30a211` and `e6c0c5e` are still on main.
+- Branch `gpui` was created from `origin/main` at `e9da772` (`Update dependencies`).
+  m3talsmith's local `gpui` branch pointed at that same commit, so nothing of his was
+  left out. `main` is untouched.
+- This branch so far changes only documents, plus a throwaway spike kept as
+  evidence in `docs/evidence/gpui-spike/` (not a workspace member, not built by
+  `cargo build` at the root).
+- The popup typing and repaint bug from the previous handoff (Flutter Linux web
+  view) is not fixed on `main`. On this branch it goes away with the Flutter Linux
+  web view itself; the spike shows the GPUI design does not have it (below).
 
-### Windows build (done, on main)
+## Decisions so far (m3talsmith, 2026-11-14)
 
-The Windows app was not built before this work. CI only ran Rust on `windows-latest`, plus `flutter build` for Linux and Android. `ARCHITECTURE.md` said the Windows app still needed `nuget.exe`.
+- **Desktop moves to GPUI; Flutter stays for mobile.** Linux, macOS and Windows get
+  a Rust GPUI shell. Android, iOS and F-Droid keep the Flutter app,
+  `morph_webview(_inapp)`, `morph-bridge` and `flutter_rust_bridge`.
+- **Linux first.** The GPUI shell has to be fully usable on Linux before any macOS
+  or Windows GPUI work. Those two are planned in the docs only.
+- **The desktop shell is a component host.** Browsing is one component behind its
+  own crates (`morph-browser` over `morph-webview`); chat, notes, projects and AI
+  come as components the same way. `PRIORITIES.md` 1 item 2 is the backbone.
+- **Dart is not an extension language.** It stays only as the mobile UI language.
+  No Dart extension SDK, no Dart to JS/WasmGC, no "Rust first; Dart later".
+- **Each phase ends with a Linux build m3talsmith can run, including Arch
+  packages**: `morph` built from the checkout (`makepkg -si` or `pacman -U`) and
+  a `morph-bin` recipe for his TAUR server, uploaded only after he approves the
+  phase.
+- `PLAN.md` is not touched. `PRIORITIES.md` got one dated progress note only.
 
-Two commits are on main:
+All of it is written up in `ARCHITECTURE.md`: sections 1 (shape), 2.0 (desktop web
+view), 2a (components), 3 (crates), and the three 2026-11-14 entries at the end
+(the switch, Dart, and the open decisions).
 
-- `d30a211590c4eb92ad1aaf69a08032029d4bcb77` — `scripts/build-windows.ps1` builds the release app and zips it. CI runs that script. `TEMP` and `TMP` are set to `C:\t\morph` because `flutter_rust_bridge_hooks` puts the Cargo target under `TEMP`, and the default user temp path makes OpenSSL's `cl` object files exceed `MAX_PATH` (`C1083`). The first attempt on the Windows VM failed that way (object path 265 characters). With the short temp, the same path was 236 characters and the object file was written.
-- `e6c0c5ead5711b19c9e4df1960a210ff654f8fc2` — MSVC 14.51 (Visual Studio 18 on `windows-latest`) rejects `<experimental/coroutine>`, which `flutter_inappwebview_windows` still includes. `app/windows/CMakeLists.txt` defines `_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS`. The CI run for `d30a211` failed on that error. The run for `e6c0c5e` passed, including the `windows` job: https://github.com/WeirdBrains/morph/actions/runs/43503875554
+## What was checked (verified, not guessed)
 
-VM build (windows-vm, Flutter 3.47.8, rustc 1.99.1, VS 2022 Build Tools 17.14 / MSVC 14.44):
+On this box (Debian 13, Xvfb, `WAYLAND_DISPLAY` unset, webkit2gtk 2.54.0, Mesa
+lavapipe Vulkan, Rust 1.100.0), with the spike in `docs/evidence/gpui-spike/`:
 
-- Zip: `<scratch-dir>/scratch/morph-windows/morph-0.1.0-x86_64-pc-windows-msvc.zip` (20,733,310 bytes, SHA-256 `6d235b6c321c2d5dd60faee5d40c0e7995394635aa7c507c8fbf474e04160b6e`).
-- `morph.exe` is an x64 Windows GUI binary. `LoadLibrary` succeeded for `morph.exe`, `morph_bridge.dll`, `flutter_inappwebview_windows_plugin.dll`, and `WebView2Loader.dll`. No Morph window was started.
-- The zip does not include the VC++ 2015–2022 runtime (`VCRUNTIME140.dll`, `MSVCP140.dll`) or the WebView2 Runtime. The loader DLL is in the zip. The VM already had WebView2 Runtime 157.0.4341.46.
-- How to rebuild, on a Windows machine with Flutter, Rust, Visual Studio C++, Strawberry Perl, and `nuget.exe` on `PATH`: `powershell -ExecutionPolicy Bypass -File scripts/build-windows.ps1`.
+- crates.io `gpui` 0.2.2 (2025-10-22, the newest published) does not build with
+  current `libc` (0.2.190+): `xattr` 0.2.3 under its `zed-async-tar` uses
+  `libc::ENOATTR`, which Linux no longer has. With `xattr` patched it builds, but
+  asking its X11 window for a raw handle panics (`unimplemented!()` in
+  `src/platform/linux/x11/window.rs`), so wry cannot attach a child web view.
+- GPUI from Zed main (`703b5ac3f4ffe1e87a073123ae56e22f72f095c4`, 2026-11-14,
+  crates `gpui` + `gpui_platform`) builds (wgpu 30 renderer; Zed pins Rust 1.98.1)
+  and implements the X11 and Wayland handles. wry 0.57.2 accepts only an Xlib
+  handle, so the spike passes the same X11 window id as an Xlib handle.
+- A GPUI window drew its own toolbar with a webkit2gtk child below it showing a
+  local page. `xdotool` clicks and typing reached the page input (one title change
+  per keystroke).
+- `window.open` reached Morph's handler, which built a GTK popup with a web view
+  related to the opener (`NewWindowResponse::Create`). Text typed in the popup's
+  field showed with the caret in the field; a button that changes the heading
+  repainted it; every keystroke also reached the opener by `postMessage`. That is
+  the Flutter popup bug's reproduction (local fixture, no real account), passing.
+- wry's default popup handling (`NewWindowResponse::Allow`) unwraps the top level
+  as a `gtk::ApplicationWindow` and would panic for a child web view (read in
+  `wry-0.57.2/src/webkitgtk/mod.rs`), so Morph must make its own popups.
 
-Not verified: launching the GUI, loading a page, the frameless window, or WebView2 itself. Wine is not installed. This was not a Linux cross-compile. There is no WiX installer.
+Not checked: a real Wayland session (the plan uses XWayland there), NVIDIA, HiDPI,
+IME, window resizing, real sites, macOS, Windows, mobile builds, and the CPU cost
+of pumping GTK from a timer.
 
-A stash is still present and was not applied: `stash@{0}` on `302020b`, two lines adding `morph_webview_inapp` to `app/macos/Flutter/GeneratedPluginRegistrant.swift`. Current main already registers that plugin. Branches `gpu-fix` and `linux-persistent-webview-session` were left alone.
+## The plan: phases, each ending in a Linux build to test
 
-### Linux `flutter build linux` / `Isolate.create` (done, on main)
+Every phase passes the quality bar before each commit (`cargo fmt --check`,
+`cargo build`, `cargo clippy --all-targets -- -D warnings`, `cargo test`), ships
+tests for new behaviour, runs GUI checks only under Xvfb (or a headless
+compositor), and is pushed to `origin/gpui` only. Domain logic goes in `morph-*`
+crates that test without a display; the GPUI crates stay thin.
 
-Commit `005d01c4ad7b2f415dd592c299dd1473c6e126e0` (`Linux: build on Flutter 3.50 with nativeapi 0.6`). `app/pubspec.yaml` requires Dart `^3.14.0` and Flutter `>=3.50.0`, and `window_manager` `>=0.7.0 <0.8.0`. The lockfile has `nativeapi` 0.6.0. CI `flutter-version` is `3.50.0`. Package lockfiles picked up `test_api` 0.7.14 and `listen` 1.0.1 from that SDK.
-
-What m3talsmith should run, already on Flutter 3.50 / Dart 3.14:
+**How m3talsmith tests a phase on my-desktop** (Rust 1.99; Flutter 3.50 only matters
+for the mobile app):
 
 ```sh
-cd morph
-git pull
-cd app
-flutter pub get
-flutter build linux
+cd ~/src/WeirdBrains/morph
+git fetch origin && git switch gpui && git pull --ff-only
+sudo pacman -S --needed webkit2gtk-4.1 gtk3 libxkbcommon-x11 vulkan-icd-loader
+export CARGO_TARGET_DIR=<scratch-dir>/cargo-target/morph
+MORPH_HOME=$(mktemp -d) cargo run -p morph-desktop --release
 ```
 
-Do not downgrade Flutter. `flutter clean` does not fix this.
+**Every phase also ships Arch packages**, in the shape of m3talsmith's existing
+TAUR packages (`mouser-bin`, `muninn-bin`, `muninn-app-bin` under org
+WeirdBrains, read from https://pkg.taur.weirdbrains.com on 2026-11-14):
 
-### Linux `flutter build linux` / `Isolate.create` (investigation, kept for the evidence)
+- `packaging/arch/morph/PKGBUILD` builds from the checkout with cargo
+  (`--locked --release`) for `makepkg -si`. `depends`: `webkit2gtk-4.1`, `gtk3`,
+  `glib2`, `libxkbcommon-x11`, `vulkan-icd-loader`, `hicolor-icon-theme`,
+  `glibc`, `gcc-libs`; `makedepends`: `cargo`, `git`, `clang`, `pkgconf`.
+- `packaging/arch/morph-bin/PKGBUILD` installs the prebuilt app from a GitHub
+  Release, like `muninn-app-bin`: `source_x86_64` (and later `source_aarch64`)
+  `$url/releases/download/v$pkgver/morph-$pkgver-$CARCH-unknown-linux-gnu.tar.gz`,
+  `sha256sums_*` filled from the release's `SHA256SUMS`, `provides=('morph')`,
+  `conflicts=('morph')`, `options=('!strip' '!debug')`, the maintainer line
+  and a header comment saying where the tarball comes from.
+- Both install `/usr/bin/morph`, `/usr/share/applications/morph.desktop`
+  (`Exec=morph %u`, http/https handlers), the icon from `docs/brand` in the
+  hicolor theme, `LICENSE` and `README.md`, and each has a `.SRCINFO` made with
+  `makepkg --printsrcinfo` next to it. CI fails if
+  `makepkg --printsrcinfo | diff - .SRCINFO` shows a difference.
+- Checked in an `archlinux:latest` container before a phase is called done:
+  `makepkg` as a non-root user, `pacman -U`, `morph --version`, a start under
+  Xvfb. CI builds `morph` the same way and attaches the `.pkg.tar.zst`.
 
-m3talsmith, on Flutter stable with Dart 3.14.0, ran `flutter build linux` from `morph/app`. `flutter clean` did not help. The failure is:
-
+```sh
+cd packaging/arch/morph && makepkg -si     # from the checkout
+sudo pacman -U morph-*-x86_64.pkg.tar.zst  # or the package CI attached
 ```
-nativeapi-0.5.10/lib/src/run_native_app.dart:45:25: Error: Member not found: 'Isolate.create'.
-    final app = Isolate.create(debugName: 'nativeapi');
-```
 
-Verified, not guessed:
+**Publishing each phase to TAUR (after m3talsmith approves the phase).** The agent
+does not run `taurctl` and does not create GitHub Releases. Once m3talsmith
+approves, the release tarball and `SHA256SUMS` go on a GitHub Release, the
+`morph-bin` recipe gets that version and those sums, and a recipe archive
+(`morph-bin/PKGBUILD` + `morph-bin/.SRCINFO`, as `morph-bin-<version>.tar.gz`)
+is uploaded from m3talsmith's machine with
+`taurctl pkg upload morph-bin-<version>.tar.gz --org WeirdBrains`, dry-run
+first, per the collective release rules. How phase builds are versioned and
+tagged off `main` is open decision 10.
 
-- Dart 3.13.7 `sdk/lib/isolate/isolate.dart` (tag `3.13.7`) has `external static Isolate create({String? debugName})`, `runSync`, and `runEventLoopSync`.
-- Dart 3.14.0's `isolate.dart` has none of those. This machine's SDK is Flutter 3.50.0 / Dart 3.14.0, and a search of that SDK found no `Isolate.create`.
-- `nativeapi` 0.5.10 `lib/nativeapi.dart` exports `src/run_native_app.dart`, so every app that imports `package:nativeapi/nativeapi.dart` compiles the removed call. Its pubspec still says `sdk: ^3.13.0`, so a lockfile from Flutter 3.47 stays on 0.5.10 under Dart 3.14. `window_manager` 0.6.0 depends on `nativeapi: ^0.5.5`, which does not allow 0.6.0 (`^0.5.5` is `<0.6.0`).
-- `nativeapi` 0.5.11 and 0.6.0 require Dart `^3.14.0`. Their changelogs say Dart 3.14 removed those VM APIs, and they moved `runNativeApp()` to `package:nativeapi/standalone.dart` so a normal import does not compile it. Checked: 0.6.0 `lib/nativeapi.dart` exports only `src/generated.dart`.
-- `window_manager` 0.7.0 requires Flutter `>=3.50.0`, Dart `^3.14.0`, and `nativeapi` `^0.6.0`. Morph's window code uses `Window`, `WindowManager`, `TitleBarStyle`, `setFrameless`, and `setContentUnderTitleBar`. Those members are still on `nativeapi` 0.6.0's `Window`.
+After each push to `origin/gpui`, m3talsmith's checkout at
+`~/src/WeirdBrains/morph` on my-desktop (branch `gpui`) is fast-forwarded
+(`git pull --ff-only origin gpui`).
 
-Those edits are what `005d01c` committed. `flutter build linux`, with `WAYLAND_DISPLAY` unset, exited 0 twice and wrote `app/build/linux/x64/release/bundle/morph`. Both runs also printed `ERROR: File modified during build. Build must be rerun.` and then `Built`.
+Or download the `morph-linux-x86_64` tarball that CI attaches to the branch run
+(phase 1 adds the job and turns on CI for pushes to `gpui`), unpack and run
+`./morph`. The package list is from Arch package names and is not yet checked on
+my-desktop. On Hyprland the window runs through XWayland (`MORPH_ALLOW_WAYLAND=1`
+will skip that once a native path exists).
 
-That line is from `hooks_runner` 1.6.4 `build_runner.dart`: if a hook dependency's mtime is after `DateTime.now()` taken at the start of the hook, it logs that string at severe and still returns `Success`. It is not the `Isolate.create` failure, and `flutter clean` cannot fix the missing member. After the successful build, `app/.dart_tool/hooks_runner/morph/87f123bf01/dependencies.dependencies_hash_file.json` records `crates/morph-webview-control/proto` with hash `1`, which is `hooks_runner`'s sentinel for "modified after the cutoff". The directory's on-disk mtime is 2026-11-12. The message repeated on the second build. The bundle was still produced both times.
+### Phase 1 — GPUI shell on Linux with one working browser component
 
-Verified on this machine (Flutter 3.50.0, Dart 3.14.0), `WAYLAND_DISPLAY` unset, stdin from `/dev/null`: `flutter build linux` exited 0 twice and wrote `app/build/linux/x64/release/bundle/morph`. `flutter test` in `app/` passed (186). Package tests for `morph_webview`, `morph_webview_inapp`, and `morph_webview_linux` passed. `cargo fmt --check`, `cargo build`, `cargo clippy --all-targets -- -D warnings`, and `cargo test` passed. Those build directories were removed afterward. CI for `005d01c` had not been checked when this note was updated.
+Flutter is untouched in this phase; both shells live side by side.
 
-### Popup / Google sign-in (not started)
+- `morph-ui`: component kinds, `Layout` (slots, sizes, visibility, saved per
+  profile as JSON), named actions and a keymap with main's shortcuts
+  (Ctrl+T, Ctrl+W, Ctrl+L, Ctrl+R, Ctrl+F, Ctrl+Tab, Ctrl+1..9), theme tokens from
+  main's `morph_theme.dart`. Unit tests.
+- `morph-core`: the address-bar rule ("phrases are searches", main's
+  `omnibox.dart` and `searchUrl`) ported to Rust with main's `omnibox_test.dart`
+  cases. The Flutter app keeps its Dart copy until phase 2 moves it onto the
+  Rust one.
+- `morph-webview`: `WebView` trait, events, the wry backend (X11 shim, GTK pump,
+  Morph-made popups, a `WebContext` per profile with
+  `morph_core::profiles::webkit_data_dir`), and an in-memory fake.
+- `morph-browser`: tabs on `morph_core::tabs::TabSet`, address bar, back,
+  forward, reload, stop; history recorded through `morph_core::library`. Tests
+  drive it with the fake web view.
+- `morph-desktop`: binary `morph`, `MORPH_HOME` honoured, GPUI on X11 when
+  `DISPLAY` is set, the component host with the browser in the main slot.
+- CI: a `desktop-linux` job (build, clippy, test, release tarball
+  `morph-<version>-x86_64-unknown-linux-gnu.tar.gz` with `SHA256SUMS`) and an
+  `arch-package` job (`archlinux:latest` container, `.SRCINFO` check,
+  `makepkg`, `pacman -U`, package artifact); CI runs on pushes to `gpui`. The
+  Flutter jobs stay as they are for now.
+- `packaging/arch/morph` and `packaging/arch/morph-bin` (PKGBUILD + `.SRCINFO`
+  each), the `.desktop` file and the icon, checked in an Arch container.
+- Xvfb checks: open a page, type into it, open a popup and type into it, switch
+  and close tabs, type a phrase and get a search.
+- **m3talsmith tests:** installs the Arch package (`makepkg -si` or `pacman -U`),
+  then browse, tabs, address bar, sign-in popups (no real account needed for the
+  check, but he may try his own).
 
-From m3talsmith's screen recording, after the Linux fix:
+### Phase 2 — Flutter desktop removed, shared logic moved down
 
-1. Open linkedin.com (it showed the mobile layout). Click "Sign in with Google", then Continue. A popup opens on accounts.google.com.
-2. Click "Email or phone" and type. No characters appear, the placeholder stays, and a caret blinks well below the field, over the "Before using this app..." text.
-3. Click Next. The heading becomes "Use your passkey to confirm it's really you", but the email field, Forgot email, Create account, and Next stay as they were. No passkey UI.
-4. The popup's X closes it.
+- Remove `app/linux`, `app/macos`, `app/windows`, `packages/morph_webview_linux`,
+  desktop-only Dart (window chrome, `window_manager`, desktop chrome widgets), the
+  Flutter `linux` and `windows` CI jobs and `scripts/build-windows.ps1`.
+- Move the logic in `morph-bridge` that both shells need (library open and unlock,
+  identity, device linking, profile deletion side effects) into a toolkit-neutral
+  `morph-services`, with its tests. `morph-bridge` keeps its function signatures,
+  so the generated Dart bindings do not change.
+- The mobile app moves onto the Rust address-bar rule through the bridge.
+- `flutter analyze`, `flutter test`, the `morph_webview` and
+  `morph_webview_inapp` package tests and the Android CI job stay green.
+- **m3talsmith tests:** the updated Arch package, plus the Android debug APK from CI.
 
-Not investigated yet. Do not sign into a real account. A local page that opens a popup with an input and then changes the DOM is enough. Public sites are read-only checks. Test on Xvfb with `WAYLAND_DISPLAY` unset. Check whether Windows WebView2 has the same gap. Passkey/WebAuthn may be separate from the paint/input offset.
+### Phase 3 — Everyday browser parts on Linux
 
-## Done
+In `PRIORITIES.md` order as far as they apply: library component (bookmarks with
+folders and tags, history, search), profiles (switch, create, rename, delete;
+library unlock from the keystore, password prompt otherwise), settings component
+(tab position, sidebar), find in page, crash and hang panel per tab, Morph error
+pages, frameless window with custom controls (close-only on tiling window
+managers), downloads to a chosen folder.
+- **m3talsmith tests:** the updated Arch package; daily browsing with bookmarks,
+  history and two profiles.
 
-- Windows release zip built on the VM and inspected (`LoadLibrary`, PE headers, DLL dependencies). CI on `e6c0c5e` is green, including the Windows job.
-- Cause of the Linux `Isolate.create` error identified against the Dart 3.13.7 and 3.14.0 SDKs and the nativeapi 0.5.10 / 0.6.0 sources.
-- Linux fix committed as `005d01c`: `window_manager` 0.7 / `nativeapi` 0.6, `flutter build linux` succeeded twice, app and package tests passed, Rust quality bar passed.
+### Phase 4 — Identity and links on Linux
 
-## Next
+Identity onboarding (create, restore from words or a backup file), recovery
+phrase and backups, device linking (QR offer shown, SAS check), "Make default
+browser" (`xdg-settings`), links from the command line into the running instance
+(single instance), page bridge round trip.
+- **m3talsmith tests:** the updated Arch package; onboarding a fresh profile,
+  linking with the phone app, opening links from other apps.
 
-The Linux fix is `005d01c4ad7b2f415dd592c299dd1473c6e126e0` on `main`. Next, and not started: the popup bug below. Find why a popup's text field accepts a caret but not visible text, and why a later DOM change updates only the heading. Fix typing and page updates. Make passkey/WebAuthn work or fall back cleanly. Check WebView2 as well as the Linux web view. Test on Xvfb with `WAYLAND_DISPLAY` unset. Never sign into a real account.
+### Phase 5 — Linux packaging and the Wayland question
+
+The remaining packages per the collective rules (deb, rpm, Nix flake, and every
+format with and without the `.desktop` entry), the shared release script
+(`scripts/weirdnet_release.py`, `release.toml`, its `taur` step for `morph-bin`), and, depending on m3talsmith's call
+on open decision 1, the native Wayland web view work.
+- **m3talsmith tests:** a release-style Arch package and the other formats.
+
+### Later — macOS, Windows, more components
+
+macOS (WKWebView child) and Windows (WebView2 child) through the same
+`morph-webview` trait; chat, notes, projects and AI components as their domain
+crates land.
+
+## Open decisions for m3talsmith
+
+Listed in full in `ARCHITECTURE.md` (2026-11-14 — Open decisions from the GPUI
+switch):
+
+1. Native Wayland: accept XWayland for phase 1, or make native Wayland a gate?
+2. GPUI pin: Zed repository by commit (recommended), or a WeirdBrains fork on
+   crates.io?
+3. Keep or drop the Linux texture/DMA-BUF/hidden-text-layer work (only useful
+   later for native Wayland)?
+4. `flutter_inappwebview` "other platforms" now means Android and iOS only.
+5. App updates: RFW and Dart-patch items now concern mobile only.
+6. Flutter engine fork: keep the BSD part, or plan BSD on GPUI?
+7. GTK 4 / native X11 item in Priorities 2, given wry is GTK 3.
+8. GPUI cannot draw over the page: popovers beside it, OK?
+9. Apply the frameless-window rule to the GPUI window?
+10. Phase builds and releases: the shared release script releases only from
+    `main`, and `morph-bin` needs a GitHub Release per phase. Tag phase builds
+    from `gpui` as pre-releases (for example `v0.2.0-gpui.1`, with `pkgver`
+    `0.2.0.gpui.1`, since `pkgver` cannot contain `-`), or release only from
+    `main` after a merge?
 
 ## How to resume
 
 ```sh
-cd <scratch-dir>/Projects/WeirdBrains/morph
-git pull --ff-only origin main
-# Linux fix is 005d01c. Working tree should be clean.
-# Next work is the popup bug described above.
+cd ~/src/WeirdBrains/morph
+git fetch origin
+git switch gpui            # or: git switch -c gpui --track origin/gpui
+git pull --ff-only origin gpui
 ```
 
-Windows, on a Windows host:
+Start phase 1 only after m3talsmith's go-ahead. Do not push to `main`. Do not touch
+`~/.morph`. Do not print secrets. GUI only under Xvfb (or a headless compositor)
+with `WAYLAND_DISPLAY` unset.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/build-windows.ps1
-```
+## History before the GPUI branch
 
-Do not touch `~/.morph`. Do not print secrets. GUI only under Xvfb with `WAYLAND_DISPLAY` unset.
+The 2026-11-13 handoff (Windows release build `d30a211`/`e6c0c5e`, Linux
+`Isolate.create` fix `005d01c`, the popup bug report) is in git:
+`git show d73e240:docs/handoff.md`. The stash `stash@{0}` and the branches
+`gpu-fix` and `linux-persistent-webview-session` mentioned there were left alone.
