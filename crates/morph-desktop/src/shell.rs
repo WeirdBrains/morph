@@ -1,12 +1,14 @@
-//! The window and the component host. The host knows components only
-//! through [`Hosted`]; the browser is one implementation, and later
-//! components (library, settings, chat, notes) are others.
+//! The window and the component host. The host routes actions and page
+//! state through [`Hosted`]; the browser and the library are
+//! implementations, and panels ask the host for things (open a page, close
+//! the panel) with [`ShellRequest`]s instead of knowing each other.
 
 use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui::{
-    AnyView, App, Bounds, Context, Entity, FocusHandle, KeyBinding, Window, WindowBounds, WindowOptions, actions, div, prelude::*, px, rgb, size,
+    AnyView, App, Bounds, Context, Entity, FocusHandle, KeyBinding, Subscription, Window, WindowBounds, WindowOptions, actions, div, prelude::*, px,
+    rgb, size,
 };
 use morph_ui::actions::{Action, Keymap};
 use morph_ui::component::{self, Catalog, KindId};
@@ -15,6 +17,8 @@ use morph_ui::theme::Theme;
 
 use crate::browser_view::{self, BrowserView};
 use crate::cli::Args;
+use crate::library::Tab;
+use crate::library_view::LibraryView;
 
 actions!(
     morph,
@@ -41,7 +45,10 @@ actions!(
         Back,
         Forward,
         ToggleFullscreen,
-        Quit
+        Quit,
+        Bookmark,
+        ShowBookmarks,
+        ShowHistory
     ]
 );
 
@@ -71,7 +78,30 @@ fn gpui_action(action: Action) -> Box<dyn gpui::Action> {
         Action::Forward => Box::new(Forward),
         Action::ToggleFullscreen => Box::new(ToggleFullscreen),
         Action::Quit => Box::new(Quit),
+        Action::Bookmark => Box::new(Bookmark),
+        Action::ShowBookmarks => Box::new(ShowBookmarks),
+        Action::ShowHistory => Box::new(ShowHistory),
     }
+}
+
+/// The page the main component shows, for panels that act on it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Page {
+    pub url: String,
+    pub title: String,
+}
+
+/// What a component asks of the host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShellRequest {
+    /// Open `url` in the main component.
+    Open { url: String, new_tab: bool },
+    /// Hide the panel that asked.
+    ClosePanel,
+    /// Take the keyboard back from the pages for the shell's own UI.
+    FocusShell,
+    /// The profile's library was unlocked.
+    LibraryUnlocked,
 }
 
 /// What the host needs from a component.
@@ -87,6 +117,18 @@ pub trait Hosted {
     /// Pull keyboard focus back to the shell's own UI.
     fn focus_shell(&self, cx: &App);
     fn title(&self, cx: &App) -> String;
+    /// Open `url`; `false` when this component does not show pages.
+    fn open_url(&self, _url: &str, _new_tab: bool, _window: &mut Window, _cx: &mut App) -> bool {
+        false
+    }
+    /// The page it shows, if it shows one.
+    fn page(&self, _cx: &App) -> Option<Page> {
+        None
+    }
+    /// Whether the shown page is bookmarked (drives the star).
+    fn set_page_marked(&self, _marked: bool, _cx: &mut App) {}
+    /// Give the component the keyboard (a panel above it closed).
+    fn focus_content(&self, _window: &mut Window, _cx: &mut App) {}
 }
 
 impl Hosted for Entity<BrowserView> {
@@ -111,9 +153,49 @@ impl Hosted for Entity<BrowserView> {
     fn title(&self, cx: &App) -> String {
         self.read(cx).title()
     }
+    fn open_url(&self, url: &str, new_tab: bool, window: &mut Window, cx: &mut App) -> bool {
+        self.update(cx, |view, cx| view.open_url(url, new_tab, window, cx));
+        true
+    }
+    fn page(&self, cx: &App) -> Option<Page> {
+        let browser = self.read(cx).browser();
+        let url = browser.active_url();
+        (!url.is_empty()).then(|| Page { url: url.to_string(), title: browser.active_title().to_string() })
+    }
+    fn set_page_marked(&self, marked: bool, cx: &mut App) {
+        self.update(cx, |view, cx| view.set_marked(marked, cx));
+    }
+    fn focus_content(&self, window: &mut Window, cx: &mut App) {
+        self.update(cx, |view, cx| view.focus_page(window, cx));
+    }
+}
+
+impl Hosted for Entity<LibraryView> {
+    fn kind(&self) -> KindId {
+        KindId::new(component::LIBRARY)
+    }
+    fn view(&self) -> AnyView {
+        self.clone().into()
+    }
+    fn dispatch(&self, action: Action, _window: &mut Window, cx: &mut App) -> bool {
+        match action {
+            Action::Bookmark => self.update(cx, |view, cx| view.toggle_bookmark(cx)),
+            _ => false,
+        }
+    }
+    fn tick(&self, _window: &mut Window, _cx: &mut App) -> Vec<String> {
+        Vec::new()
+    }
+    fn set_shown(&self, _shown: bool, _cx: &mut App) {}
+    fn focus_shell(&self, _cx: &App) {}
+    fn title(&self, _cx: &App) -> String {
+        "Library".into()
+    }
 }
 
 pub struct Shell {
+    home: PathBuf,
+    profile: String,
     theme: Theme,
     keymap: Keymap,
     catalog: Catalog,
@@ -124,9 +206,132 @@ pub struct Shell {
     /// Holds GPUI's keyboard focus when no input does, so the shell's keys
     /// work while its own chrome (not a page or a field) has the keyboard.
     focus: FocusHandle,
+    library: Option<Entity<LibraryView>>,
+    /// The main component's page as last passed to the panels.
+    last_page: Option<Page>,
+    last_marked: Option<bool>,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl Shell {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        home: PathBuf,
+        profile: String,
+        start: &str,
+        theme: Theme,
+        keymap: Keymap,
+        layout: Layout,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut catalog = Catalog::new();
+        for kind in component::builtin() {
+            catalog.register(kind);
+        }
+        let keystrokes = page_shortcuts(&keymap);
+        let mut components: Vec<Box<dyn Hosted>> = Vec::new();
+        let mut subscriptions = Vec::new();
+        let error = match BrowserView::create(&home, &profile, start, window, &keystrokes) {
+            Ok(browser) => {
+                let view = cx.new(|cx| BrowserView::new(browser, theme, window, cx));
+                components.push(Box::new(view));
+                None
+            }
+            Err(e) => {
+                eprintln!("morph: {e}");
+                Some(e)
+            }
+        };
+        let library = cx.new(|cx| LibraryView::new(&home, &profile, theme, window, cx));
+        subscriptions.push(cx.subscribe_in(&library, window, |shell, _, request, window, cx| shell.request(request, window, cx)));
+        components.push(Box::new(library.clone()));
+        let shell = Self {
+            home,
+            profile,
+            theme,
+            keymap,
+            catalog,
+            layout,
+            components,
+            error,
+            last_title: String::new(),
+            focus: cx.focus_handle(),
+            library: Some(library),
+            last_page: None,
+            last_marked: None,
+            _subscriptions: subscriptions,
+        };
+        // Components outside a visible slot keep their pages hidden.
+        for c in &shell.components {
+            let shown = Slot::ALL.iter().any(|s| shell.layout.shown(*s) == Some(&c.kind()));
+            c.set_shown(shown, cx);
+        }
+        shell
+    }
+
+    fn main(&self) -> Option<&dyn Hosted> {
+        self.layout.shown(Slot::Main).and_then(|k| self.component(k))
+    }
+
+    /// A component asked for something.
+    fn request(&mut self, request: &ShellRequest, window: &mut Window, cx: &mut Context<Self>) {
+        match request {
+            ShellRequest::Open { url, new_tab } => {
+                if let Some(main) = self.main() {
+                    main.open_url(url, *new_tab, window, cx);
+                }
+            }
+            ShellRequest::ClosePanel => {
+                if self.layout.shown(Slot::Sidebar).is_some() {
+                    self.layout.toggle(Slot::Sidebar);
+                    self.save_layout();
+                }
+                if let Some(main) = self.main() {
+                    main.focus_content(window, cx);
+                }
+            }
+            ShellRequest::FocusShell => self.focus_shell(cx),
+            ShellRequest::LibraryUnlocked => self.last_marked = None,
+        }
+        cx.notify();
+    }
+
+    fn focus_shell(&self, cx: &App) {
+        for component in &self.components {
+            component.focus_shell(cx);
+        }
+    }
+
+    fn save_layout(&self) {
+        if let Err(e) = layout::save(&self.home, &self.profile, &self.layout) {
+            eprintln!("morph: could not save the layout: {e}");
+        }
+    }
+
+    /// Open the library on `tab`, or close it when it already shows that.
+    fn show_library(&mut self, tab: Tab, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(library) = self.library.clone() else {
+            return;
+        };
+        let kind = KindId::new(component::LIBRARY);
+        let open = self.layout.shown(Slot::Sidebar) == Some(&kind);
+        if open && library.read(cx).tab() == tab {
+            self.request(&ShellRequest::ClosePanel, window, cx);
+            return;
+        }
+        if !open {
+            self.layout.toggle_kind(Slot::Sidebar, kind);
+            self.save_layout();
+        }
+        library.update(cx, |view, cx| {
+            view.set_tab(tab, cx);
+            view.focus(window, cx);
+        });
+        self.focus_shell(cx);
+        cx.notify();
+    }
+
     fn component(&self, kind: &KindId) -> Option<&dyn Hosted> {
         self.components.iter().find(|c| &c.kind() == kind).map(|c| c.as_ref())
     }
@@ -143,6 +348,8 @@ impl Shell {
                 window.toggle_fullscreen();
                 return;
             }
+            Action::ShowBookmarks => return self.show_library(Tab::Bookmarks, window, cx),
+            Action::ShowHistory => return self.show_library(Tab::History, window, cx),
             _ => {}
         }
         let main = self.layout.shown(Slot::Main).cloned();
@@ -172,10 +379,24 @@ impl Shell {
                 self.run(action, window, cx);
             }
         }
-        let title = match self.layout.shown(Slot::Main).and_then(|k| self.component(k)) {
+        let title = match self.main() {
             Some(c) => c.title(cx),
             None => String::new(),
         };
+        let page = self.main().and_then(|c| c.page(cx));
+        if page != self.last_page {
+            if let Some(library) = &self.library {
+                library.update(cx, |view, cx| view.set_page(page.clone(), cx));
+            }
+            self.last_page = page;
+        }
+        let marked = self.library.as_ref().map(|l| l.read(cx).marked());
+        if marked != self.last_marked {
+            if let Some(main) = self.main() {
+                main.set_page_marked(marked.unwrap_or(false), cx);
+            }
+            self.last_marked = marked;
+        }
         if title != self.last_title {
             let full = if title.is_empty() { "Morph".to_string() } else { format!("{title} — Morph") };
             window.set_window_title(&full);
@@ -251,12 +472,11 @@ impl Render for Shell {
             Forward => Action::Forward,
             ToggleFullscreen => Action::ToggleFullscreen,
             Quit => Action::Quit,
+            Bookmark => Action::Bookmark,
+            ShowBookmarks => Action::ShowBookmarks,
+            ShowHistory => Action::ShowHistory,
         ]);
-        let root = root.on_any_mouse_down(cx.listener(|this, _, _, cx| {
-            for component in &this.components {
-                component.focus_shell(cx);
-            }
-        }));
+        let root = root.on_any_mouse_down(cx.listener(|this, _, _, cx| this.focus_shell(cx)));
         if let Some(error) = &self.error {
             return root.items_center().justify_center().child(div().max_w(px(640.)).p(px(24.)).child(error.clone()));
         }
@@ -315,15 +535,15 @@ pub fn run(home: PathBuf, args: Args) {
         })
         .detach();
 
-        let (profile, history) = match morph_core::profiles::load_catalog(&home) {
+        let profile = match morph_core::profiles::load_catalog(&home) {
             Ok(catalog) => {
                 let profile = catalog.current().id.clone();
-                let history = crate::library::open_at_launch(&home, &profile);
-                (profile, history)
+                crate::library::open_at_launch(&home, &profile);
+                profile
             }
             Err(e) => {
-                eprintln!("morph: profiles: {e}; using the default profile without history");
-                (morph_core::profiles::DEFAULT_PROFILE_ID.to_string(), false)
+                eprintln!("morph: profiles: {e}; using the default profile");
+                morph_core::profiles::DEFAULT_PROFILE_ID.to_string()
             }
         };
         let saved_layout = layout::load(&home, &profile);
@@ -334,43 +554,9 @@ pub fn run(home: PathBuf, args: Args) {
             window_min_size: Some(size(px(480.), px(320.))),
             ..Default::default()
         };
+        let start = args.open.clone().unwrap_or_default();
         let opened = cx.open_window(options, |window, cx| {
-            let theme = Theme::default();
-            let keystrokes = page_shortcuts(&keymap);
-            let start = args.open.clone().unwrap_or_default();
-            let mut catalog = Catalog::new();
-            for kind in component::builtin() {
-                catalog.register(kind);
-            }
-            let (components, error): (Vec<Box<dyn Hosted>>, Option<String>) =
-                match BrowserView::create(&home, &profile, &start, history, window, &keystrokes) {
-                    Ok(browser) => {
-                        let view = cx.new(|cx| BrowserView::new(browser, theme, window, cx));
-                        (vec![Box::new(view)], None)
-                    }
-                    Err(e) => {
-                        eprintln!("morph: {e}");
-                        (Vec::new(), Some(e))
-                    }
-                };
-            let shell = cx.new(|cx| Shell {
-                theme,
-                keymap: keymap.clone(),
-                catalog,
-                layout: saved_layout,
-                components,
-                error,
-                last_title: String::new(),
-                focus: cx.focus_handle(),
-            });
-            // Components outside a visible slot keep their pages hidden.
-            shell.update(cx, |shell, cx| {
-                for c in &shell.components {
-                    let shown = Slot::ALL.iter().any(|s| shell.layout.shown(*s) == Some(&c.kind()));
-                    c.set_shown(shown, cx);
-                }
-            });
-            shell
+            cx.new(|cx| Shell::new(home.clone(), profile.clone(), &start, Theme::default(), keymap.clone(), saved_layout, window, cx))
         });
         let window = match opened {
             Ok(window) => window,

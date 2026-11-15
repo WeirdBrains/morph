@@ -119,6 +119,18 @@ impl Layout {
         state.visible
     }
 
+    /// Show `kind` in `slot`, or hide the slot when it already shows it (a
+    /// panel's shortcut opens and closes it). Returns whether it is shown.
+    pub fn toggle_kind(&mut self, slot: Slot, kind: KindId) -> bool {
+        if self.shown(slot) == Some(&kind) {
+            self.state_mut(slot).visible = false;
+            false
+        } else {
+            self.place(slot, kind);
+            true
+        }
+    }
+
     /// Swap the contents of two slots, keeping each slot's size.
     pub fn swap(&mut self, a: Slot, b: Slot) {
         let (ca, va) = (self.state(a).component.clone(), self.state(a).visible);
@@ -205,6 +217,19 @@ mod tests {
         assert!(layout.toggle(Slot::Bottom));
         layout.clear(Slot::Bottom);
         assert_eq!(layout.shown(Slot::Bottom), None);
+    }
+
+    #[test]
+    fn a_panel_shortcut_opens_closes_and_replaces_the_panel() {
+        let mut layout = Layout::default();
+        assert!(layout.toggle_kind(Slot::Sidebar, KindId::new("morph.library")));
+        assert_eq!(layout.shown(Slot::Sidebar).map(KindId::as_str), Some("morph.library"));
+        assert!(!layout.toggle_kind(Slot::Sidebar, KindId::new("morph.library")));
+        assert_eq!(layout.shown(Slot::Sidebar), None);
+        assert!(layout.toggle_kind(Slot::Sidebar, KindId::new("morph.library")));
+        assert!(layout.toggle_kind(Slot::Sidebar, KindId::new("morph.settings")), "another panel takes the slot");
+        assert_eq!(layout.shown(Slot::Sidebar).map(KindId::as_str), Some("morph.settings"));
+        assert_eq!(layout.shown(Slot::Main).map(KindId::as_str), Some(BROWSER));
     }
 
     #[test]

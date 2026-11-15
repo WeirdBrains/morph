@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Drive the desktop shell (`morph`) in Xvfb with xdotool and check that keys
 reach pages and popups, that the shell's own keys work, that typing a
-phrase searches, that find in page works beside the page, and that a failed
-load shows Morph's error page.
+phrase searches, that find in page works beside the page, that the library
+panel (bookmarks, history) opens beside the page and takes the keyboard, and
+that a failed load shows Morph's error page.
 
     scripts/xvfb-check.py [--bin PATH] [--report FILE] [--no-wm]
 
@@ -31,6 +32,7 @@ EVENT = re.compile(r'^morph-event tab=(\d+) (\w+)(?:\((.*)\))?')
 class Morph:
     def __init__(self, binary, display, home):
         self.display = display
+        self.home = Path(home)
         self.env = dict(os.environ, DISPLAY=display, MORPH_HOME=home, MORPH_LOG_EVENTS="1")
         self.env.pop("WAYLAND_DISPLAY", None)
         self.log_path = Path(home) / "morph.log"
@@ -269,6 +271,51 @@ def find_in_page(m, r, win, top):
     r.check("find", "the page never saw Ctrl+G or Escape", (st() or {}).get("n") == n1, f"{n1} vs {(st() or {}).get('n')}")
 
 
+def bookmarks_file(m):
+    path = m.home / "profiles" / "default" / "bookmarks.json"
+    return path.read_text(errors="replace") if path.exists() else ""
+
+
+def library_panel(m, r, win, top):
+    """Ctrl+D bookmarks the page; Ctrl+Shift+O and Ctrl+H open the library
+    beside the page (the page gets narrower, never covered); its search takes
+    the keyboard and Enter opens the first match; the same key or Escape
+    closes it and the page has the keyboard again."""
+    st = lambda: state(m, tab=1)  # noqa: E731
+    url = PAGE.as_uri()
+    m.click(win, 300, top + 300)
+    s0 = st() or {}
+    n0, w0 = s0.get("n"), s0.get("w", 0)
+    m.key("ctrl+d", delay=0.8)
+    r.check("library", "Ctrl+D bookmarks the page", wait_for(lambda: url in bookmarks_file(m)), bookmarks_file(m)[:200])
+    m.key("ctrl+shift+o", delay=0.8)
+    w1 = wait_for(lambda: (st() or {}).get("w", 0) < w0 and (st() or {}).get("w"))
+    r.check("library", "Ctrl+Shift+O opens bookmarks beside the page (page narrows)", w1 and w1 < w0, f"{w0} -> {(st() or {}).get('w')}")
+    m.type("keys.html")
+    r.check("library", "the page never saw Ctrl+D, Ctrl+Shift+O or the search text", (st() or {}).get("n") == n0, f"{n0} vs {(st() or {}).get('n')}")
+    id0 = (st() or {}).get("id")
+    m.key("Return", delay=1.5)
+    r.check("library", "Enter in the search opens the bookmark", wait_for(lambda: (st() or {}).get("id") not in (None, id0)), str(st()))
+    m.key("ctrl+h", delay=0.8)
+    r.check("library", "Ctrl+H switches the open library to history", (st() or {}).get("w") == w1, f"{w1} vs {(st() or {}).get('w')}")
+    m.type("keys")
+    id1 = (st() or {}).get("id")
+    m.key("Return", delay=1.5)
+    r.check("library", "Enter in the history search opens the visit", wait_for(lambda: (st() or {}).get("id") not in (None, id1)), str(st()))
+    m.key("ctrl+h", delay=0.8)
+    w2 = wait_for(lambda: (st() or {}).get("w") == w0 and w0)
+    r.check("library", "Ctrl+H again closes the library (page widens)", w2 == w0, f"{w1} -> {(st() or {}).get('w')}")
+    m.key("ctrl+h", delay=0.8)
+    wait_for(lambda: (st() or {}).get("w", 0) < w0)
+    m.key("Escape", delay=0.8)
+    w3 = wait_for(lambda: (st() or {}).get("w") == w0 and w0)
+    r.check("library", "Escape in the library closes it", w3 == w0, f"{(st() or {}).get('w')}")
+    m.key("q")
+    r.check("library", "after closing, the page has the keyboard", (st() or {}).get("c") == "KeyQ", str(st()))
+    m.key("ctrl+d", delay=0.8)
+    r.check("library", "Ctrl+D again removes the bookmark", wait_for(lambda: url not in bookmarks_file(m)), bookmarks_file(m)[:200])
+
+
 def error_page(m, r, win, top):
     """A load that fails shows Morph's error page (the web view is hidden)
     and keeps the shell's keys working: F5 tries again, Alt+Left goes back."""
@@ -323,6 +370,7 @@ def main():
 
         page_keys(m, r, "page", win, popup=False, top=top)
         find_in_page(m, r, win, top)
+        library_panel(m, r, win, top)
 
         # Shell keys while the page has focus: the page must not see them.
         m.click(win, 300, top + 300)
