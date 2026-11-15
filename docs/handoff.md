@@ -551,6 +551,22 @@ yay --aururl https://pkg.taur.weirdbrains.com -S morph-bin
 installed `morph` uses the normal profile directory. On Hyprland it runs
 natively on Wayland since alpha.6 (`MORPH_BACKEND=x11` for XWayland).
 
+## Release and TAUR (alpha.8)
+
+- Pre-release `v0.2.0-alpha.8` (tag at `07b44ca`):
+  https://github.com/WeirdBrains/morph/releases/tag/v0.2.0-alpha.8, created
+  with `python3 scripts/weirdnet_release.py github 0.2.0-alpha.8` (helpers
+  0.3.0: `--prerelease`, SHA256SUMS with GitHub's dotted names) and checked
+  with `... assets 0.2.0-alpha.8`. Linux assets built on the box as before;
+  macOS assets from CI run 43770520363 (`07b44ca`), Windows assets from CI run
+  43767845591 (`53d6b48`, the same Rust sources; only CI and harness files
+  changed after it).
+- `morph-bin` 0.2.0alpha8-1: tarball sha256
+  `7a5a71579c28180e17cc31fed7675804b1c1e70f2bf98387ffa9e8031315be7f`; both
+  `.SRCINFO` from `makepkg --printsrcinfo`; built, installed and started in
+  `archlinux:latest`; `taur-check` passes. Archive:
+  `/workspace/dist/morph-bin-0.2.0alpha8.tar.gz`. Not uploaded (no taurctl).
+
 ## Release and TAUR (alpha.7)
 
 - Pre-release `v0.2.0-alpha.7` on GitHub, from `main`, with the tarball, the
