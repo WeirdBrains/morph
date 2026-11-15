@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- `v0.2.0-alpha.5` (phase 5), GPUI desktop shell: the page bridge
+  (`window.MorphBridge`) works on Linux; zip, deb, rpm and Nix flake packages,
+  each with and without the desktop entry. Fixed: the window stopped
+  answering while `xdg-settings` ran.
 - `v0.2.0-alpha.4` (phase 4), GPUI desktop shell: the identity panel
   (Ctrl+Shift+L; create, restore from recovery words or a backup file, show the
   words, save a backup), device linking (a link with its QR code, a code to

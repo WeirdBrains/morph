@@ -1,13 +1,14 @@
 # Handoff
 
 Updated 2026-11-15. This file is the resume point for moving Morph's desktop shell to
-GPUI. **Phases 1 to 4 are done and pushed to `main`**: pre-releases `v0.2.0-alpha.1`
+GPUI. **Phases 1 to 5 are done and pushed to `main`** (native Wayland left for later): pre-releases `v0.2.0-alpha.1`
 (https://github.com/WeirdBrains/morph/releases/tag/v0.2.0-alpha.1), `v0.2.0-alpha.2`
 (https://github.com/WeirdBrains/morph/releases/tag/v0.2.0-alpha.2), `v0.2.0-alpha.3`
-(https://github.com/WeirdBrains/morph/releases/tag/v0.2.0-alpha.3) and `v0.2.0-alpha.4`
-(https://github.com/WeirdBrains/morph/releases/tag/v0.2.0-alpha.4), each with a
+(https://github.com/WeirdBrains/morph/releases/tag/v0.2.0-alpha.3), `v0.2.0-alpha.4`
+(https://github.com/WeirdBrains/morph/releases/tag/v0.2.0-alpha.4) and `v0.2.0-alpha.5`
+(https://github.com/WeirdBrains/morph/releases/tag/v0.2.0-alpha.5), each with a
 `morph-bin` recipe for TAUR. m3talsmith said to keep going through the phases without
-waiting for him; phase 5 is next.
+waiting for him; native Wayland and macOS/Windows are next.
 
 ## Where things stand
 
@@ -31,6 +32,57 @@ waiting for him; phase 5 is next.
   phase 2 (a password-field widget test, and the Android Gradle Plugin 9.1.0
   being below Flutter's 9.1.1 minimum); phase 2 fixed both. The Flutter `linux`
   and `windows` jobs are gone with their targets.
+
+## Phase 5 result: what changed and how it was checked
+
+Packaging, the page bridge and the Wayland question (`v0.2.0-alpha.5`).
+
+- **Page bridge round trip** (carried over from phase 4): every page and popup
+  gets `morph-bridge.js` (the same file the mobile app injects,
+  `morph_core::page_bridge::BRIDGE_SCRIPT`) and a shim posting through a WebKit
+  script message handler of Morph's own (`morphBridge`; wry's IPC drops
+  messages from `file://` pages because their URL is not an `http::Uri`).
+  Replies, errors included, come back through `MorphBridge.deliver`
+  (`morph_webview::PageBridge`, `Backend::set_page_bridge`).
+- **The flaky "Left moves the tabs to the left (saved)" check:** the cause
+  was `xdg-settings` (the default-browser status on opening settings, and
+  "make default") running on the UI thread; on a slow desktop the window
+  stopped answering and the arrow key after `d` was saved seconds late. It now
+  runs on a thread (`default_browser::Check`) and the settings panel picks the
+  result up on the host's tick. The Xvfb checks give Morph an `xdg-settings`
+  that takes 2 s and check that the keys did not wait for it (a regression
+  test for the cause). Green since: 2 local runs (151/151)
+  and CI on `2a076b1`..`854bf68` (3 runs).
+- **Linux packages** (`scripts/linux-packages.sh`, from the release tarball):
+  a zip, `morph` and `morph-standalone` debs and rpms (with and without the
+  desktop entry and icons; `0.2.0~alpha.5` sorts before 0.2.0), and a Nix flake
+  (`flake.nix`, `packaging/nix/`) with `morph` and `morph-standalone` built
+  from the release named in `packaging/nix/release.json`. Checked: the debs
+  installed in `ubuntu:24.04`, the rpms in `fedora:latest` (`morph
+  --version`, desktop file and icons only in `morph`, `dnf swap` to the
+  standalone), the flake built in `nixos/nix` (`nix flake check`, both
+  packages, `morph --version`); CI builds and installs the deb, checks the rpm
+  and builds both flake packages (`nix` job). Not made: a standalone Arch
+  recipe, AppImage and Flatpak (not in the plan), aarch64.
+- **Release script:** `scripts/weirdnet_release.py` (helpers 0.2.0, vendored
+  byte-identical) and `release.toml` (platform matrix, `morph-bin` TAUR
+  recipe). The script takes `MAJOR.MINOR.PATCH` only, so it refuses
+  `0.2.0-alpha.N` (`validate` says so) and the phase pre-releases are still cut
+  by hand (below). Pre-release support has to land in
+  `weirdnet-project-helpers` first (not done here: that repo is not part of
+  this work).
+- **Wayland:** native Wayland is **not done**. Checked instead under headless
+  sway (`WLR_BACKENDS=headless`, in an `archlinux` container): with XWayland
+  Morph runs as an XWayland client (the page loads, a key reaches it); without
+  XWayland its window opens natively and shows the explanation instead of a
+  page. A probe showed the way forward: an offscreen `WebKitWebView` under
+  GDK's Wayland backend renders (`gtk_offscreen_window_get_pixbuf`) and takes
+  synthesized clicks and keys, so a native path can draw the page as a GPUI
+  image and forward input (the snapshot fallback planned in ARCHITECTURE.md).
+  That is a backend of its own plus page drawing and input in the shell.
+- **Checks on this box:** fmt, build, clippy `-D warnings`, workspace tests
+  clean; Xvfb checks 151/151 on the release build (phase 4's plus the bridge
+  and the slow `xdg-settings`).
 
 ## Phase 4 result: what changed and how it was checked
 
@@ -334,7 +386,7 @@ export CARGO_TARGET_DIR=<scratch-dir>/cargo-target/morph
 MORPH_HOME=$(mktemp -d) cargo run -p morph-desktop --release
 
 # 2. Or build and install the Arch package from the checkout:
-cd packaging/arch/morph && makepkg -si      # morph 0.2.0alpha4-1
+cd packaging/arch/morph && makepkg -si      # morph 0.2.0alpha5-1
 morph                                        # or "Morph" in the launcher
 
 # 3. Or the prebuilt release from TAUR (once uploaded):
@@ -345,6 +397,16 @@ morph                                        # or "Morph" in the launcher
 `<scratch-dir>`), so the first build takes a while. Without `MORPH_HOME` the
 installed `morph` uses the normal profile directory. On Hyprland it runs
 through XWayland (needs `xorg-xwayland`, which Hyprland normally has).
+
+## Release and TAUR (phase 5)
+
+- Pre-release `v0.2.0-alpha.5` on GitHub, from `main`, with the tarball, the
+  zip, the four debs/rpms and `SHA256SUMS`.
+- `packaging/arch/morph-bin` and `packaging/arch/morph` are `0.2.0alpha5`
+  (`morph-bin` with the tarball's sha256), `packaging/nix/release.json` names
+  the same tarball. The recipe archive is `morph-bin-0.2.0alpha5.tar.gz`
+  (upload from m3talsmith's side with `taurctl pkg upload
+  morph-bin-0.2.0alpha5.tar.gz --org WeirdBrains`, dry run first).
 
 ## Release and TAUR (phase 4)
 
@@ -563,7 +625,7 @@ browser" (`xdg-settings`), links from the command line into the running instance
 - **m3talsmith tests:** the updated Arch package; onboarding a fresh profile,
   linking with the phone app, opening links from other apps.
 
-### Phase 5 — Linux packaging and the Wayland question
+### Phase 5 — Linux packaging and the Wayland question (done, `v0.2.0-alpha.5`; native Wayland not done)
 
 The remaining packages per the collective rules (deb, rpm, Nix flake, and every
 format with and without the `.desktop` entry), the shared release script
@@ -606,7 +668,7 @@ cd /workspace/morph            # or ~/src/WeirdBrains/morph
 git switch main && git pull --rebase origin main
 ```
 
-Next is phase 5 (and the page bridge round trip left from phase 4). Commit as m3talsmith, run the quality bar before each commit,
+Next: native Wayland (offscreen web view drawn by GPUI, see phase 5), then macOS and Windows. Commit as m3talsmith, run the quality bar before each commit,
 `git pull --rebase origin main` before each push, push to `origin/main`; no pull
 requests, no force-push, leave the remote `gpui` branch alone. Do not modify
 `PLAN.md`; `PRIORITIES.md` gets dated progress notes only. Do not touch
