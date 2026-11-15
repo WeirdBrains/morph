@@ -137,7 +137,8 @@ jobs:
 
   # The GPUI desktop shell: release tarball (scripts/linux-dist.sh) and the
   # key, tab, address-bar and popup checks (scripts/xvfb-check.py), on X11
-  # (Xvfb) and on native Wayland (headless sway).
+  # (Xvfb) and on native Wayland (headless sway). The media check needs the
+  # VP8 (gstreamer1.0-plugins-good) and H.264 (gstreamer1.0-libav) decoders.
   desktop-linux:
     runs-on: ubuntu-24.04
     steps:
@@ -149,7 +150,8 @@ jobs:
       - name: Build and test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y $DESKTOP_DEPS xvfb xdotool openbox mesa-vulkan-drivers rpm sway
+          sudo apt-get install -y $DESKTOP_DEPS xvfb xdotool openbox mesa-vulkan-drivers rpm sway \
+            gstreamer1.0-plugins-good gstreamer1.0-libav
       - name: Release tarball
         run: scripts/linux-dist.sh
       - name: zip, deb and rpm (with and without the desktop entry)
