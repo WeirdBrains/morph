@@ -990,6 +990,9 @@ def main():
         win = wait_for(lambda: m.window("Morph"), 20)
         r.check("shell", "window opens", win)
         r.check("shell", "page loads", wait_for(lambda: state(m), 20))
+        # Looked up again: while Morph starts, the page's own GTK window can
+        # carry the name for a moment (seen when the render check runs).
+        win = m.window("Morph") or win
         if not win:
             return finish(r, args)
         # The page area starts below the tab strip (34) and toolbar (42).
