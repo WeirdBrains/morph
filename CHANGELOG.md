@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- `v0.2.0-alpha.8` (phase 7), GPUI desktop shell on macOS and Windows: pages
+  are WKWebView (macOS) and WebView2 (Windows) child views behind the same
+  web view trait as Linux, with the page bridge, find in page, shell
+  shortcuts while a page has the keyboard (and Cmd for every Ctrl shortcut on
+  macOS). Downloads: a universal Morph.app (arm64 + x86_64) as a zip and a
+  dmg, and a Windows zip and MSI, all unsigned (Gatekeeper and SmartScreen
+  steps in `docs/install-macos-windows.md`). Linux is unchanged from alpha.7.
+  The release script (weirdnet-project-helpers 0.3.0) now handles these
+  pre-releases.
+
 - `v0.2.0-alpha.7`, GPUI desktop shell: fixes for alpha.6 on a real GPU
   (RTX 3060, nvidia-open, Hyprland). Native Wayland no longer aborts with
   "GDK is not able to create a GL context": GTK 3's off-screen windows have
