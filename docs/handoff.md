@@ -6,8 +6,10 @@ GPUI. **Phases 1 to 6 are done and pushed to `main`** (phase 6: native Wayland):
 (https://github.com/WeirdBrains/morph/releases/tag/v0.2.0-alpha.2), `v0.2.0-alpha.3`
 (https://github.com/WeirdBrains/morph/releases/tag/v0.2.0-alpha.3), `v0.2.0-alpha.4`
 (https://github.com/WeirdBrains/morph/releases/tag/v0.2.0-alpha.4), `v0.2.0-alpha.5`
-(https://github.com/WeirdBrains/morph/releases/tag/v0.2.0-alpha.5) and `v0.2.0-alpha.6`
-(https://github.com/WeirdBrains/morph/releases/tag/v0.2.0-alpha.6), each with a
+(https://github.com/WeirdBrains/morph/releases/tag/v0.2.0-alpha.5), `v0.2.0-alpha.6`
+(https://github.com/WeirdBrains/morph/releases/tag/v0.2.0-alpha.6) and `v0.2.0-alpha.7`
+(https://github.com/WeirdBrains/morph/releases/tag/v0.2.0-alpha.7, fixes for alpha.6 on
+m3talsmith's GPU), each with a
 `morph-bin` recipe for TAUR. m3talsmith installs with
 `yay --aururl https://pkg.taur.weirdbrains.com -S morph-bin`. m3talsmith said to keep
 going through the phases without waiting for him; macOS/Windows are next.
@@ -34,6 +36,47 @@ going through the phases without waiting for him; macOS/Windows are next.
   phase 2 (a password-field widget test, and the Android Gradle Plugin 9.1.0
   being below Flutter's 9.1.1 minimum); phase 2 fixed both. The Flutter `linux`
   and `windows` jobs are gone with their targets.
+
+## alpha.7: alpha.6 on a real GPU, and the render check
+
+alpha.6 on my-desktop (Hyprland, NVIDIA GPU, nvidia-open 615.78.08, EGL vendor
+NVIDIA, webkit2gtk-4.1 2.54.1, session `GDK_BACKEND=wayland GDK_SCALE=2`):
+
+- **Native Wayland aborted** at start: `GDK is not able to create a GL
+  context: The current backend does not support OpenGL` (also with
+  `MORPH_DMABUF_PROBE=0`). Cause, reproduced on the box: GTK 3 off-screen
+  windows never make GL contexts, and WebKit `g_error`s when it gets a GPU
+  buffer for such a view. The box has no DRM device, so WebKit used shared
+  memory there and never hit it.
+- **X11 (`MORPH_BACKEND=x11`) pages black**, `Failed to create GBM buffer of
+  size 1x1: Invalid argument` twice. The alpha.6 probe (2x2 ARGB8888 with the
+  GBM-platform EGL display's modifiers) did not ask for what WebKit asks for
+  (opaque XRGB8888, modifiers intersected across the UI and web process
+  displays), so it passed.
+- **Fix (`crates/morph-desktop/src/render_check.rs`,
+  `crates/morph-webview/src/render_probe.rs`):** child processes
+  (`morph --probe-render offscreen|window gl|page`) ask GTK whether an
+  off-screen window has GL (Wayland: if not, `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1`,
+  always checked where a DRM device exists) and load a test page with a known
+  colour where the shell's pages live, reading the view back until the colour
+  shows; the parent also stops a try when WebKit prints a buffer failure.
+  Ladder: defaults, `WEBKIT_DMABUF_RENDERER_DISABLE_GBM=1`,
+  `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1`, `WEBKIT_DISABLE_DMABUF_RENDERER=1`;
+  Wayland falls back to XWayland when nothing paints natively. One line on
+  stderr (`morph: ...`) says what was chosen. `MORPH_DMABUF_PROBE=0` skips the
+  page check (not the GL one), `=1` forces it without a DRM device. Any
+  WebKit renderer variable the user sets skips the page check. No vendor is
+  named anywhere.
+- **Checked:** unit tests with made-up outcomes (m3talsmith's two failures, a
+  working GPU, XWayland fallback, no conclusion); `xvfb-check.py` runs the
+  child under Xvfb and sway (off-screen window has no GL; test page paints;
+  a Morph with the check forced starts, on Wayland with shared memory).
+  **Not verified on NVIDIA** (no GPU here): m3talsmith's run is the test.
+- The `_gdk_frame_clock_freeze` critical on X11 predates alpha.6 (alpha.5
+  prints it on the box) and does not affect drawing.
+- The GDK_SCALE harness check compared against the first page report, which
+  can come before GTK knows the output's scale (one scale-2 run failed that
+  way, the rerun passed); it now waits for both to settle.
 
 ## Phase 6 result: what changed and how it was checked
 
@@ -64,7 +107,8 @@ Native Wayland (`v0.2.0-alpha.6`).
   drops ours; the window now follows the web view's `destroy`); videos not
   playing on Wayland (above). On X11 the bundled clips already played.
 - **No vendor checks (m3talsmith, 2026-11-15).** The NVIDIA detection pushed in
-  `b706629` is removed (`3261b1c`). Instead `morph --probe-dmabuf` runs as a
+  `b706629` is removed (`3261b1c`). (alpha.6 state; alpha.7 replaced this
+  probe with the render check above.) Instead `morph --probe-dmabuf` ran as a
   child at start and makes the allocation WebKit's DMA-BUF renderer makes (2x2
   ARGB8888 GBM buffer for rendering, with the EGL display's modifiers, on the
   first render node). Only if it fails does Morph set
@@ -461,7 +505,7 @@ export CARGO_TARGET_DIR=<scratch-dir>/cargo-target/morph
 MORPH_HOME=$(mktemp -d) cargo run -p morph-desktop --release
 
 # 2. Or build and install the Arch package from the checkout:
-cd packaging/arch/morph && makepkg -si      # morph 0.2.0alpha6-1
+cd packaging/arch/morph && makepkg -si      # morph 0.2.0alpha7-1
 morph                                        # or "Morph" in the launcher
 
 # 3. Or the prebuilt release from TAUR (conflicts with morph):
@@ -472,6 +516,18 @@ yay --aururl https://pkg.taur.weirdbrains.com -S morph-bin
 `<scratch-dir>`), so the first build takes a while. Without `MORPH_HOME` the
 installed `morph` uses the normal profile directory. On Hyprland it runs
 natively on Wayland since alpha.6 (`MORPH_BACKEND=x11` for XWayland).
+
+## Release and TAUR (alpha.7)
+
+- Pre-release `v0.2.0-alpha.7` on GitHub, from `main`, with the tarball, the
+  zip, the four debs/rpms and `SHA256SUMS` (dotted asset names).
+  Container-checked like alpha.6 (`morph-bin` from the release tarball,
+  sha256 matched, installed, `morph --version`, desktop entry; both
+  `.SRCINFO` regenerated).
+- `packaging/arch/morph-bin` and `packaging/arch/morph` are `0.2.0alpha7`,
+  `packaging/nix/release.json` names the same tarball. Recipe archive:
+  `/workspace/dist/morph-bin-0.2.0alpha7.tar.gz` (older `SHA256SUMS-*` kept).
+  m3talsmith installs with `yay --aururl https://pkg.taur.weirdbrains.com -S morph-bin`.
 
 ## Release and TAUR (phase 6)
 
