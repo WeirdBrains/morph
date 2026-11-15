@@ -172,13 +172,13 @@ Packaging, the page bridge and the Wayland question (`v0.2.0-alpha.5`).
   packages, `morph --version`); CI builds and installs the deb, checks the rpm
   and builds both flake packages (`nix` job). Not made: a standalone Arch
   recipe, AppImage and Flatpak (not in the plan), aarch64.
-- **Release script:** `scripts/weirdnet_release.py` (helpers 0.2.0, vendored
+- **Release script:** `scripts/weirdnet_release.py` (helpers 0.3.0, vendored
   byte-identical) and `release.toml` (platform matrix, `morph-bin` TAUR
-  recipe). The script takes `MAJOR.MINOR.PATCH` only, so it refuses
-  `0.2.0-alpha.N` (`validate` says so) and the phase pre-releases are still cut
-  by hand (below). Pre-release support has to land in
-  `weirdnet-project-helpers` first (not done here: that repo is not part of
-  this work).
+  recipe, `[github]` assets). Since helpers 0.3.0 it cuts the phase
+  pre-releases: `--pre alpha` bumps `0.2.0-alpha.N` to `alpha.N+1`, `{pkgver}`
+  is the Arch form (`0.2.0alpha8`), `taur-check` expects it, and `github
+  VERSION` creates the pre-release with a SHA256SUMS listing GitHub's dotted
+  asset names. (Before 0.3.0 the pre-releases were cut by hand.)
 - **Wayland:** native Wayland is **not done**. Checked instead under headless
   sway (`WLR_BACKENDS=headless`, in an `archlinux` container): with XWayland
   Morph runs as an XWayland client (the page loads, a key reaches it); without
