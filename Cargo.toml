@@ -42,6 +42,7 @@ gpui = { git = "https://github.com/zed-industries/zed", rev = "703b5ac3f4ffe1e87
 gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "703b5ac3f4ffe1e87a073123ae56e22f72f095c4", features = ["font-kit", "wayland", "x11"] }
 wry = "=0.57.2"
 gtk = "0.18"
+gdkx11 = "0.18"
 webkit2gtk = { version = "=2.0.2", features = ["v2_38"] }
 raw-window-handle = "0.6"
 x11-dl = "2.21"

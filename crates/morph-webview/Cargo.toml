@@ -15,6 +15,7 @@ thiserror.workspace = true
 # The wry backend: Linux only for now (ARCHITECTURE.md section 2.0). macOS
 # (WKWebView) and Windows (WebView2) are planned behind the same trait.
 [target.'cfg(target_os = "linux")'.dependencies]
+gdkx11.workspace = true
 gtk.workspace = true
 raw-window-handle.workspace = true
 webkit2gtk.workspace = true

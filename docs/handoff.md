@@ -1,22 +1,209 @@
 # Handoff
 
-Updated 2026-11-14 on the `gpui` branch. This file is the resume point for moving
-Morph's desktop shell to GPUI. m3talsmith's usage was under 1% of the weekly limit.
-**Stage 1 (plan and docs) is done and pushed. Nothing else is started: m3talsmith asked
-to stop here and wait for his go-ahead before any Flutter code is removed or any
-GPUI code is written.**
+Updated 2026-11-14. This file is the resume point for moving Morph's desktop shell to
+GPUI. **Phase 1 is done and pushed to `main`**, with pre-release `v0.2.0-alpha.1`
+(https://github.com/WeirdBrains/morph/releases/tag/v0.2.0-alpha.1) and the `morph-bin`
+recipe for TAUR. m3talsmith said to keep going through the phases without waiting for
+him; phase 2 is next.
 
 ## Where things stand
 
-- Branch `gpui` was created from `origin/main` at `e9da772` (`Update dependencies`).
-  m3talsmith's local `gpui` branch pointed at that same commit, so nothing of his was
-  left out. `main` is untouched.
-- This branch so far changes only documents, plus a throwaway spike kept as
-  evidence in `docs/evidence/gpui-spike/` (not a workspace member, not built by
-  `cargo build` at the root).
-- The popup typing and repaint bug from the previous handoff (Flutter Linux web
-  view) is not fixed on `main`. On this branch it goes away with the Flutter Linux
-  web view itself; the spike shows the GPUI design does not have it (below).
+- The `gpui` branch was merged into `main` (fast-forward, `fbb5af9`) on 2026-11-14.
+  **All work is committed and pushed straight to `origin/main`, no pull requests.**
+  Another worker pushes the website (`site/`) to `main`, so always
+  `git pull --rebase origin main` before pushing; never force-push. The remote
+  `gpui` branch is left as it was.
+- Phase 1 (below) is in `main`: crates `morph-ui`, `morph-webview`,
+  `morph-browser`, `morph-desktop` (binary `morph`), the Arch recipes, the Xvfb key
+  checks and the CI jobs. Flutter is untouched; both shells live side by side
+  until phase 2.
+- The throwaway spike from planning stays in `docs/evidence/gpui-spike/` (not a
+  workspace member).
+- Builds are tagged `v0.2.0-alpha.N` from `main` (chosen over `v0.2.0-gpui.N`
+  since the work is on `main` now), `pkgver` `0.2.0alphaN`. Only `morph-desktop`
+  carries that version.
+- CI on `main`: the `flutter` and `android` jobs were already failing on
+  `fbb5af9` before phase 1 (a password-field widget test, and the Android Gradle
+  Plugin 9.1.0 being below Flutter's 9.1.1 minimum). Phase 1 leaves Flutter alone,
+  so they still fail; phase 2 touches that code.
+
+## Phase 1 result: what works and how it was checked
+
+On this box (Debian 13, Xvfb, `WAYLAND_DISPLAY` unset, openbox, webkit2gtk 2.54,
+Mesa lavapipe Vulkan, Rust 1.100), release build of `v0.2.0-alpha.1`:
+
+- **Window and browser component.** A 1200x800 GPUI window (`app_id` `morph`)
+  draws a tab strip, a toolbar (back, forward, reload/stop, address bar) and the
+  page below as a webkit2gtk child window. Tabs open, close and switch (buttons
+  and keys); the address bar edits text with the mouse and keys, phrases become
+  searches (main's rule and test cases, `morph_core::omnibox`); back, forward,
+  reload and stop follow the page; history goes into the profile's library; a
+  crashed page shows a reload panel in its tab.
+- **Popups** (`window.open`) are GTK windows Morph makes, related to the opener
+  (same session, `postMessage` works); their title follows the page, F5 and
+  Ctrl+R reload them, Ctrl+W closes them, and every other key goes to their page.
+- **Keys.** `scripts/xvfb-check.py` starts the binary in its own Xvfb with
+  openbox and a temporary `MORPH_HOME`, loads `tests/xvfb/keys.html` (a page that
+  puts every keydown, the focused field, the field values, the caret and the
+  scroll position in its title), and drives it with `xdotool`. 72 of 72 pass:
+
+| Where | Check | Result |
+|---|---|---|
+| shell | window opens | pass |
+| shell | page loads | pass |
+| page | click focuses the input | pass |
+| page | typing | pass |
+| page | typing with the pointer over the shell | pass |
+| page | Backspace | pass |
+| page | Home in a field | pass |
+| page | Delete | pass |
+| page | End in a field | pass |
+| page | Left arrow | pass |
+| page | Right arrow | pass |
+| page | Ctrl+A, Tab moves focus | pass |
+| page | Ctrl+C / Ctrl+V | pass |
+| page | Shift+Tab moves focus back | pass |
+| page | Ctrl+X | pass |
+| page | Ctrl+Z | pass |
+| page | Enter reaches the page | pass |
+| page | Escape reaches the page | pass |
+| page | Ctrl+F reaches the page (no find bar yet) | pass |
+| page | keypad key, Num Lock off | pass |
+| page | keypad digits and +, Num Lock on | pass |
+| page | keypad Enter | pass |
+| page | Page Down scrolls | pass |
+| page | Page Up scrolls back | pass |
+| page | Space scrolls down | pass |
+| page | Shift+Space scrolls up | pass |
+| page | Down arrow scrolls | pass |
+| page | Up arrow scrolls | pass |
+| page | End scrolls to the bottom | pass |
+| page | Home scrolls to the top | pass |
+| page | F5 reloads | pass |
+| page | Ctrl+R reloads | pass |
+| shell | Ctrl+T opens a tab from the page | pass |
+| shell | the new tab's address bar takes typing | pass |
+| shell | Ctrl+Tab switches tabs | pass |
+| page | page never saw Ctrl+T / Ctrl+Tab | pass |
+| shell | Ctrl+L, then a phrase searches | pass |
+| shell | Ctrl+W closes the tab (tab 2 shows again) | pass |
+| shell | F11 toggles full screen | pass |
+| shell | F11 again leaves full screen | pass |
+| popup | window.open makes a popup window | pass |
+| popup | click focuses the input | pass |
+| popup | typing | pass |
+| popup | Backspace | pass |
+| popup | Home in a field | pass |
+| popup | Delete | pass |
+| popup | End in a field | pass |
+| popup | Left arrow | pass |
+| popup | Right arrow | pass |
+| popup | Ctrl+A, Tab moves focus | pass |
+| popup | Ctrl+C / Ctrl+V | pass |
+| popup | Shift+Tab moves focus back | pass |
+| popup | Ctrl+X | pass |
+| popup | Ctrl+Z | pass |
+| popup | Enter reaches the page | pass |
+| popup | Escape reaches the page | pass |
+| popup | Ctrl+F reaches the page (no find bar yet) | pass |
+| popup | keypad key, Num Lock off | pass |
+| popup | keypad digits and +, Num Lock on | pass |
+| popup | keypad Enter | pass |
+| popup | Page Down scrolls | pass |
+| popup | Page Up scrolls back | pass |
+| popup | Space scrolls down | pass |
+| popup | Shift+Space scrolls up | pass |
+| popup | Down arrow scrolls | pass |
+| popup | Up arrow scrolls | pass |
+| popup | End scrolls to the bottom | pass |
+| popup | Home scrolls to the top | pass |
+| popup | F5 reloads | pass |
+| popup | Ctrl+R reloads | pass |
+| popup | popup state reached the shell | pass |
+| popup | Ctrl+W closes the popup | pass |
+
+  The page rows run in the main window, the popup rows in a popup opened from the
+  page. "page never saw Ctrl+T / Ctrl+Tab" reads the page's key log: shell keys
+  are taken before the page. Ctrl+F goes to the page until find in page exists
+  (phase 3). CI runs the same script on Ubuntu 24.04 (`desktop-linux` job) and
+  attaches the report as `xvfb-checks.md`.
+- **Arch package.** In an `archlinux:latest` container (podman): `makepkg
+  --printsrcinfo` matches both `.SRCINFO` files; `makepkg -s` for
+  `packaging/arch/morph` built it from the checkout (`cargo build --locked
+  --release`), `pacman -U` installed it, `morph --version` printed `morph
+  0.2.0-alpha.1`, `pacman -Ql` listed the binary, desktop file, icons, licence and
+  readme, and the installed `morph` opened its window under Xvfb. `morph-bin` was
+  checked the same way against the published release (see the release section).
+- **Quality bar** before each commit: `cargo fmt --check`, `cargo build`,
+  `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`.
+  New tests: `morph-ui` (layout, keymap, text field), `morph-core::omnibox`,
+  `morph-browser` (17, against the fake web view), `morph-desktop` (key routing,
+  action mapping, UTF-16 offsets).
+
+**Not checked:** a real Wayland session through XWayland (Hyprland on
+my-desktop), NVIDIA, HiDPI scaling, IME input, window resizing by hand, real
+sites and real sign-in popups, a long session's CPU cost of pumping GTK every
+8 ms, and m3talsmith's Arch box itself (packages were checked in a container only).
+
+### How the keys are routed (X11)
+
+- The page is a child X window of the shell's window. X11 gives a key to the
+  window under the pointer when the focused window is its ancestor, so:
+  - **Shell has focus** (address bar, after Ctrl+T or Ctrl+L, a click on the tab
+    strip or toolbar): the shell's window has X focus, and the page's GTK window
+    hands any key it gets on to the shell's window (`XSendEvent`, `HostKeys` in
+    `morph-webview`).
+  - **Page has focus** (a click into the page, Escape in the address bar, a
+    submitted address): the web view's own X window gets X focus, so keys reach
+    the page wherever the pointer is.
+- While a page has focus, its web view reports the keys the shell uses (Ctrl+T,
+  Ctrl+W, Ctrl+L, Ctrl+R, F5, Ctrl+Tab, Ctrl+Shift+Tab, Ctrl+1..9, Alt+Left/Right,
+  F11, Ctrl+Q) and does not pass them to the page; everything else goes to the page.
+- WebKitGTK does not bind Ctrl+Z / Ctrl+Shift+Z itself, so a small injected
+  script runs undo/redo when the page did not handle the key.
+
+## How m3talsmith builds and installs on my-desktop
+
+Arch, Rust 1.99 (the workspace's `rust-version` is 1.99, so that is the minimum).
+
+```sh
+cd ~/src/WeirdBrains/morph
+git switch main && git pull --ff-only origin main
+sudo pacman -S --needed base-devel webkit2gtk-4.1 gtk3 libxkbcommon-x11 libxcb \
+  vulkan-icd-loader fontconfig freetype2 openssl clang cmake pkgconf
+
+# 1. Run from the checkout without installing (a throwaway profile):
+export CARGO_TARGET_DIR=<scratch-dir>/cargo-target/morph
+MORPH_HOME=$(mktemp -d) cargo run -p morph-desktop --release
+
+# 2. Or build and install the Arch package from the checkout:
+cd packaging/arch/morph && makepkg -si      # morph 0.2.0alpha1-1
+morph                                        # or "Morph" in the launcher
+
+# 3. Or the prebuilt release from TAUR (once uploaded):
+#    install morph-bin from the WeirdBrains TAUR repo; it conflicts with morph.
+```
+
+`makepkg` builds into `packaging/arch/morph/src/target` (its own target dir, not
+`<scratch-dir>`), so the first build takes a while. Without `MORPH_HOME` the
+installed `morph` uses the normal profile directory. On Hyprland it runs
+through XWayland (needs `xorg-xwayland`, which Hyprland normally has).
+
+## Release and TAUR (phase 1)
+
+- Pre-release `v0.2.0-alpha.1` on GitHub, from `main`, with
+  `morph-0.2.0-alpha.1-x86_64-unknown-linux-gnu.tar.gz` and `SHA256SUMS`. The
+  tarball holds `bin/morph`, `share/applications/morph.desktop`, the hicolor
+  icons, `LICENSE` and `README.md` (`scripts/linux-dist.sh`).
+- `packaging/arch/morph-bin` points at that tarball with its sha256 filled in.
+  The recipe archive (`morph-bin/PKGBUILD` + `morph-bin/.SRCINFO`) is
+  `morph-bin-0.2.0alpha1.tar.gz`, uploaded from m3talsmith's side with
+  `taurctl pkg upload morph-bin-0.2.0alpha1.tar.gz --org WeirdBrains` (dry run
+  first). The agent does not run `taurctl`.
+- CI on `main`: `check` (fmt, clippy, tests, on Ubuntu 24.04 with the desktop
+  libraries), `desktop-linux` (tarball, Xvfb key checks, artifacts) and
+  `arch-package` (`.SRCINFO` check, `makepkg`, `pacman -U`, `--version`, start
+  under Xvfb, the `.pkg.tar.zst` as an artifact), next to the existing jobs.
 
 ## Decisions so far (m3talsmith, 2026-11-14)
 
@@ -40,7 +227,7 @@ All of it is written up in `ARCHITECTURE.md`: sections 1 (shape), 2.0 (desktop w
 view), 2a (components), 3 (crates), and the three 2026-11-14 entries at the end
 (the switch, Dart, and the open decisions).
 
-## What was checked (verified, not guessed)
+## What the planning spike checked (before phase 1)
 
 On this box (Debian 13, Xvfb, `WAYLAND_DISPLAY` unset, webkit2gtk 2.54.0, Mesa
 lavapipe Vulkan, Rust 1.100.0), with the spike in `docs/evidence/gpui-spike/`:
@@ -75,19 +262,12 @@ of pumping GTK from a timer.
 Every phase passes the quality bar before each commit (`cargo fmt --check`,
 `cargo build`, `cargo clippy --all-targets -- -D warnings`, `cargo test`), ships
 tests for new behaviour, runs GUI checks only under Xvfb (or a headless
-compositor), and is pushed to `origin/gpui` only. Domain logic goes in `morph-*`
+compositor), and is pushed straight to `origin/main` after
+`git pull --rebase origin main` (no pull requests, no force-push). Domain logic goes in `morph-*`
 crates that test without a display; the GPUI crates stay thin.
 
-**How m3talsmith tests a phase on my-desktop** (Rust 1.99; Flutter 3.50 only matters
-for the mobile app):
-
-```sh
-cd ~/src/WeirdBrains/morph
-git fetch origin && git switch gpui && git pull --ff-only
-sudo pacman -S --needed webkit2gtk-4.1 gtk3 libxkbcommon-x11 vulkan-icd-loader
-export CARGO_TARGET_DIR=<scratch-dir>/cargo-target/morph
-MORPH_HOME=$(mktemp -d) cargo run -p morph-desktop --release
-```
+**How m3talsmith tests a phase on my-desktop:** see "How m3talsmith builds and
+installs on my-desktop" above.
 
 **Every phase also ships Arch packages**, in the shape of m3talsmith's existing
 TAUR packages (`mouser-bin`, `muninn-bin`, `muninn-app-bin` under org
@@ -99,7 +279,8 @@ WeirdBrains, read from https://pkg.taur.weirdbrains.com on 2026-11-14):
   `glibc`, `gcc-libs`; `makedepends`: `cargo`, `git`, `clang`, `pkgconf`.
 - `packaging/arch/morph-bin/PKGBUILD` installs the prebuilt app from a GitHub
   Release, like `muninn-app-bin`: `source_x86_64` (and later `source_aarch64`)
-  `$url/releases/download/v$pkgver/morph-$pkgver-$CARCH-unknown-linux-gnu.tar.gz`,
+  `$url/releases/download/v$_ver/morph-$_ver-$CARCH-unknown-linux-gnu.tar.gz`
+  (`_ver` is the tag's version, `0.2.0-alpha.1`; `pkgver` is `0.2.0alpha1`),
   `sha256sums_*` filled from the release's `SHA256SUMS`, `provides=('morph')`,
   `conflicts=('morph')`, `options=('!strip' '!debug')`, the maintainer line
   and a header comment saying where the tarball comes from.
@@ -117,27 +298,17 @@ cd packaging/arch/morph && makepkg -si     # from the checkout
 sudo pacman -U morph-*-x86_64.pkg.tar.zst  # or the package CI attached
 ```
 
-**Publishing each phase to TAUR (after m3talsmith approves the phase).** The agent
-does not run `taurctl` and does not create GitHub Releases. Once m3talsmith
-approves, the release tarball and `SHA256SUMS` go on a GitHub Release, the
-`morph-bin` recipe gets that version and those sums, and a recipe archive
-(`morph-bin/PKGBUILD` + `morph-bin/.SRCINFO`, as `morph-bin-<version>.tar.gz`)
-is uploaded from m3talsmith's machine with
-`taurctl pkg upload morph-bin-<version>.tar.gz --org WeirdBrains`, dry-run
-first, per the collective release rules. How phase builds are versioned and
-tagged off `main` is open decision 10.
+**Publishing each phase to TAUR.** The agent tags the phase build as a GitHub
+pre-release from `main` (`v0.2.0-alpha.N`) with the tarball and `SHA256SUMS`, fills
+the `morph-bin` recipe's version and sums, and leaves the recipe archive
+(`morph-bin/PKGBUILD` + `morph-bin/.SRCINFO`, as `morph-bin-<pkgver>.tar.gz`) for
+upload from m3talsmith's side with `taurctl pkg upload ... --org WeirdBrains`, dry
+run first. The agent does not run `taurctl`. After each push, m3talsmith's checkout
+at `~/src/WeirdBrains/morph` on my-desktop (branch `main`) is fast-forwarded
+(`git pull --ff-only origin main`). CI also attaches the tarball and the Arch
+package to each `main` run.
 
-After each push to `origin/gpui`, m3talsmith's checkout at
-`~/src/WeirdBrains/morph` on my-desktop (branch `gpui`) is fast-forwarded
-(`git pull --ff-only origin gpui`).
-
-Or download the `morph-linux-x86_64` tarball that CI attaches to the branch run
-(phase 1 adds the job and turns on CI for pushes to `gpui`), unpack and run
-`./morph`. The package list is from Arch package names and is not yet checked on
-my-desktop. On Hyprland the window runs through XWayland (`MORPH_ALLOW_WAYLAND=1`
-will skip that once a native path exists).
-
-### Phase 1 — GPUI shell on Linux with one working browser component
+### Phase 1 — GPUI shell on Linux with one working browser component (done)
 
 Flutter is untouched in this phase; both shells live side by side.
 
@@ -160,12 +331,13 @@ Flutter is untouched in this phase; both shells live side by side.
 - CI: a `desktop-linux` job (build, clippy, test, release tarball
   `morph-<version>-x86_64-unknown-linux-gnu.tar.gz` with `SHA256SUMS`) and an
   `arch-package` job (`archlinux:latest` container, `.SRCINFO` check,
-  `makepkg`, `pacman -U`, package artifact); CI runs on pushes to `gpui`. The
-  Flutter jobs stay as they are for now.
+  `makepkg`, `pacman -U`, package artifact); CI runs on pushes to `main` and
+  on pull requests. The Flutter jobs stay as they are for now.
 - `packaging/arch/morph` and `packaging/arch/morph-bin` (PKGBUILD + `.SRCINFO`
   each), the `.desktop` file and the icon, checked in an Arch container.
 - Xvfb checks: open a page, type into it, open a popup and type into it, switch
-  and close tabs, type a phrase and get a search.
+  and close tabs, type a phrase and get a search; every key m3talsmith listed, in
+  pages and popups (results above).
 - **m3talsmith tests:** installs the Arch package (`makepkg -si` or `pacman -U`),
   then browse, tabs, address bar, sign-in popups (no real account needed for the
   check, but he may try his own).
@@ -221,37 +393,37 @@ crates land.
 ## Open decisions for m3talsmith
 
 Listed in full in `ARCHITECTURE.md` (2026-11-14 — Open decisions from the GPUI
-switch):
+switch). Decided for phase 1 (`ARCHITECTURE.md`, 2026-11-14 — Phase 1 decisions):
 
-1. Native Wayland: accept XWayland for phase 1, or make native Wayland a gate?
-2. GPUI pin: Zed repository by commit (recommended), or a WeirdBrains fork on
-   crates.io?
+1. Native Wayland: **XWayland for now**; native Wayland stays future work.
+2. GPUI pin: **Zed repository by commit** (`703b5ac`).
+8. GPUI cannot draw over the page: **popovers beside it**.
+10. Phase builds: **pre-releases from `main`**, `v0.2.0-alpha.N`, `pkgver`
+    `0.2.0alphaN` (sorts correctly before a final 0.2.0).
+
+Still open:
+
 3. Keep or drop the Linux texture/DMA-BUF/hidden-text-layer work (only useful
    later for native Wayland)?
 4. `flutter_inappwebview` "other platforms" now means Android and iOS only.
 5. App updates: RFW and Dart-patch items now concern mobile only.
 6. Flutter engine fork: keep the BSD part, or plan BSD on GPUI?
 7. GTK 4 / native X11 item in Priorities 2, given wry is GTK 3.
-8. GPUI cannot draw over the page: popovers beside it, OK?
-9. Apply the frameless-window rule to the GPUI window?
-10. Phase builds and releases: the shared release script releases only from
-    `main`, and `morph-bin` needs a GitHub Release per phase. Tag phase builds
-    from `gpui` as pre-releases (for example `v0.2.0-gpui.1`, with `pkgver`
-    `0.2.0.gpui.1`, since `pkgver` cannot contain `-`), or release only from
-    `main` after a merge?
+9. Apply the frameless-window rule to the GPUI window? (Phase 3 plans it.)
 
 ## How to resume
 
 ```sh
-cd ~/src/WeirdBrains/morph
-git fetch origin
-git switch gpui            # or: git switch -c gpui --track origin/gpui
-git pull --ff-only origin gpui
+cd /workspace/morph            # or ~/src/WeirdBrains/morph
+git switch main && git pull --rebase origin main
 ```
 
-Start phase 1 only after m3talsmith's go-ahead. Do not push to `main`. Do not touch
-`~/.morph`. Do not print secrets. GUI only under Xvfb (or a headless compositor)
-with `WAYLAND_DISPLAY` unset.
+Next is phase 2. Commit as m3talsmith, run the quality bar before each commit,
+`git pull --rebase origin main` before each push, push to `origin/main`; no pull
+requests, no force-push, leave the remote `gpui` branch alone. Do not modify
+`PLAN.md`; `PRIORITIES.md` gets dated progress notes only. Do not touch
+`~/.morph`. Do not print secrets. GUI only under Xvfb with `WAYLAND_DISPLAY`
+unset (`scripts/xvfb-check.py` starts its own). Do not run `taurctl`.
 
 ## History before the GPUI branch
 

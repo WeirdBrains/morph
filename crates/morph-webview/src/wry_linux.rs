@@ -169,6 +169,23 @@ impl HostKeys {
         true
     }
 
+    /// Give X input focus to a page's GTK window `page` (an X window id), so
+    /// keys reach the page wherever the pointer is. Without this the shell's
+    /// window keeps X focus and keys typed with the pointer over the shell's
+    /// tab strip or toolbar never reach the page.
+    fn focus_page(&self, page: Option<u64>) {
+        self.set_active(false);
+        let (Some(conn), Some(page)) = (self.conn.as_ref(), page) else {
+            return;
+        };
+        // SAFETY: the display is open; the window id is a live page window,
+        // a child of the shell's window.
+        unsafe {
+            (conn.xlib.XSetInputFocus)(conn.display, page as _, x11_dl::xlib::RevertToParent, x11_dl::xlib::CurrentTime);
+            (conn.xlib.XFlush)(conn.display);
+        }
+    }
+
     fn focus_host(&self) {
         self.set_active(true);
         let Some(conn) = self.conn.as_ref() else {
@@ -181,6 +198,15 @@ impl HostKeys {
             (conn.xlib.XFlush)(conn.display);
         }
     }
+}
+
+/// The X window id to give input focus for web view `engine`: the web view
+/// widget's own window, the one that selects key events. (The GTK window
+/// around it does not, so keys sent there would pass up to the shell.)
+fn page_window(engine: &webkit2gtk::WebView) -> Option<u64> {
+    let window = engine.window()?;
+    let x11 = window.downcast::<gdkx11::X11Window>().ok()?;
+    Some(x11.xid())
 }
 
 impl WryBackend {
@@ -372,8 +398,8 @@ impl Backend for WryBackend {
         let engine = view.webview();
         watch(&engine, id, &self.queue, &self.shortcuts);
         let keys = self.keys.clone();
-        engine.connect_button_press_event(move |_, _| {
-            keys.set_active(false);
+        engine.connect_button_press_event(move |engine, _| {
+            keys.focus_page(page_window(engine));
             Propagation::Proceed
         });
         if let Some(top) = engine.toplevel() {
@@ -445,7 +471,7 @@ impl WebView for WryView {
         Ok(())
     }
     fn focus(&self) -> Result<()> {
-        self.keys.set_active(false);
+        self.keys.focus_page(page_window(&self.view.webview()));
         self.view.focus().map_err(backend_err)
     }
 }
