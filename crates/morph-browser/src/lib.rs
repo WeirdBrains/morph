@@ -14,7 +14,7 @@ use morph_core::omnibox;
 use morph_core::tabs::{TabId, TabSet};
 use morph_ui::actions::Action;
 use morph_ui::text::TextField;
-use morph_webview::{Backend, Event, Rect, Spec, ViewId, WebView};
+use morph_webview::{Backend, ErrorKind, Event, LoadError, Rect, Spec, ViewId, WebView};
 
 /// Called with `(url, title)` when a page finishes loading or its title
 /// changes afterwards. The desktop shell writes it to the profile's history.
@@ -39,9 +39,105 @@ struct Page {
     loading: bool,
     can_back: bool,
     can_forward: bool,
-    crashed: bool,
+    /// What the shell shows instead of the page, if anything.
+    cover: Option<Cover>,
+    /// The user chose to wait for a page that stopped answering; it is not
+    /// covered again until it has answered.
+    waited: bool,
+    /// The page's process was ended on purpose (Reload on a hung page); its
+    /// crash report is expected and ignored once.
+    terminating: bool,
+    /// The address the page still shows under an error page (the engine
+    /// puts it back when a load fails), for Back.
+    shown_url: Option<String>,
     finished: bool,
     popups: usize,
+}
+
+impl Page {
+    fn new(view: Box<dyn WebView>) -> Self {
+        Self {
+            view,
+            loading: false,
+            can_back: false,
+            can_forward: false,
+            cover: None,
+            waited: false,
+            terminating: false,
+            shown_url: None,
+            finished: false,
+            popups: 0,
+        }
+    }
+}
+
+/// What covers the page area instead of the page. The web view is hidden
+/// while one is shown, since nothing can draw over it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Cover {
+    /// The page's process ended.
+    Crashed,
+    /// The page's process stopped answering.
+    Unresponsive,
+    /// The last main-frame load failed.
+    Failed(LoadError),
+}
+
+/// Title and explanation for a page that failed to load.
+pub fn error_text(error: &LoadError) -> (String, String) {
+    let host = host(&error.url);
+    let site = if host.is_empty() { "This site".to_string() } else { host.to_string() };
+    match error.kind {
+        ErrorKind::Certificate => (
+            "This connection isn't private".into(),
+            format!(
+                "{site} sent a security certificate Morph cannot trust, so the page was not loaded. {}Check the address for a typo.",
+                sentence(&error.message)
+            ),
+        ),
+        ErrorKind::NotFound => (format!("Can't find {site}"), "The address may be misspelled, or the site no longer exists.".into()),
+        ErrorKind::Unreachable => {
+            (format!("Can't reach {site}"), "The site refused the connection or the network is down. Check your connection and try again.".into())
+        }
+        ErrorKind::TimedOut => (format!("{site} took too long to respond"), "The site may be busy or your connection slow. Try again.".into()),
+        ErrorKind::Other => (
+            "This page couldn't load".into(),
+            if error.message.trim().is_empty() { "Try again in a moment.".into() } else { error.message.trim().to_string() },
+        ),
+    }
+}
+
+/// The host of `url` (`https://user@example.com:8080/x` gives
+/// `example.com`), or empty.
+fn host(url: &str) -> &str {
+    let Some((_, rest)) = url.split_once("://") else {
+        return "";
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let authority = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    if authority.starts_with('[') {
+        return authority.split_inclusive(']').next().unwrap_or(authority);
+    }
+    authority.split(':').next().unwrap_or("")
+}
+
+/// `text` as a sentence followed by a space, or nothing when empty.
+fn sentence(text: &str) -> String {
+    let trimmed = text.trim();
+    match trimmed.chars().last() {
+        None => String::new(),
+        Some('.' | '!' | '?') => format!("{trimmed} "),
+        Some(_) => format!("{trimmed}. "),
+    }
+}
+
+/// The find bar's state. It belongs to the browser, not a tab: switching
+/// tabs searches the new tab for the same text.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FindBar {
+    pub query: String,
+    /// Matches in the active page; `None` until the page answers.
+    pub matches: Option<u32>,
 }
 
 /// One entry of the tab strip, ready to draw.
@@ -59,7 +155,8 @@ pub struct Toolbar {
     pub can_back: bool,
     pub can_forward: bool,
     pub loading: bool,
-    pub crashed: bool,
+    /// Something covers the page (crash, hang or error page).
+    pub covered: bool,
     pub popups: usize,
 }
 
@@ -84,6 +181,7 @@ pub struct Browser {
     shown: bool,
     history: Option<HistorySink>,
     log_events: bool,
+    find: Option<FindBar>,
 }
 
 impl Browser {
@@ -100,6 +198,7 @@ impl Browser {
             shown: true,
             history: config.history,
             log_events: config.log_events,
+            find: None,
         };
         let first = browser.tabs.active_id();
         let url = config.start_url.trim().to_string();
@@ -124,7 +223,7 @@ impl Browser {
         })?;
         self.by_view.insert(view.id(), id);
         let _ = self.tabs.update(id, target, String::new());
-        self.pages.insert(id, Page { view, loading: false, can_back: false, can_forward: false, crashed: false, finished: false, popups: 0 });
+        self.pages.insert(id, Page::new(view));
         Ok(())
     }
 
@@ -132,11 +231,21 @@ impl Browser {
     fn after_switch(&mut self) {
         let active = self.tabs.active_id();
         for (id, page) in &self.pages {
-            let visible = *id == active && self.shown && !page.crashed;
+            let visible = *id == active && self.shown && page.cover.is_none();
             if visible {
                 let _ = page.view.set_bounds(self.page_area);
             }
             let _ = page.view.set_visible(visible);
+        }
+        if let Some(find) = self.find.as_mut() {
+            find.matches = None;
+            for (id, page) in &self.pages {
+                if *id == active && !find.query.is_empty() {
+                    let _ = page.view.find(&find.query);
+                } else {
+                    let _ = page.view.find_clear();
+                }
+            }
         }
         let url = self.tabs.active().url.clone();
         self.address.set_text_selected(&url);
@@ -180,7 +289,59 @@ impl Browser {
 
     pub fn toolbar(&self) -> Toolbar {
         let page = self.active_page();
-        Toolbar { can_back: page.can_back, can_forward: page.can_forward, loading: page.loading, crashed: page.crashed, popups: page.popups }
+        Toolbar { can_back: page.can_back, can_forward: page.can_forward, loading: page.loading, covered: page.cover.is_some(), popups: page.popups }
+    }
+
+    /// What covers the active page, if anything.
+    pub fn cover(&self) -> Option<&Cover> {
+        self.active_page().cover.as_ref()
+    }
+
+    /// The find bar, when open.
+    pub fn find(&self) -> Option<&FindBar> {
+        self.find.as_ref()
+    }
+
+    /// Open the find bar (Ctrl+F) and take keyboard focus from the page for
+    /// it. Opening it again keeps its text.
+    pub fn open_find(&mut self) {
+        if self.address_focused {
+            self.blur_address();
+        }
+        if self.find.is_none() {
+            self.find = Some(FindBar::default());
+        }
+        self.backend.focus_host();
+    }
+
+    /// The find bar's text changed: search the active page for it.
+    pub fn set_find_query(&mut self, query: &str) {
+        let Some(find) = self.find.as_mut() else {
+            return;
+        };
+        if find.query == query {
+            return;
+        }
+        find.query = query.to_string();
+        find.matches = None;
+        let view = &self.pages.get(&self.tabs.active_id()).expect("every tab has a page").view;
+        let _ = if query.is_empty() { view.find_clear() } else { view.find(query) };
+    }
+
+    /// Next match (Enter, F3) or previous (Shift+Enter, Shift+F3).
+    pub fn find_next(&mut self, forward: bool) {
+        if self.find.as_ref().is_some_and(|f| !f.query.is_empty()) {
+            let _ = self.active_page().view.find_next(forward);
+        }
+    }
+
+    /// Close the find bar (Escape), drop the highlights and give the page
+    /// keyboard focus back.
+    pub fn close_find(&mut self) {
+        if self.find.take().is_some() {
+            let _ = self.active_page().view.find_clear();
+            self.focus_page();
+        }
     }
 
     pub fn address(&self) -> &TextField {
@@ -237,8 +398,7 @@ impl Browser {
         let area = self.page_area;
         if let Some(page) = self.pages.get_mut(&id) {
             page.finished = false;
-            if page.crashed {
-                page.crashed = false;
+            if page.cover.take().is_some() {
                 let _ = page.view.set_bounds(area);
                 let _ = page.view.set_visible(shown);
             }
@@ -304,29 +464,104 @@ impl Browser {
             Action::Stop => {
                 let _ = self.active_page().view.stop();
             }
-            Action::Back => {
-                let _ = self.active_page().view.back();
-            }
+            Action::Back => self.back(),
             Action::Forward => {
                 let _ = self.active_page().view.forward();
             }
-            Action::Find | Action::ToggleFullscreen | Action::Quit => return false,
+            Action::Find => self.open_find(),
+            Action::FindNext | Action::FindPrevious if self.find.is_none() => self.open_find(),
+            Action::FindNext => self.find_next(true),
+            Action::FindPrevious => self.find_next(false),
+            Action::ToggleFullscreen | Action::Quit => return false,
         }
         true
     }
 
-    /// Reload the active page; after a crash this brings the page back.
+    /// Reload the active page. After a crash or an error page this brings
+    /// the page back; a page that stopped answering is ended first.
     pub fn reload(&mut self) {
         let shown = self.shown;
         let area = self.page_area;
         let id = self.tabs.active_id();
         if let Some(page) = self.pages.get_mut(&id) {
-            if page.crashed {
-                page.crashed = false;
-                let _ = page.view.set_bounds(area);
-                let _ = page.view.set_visible(shown);
+            let cover = page.cover.take();
+            match &cover {
+                Some(Cover::Unresponsive) => {
+                    page.terminating = true;
+                    let _ = page.view.terminate();
+                }
+                Some(_) => {}
+                None => {
+                    let _ = page.view.reload();
+                    return;
+                }
             }
-            let _ = page.view.reload();
+            page.waited = false;
+            let _ = page.view.set_bounds(area);
+            let _ = page.view.set_visible(shown);
+            // A failed load never became the page, so reloading would show
+            // the one before it: load the failed address again instead.
+            let _ = match cover {
+                Some(Cover::Failed(error)) => page.view.load_url(&error.url),
+                _ => page.view.reload(),
+            };
+        }
+    }
+
+    /// Go back. From an error page that means the page under it: the failed
+    /// load never became a history entry, so the engine's Back would skip
+    /// past it.
+    pub fn back(&mut self) {
+        let id = self.tabs.active_id();
+        let page = self.pages.get_mut(&id).expect("every tab has a page");
+        if matches!(page.cover, Some(Cover::Failed(_))) {
+            let url = page.shown_url.take().unwrap_or_default();
+            self.set_cover(id, None);
+            let title = self.tabs.active().title.clone();
+            let _ = self.tabs.update(id, url.clone(), title);
+            if !self.address_focused {
+                self.address.set_text_selected(&url);
+            }
+            let _ = self.active_page().view.focus();
+            return;
+        }
+        let _ = page.view.back();
+    }
+
+    /// Keep waiting for a page that stopped answering: show it again and do
+    /// not cover it until it has answered.
+    pub fn wait(&mut self) {
+        let shown = self.shown;
+        let area = self.page_area;
+        if let Some(page) = self.pages.get_mut(&self.tabs.active_id())
+            && page.cover == Some(Cover::Unresponsive)
+        {
+            page.cover = None;
+            page.waited = true;
+            let _ = page.view.set_bounds(area);
+            let _ = page.view.set_visible(shown);
+        }
+    }
+
+    /// Cover or uncover tab `tab`'s page, hiding or showing its web view.
+    /// Covering the active page gives the keyboard back to the shell, since a
+    /// hidden page would swallow it.
+    fn set_cover(&mut self, tab: TabId, cover: Option<Cover>) {
+        let active = self.tabs.active_id() == tab;
+        if active && cover.is_some() {
+            self.backend.focus_host();
+        }
+        let visible = active && self.shown && cover.is_none();
+        let area = self.page_area;
+        if let Some(page) = self.pages.get_mut(&tab) {
+            let was = page.cover.is_some();
+            page.cover = cover;
+            if was != page.cover.is_some() {
+                if visible {
+                    let _ = page.view.set_bounds(area);
+                }
+                let _ = page.view.set_visible(visible);
+            }
         }
     }
 
@@ -354,7 +589,7 @@ impl Browser {
     fn after_switch_keep_address(&mut self) {
         let active = self.tabs.active_id();
         for (id, page) in &self.pages {
-            let _ = page.view.set_visible(*id == active && self.shown && !page.crashed);
+            let _ = page.view.set_visible(*id == active && self.shown && page.cover.is_none());
         }
     }
 
@@ -408,6 +643,9 @@ impl Browser {
                     page.loading = true;
                     page.finished = false;
                 }
+                if matches!(self.pages.get(&tab).and_then(|p| p.cover.as_ref()), Some(Cover::Failed(_))) {
+                    self.set_cover(tab, None);
+                }
             }
             Event::LoadFinished => {
                 if let Some(page) = self.pages.get_mut(&tab) {
@@ -434,10 +672,46 @@ impl Browser {
                 }
             }
             Event::Crashed => {
+                let expected = self.pages.get_mut(&tab).is_some_and(|p| std::mem::take(&mut p.terminating));
+                if !expected {
+                    if let Some(page) = self.pages.get_mut(&tab) {
+                        page.loading = false;
+                    }
+                    self.set_cover(tab, Some(Cover::Crashed));
+                }
+            }
+            Event::LoadFailed(error) => {
                 if let Some(page) = self.pages.get_mut(&tab) {
-                    page.crashed = true;
                     page.loading = false;
-                    let _ = page.view.set_visible(false);
+                    page.finished = false;
+                    if !matches!(page.cover, Some(Cover::Failed(_))) {
+                        page.shown_url = Some(current.url.clone());
+                    }
+                }
+                // The engine puts the previous address back; the tab shows the
+                // one that failed, so Enter or Reload tries it again.
+                let _ = self.tabs.update(tab, error.url.clone(), current.title);
+                if active && !self.address_focused {
+                    self.address.set_text_selected(&error.url);
+                }
+                self.set_cover(tab, Some(Cover::Failed(error)));
+            }
+            Event::Unresponsive(true) => {
+                if self.pages.get(&tab).is_some_and(|p| p.cover.is_none() && !p.waited) {
+                    self.set_cover(tab, Some(Cover::Unresponsive));
+                }
+            }
+            Event::Unresponsive(false) => {
+                if let Some(page) = self.pages.get_mut(&tab) {
+                    page.waited = false;
+                }
+                if self.pages.get(&tab).is_some_and(|p| p.cover == Some(Cover::Unresponsive)) {
+                    self.set_cover(tab, None);
+                }
+            }
+            Event::FindResult { matches } => {
+                if let (true, Some(find)) = (active, self.find.as_mut()) {
+                    find.matches = Some(matches);
                 }
             }
             Event::Focused => {

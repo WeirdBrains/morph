@@ -12,8 +12,12 @@ pub enum Action {
     SelectTab(usize),
     SelectLastTab,
     FocusAddress,
-    /// Find in page (phase 3; bound now so the key is reserved).
+    /// Open the find bar beside the page.
     Find,
+    /// Next match in the find bar (opens it when closed).
+    FindNext,
+    /// Previous match in the find bar (opens it when closed).
+    FindPrevious,
     Reload,
     Stop,
     Back,
@@ -34,6 +38,8 @@ impl Action {
             Action::SelectLastTab => "browser.select_last_tab".into(),
             Action::FocusAddress => "browser.focus_address".into(),
             Action::Find => "browser.find".into(),
+            Action::FindNext => "browser.find_next".into(),
+            Action::FindPrevious => "browser.find_previous".into(),
             Action::Reload => "browser.reload".into(),
             Action::Stop => "browser.stop".into(),
             Action::Back => "browser.back".into(),
@@ -53,6 +59,8 @@ impl Action {
             Action::SelectLastTab,
             Action::FocusAddress,
             Action::Find,
+            Action::FindNext,
+            Action::FindPrevious,
             Action::Reload,
             Action::Stop,
             Action::Back,
@@ -93,6 +101,10 @@ impl Default for Keymap {
             ("ctrl-shift-tab", Action::PrevTab),
             ("ctrl-l", Action::FocusAddress),
             ("ctrl-f", Action::Find),
+            ("f3", Action::FindNext),
+            ("shift-f3", Action::FindPrevious),
+            ("ctrl-g", Action::FindNext),
+            ("ctrl-shift-g", Action::FindPrevious),
             ("ctrl-r", Action::Reload),
             ("f5", Action::Reload),
             ("alt-left", Action::Back),
@@ -141,6 +153,10 @@ mod tests {
         assert_eq!(keys.action_for("ctrl-l"), Some(Action::FocusAddress));
         assert_eq!(keys.action_for("ctrl-r"), Some(Action::Reload));
         assert_eq!(keys.action_for("ctrl-f"), Some(Action::Find));
+        assert_eq!(keys.action_for("f3"), Some(Action::FindNext));
+        assert_eq!(keys.action_for("shift-f3"), Some(Action::FindPrevious));
+        assert_eq!(keys.action_for("ctrl-g"), Some(Action::FindNext));
+        assert_eq!(keys.action_for("ctrl-shift-g"), Some(Action::FindPrevious));
         assert_eq!(keys.action_for("ctrl-tab"), Some(Action::NextTab));
         assert_eq!(keys.action_for("ctrl-shift-tab"), Some(Action::PrevTab));
         assert_eq!(keys.action_for("ctrl-1"), Some(Action::SelectTab(0)));

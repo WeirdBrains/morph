@@ -5,7 +5,9 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use gpui::{AnyView, App, Bounds, Context, Entity, KeyBinding, Window, WindowBounds, WindowOptions, actions, div, prelude::*, px, rgb, size};
+use gpui::{
+    AnyView, App, Bounds, Context, Entity, FocusHandle, KeyBinding, Window, WindowBounds, WindowOptions, actions, div, prelude::*, px, rgb, size,
+};
 use morph_ui::actions::{Action, Keymap};
 use morph_ui::component::{self, Catalog, KindId};
 use morph_ui::layout::{self, Layout, Slot};
@@ -32,6 +34,8 @@ actions!(
         SelectLastTab,
         FocusAddress,
         Find,
+        FindNext,
+        FindPrevious,
         Reload,
         Stop,
         Back,
@@ -59,6 +63,8 @@ fn gpui_action(action: Action) -> Box<dyn gpui::Action> {
         Action::SelectLastTab => Box::new(SelectLastTab),
         Action::FocusAddress => Box::new(FocusAddress),
         Action::Find => Box::new(Find),
+        Action::FindNext => Box::new(FindNext),
+        Action::FindPrevious => Box::new(FindPrevious),
         Action::Reload => Box::new(Reload),
         Action::Stop => Box::new(Stop),
         Action::Back => Box::new(Back),
@@ -115,6 +121,9 @@ pub struct Shell {
     components: Vec<Box<dyn Hosted>>,
     error: Option<String>,
     last_title: String,
+    /// Holds GPUI's keyboard focus when no input does, so the shell's keys
+    /// work while its own chrome (not a page or a field) has the keyboard.
+    focus: FocusHandle,
 }
 
 impl Shell {
@@ -151,6 +160,9 @@ impl Shell {
     }
 
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if window.focused(cx).is_none() {
+            window.focus(&self.focus, cx);
+        }
         let mut shortcuts = Vec::new();
         for component in &self.components {
             shortcuts.extend(component.tick(window, cx));
@@ -207,7 +219,14 @@ macro_rules! on_actions {
 impl Render for Shell {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = self.theme;
-        let root = div().flex().flex_col().size_full().bg(rgb(t.background)).text_color(rgb(t.text_primary)).font_family(".SystemUIFont");
+        let root = div()
+            .track_focus(&self.focus)
+            .flex()
+            .flex_col()
+            .size_full()
+            .bg(rgb(t.background))
+            .text_color(rgb(t.text_primary))
+            .font_family(".SystemUIFont");
         let root = on_actions!(root, cx, [
             NewTab => Action::NewTab,
             CloseTab => Action::CloseTab,
@@ -224,6 +243,8 @@ impl Render for Shell {
             SelectLastTab => Action::SelectLastTab,
             FocusAddress => Action::FocusAddress,
             Find => Action::Find,
+            FindNext => Action::FindNext,
+            FindPrevious => Action::FindPrevious,
             Reload => Action::Reload,
             Stop => Action::Stop,
             Back => Action::Back,
@@ -267,12 +288,11 @@ fn address_bindings() -> Vec<KeyBinding> {
     ]
 }
 
-/// Keys the shell takes even while a page has focus: only those whose action
-/// does something in this phase. Everything else (Ctrl+F until find in page
-/// exists, Ctrl+C/V/X/A/Z, arrows, Page Up/Down, Space, Tab, keypad) goes
-/// to the page.
+/// Keys the shell takes even while a page has focus: every bound shortcut
+/// (Ctrl+F opens the find bar). Everything else (Ctrl+C/V/X/A/Z, arrows,
+/// Page Up/Down, Space, Tab, keypad) goes to the page.
 fn page_shortcuts(keymap: &Keymap) -> Vec<String> {
-    keymap.bindings().iter().filter(|b| b.action != Action::Find).map(|b| b.keystroke.clone()).collect()
+    keymap.bindings().iter().map(|b| b.keystroke.clone()).collect()
 }
 
 /// Open the window and run until it closes.
@@ -280,6 +300,7 @@ pub fn run(home: PathBuf, args: Args) {
     gpui_platform::application().run(move |cx: &mut App| {
         let keymap = Keymap::default();
         let mut bindings = address_bindings();
+        bindings.extend(crate::text_input::bindings());
         for binding in keymap.bindings() {
             match KeyBinding::load(&binding.keystroke, gpui_action(binding.action), None, false, None, cx) {
                 Ok(b) => bindings.push(b),
@@ -324,7 +345,7 @@ pub fn run(home: PathBuf, args: Args) {
             let (components, error): (Vec<Box<dyn Hosted>>, Option<String>) =
                 match BrowserView::create(&home, &profile, &start, history, window, &keystrokes) {
                     Ok(browser) => {
-                        let view = cx.new(|cx| BrowserView::new(browser, theme, cx));
+                        let view = cx.new(|cx| BrowserView::new(browser, theme, window, cx));
                         (vec![Box::new(view)], None)
                     }
                     Err(e) => {
@@ -332,8 +353,16 @@ pub fn run(home: PathBuf, args: Args) {
                         (Vec::new(), Some(e))
                     }
                 };
-            let shell =
-                cx.new(|_| Shell { theme, keymap: keymap.clone(), catalog, layout: saved_layout, components, error, last_title: String::new() });
+            let shell = cx.new(|cx| Shell {
+                theme,
+                keymap: keymap.clone(),
+                catalog,
+                layout: saved_layout,
+                components,
+                error,
+                last_title: String::new(),
+                focus: cx.focus_handle(),
+            });
             // Components outside a visible slot keep their pages hidden.
             shell.update(cx, |shell, cx| {
                 for c in &shell.components {
@@ -375,10 +404,26 @@ mod tests {
     #[test]
     fn pages_keep_keys_the_shell_does_not_use() {
         let keys = page_shortcuts(&Keymap::default());
-        for taken in ["ctrl-t", "ctrl-w", "ctrl-l", "ctrl-r", "f5", "ctrl-tab", "ctrl-shift-tab", "f11", "ctrl-1", "ctrl-9"] {
+        for taken in [
+            "ctrl-t",
+            "ctrl-w",
+            "ctrl-l",
+            "ctrl-r",
+            "f5",
+            "ctrl-tab",
+            "ctrl-shift-tab",
+            "f11",
+            "ctrl-1",
+            "ctrl-9",
+            "ctrl-f",
+            "f3",
+            "shift-f3",
+            "ctrl-g",
+            "ctrl-shift-g",
+        ] {
             assert!(keys.iter().any(|k| k == taken), "{taken}");
         }
-        for page in ["ctrl-f", "ctrl-c", "ctrl-v", "ctrl-x", "ctrl-a", "ctrl-z", "pageup", "space", "tab"] {
+        for page in ["ctrl-c", "ctrl-v", "ctrl-x", "ctrl-a", "ctrl-z", "pageup", "space", "tab"] {
             assert!(!keys.iter().any(|k| k == page), "{page}");
         }
     }

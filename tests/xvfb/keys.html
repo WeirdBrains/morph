@@ -16,7 +16,7 @@
 </head>
 <body>
 <div id="bar"><input id="a" autocomplete="off"><input id="b" autocomplete="off"><button id="open">popup</button></div>
-<div id="tall">Tall page for scrolling.</div>
+<div id="tall">Tall page for scrolling. A needle for find in page.<p style="margin-top: 2000px">Another needle, far down.</p></div>
 <script>
   const popup = new URLSearchParams(location.search).has("popup");
   const loadId = Math.random().toString(36).slice(2, 8);

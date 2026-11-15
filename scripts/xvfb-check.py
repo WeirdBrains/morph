@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Drive the desktop shell (`morph`) in Xvfb with xdotool and check that keys
-reach pages and popups, that the shell's own keys work, and that typing a
-phrase searches.
+reach pages and popups, that the shell's own keys work, that typing a
+phrase searches, that find in page works beside the page, and that a failed
+load shows Morph's error page.
 
     scripts/xvfb-check.py [--bin PATH] [--report FILE] [--no-wm]
 
@@ -36,6 +37,11 @@ class Morph:
         self.log = open(self.log_path, "w")
         self.proc = subprocess.Popen([binary, PAGE.as_uri()], env=self.env, stdout=self.log, stderr=subprocess.STDOUT)
         self.read_at = 0
+
+    def lines(self, pattern):
+        """Log lines matching `pattern` (a regex)."""
+        rx = re.compile(pattern)
+        return [line for line in self.log_path.read_text(errors="replace").splitlines() if rx.search(line)]
 
     def events(self):
         out = []
@@ -158,9 +164,10 @@ def page_keys(m, r, area, win, popup, top):
     r.check(area, "Enter reaches the page", (st() or {}).get("c") == "Enter", str(st()))
     m.key("Escape")
     r.check(area, "Escape reaches the page", (st() or {}).get("c") == "Escape", str(st()))
-    m.key("ctrl+f")
-    s = st() or {}
-    r.check(area, "Ctrl+F reaches the page (no find bar yet)", s.get("c") == "KeyF" and s.get("m") == "C", str(s))
+    if popup:
+        m.key("ctrl+f")
+        s = st() or {}
+        r.check(area, "Ctrl+F reaches a popup's page (popups have no find bar)", s.get("c") == "KeyF" and s.get("m") == "C", str(s))
     m.key("KP_1")
     s = st() or {}
     r.check(area, "keypad key, Num Lock off", s.get("c") == "Numpad1", str(s))
@@ -210,6 +217,84 @@ def page_keys(m, r, area, win, popup, top):
     r.check(area, "Ctrl+R reloads", wait_for(lambda: (st() or {}).get("id") not in (None, id1)), str(st()))
 
 
+def find_matches(m):
+    """Match counts from FindResult events, oldest first."""
+    return [int(x) for line in m.lines(r"FindResult \{ matches: \d+ \}") for x in re.findall(r"matches: (\d+)", line)]
+
+
+def find_in_page(m, r, win, top):
+    """Ctrl+F opens the find bar above the page (the page shrinks rather
+    than being covered), typing searches, Enter/F3 move, Escape closes and
+    gives the page the keyboard back. The page never sees these keys."""
+    st = lambda: state(m, tab=1)  # noqa: E731
+    m.click(win, 300, top + 300)
+    m.key("Escape")
+    s0 = st() or {}
+    n0, h0 = s0.get("n"), s0.get("h", 0)
+    m.key("ctrl+f", delay=0.8)
+    h1 = wait_for(lambda: (st() or {}).get("h", 0) < h0 and (st() or {}).get("h"))
+    r.check("find", "Ctrl+F opens the find bar beside the page (page shrinks)", h1 and h1 < h0, f"{h0} -> {(st() or {}).get('h')}")
+    r.check("find", "the page never saw Ctrl+F", (st() or {}).get("n") == n0, f"{n0} vs {(st() or {}).get('n')}")
+    before = len(find_matches(m))
+    m.type("needle")
+    found = wait_for(lambda: find_matches(m)[before:])
+    r.check("find", "typing searches the page (2 matches)", found and found[-1] == 2, str(found))
+    r.check("find", "the page never saw the find text", (st() or {}).get("n") == n0, f"{n0} vs {(st() or {}).get('n')}")
+    before = len(find_matches(m))
+    m.key("Return")
+    r.check("find", "Enter goes to the next match", wait_for(lambda: find_matches(m)[before:]), "no FindResult")
+    before = len(find_matches(m))
+    m.key("F3")
+    r.check("find", "F3 goes to the next match", wait_for(lambda: find_matches(m)[before:]), "no FindResult")
+    before = len(find_matches(m))
+    m.key("shift+F3")
+    r.check("find", "Shift+F3 goes to the previous match", wait_for(lambda: find_matches(m)[before:]), "no FindResult")
+    before = len(find_matches(m))
+    m.key("ctrl+a")
+    m.type("nomatchzz")
+    none = wait_for(lambda: [x for x in find_matches(m)[before:] if x == 0])
+    r.check("find", "text that is not there finds nothing", none, str(find_matches(m)[before:]))
+    r.check("find", "the page never saw the find bar's keys", (st() or {}).get("n") == n0, f"{n0} vs {(st() or {}).get('n')}")
+    m.key("Escape", delay=0.8)
+    h2 = wait_for(lambda: (st() or {}).get("h", 0) == h0 and (st() or {}).get("h"))
+    r.check("find", "Escape closes the find bar (page grows back)", h2 == h0, f"{h1} -> {(st() or {}).get('h')}")
+    m.key("x")
+    r.check("find", "after Escape the page has the keyboard again", (st() or {}).get("c") == "KeyX", str(st()))
+    n1 = (st() or {}).get("n")
+    m.key("ctrl+g", delay=0.8)
+    h3 = wait_for(lambda: (st() or {}).get("h", 0) < h0 and (st() or {}).get("h"))
+    r.check("find", "Ctrl+G opens the find bar too", h3 and h3 < h0, f"{h0} -> {(st() or {}).get('h')}")
+    m.key("Escape", delay=0.8)
+    wait_for(lambda: (st() or {}).get("h", 0) == h0)
+    r.check("find", "the page never saw Ctrl+G or Escape", (st() or {}).get("n") == n1, f"{n1} vs {(st() or {}).get('n')}")
+
+
+def error_page(m, r, win, top):
+    """A load that fails shows Morph's error page (the web view is hidden)
+    and keeps the shell's keys working: F5 tries again, Alt+Left goes back."""
+    # A port nothing listens on (found by binding and closing it), so the
+    # connection is refused.
+    import socket
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    bad = f"http://127.0.0.1:{port}/"
+    m.click(win, 300, top + 300)
+    before = len(m.lines(r"LoadFailed"))
+    m.key("ctrl+l", delay=0.6)
+    m.type(bad)
+    m.key("Return", delay=1.5)
+    failed = wait_for(lambda: m.lines(r"LoadFailed")[before:])
+    r.check("error", "an unreachable site reports a failed load", failed and "Unreachable" in failed[-1], str(failed))
+    m.key("F5", delay=1.5)
+    r.check("error", "F5 on the error page tries again", wait_for(lambda: len(m.lines(r"LoadFailed")) >= before + 2), str(m.lines(r"LoadFailed")[before:]))
+    m.key("alt+Left", delay=1.0)
+    # Back shows the page under the error page again, with the keyboard.
+    m.key("y")
+    back = wait_for(lambda: (state(m, tab=2) or {}).get("c") == "KeyY")
+    r.check("error", "Alt+Left leaves the error page for the page under it", back, f"{m.xdo('getwindowname', win)} {state(m, tab=2)}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bin", default=str(Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target")) / "release" / "morph"))
@@ -237,6 +322,7 @@ def main():
         top = 76
 
         page_keys(m, r, "page", win, popup=False, top=top)
+        find_in_page(m, r, win, top)
 
         # Shell keys while the page has focus: the page must not see them.
         m.click(win, 300, top + 300)
@@ -259,6 +345,7 @@ def main():
         m.key("ctrl+w", delay=1.0)
         tab2 = (state(m, tab=2) or {}).get("id", "?")
         r.check("shell", "Ctrl+W closes the tab (tab 2 shows again)", f'"id":"{tab2}"' in m.xdo("getwindowname", win), m.xdo("getwindowname", win))
+        error_page(m, r, win, top)
         if wm:
             w0 = (state(m, tab=2) or {}).get("w", 0)
             m.click(win, 300, top + 300)

@@ -12,13 +12,14 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use gtk::glib::Propagation;
+use gtk::glib::translate::ToGlibPtr;
 use gtk::prelude::*;
 use raw_window_handle::{HandleError, HasWindowHandle, RawWindowHandle, WindowHandle, XlibWindowHandle};
-use webkit2gtk::{LoadEvent, WebViewExt};
+use webkit2gtk::{FindControllerExt, FindOptions, LoadEvent, WebViewExt};
 use wry::dpi::{LogicalPosition, LogicalSize};
 use wry::{NewWindowFeatures, NewWindowResponse, WebContext, WebViewBuilder, WebViewBuilderExtUnix, WebViewExtUnix};
 
-use crate::{Backend, Error, Event, Rect, Result, Spec, ViewId, WebView};
+use crate::{Backend, Error, Event, LoadError, Rect, Result, Spec, ViewId, WebView, errors};
 
 /// Start GTK on this thread. Call once, before [`WryBackend::new`].
 pub fn init() -> Result<()> {
@@ -124,7 +125,14 @@ struct HostKeys {
     conn: Option<Rc<XConn>>,
     host: u64,
     active: Rc<Cell<bool>>,
+    /// A page window that should have X focus and how many more polls to
+    /// check it got it. A window that was just shown is not mapped yet, and
+    /// X refuses focus to an unmapped window, so the backend tries again.
+    pending: Rc<Cell<Option<(u64, u8)>>>,
 }
+
+/// Polls (8 ms apart) to keep re-checking a page's focus.
+const FOCUS_RETRIES: u8 = 40;
 
 impl HostKeys {
     fn set_active(&self, active: bool) {
@@ -175,18 +183,39 @@ impl HostKeys {
     /// tab strip or toolbar never reach the page.
     fn focus_page(&self, page: Option<u64>) {
         self.set_active(false);
-        let (Some(conn), Some(page)) = (self.conn.as_ref(), page) else {
+        let Some(page) = page else {
             return;
         };
-        // SAFETY: the display is open; the window id is a live page window,
-        // a child of the shell's window.
+        self.pending.set(Some((page, FOCUS_RETRIES)));
+        self.retry_focus();
+    }
+
+    /// Give the pending page X focus if it does not have it and can take it.
+    fn retry_focus(&self) {
+        let (Some(conn), Some((page, left))) = (self.conn.as_ref(), self.pending.get()) else {
+            return;
+        };
+        self.pending.set(left.checked_sub(1).map(|left| (page, left)));
+        // SAFETY: the display is open; the window id is a page window, a
+        // child of the shell's window. Focus is only set while it is mapped.
         unsafe {
+            let mut focused: x11_dl::xlib::Window = 0;
+            let mut revert = 0;
+            (conn.xlib.XGetInputFocus)(conn.display, &mut focused, &mut revert);
+            if focused as u64 == page {
+                return;
+            }
+            let mut attrs: x11_dl::xlib::XWindowAttributes = std::mem::zeroed();
+            if (conn.xlib.XGetWindowAttributes)(conn.display, page as _, &mut attrs) == 0 || attrs.map_state != x11_dl::xlib::IsViewable {
+                return;
+            }
             (conn.xlib.XSetInputFocus)(conn.display, page as _, x11_dl::xlib::RevertToParent, x11_dl::xlib::CurrentTime);
             (conn.xlib.XFlush)(conn.display);
         }
     }
 
     fn focus_host(&self) {
+        self.pending.set(None);
         self.set_active(true);
         let Some(conn) = self.conn.as_ref() else {
             return;
@@ -219,7 +248,7 @@ impl WryBackend {
             popups: Rc::default(),
             contexts: HashMap::new(),
             shortcuts: Rc::default(),
-            keys: HostKeys { conn: XConn::open().map(Rc::new), host: window, active: Rc::default() },
+            keys: HostKeys { conn: XConn::open().map(Rc::new), host: window, active: Rc::default(), pending: Rc::default() },
         }
     }
 }
@@ -247,6 +276,7 @@ fn keystroke(event: &gtk::gdk::EventKey) -> Option<String> {
         "iso_left_tab" => "tab".to_string(),
         "page_up" => "pageup".into(),
         "page_down" => "pagedown".into(),
+        "comma" => ",".into(),
         other => other.to_string(),
     };
     let function_key = key.len() >= 2 && key.starts_with('f') && key[1..].chars().all(|c| c.is_ascii_digit());
@@ -294,6 +324,39 @@ fn watch(view: &webkit2gtk::WebView, id: ViewId, queue: &Queue, shortcuts: &Rc<R
     view.connect_web_process_terminated(move |_, _| {
         q.borrow_mut().push((id, Event::Crashed));
     });
+    let q = queue.clone();
+    view.connect_load_failed(move |_, _, uri, error| {
+        let domain = error.domain().as_str().to_string();
+        let raw: *const gtk::glib::ffi::GError = error.to_glib_none().0;
+        // SAFETY: `raw` points at the live error the signal passed in.
+        let code = unsafe { (*raw).code };
+        if errors::shown(&domain, code) {
+            let kind = errors::kind(&domain, code, false);
+            q.borrow_mut().push((id, Event::LoadFailed(LoadError { url: uri.to_string(), kind, message: error.message().to_string() })));
+        }
+        // Morph draws its own error page; keep the engine's off the screen.
+        true
+    });
+    let q = queue.clone();
+    view.connect_load_failed_with_tls_errors(move |_, uri, _, flags| {
+        let message = errors::tls_reason(flags.bits()).to_string();
+        q.borrow_mut().push((id, Event::LoadFailed(LoadError { url: uri.to_string(), kind: crate::ErrorKind::Certificate, message })));
+        true
+    });
+    let q = queue.clone();
+    view.connect_is_web_process_responsive_notify(move |v| {
+        q.borrow_mut().push((id, Event::Unresponsive(!v.is_web_process_responsive())));
+    });
+    if let Some(find) = view.find_controller() {
+        let q = queue.clone();
+        find.connect_found_text(move |_, matches| {
+            q.borrow_mut().push((id, Event::FindResult { matches }));
+        });
+        let q = queue.clone();
+        find.connect_failed_to_find_text(move |_| {
+            q.borrow_mut().push((id, Event::FindResult { matches: 0 }));
+        });
+    }
     let q = queue.clone();
     view.connect_focus_in_event(move |_, _| {
         q.borrow_mut().push((id, Event::Focused));
@@ -415,6 +478,7 @@ impl Backend for WryBackend {
         while gtk::events_pending() {
             gtk::main_iteration_do(false);
         }
+        self.keys.retry_focus();
         std::mem::take(&mut self.queue.borrow_mut())
     }
 
@@ -474,7 +538,37 @@ impl WebView for WryView {
         self.keys.focus_page(page_window(&self.view.webview()));
         self.view.focus().map_err(backend_err)
     }
+    fn find(&self, query: &str) -> Result<()> {
+        if let Some(find) = self.view.webview().find_controller() {
+            let options = FindOptions::CASE_INSENSITIVE | FindOptions::WRAP_AROUND;
+            find.search(query, options.bits(), FIND_MAX_MATCHES);
+        }
+        Ok(())
+    }
+    fn find_next(&self, forward: bool) -> Result<()> {
+        if let Some(find) = self.view.webview().find_controller() {
+            if forward {
+                find.search_next();
+            } else {
+                find.search_previous();
+            }
+        }
+        Ok(())
+    }
+    fn find_clear(&self) -> Result<()> {
+        if let Some(find) = self.view.webview().find_controller() {
+            find.search_finish();
+        }
+        Ok(())
+    }
+    fn terminate(&self) -> Result<()> {
+        self.view.webview().terminate_web_process();
+        Ok(())
+    }
 }
+
+/// Matches counted and highlighted at most, as other browsers cap them.
+const FIND_MAX_MATCHES: u32 = 1000;
 
 impl Drop for WryView {
     fn drop(&mut self) {

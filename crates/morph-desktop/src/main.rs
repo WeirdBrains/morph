@@ -13,6 +13,8 @@ mod cli;
 mod library;
 #[cfg(target_os = "linux")]
 mod shell;
+#[cfg(target_os = "linux")]
+mod text_input;
 
 use std::process::ExitCode;
 

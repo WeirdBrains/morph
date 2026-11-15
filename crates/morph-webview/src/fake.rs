@@ -18,6 +18,10 @@ pub enum Call {
     Bounds(Rect),
     Visible(bool),
     Focus,
+    Find(String),
+    FindNext(bool),
+    FindClear,
+    Terminate,
     Dropped,
 }
 
@@ -146,6 +150,22 @@ impl WebView for FakeView {
     }
     fn focus(&self) -> Result<()> {
         self.backend.record(self.id, Call::Focus);
+        Ok(())
+    }
+    fn find(&self, query: &str) -> Result<()> {
+        self.backend.record(self.id, Call::Find(query.into()));
+        Ok(())
+    }
+    fn find_next(&self, forward: bool) -> Result<()> {
+        self.backend.record(self.id, Call::FindNext(forward));
+        Ok(())
+    }
+    fn find_clear(&self) -> Result<()> {
+        self.backend.record(self.id, Call::FindClear);
+        Ok(())
+    }
+    fn terminate(&self) -> Result<()> {
+        self.backend.record(self.id, Call::Terminate);
         Ok(())
     }
 }
