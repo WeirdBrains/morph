@@ -148,9 +148,17 @@ jobs:
       - name: Build and test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y $DESKTOP_DEPS xvfb xdotool openbox mesa-vulkan-drivers
+          sudo apt-get install -y $DESKTOP_DEPS xvfb xdotool openbox mesa-vulkan-drivers rpm
       - name: Release tarball
         run: scripts/linux-dist.sh
+      - name: zip, deb and rpm (with and without the desktop entry)
+        run: |
+          scripts/linux-packages.sh
+          for f in dist/*.deb; do dpkg-deb -I "$f" >/dev/null; done
+          sudo apt-get install -y ./dist/morph_*_amd64.deb
+          morph --version
+          rpm -qp --requires dist/morph-standalone-*.rpm >/dev/null
+          sudo apt-get remove -y morph
       - name: Xvfb checks
         env:
           LIBGL_ALWAYS_SOFTWARE: "1"
@@ -161,9 +169,26 @@ jobs:
           name: morph-linux-x86_64
           path: |
             dist/morph-*-x86_64-unknown-linux-gnu.tar.gz
+            dist/morph-*-x86_64-unknown-linux-gnu.zip
+            dist/*.deb
+            dist/*.rpm
             dist/SHA256SUMS
             dist/xvfb-checks.md
           if-no-files-found: warn
+
+  # The Nix flake: both packages (from the release in packaging/nix/release.json)
+  # build, patch and start.
+  nix:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: cachix/install-nix-action@v31
+      - run: |
+          nix flake check
+          nix build .#morph .#morph-standalone
+          ./result/bin/morph --version
+          test -f result/share/applications/morph.desktop
+          test ! -e result-1/share/applications
 
   # Arch packages: .SRCINFO in sync for both recipes, the source package
   # built with makepkg as a normal user, installed with pacman, and started.
