@@ -34,6 +34,11 @@ struct Shared {
     scale: Cell<f64>,
     /// Event times count from here, in milliseconds.
     start: Instant,
+    /// A realized, never shown window that every off-screen window is
+    /// embedded in. GTK gives an off-screen window its embedder's scale,
+    /// and a new Wayland window starts at the largest monitor scale, so
+    /// pages render at HiDPI rather than at the scale-1 root window's.
+    embedder: gtk::Window,
 }
 
 impl Shared {
@@ -85,6 +90,11 @@ impl OffscreenBackend {
                 windows: RefCell::default(),
                 scale: Cell::new(scale.max(0.5)),
                 start: Instant::now(),
+                embedder: {
+                    let window = gtk::Window::new(gtk::WindowType::Toplevel);
+                    window.realize();
+                    window
+                },
             }),
         }
     }
@@ -128,6 +138,10 @@ impl Backend for OffscreenBackend {
         let context = self.contexts.entry(spec.data_dir.clone()).or_insert_with(|| WebContext::new(spec.data_dir.clone()));
         let url = if spec.url.is_empty() { "about:blank".to_string() } else { spec.url.clone() };
         let window = gtk::OffscreenWindow::new();
+        window.realize();
+        if let (Some(own), Some(embedder)) = (window.window(), self.shared.embedder.window()) {
+            own.offscreen_window_set_embedder(&embedder);
+        }
         let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
         window.add(&vbox);
         let builder = WebViewBuilder::new_with_web_context(context)

@@ -13,6 +13,8 @@
 //! move X Y WIDTH HEIGHT pointer to X,Y of a WIDTHxHEIGHT output layout
 //! button CODE 1|0       evdev button (272 left, 273 right, 274 middle)
 //! scroll STEPS          wheel steps, positive down
+//! ime TEXT              commit TEXT as an input method would (to the
+//!                       focused text field of a text-input-v3 client)
 //! sync                  just answer
 //! ```
 
@@ -41,6 +43,7 @@ mod linux {
 
     use wayland_client::protocol::{wl_pointer, wl_registry, wl_seat};
     use wayland_client::{Connection, Dispatch, QueueHandle, delegate_noop};
+    use wayland_protocols_misc::zwp_input_method_v2::client::{zwp_input_method_manager_v2 as imm, zwp_input_method_v2 as im};
     use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{zwp_virtual_keyboard_manager_v1 as vkm, zwp_virtual_keyboard_v1 as vk};
     use wayland_protocols_wlr::virtual_pointer::v1::client::{zwlr_virtual_pointer_manager_v1 as vpm, zwlr_virtual_pointer_v1 as vp};
     use xkbcommon::xkb;
@@ -50,6 +53,12 @@ mod linux {
         seat: Option<wl_seat::WlSeat>,
         keyboards: Option<vkm::ZwpVirtualKeyboardManagerV1>,
         pointers: Option<vpm::ZwlrVirtualPointerManagerV1>,
+        methods: Option<imm::ZwpInputMethodManagerV2>,
+        /// The input method's state: `done` events so far (the serial a
+        /// commit names) and whether a text field is active.
+        done: u32,
+        active: bool,
+        pending_active: bool,
     }
 
     impl Dispatch<wl_registry::WlRegistry, ()> for Globals {
@@ -59,6 +68,7 @@ mod linux {
                     "wl_seat" if g.seat.is_none() => g.seat = Some(registry.bind(name, version.min(7), qh, ())),
                     "zwp_virtual_keyboard_manager_v1" => g.keyboards = Some(registry.bind(name, 1, qh, ())),
                     "zwlr_virtual_pointer_manager_v1" => g.pointers = Some(registry.bind(name, version.min(2), qh, ())),
+                    "zwp_input_method_manager_v2" => g.methods = Some(registry.bind(name, 1, qh, ())),
                     _ => {}
                 }
             }
@@ -68,6 +78,20 @@ mod linux {
     impl Dispatch<wl_seat::WlSeat, ()> for Globals {
         fn event(_: &mut Self, _: &wl_seat::WlSeat, _: wl_seat::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
     }
+    impl Dispatch<im::ZwpInputMethodV2, ()> for Globals {
+        fn event(g: &mut Self, _: &im::ZwpInputMethodV2, event: im::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+            match event {
+                im::Event::Activate => g.pending_active = true,
+                im::Event::Deactivate => g.pending_active = false,
+                im::Event::Done => {
+                    g.done += 1;
+                    g.active = g.pending_active;
+                }
+                _ => {}
+            }
+        }
+    }
+    delegate_noop!(Globals: ignore imm::ZwpInputMethodManagerV2);
     delegate_noop!(Globals: ignore vkm::ZwpVirtualKeyboardManagerV1);
     delegate_noop!(Globals: ignore vk::ZwpVirtualKeyboardV1);
     delegate_noop!(Globals: ignore vpm::ZwlrVirtualPointerManagerV1);
@@ -115,6 +139,8 @@ mod linux {
             .as_ref()
             .ok_or("the compositor has no virtual pointers (a wlroots compositor such as sway does)")?
             .create_virtual_pointer(Some(&seat), &qh, ());
+        // Optional: only the `ime` command needs it.
+        let method = g.methods.as_ref().map(|m| m.get_input_method(&seat, &qh, ()));
         let (map, text) = keymap()?;
         let file = keymap_file(&text)?;
         keyboard.keymap(xkb::KEYMAP_FORMAT_TEXT_V1, file.as_fd(), u32::try_from(text.len() + 1).map_err(|e| e.to_string())?);
@@ -164,6 +190,15 @@ mod linux {
                     pointer.frame();
                     "ok"
                 }
+                (Some("ime"), _, _) => match &method {
+                    Some(method) if g.active => {
+                        method.commit_string(line.trim_start()[3..].trim_start().to_string());
+                        method.commit(g.done);
+                        "ok"
+                    }
+                    Some(_) => "error: no text field is active",
+                    None => "error: the compositor has no input methods",
+                },
                 (Some("sync"), _, _) => "ok",
                 _ => "error: unknown command",
             };
