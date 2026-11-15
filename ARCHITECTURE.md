@@ -10,36 +10,149 @@ policy (6b). Later still the same day: Linux web view decisions in section 2
 (GTK 3 now / GTK 4 later, DMA-BUF default with snapshot fallback, Wayland first).
 Later still: a Weirdnet URL-scheme registry tying schemes such as `weirdnet-morph://` to apps
 (section 5c), and access policy moved upstream to `weirdnet-access` (section 6).
+Updated 2026-11-14 on the `gpui` branch: the desktop shell moves to GPUI and Flutter stays
+for mobile (sections 1, 2.0, 2a and 3, and the 2026-11-14 decision entries), and Dart is no
+longer an extension language.
 
 ## 1. Shape of the app
 
-Morph is a Flutter app (Windows, macOS, Linux, iOS, Android) with a Rust 2024 core. Pages
-render in the system web view. Morph's own value (identity, AI, notes, projects, peers)
-lives in the Rust core.
+_(changed 2026-11-14, `gpui` branch)_ Morph has two shells over one Rust 2024 core.
+The **desktop** shell (Linux, macOS, Windows) is written in Rust with
+[GPUI](https://gpui.rs), Zed's GPU-accelerated UI framework. The **mobile** shell
+(Android, iOS, F-Droid) stays Flutter. Linux comes first; macOS and Windows on
+GPUI are planned, not started. Pages render in the system web view on every
+platform. Morph's own value (identity, AI, notes, projects, peers) lives in the Rust
+core, which both shells share. Until the 2026-11-14 decision every platform used the
+Flutter shell; `main` still does.
 
 ```
-┌──────────────────────────── Flutter (Dart) ───────────────────────────────────────┐
-│ Shell: tabs, address bar, panels  │ Components (core set)  │ Themes               │
-│ morph_webview: WebKitGTK (own plugin) / flutter_inappwebview + bridge             │
-├──────────────── flutter_rust_bridge v2 (async, streams) ──────────────────────────┤
-│                           morph-core (Rust)                                       │
-│ identity │ store │ ai │ projects/notes │ ddns │ peer │ sites │ ext                │
-├───────────────────────────────────────────────────────────────────────────────────┤
-│ weirdnet-keys · weirdnet-storage · weirdnet-net · grindvakt-core                  │
-│ weirdnet-model · weirdnet-tls · weirdnet-access · weirdnet-schemes · weirdnet-ext │
-└───────────────────────────────────────────────────────────────────────────────────┘
+┌──── Desktop: GPUI (Rust) ─────────────┐ ┌──── Mobile: Flutter (Dart) ──────────────┐
+│ morph-desktop: window, layout,        │ │ app/: shell, panels                      │
+│   component host, themes              │ │ morph_webview(_inapp): Android/iOS       │
+│ components: browser · library ·       │ │   system web views                       │
+│   chat · notes · projects · settings  │ │                                          │
+│ morph-webview: trait + wry backend    │ ├──── flutter_rust_bridge v2 ──────────────┤
+│   (webkit2gtk / WKWebView / WebView2) │ │ morph-bridge (thin)                      │
+├───────────────────────────────────────┴─┴──────────────────────────────────────────┤
+│ morph-core · morph-identity · morph-store · morph-keystore · morph-ui (component   │
+│ model, no UI toolkit) · later: morph-ai, morph-projects, morph-peer, morph-sites   │
+├────────────────────────────────────────────────────────────────────────────────────┤
+│ weirdnet-keys · weirdnet-storage · weirdnet-net · grindvakt-core                   │
+│ weirdnet-model · weirdnet-tls · weirdnet-access · weirdnet-schemes · weirdnet-ext  │
+└────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 Rules:
-- Dart draws and routes input. Rust owns state, secrets, network and inference. The UI
-  never holds a key.
-- One Rust runtime (tokio) per process, started by the bridge. Long-lived things (peer
-  node, inference, DNS sync) are services with typed commands and event streams to Dart.
+- The shells draw and route input. Rust crates below them own state, secrets,
+  network and inference. Neither shell holds a key, and neither carries business
+  logic: anything both shells need (the address-bar rule, tab rules, library
+  unlock) lives in a `morph-*` crate with tests, and the shells call it.
+- Browsing is one component, not the shell. The desktop shell is a host for
+  swappable components (section 2a); the browser, library, chat, notes,
+  projects and settings are components behind the same interface, and the web
+  view sits behind its own crate and trait (`morph-webview`), so nothing outside
+  the browser component knows a web view exists.
+- One Rust runtime (tokio) per process. On mobile the bridge starts it; on
+  desktop `morph-desktop` starts it next to GPUI's own executor. Long-lived
+  things (peer node, inference, DNS sync) are services with typed commands and
+  event streams.
 - Peer content and extensions are untrusted. They reach Morph only through the page
   bridge and the permission check (section 7). Third-party extensions run in their own
   sandboxed process (section 7).
 
 ## 2. Web view
+
+### 2.0 Desktop web view on GPUI _(new 2026-11-14, `gpui` branch)_
+
+Decision: on desktop each tab's page is a **native system web view placed as a
+child window** inside the GPUI window, through [wry](https://crates.io/crates/wry)
+(0.57.2) behind Morph's own `morph-webview` crate. No texture copying and no
+synthesized input: the engine gets real keyboard, mouse and IME events from the
+window system, and popups are real windows.
+
+- **Why child windows, not a texture.** GPUI has no API to embed a platform view
+  and none to import an external GPU texture on Linux. The texture design below
+  (section 2.1) would mean forwarding every key and pointer event ourselves, which
+  is where the Flutter Linux popup bug lives (typing invisible, DOM changes not
+  repainted). A child window avoids that whole layer.
+- **Per platform:**
+  - *Linux:* webkit2gtk-4.1 through wry's `build_as_child`, which wraps the GPUI
+    window's X11 id as a foreign GDK window. **X11 only**: wry has no child web
+    view on Wayland. GTK must be initialised and its main loop pumped on the GPUI
+    thread (the spike pumps it from a GPUI timer every 8 ms; folding the GLib
+    main context into GPUI's event loop is planned).
+  - *macOS (planned, not started):* WKWebView as a child `NSView`, same wry call.
+  - *Windows (planned, not started):* WebView2 as a child `HWND`, same wry call.
+    The WebView2 Runtime stays a requirement, as on main.
+- **Wayland.** Phase 1 runs the desktop shell through **XWayland** on Wayland
+  sessions: when `DISPLAY` is set, `morph-desktop` starts GPUI on X11 before it
+  opens a window. That matches what the Flutter shell already does on NVIDIA
+  (section 2.1). It conflicts with "Wayland first" in `PRIORITIES.md` and the
+  collective rules, so a native Wayland path is an open decision (see the
+  2026-11-14 decision entries): the candidates are WPE WebKit rendering into a
+  DMA-BUF that GPUI imports (needs an external-texture API in GPUI, which does
+  not exist yet) or a Wayland subsurface (no WebKit API for a foreign
+  `wl_surface` today).
+- **What GPUI cannot do here:** draw over the page. The child window sits above
+  GPUI's surface, so menus, the address-bar suggestion list and the find bar are
+  laid out beside the page area (or the page area shrinks while they are open).
+  This is the same trade-off section 2.1 calls the "last-resort overlay".
+- **Popups.** `window.open` goes to Morph's handler, which builds a GTK popup
+  window holding a web view *related* to the opener (same process, same profile
+  storage, `window.opener` and `postMessage` work) and returns it to WebKit
+  (`NewWindowResponse::Create`). wry's default (`Allow`) expects a
+  `gtk::ApplicationWindow` top level and would panic for a child web view
+  (`webkitgtk/mod.rs` unwraps the downcast), so Morph never returns it.
+- **Profiles.** Each profile's web view uses its own wry `WebContext` with the
+  profile's WebKit data directory (`morph_core::profiles::webkit_data_dir`), so
+  cookies and storage never mix, as on main.
+- **Page bridge.** `morph-bridge.js` is injected with wry's initialization
+  scripts; messages come back through wry's IPC handler into
+  `morph_core::page_bridge`. The bridge contract is unchanged.
+- **Crashes, find, zoom:** through the engine object wry exposes
+  (`WebViewExtUnix::webview()` on Linux): `web-process-terminated` for the crash
+  panel, WebKit's find controller for find in page.
+- **The selection layer and texture risk go away on desktop.** Native views give
+  native selection, copying and accessibility, so the hidden text layer and the
+  DMA-BUF/snapshot texture paths are not needed there. The gRPC control layer
+  (`morph-webview-control`) stays: Android uses it, and extension hooks will.
+
+**GPUI source.** Morph pins GPUI from Zed's repository by commit
+(`zed-industries/zed`, crates `gpui` and `gpui_platform`), not crates.io:
+
+- crates.io `gpui` 0.2.2 (published 2025-10-22, still the newest there) panics
+  when asked for an X11 window handle (`impl HasWindowHandle for X11Window` is
+  `unimplemented!()` in `src/platform/linux/x11/window.rs`), so no child web view
+  can be attached on Linux. It also fails to build with current `libc`
+  (0.2.190 and later): its `zed-async-tar` pulls `xattr` 0.2.3, which uses
+  `libc::ENOATTR`, gone on Linux. Both checked on this branch's spike.
+- Zed main (`703b5ac`, 2026-11-14) implements the X11 (XCB) and Wayland window
+  handles, renders through wgpu 30 (Vulkan on Linux), and builds with Rust
+  1.98.1 (its `rust-toolchain.toml`), so Morph's Rust 1.99 floor holds. wry wants
+  an Xlib handle; an X11 window id is the same under XCB and Xlib, so
+  `morph-webview` hands wry an Xlib handle built from GPUI's XCB one.
+- GPUI is pre-1.0 and its API follows Zed. Morph bumps the pinned commit on
+  purpose, in its own commit, after the quality bar passes.
+
+**Verified, not guessed (2026-11-14, spike outside the repo, Debian 13 in Xvfb
+with `WAYLAND_DISPLAY` unset, webkit2gtk 2.54.0, Mesa lavapipe Vulkan):** a GPUI
+window from Zed `703b5ac` drew its own toolbar with a wry 0.57.2 webkit2gtk child
+below it showing a local page. `xdotool` clicks and typing reached the page's
+input (a title change per keystroke). `window.open` from the page opened a native
+GTK popup through the handler above; text typed into the popup's field showed,
+with the caret in the field, and a button that changes the heading repainted it.
+Each keystroke in the popup also reached the opener through `postMessage`.
+That is the Flutter Linux popup bug's reproduction, passing. The spike is kept
+in `docs/evidence/gpui-spike/` (not a workspace member). Not checked yet: a
+real Wayland session (XWayland), NVIDIA, HiDPI scaling, IME, resizing, or real
+sites.
+
+### 2.1 Mobile, and the Flutter desktop shell on `main`
+
+_(2026-11-14)_ The rest of this section is the Flutter design. On the `gpui`
+branch its Android and iOS parts stay as they are (Flutter remains the mobile
+shell). Its Linux, Windows and macOS parts describe the Flutter desktop shell,
+which phase 2 of the plan in `docs/handoff.md` removes from the branch.
 
 Decision: `morph_webview` is a Morph-owned federated plugin with one Dart interface and a
 backend per platform.
@@ -274,6 +387,57 @@ backend per platform.
 M1 exists to prove this design, with a frame-rate and input check. If the texture
 paths fall short, the overlay fallback above is ready to use.
 
+## 2a. UI components: the desktop shell is a host _(new 2026-11-14, `gpui` branch)_
+
+Browsing is one part of Morph; chat, notes and journals, projects and Code
+Spaces, AI and peers are the rest (`PLAN.md`: "Swappable UI", "Themable
+components"; `PRIORITIES.md` 1 item 2, "UI Components (a plugin system)"). The
+desktop shell is therefore built as a **host for components**, and the
+component system is its backbone. The browser is the first component, not the
+frame everything hangs off.
+
+- **`morph-ui` (no UI toolkit, fully unit-tested):** the component model.
+  - `ComponentKind`: a stable id (`morph.browser`, `morph.library`,
+    `morph.settings`, later `morph.chat`, `morph.notes`, `morph.projects`), a
+    title, an icon name and what it needs (a web view, the library, the
+    network).
+  - `Layout`: named slots (main, sidebar, bottom panel) holding component
+    instances, their sizes and visibility. Swapping, hiding and moving a
+    component is a change to this value, saved per profile as JSON next to the
+    profile's settings. The drag-and-drop design mode (Priorities 2) edits the
+    same value.
+  - `Actions`: every command is a named action (`browser.new_tab`,
+    `browser.focus_address`, `library.open`, `shell.toggle_sidebar`). Menus,
+    keybindings and help dispatch the same names, as the collective rules ask.
+    The keymap is data (action name to keystroke) with defaults matching main's
+    shortcuts.
+  - Theme tokens: Morph's colour roles (from `app/lib/src/theme/morph_theme.dart`
+    on main), later fed by `weirdnet-themes`.
+- **`morph-desktop` (GPUI):** the window, the layout host and the registry. A
+  component implements a small `Component` trait over a GPUI view (kind,
+  render, actions it handles, state to save) and is registered by kind. The host
+  draws the slots, routes actions to the focused component and carries typed
+  messages between components (the library's "open this URL" reaches the
+  browser through the host, never by one component holding the other).
+- **`morph-browser` (GPUI):** the browser component: tabs, the address bar,
+  back/forward/reload, the crash and error panels, find in page. It depends on
+  `morph-webview`, `morph-core` and `morph-ui`. Nothing else in the desktop
+  shell depends on `morph-webview`.
+- **`morph-webview` (no GPUI):** the web view boundary. A `WebView` trait
+  (navigate, back, forward, reload, stop, set bounds, show or hide, evaluate a
+  script, find) and an event stream (URL and title changes, load state, popup
+  requests, crashes, page-bridge messages). Backends: `wry` (webkit2gtk now;
+  WKWebView and WebView2 later) and an in-memory fake that the browser
+  component's tests drive without a display.
+- Later components (chat, notes, projects, AI) arrive as crates of their own
+  over their `morph-*` domain crates, registered with the host the same way.
+  Third-party UI components are extension work (section 7) and are not part of
+  phase 1.
+
+The Flutter mobile shell keeps its own widgets. It can read the same `Layout`
+and `Actions` values through the bridge when that is useful; nothing in
+`morph-ui` depends on either toolkit.
+
 ## 3. Rust workspace (proposed)
 
 ```
@@ -314,6 +478,24 @@ packages/
 
 `morph-bridge` stays thin so the generated surface is small and stable. Each domain crate
 is testable without Flutter.
+
+_(2026-11-14, `gpui` branch)_ Desktop crates added by the plan in
+`docs/handoff.md` (none exist yet):
+
+```
+crates/
+  morph-ui/            # component model: kinds, layout, named actions, keymap, theme tokens
+  morph-webview/       # WebView trait + events; wry backend; in-memory fake for tests
+  morph-browser/       # GPUI browser component (tabs, address bar, panels)
+  morph-desktop/       # GPUI binary `morph`: window, component host, registry
+```
+
+`morph-bridge`, `app/` and `packages/morph_webview(_inapp)` stay for the mobile
+shell. Logic both shells need moves out of `morph-bridge` into a toolkit-neutral
+crate (`morph-services`, phase 2) so the bridge stays a thin wrapper and the
+desktop shell calls the same functions. `morph_webview_linux` and the Flutter
+desktop runners go in phase 2. The `weirdnet_webview` (Dart) candidate in the
+table above becomes a Rust candidate, `weirdnet-webview`, from `morph-webview`.
 
 Shared outside Morph: **`weirdnet-model`** (section 8), used by Mouser and Morph.
 
@@ -1238,7 +1420,8 @@ desktop-only, and Morph says so before install.
 The API exposes declarative block rules everywhere and a `Request` hook only where it is
 real.
 
-**Dart (Priorities 1 item 5 verdict).**
+**Dart (Priorities 1 item 5 verdict).** _(superseded 2026-11-14: Dart is not an extension
+language; see the 2026-11-14 decision entry. Kept for the reasoning.)_
 - *Embedding the Dart VM in the browser:* not possible. A system web view (WebView2,
   WKWebView, WebKitGTK, Android WebView) runs only JavaScript and WebAssembly and has no
   API for hosting another VM.
@@ -1383,6 +1566,10 @@ real.
   Weirdnet code.
 
 ## 9a. Updating the Flutter app over the air _(changed 2026-11-11: decided)_
+
+_(2026-11-14, `gpui` branch)_ This section now covers the Flutter mobile builds. Desktop
+builds are GPUI and get signed full updates, as desktop builds already did; downloaded UI
+(RFW) has no GPUI counterpart. See open decision 5 in the 2026-11-14 entries.
 
 App updates come from **Salty Gull**, a standalone WeirdBrains project. Morph uses
 that service; this document does not design it. See **Salty Gull's plan** (written
@@ -1551,6 +1738,12 @@ uses it. **Morph** means work inside Morph. **Grindvakt** means App Maker's in-f
 
 Each milestone ends with a demo on the listed platforms and CI building them. W-rows are
 upstream Weirdnet releases; the Morph milestone after each one only consumes them.
+
+_(2026-11-14, `gpui` branch)_ On desktop, M1 and M2 are met by the GPUI shell (phases 1
+and 3 in `docs/handoff.md`): the texture, DMA-BUF and hidden-text-layer criteria apply to the
+Flutter shell on `main` and to a future native-Wayland path (open decision 1), not to the
+child web view. Android criteria are unchanged. Dart items below are superseded by the
+2026-11-14 Dart decision.
 
 | # | Milestone | Exit criteria |
 |---|---|---|
@@ -2093,3 +2286,96 @@ since Morph started under XWayland had it, not only bd4c4ff.
 - Reproduced and checked in Xvfb with a minimal tiling window manager that
   fits the window to a tile, refuses client resizes and sets no
   `_NET_WM_STATE`, as Hyprland does for XWayland windows.
+
+### 2026-11-14 — Desktop shell moves to GPUI; Flutter stays for mobile
+
+Michael's decision, on the `gpui` branch. Flutter's trouble was on Linux:
+no platform views in the GTK embedder, so the web view became a texture with
+forwarded input, and the popup bug (typed text invisible, DOM changes not
+repainted) lives in that layer. The `Isolate.create` break from Dart 3.14
+(`005d01c`) was another Linux-desktop cost.
+
+- **Desktop (Linux, macOS, Windows): GPUI**, pinned from Zed's repository by
+  commit (section 2.0). **Linux first**, until the shell is fully usable there;
+  macOS and Windows are planned in the docs only and not started.
+- **Mobile (Android, iOS, F-Droid): Flutter**, unchanged. `app/`,
+  `packages/morph_webview`, `packages/morph_webview_inapp`, `morph-bridge` and
+  `flutter_rust_bridge` stay, with the Android and iOS runners and the mobile CI
+  jobs. Removed from the branch in phase 2: `app/linux`, `app/macos`,
+  `app/windows`, `packages/morph_webview_linux`, desktop-only Dart (window
+  chrome, `window_manager`), the Flutter `linux` and `windows` CI jobs and
+  `scripts/build-windows.ps1`. Mobile builds and tests have to stay green.
+- **One Rust core.** Both shells sit on the same `morph-*` crates. Logic now
+  in `morph-bridge` that both need (library open and unlock, identity, device
+  linking) moves into a toolkit-neutral crate; the bridge keeps its generated
+  API so the Dart side does not change.
+- **The desktop shell is a component host** (section 2a): the browser is one
+  component behind `morph-webview`; chat, notes, projects and AI follow as
+  their own components.
+- **Each phase ends with a Linux build Michael can run** (`docs/handoff.md`),
+  and each such build ships **Arch Linux packages**: `packaging/arch/morph`
+  builds the GPUI app from the checkout with cargo for `makepkg -si` or
+  `pacman -U`, and `packaging/arch/morph-bin` installs the prebuilt release
+  tarball from a GitHub Release, in the shape of Michael's other `-bin`
+  packages on his TAUR server (org WeirdBrains). Both declare the WebKit and
+  Vulkan runtime dependencies, install the binary, a `.desktop` entry and the
+  icon, and carry a `.SRCINFO` that CI checks against `makepkg --printsrcinfo`.
+  They are checked in an `archlinux:latest` container before a phase is called
+  done; `morph-bin` is uploaded to TAUR only after Michael approves a phase.
+- `main` keeps the Flutter desktop shell until the branch is merged.
+
+### 2026-11-14 — Dart is not an extension language
+
+Michael's decision. Dart remains only as the mobile UI language (Flutter).
+There is no Dart extension SDK, no Dart compiled to JavaScript or WasmGC for
+pages, and no "Rust first; Dart later" for extensions or project templates.
+Extensions are Rust first; any other compiled language can still use the
+gRPC/protobuf extension contract (section 7), but Dart is not a planned
+target. This supersedes the Dart verdict in section 7, the "Dart SDK last" step
+of its phasing, "Dart templates come later" in M5, and "Rust SDK first, Dart
+later" in the phase 2 list. `PRIORITIES.md` keeps its original Dart lines; its
+2026-11-14 progress note marks them.
+
+### 2026-11-14 — Open decisions from the GPUI switch
+
+For Michael. Each says what GPUI means for the item; none is decided yet.
+
+1. **Native Wayland web view.** Phase 1 runs the desktop shell through
+   XWayland (section 2.0), against "Wayland first" (`PRIORITIES.md` 1 item 1,
+   collective platform rules). Native Wayland needs either an external-texture
+   API in GPUI fed by WPE WebKit DMA-BUFs (GPUI work, likely upstream in Zed)
+   or a WebKit view on a foreign Wayland subsurface (no API today). Accept
+   XWayland for phase 1 and schedule the native path, or make it a gate?
+2. **GPUI pin policy.** Zed's repository by commit (recommended; crates.io
+   0.2.2 cannot host a child web view on X11, section 2.0), bumped on purpose.
+   CI then fetches Zed's repository (about 550 MB) on a cold cache. The
+   alternative is a WeirdBrains fork of GPUI published to crates.io.
+3. **`PRIORITIES.md` 1 item 1, "Linux: build our own WebKit plugin"** (texture
+   layer, DMA-BUF default, snapshot fallback, hidden text layer, Wayland first,
+   GTK 4 later). On desktop the child web view replaces the texture and text
+   layers. Keep the texture work as the future native-Wayland path (decision 1),
+   or drop it?
+4. **`PRIORITIES.md` 1 item 1, "Other platforms: flutter_inappwebview behind
+   the same Morph interface."** Now true for Android and iOS only; desktop
+   macOS and Windows use wry's WKWebView and WebView2 behind `morph-webview`.
+5. **`PRIORITIES.md` 8, app updates.** Remote Flutter Widgets (downloaded UI)
+   and "no Dart patches on iOS" apply to the Flutter mobile builds only.
+   Desktop already gets signed full updates; GPUI adds nothing like RFW.
+   "F-Droid uses stock Flutter" is unchanged.
+6. **Priorities 2, modified Flutter engine fork.** The Dart interpreter for App
+   Store patches still concerns mobile. The BSD port was for desktop: a GPUI
+   desktop shell on the BSDs would need GPUI and wry (webkit2gtk) to build
+   there, which nobody has checked. Keep the BSD part of the fork, or plan BSD
+   on GPUI?
+7. **Priorities 2, "Linux web view: GTK 4 (WebKitGTK 6.0), and native X11
+   beyond XWayland."** With child web views the desktop is native X11 already;
+   GTK 4 depends on wry, which is on GTK 3 / webkit2gtk-4.1.
+8. **Drawing over the page.** GPUI cannot draw above a child web view, so
+   popovers sit beside the page or shrink it (section 2.0). Acceptable?
+9. **Frameless window.** The collective rule names Flutter desktop apps. The
+   plan applies the same rule to the GPUI window (custom controls, close-only
+   on tiling window managers); confirm.
+10. **Phase builds and releases.** The shared release script releases only
+    from `main`, and `morph-bin` needs a GitHub Release per phase. Tag phase
+    builds from `gpui` as pre-releases (`pkgver` cannot contain `-`, so
+    `v0.2.0-gpui.1` becomes `0.2.0.gpui.1`), or release only after a merge?

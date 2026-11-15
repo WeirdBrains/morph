@@ -22,6 +22,15 @@ settings and Android sharing work on desktop and phone, with bookmarks and histo
 profile, and each profile is onboarded to its own Weirdnet identity on first use. A crashed or hung tab now shows its own "page crashed, reload" panel while the shell and other tabs keep running (Linux runs a web process per tab; Android shares one renderer, see ARCHITECTURE.md §2). DMA-BUF frame-rate measurements and
 hidden-text-layer alignment tests are still ahead in M1.
 
+2026-11-14: the `gpui` branch is exploring a GPUI desktop shell (Linux first), with Flutter
+kept for mobile (Android, iOS, F-Droid). Only the plan is written so far. The desktop shell
+is a host for swappable components, so item 2 (UI Components) is its backbone and the
+browser is one component. Dart was dropped along with Flutter desktop: it stays only as the
+mobile UI language, and the Dart lines below (items 5 and 8) are kept as written but no
+longer plan Dart extensions, page scripts or templates. Items that depend on Flutter on
+desktop are open decisions in ARCHITECTURE.md (2026-11-14 entries). Plan and progress:
+`docs/handoff.md`.
+
 1. Webview _(moved up: everything else plugs into it)_
     - System web views: WebView2 (Windows), WKWebView (Apple), WebKit (Linux: WPE + webkit2gtk), Android WebView _(changed 2026-11-11)_
         - Linux: build our own WebKit plugin _(changed 2026-11-11)_
