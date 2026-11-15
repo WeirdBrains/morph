@@ -1,0 +1,82 @@
+# Morph release config for weirdnet-project-helpers (scripts/weirdnet_release.py).
+# Phase builds are pre-releases (v0.2.0-alpha.N, docs/handoff.md), which the
+# shared script does not cut yet (it takes MAJOR.MINOR.PATCH only); until it
+# does they are cut by hand as the handoff describes, and this file declares
+# the platform matrix and the TAUR recipe so `validate` runs in CI.
+helpers = "0.2.0"
+project = "morph"
+require_message = true
+tag_message = "{tag}: {title}"
+next = [
+  "scripts/linux-dist.sh && scripts/linux-packages.sh   # tarball, zip, deb, rpm into dist/",
+  "gh release create v{version} dist/*   # then: python3 scripts/weirdnet_release.py assets {version}",
+  "bump packaging/arch/*/PKGBUILD and packaging/nix/release.json to the tarball's sha256, regenerate .SRCINFO",
+  "python3 scripts/weirdnet_release.py taur {version} --dry-run, then without --dry-run",
+]
+
+[env]
+CARGO_TARGET_DIR = "<scratch-dir>/cargo-target/morph"
+
+[[files]]                       # only the desktop shell carries the release version
+kind = "cargo-package"
+paths = ["crates/morph-desktop/Cargo.toml"]
+primary = true
+
+[[files]]
+kind = "cargo-lock"
+paths = ["Cargo.lock"]
+packages = ["morph-desktop"]
+
+[changelog]
+path = "CHANGELOG.md"
+first_message_is_title = true
+
+[checks]
+commands = [
+  "cargo fmt --all --check",
+  "cargo clippy --locked --workspace --all-targets -- -D warnings",
+  "cargo test -q --locked --workspace",
+]
+
+[crates]
+publish = []                    # crates are not published in this pass (README)
+
+[taur]
+org = "WeirdBrains"
+
+[[taur.packages]]
+name = "morph-bin"
+dir = "packaging/arch/morph-bin"
+source_contains = "v{version}"
+
+[[platforms]]
+os = "linux"
+arch = ["x86_64"]
+arch_note = "aarch64 waits for an ARM64 runner with the GPUI/WebKitGTK stack"
+formats = ["tar.gz", "zip", "deb", "rpm", "pkg.tar.zst", "nix"]
+channels = ["github", "taur", "nix"]
+assets = ["morph-{version}-x86_64-unknown-linux-gnu.tar.gz", "morph-{version}-x86_64-unknown-linux-gnu.zip",
+          "morph_*_amd64.deb", "morph-standalone_*_amd64.deb", "morph-*.x86_64.rpm", "morph-standalone-*.x86_64.rpm",
+          "SHA256SUMS"]
+
+[[platforms]]
+os = "macos"
+opt_out = "the GPUI shell is Linux-only for now; macOS (WKWebView child) is planned (docs/handoff.md, Later)"
+
+[[platforms]]
+os = "windows"
+opt_out = "the GPUI shell is Linux-only for now; Windows (WebView2 child) is planned (docs/handoff.md, Later)"
+
+[[platforms]]
+os = "android"
+arch = ["aarch64", "x86_64"]
+formats = ["apk", "aab"]
+channels = ["github", "apk-sideload", "fdroid", "google-play"]
+assets = []
+
+[[platforms]]
+os = "ios"
+arch = ["aarch64"]
+formats = ["ipa"]
+channels = ["testflight", "app-store", "altstore", "eu-marketplace"]
+assets = []
