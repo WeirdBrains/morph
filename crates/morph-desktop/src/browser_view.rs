@@ -107,17 +107,12 @@ impl BrowserView {
     }
 
     /// A browser on the real web view backend: child windows of `window`
-    /// on X11, pages rendered off screen on Wayland.
+    /// on X11, pages rendered off screen on Wayland, WKWebView and WebView2
+    /// child views on macOS and Windows.
     pub fn create(home: &Path, profile: &str, start: &str, window: &Window, keystrokes: &[String]) -> Result<Browser, String> {
-        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        use raw_window_handle::HasWindowHandle;
         let raw = HasWindowHandle::window_handle(window).map_err(|e| format!("no window handle: {e}"))?.as_raw();
-        let mut backend: Box<dyn morph_webview::Backend> = match raw {
-            RawWindowHandle::Wayland(_) => Box::new(morph_webview::offscreen::OffscreenBackend::new(f64::from(window.scale_factor()))),
-            raw => {
-                let xid = morph_webview::wry_linux::x11_window_id(raw).ok_or("Morph's desktop shell runs on X11 or Wayland only")?;
-                Box::new(morph_webview::wry_linux::WryBackend::new(xid))
-            }
-        };
+        let mut backend = Self::backend(raw, window)?;
         backend.set_page_bridge(morph_webview::PageBridge {
             script: morph_core::page_bridge::BRIDGE_SCRIPT.into(),
             handler: std::rc::Rc::new(morph_core::page_bridge::answer),
@@ -137,6 +132,25 @@ impl BrowserView {
         let mut browser = Browser::new(backend, config).map_err(|e| e.to_string())?;
         browser.set_shortcuts(keystrokes);
         Ok(browser)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn backend(raw: raw_window_handle::RawWindowHandle, window: &Window) -> Result<Box<dyn morph_webview::Backend>, String> {
+        Ok(match raw {
+            raw_window_handle::RawWindowHandle::Wayland(_) => {
+                Box::new(morph_webview::offscreen::OffscreenBackend::new(f64::from(window.scale_factor())))
+            }
+            raw => {
+                let xid = morph_webview::wry_linux::x11_window_id(raw).ok_or("Morph's desktop shell runs on X11 or Wayland only")?;
+                Box::new(morph_webview::wry_linux::WryBackend::new(xid))
+            }
+        })
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    fn backend(raw: raw_window_handle::RawWindowHandle, _: &Window) -> Result<Box<dyn morph_webview::Backend>, String> {
+        let backend = morph_webview::wry_native::NativeBackend::new(raw).ok_or("the shell's window is not an AppKit or Win32 window")?;
+        Ok(Box::new(backend))
     }
 
     pub fn browser(&self) -> &Browser {
@@ -368,7 +382,7 @@ impl BrowserView {
         if !self.browser.page_has_keyboard() {
             return;
         }
-        if let Some(input) = crate::page_input::key(&event.keystroke, true, gpui_linux::raw_key::current()) {
+        if let Some(input) = crate::page_input::key(&event.keystroke, true, crate::page_input::current_raw_key()) {
             self.browser.page_input(input);
             cx.stop_propagation();
         }
@@ -378,7 +392,7 @@ impl BrowserView {
         if !self.browser.page_has_keyboard() {
             return;
         }
-        if let Some(input) = crate::page_input::key(&event.keystroke, false, gpui_linux::raw_key::current()) {
+        if let Some(input) = crate::page_input::key(&event.keystroke, false, crate::page_input::current_raw_key()) {
             self.browser.page_input(input);
             cx.stop_propagation();
         }

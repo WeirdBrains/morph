@@ -16,14 +16,9 @@ path = "src/main.rs"
 [dependencies]
 morph-core.workspace = true
 
-# Linux first (ARCHITECTURE.md section 2.0). On macOS and Windows the binary
-# only says the GPUI shell is not there yet, so workspace builds stay green.
-[target.'cfg(target_os = "linux")'.dependencies]
 gpui.workspace = true
 gpui_platform.workspace = true
-gpui_linux.workspace = true
 image.workspace = true
-libc.workspace = true
 morph-browser.workspace = true
 morph-identity.workspace = true
 morph-services.workspace = true
@@ -32,6 +27,17 @@ morph-webview.workspace = true
 qrcode.workspace = true
 raw-window-handle.workspace = true
 unicode-segmentation.workspace = true
+
+# Linux: GPUI's patched platform (the raw key behind a key event) and the
+# render check's process handling.
+[target.'cfg(target_os = "linux")'.dependencies]
+gpui_linux.workspace = true
+libc.workspace = true
+
+# Windows: `morph --version` and errors reach the console the app was
+# started from (the release binary is a GUI app, with no console of its own).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_Console"] }
 
 [dev-dependencies]
 # Tests never touch the real OS keystore.

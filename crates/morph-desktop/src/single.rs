@@ -5,9 +5,15 @@
 //!
 //! The protocol is one line each way: `open <url>` or `show`, answered by
 //! `ok`.
+//!
+//! On Windows the socket file holds the port of a loopback TCP listener
+//! instead (the standard library has no Unix sockets there).
 
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::{UnixListener, UnixStream};
+#[cfg(windows)]
+use std::net::{TcpListener as Socket, TcpStream as Stream};
+#[cfg(unix)]
+use std::os::unix::net::{UnixListener as Socket, UnixStream as Stream};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Duration;
@@ -61,7 +67,7 @@ pub fn socket_for(home: &Path) -> PathBuf {
 
 /// Hand `request` to a running Morph at `path`. `true` when it took it.
 pub fn hand_off(path: &Path, request: &Request) -> bool {
-    let Ok(mut stream) = UnixStream::connect(path) else {
+    let Ok(mut stream) = connect(path) else {
         return false;
     };
     let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
@@ -85,7 +91,7 @@ impl Listener {
     /// crashed) is replaced; a live one is an error.
     pub fn bind(path: &Path) -> std::io::Result<Self> {
         if path.exists() {
-            if UnixStream::connect(path).is_ok() {
+            if connect(path).is_ok() {
                 return Err(std::io::Error::new(std::io::ErrorKind::AddrInUse, "another Morph is running"));
             }
             std::fs::remove_file(path)?;
@@ -93,7 +99,7 @@ impl Listener {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        let listener = UnixListener::bind(path)?;
+        let listener = bind(path)?;
         let (tx, requests) = channel();
         std::thread::Builder::new().name("morph-single-instance".into()).spawn(move || serve(listener, tx))?;
         Ok(Self { path: path.to_path_buf(), requests })
@@ -111,7 +117,30 @@ impl Drop for Listener {
     }
 }
 
-fn serve(listener: UnixListener, tx: Sender<Request>) {
+#[cfg(unix)]
+fn connect(path: &Path) -> std::io::Result<Stream> {
+    Stream::connect(path)
+}
+
+#[cfg(unix)]
+fn bind(path: &Path) -> std::io::Result<Socket> {
+    Socket::bind(path)
+}
+
+#[cfg(windows)]
+fn connect(path: &Path) -> std::io::Result<Stream> {
+    let port: u16 = std::fs::read_to_string(path)?.trim().parse().map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "not a port"))?;
+    Stream::connect_timeout(&std::net::SocketAddr::from(([127, 0, 0, 1], port)), Duration::from_secs(1))
+}
+
+#[cfg(windows)]
+fn bind(path: &Path) -> std::io::Result<Socket> {
+    let socket = Socket::bind(("127.0.0.1", 0))?;
+    std::fs::write(path, format!("{}\n", socket.local_addr()?.port()))?;
+    Ok(socket)
+}
+
+fn serve(listener: Socket, tx: Sender<Request>) {
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
         let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
@@ -170,7 +199,7 @@ mod tests {
     fn a_stale_socket_file_is_replaced() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("m.sock");
-        drop(UnixListener::bind(&path).unwrap());
+        drop(bind(&path).unwrap());
         assert!(path.exists());
         let listener = Listener::bind(&path).unwrap();
         assert!(hand_off(&path, &Request::Show));

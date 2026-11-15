@@ -6,19 +6,27 @@
 //! (`wry_linux`) places real webkit2gtk views as child windows of the
 //! desktop shell's X11 window, and the off-screen backend (`offscreen`)
 //! renders them into [`Frame`]s the shell draws itself and takes [`Input`]
-//! from the shell (native Wayland, where there are no child windows).
+//! from the shell (native Wayland, where there are no child windows). On
+//! macOS and Windows `wry_native` places WKWebView and WebView2 views as
+//! child views of the shell's window.
 
 use std::path::PathBuf;
 use std::rc::Rc;
 
 pub mod fake;
 pub mod keys;
+pub mod native_page;
 #[cfg(target_os = "linux")]
 pub mod offscreen;
 #[cfg(target_os = "linux")]
 pub mod render_probe;
 #[cfg(target_os = "linux")]
 pub mod wry_linux;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub mod wry_native;
+
+/// Matches counted and highlighted at most, as other browsers cap them.
+pub const FIND_MAX_MATCHES: u32 = 1000;
 
 /// Identifies a web view for the life of its backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]

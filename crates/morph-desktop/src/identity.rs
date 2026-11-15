@@ -357,7 +357,8 @@ fn recovery_words(text: &str) -> Result<Zeroizing<String>, String> {
 
 /// `~/x` to the home directory's `x`.
 fn expand_home(path: &str) -> PathBuf {
-    match (path.strip_prefix("~/"), std::env::var_os("HOME")) {
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
+    match (path.strip_prefix("~/"), home) {
         (Some(rest), Some(home)) => PathBuf::from(home).join(rest),
         _ => PathBuf::from(path),
     }
@@ -373,17 +374,30 @@ fn suggested_backup_path(profile_name: &str) -> String {
 /// Write a new file only the user can read.
 fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    // Windows: a new file in the user's profile inherits the profile's ACL
+    // (the user, SYSTEM and administrators).
+    let mut file = options.open(path)?;
     file.write_all(bytes)?;
     file.sync_all()
 }
 
 /// This computer's name, shown on the other device.
 fn device_name() -> String {
-    let host = std::fs::read_to_string("/etc/hostname").unwrap_or_default();
+    let host = std::fs::read_to_string("/etc/hostname").ok().or_else(|| std::env::var("COMPUTERNAME").ok()).unwrap_or_default();
     let host = host.trim();
-    if host.is_empty() { "Morph on Linux".into() } else { format!("Morph on {host}") }
+    if host.is_empty() { format!("Morph on {}", os_name()) } else { format!("Morph on {host}") }
+}
+
+fn os_name() -> &'static str {
+    match std::env::consts::OS {
+        "macos" => "macOS",
+        "windows" => "Windows",
+        _ => "Linux",
+    }
 }
 
 fn link_failure(state: &LinkState) -> String {
@@ -454,8 +468,11 @@ mod tests {
         assert_eq!(id.error.as_deref(), Some("Wrong password."));
         id.submit(&s(&["long enough", "backup pass", path.to_str().unwrap()]));
         assert_eq!(id.step, Step::Overview, "{:?}", id.error);
-        use std::os::unix::fs::PermissionsExt;
-        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        }
         id.start(Step::Export);
         id.submit(&s(&["long enough", "backup pass", path.to_str().unwrap()]));
         assert!(id.error.as_deref().unwrap().contains("already exists"));

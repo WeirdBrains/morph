@@ -3,6 +3,10 @@
 //! `x-scheme-handler/http`, `https` and `text/html`). The command runner is
 //! a parameter so the rules are tested without touching the desktop.
 
+/// Why there is no answer on macOS and Windows: Morph does not register
+/// as a browser there yet (no URL handler in the app bundle or registry).
+pub const OTHER_SYSTEMS: &str = "Morph cannot be the default browser on this system yet";
+
 /// The desktop entry the packages install.
 pub const DESKTOP_ID: &str = "morph.desktop";
 
@@ -58,8 +62,12 @@ fn explain(error: &str) -> String {
     }
 }
 
-/// The real runner: run the command and capture its output.
+/// The real runner: run the command and capture its output. Off Linux
+/// there is no `xdg-settings`; the system settings choose the browser.
 pub fn system(program: &str, args: &[&str]) -> Result<String, String> {
+    if !cfg!(target_os = "linux") {
+        return Err(OTHER_SYSTEMS.into());
+    }
     let out = std::process::Command::new(program).args(args).output().map_err(|e| format!("{program}: {e}"))?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())

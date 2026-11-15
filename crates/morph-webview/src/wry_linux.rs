@@ -718,8 +718,7 @@ impl WebView for WryView {
     }
 }
 
-/// Matches counted and highlighted at most, as other browsers cap them.
-pub(crate) const FIND_MAX_MATCHES: u32 = 1000;
+pub(crate) use crate::FIND_MAX_MATCHES;
 
 impl Drop for WryView {
     fn drop(&mut self) {

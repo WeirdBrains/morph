@@ -6,14 +6,14 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "Morph's web view boundary: a WebView trait and events, a wry backend (webkit2gtk child windows on Linux) and an in-memory fake for tests."
+description = "Morph's web view boundary: a WebView trait and events, wry backends (webkit2gtk on Linux, WKWebView on macOS, WebView2 on Windows) and an in-memory fake for tests."
 publish = false
 
 [dependencies]
 thiserror.workspace = true
 
-# The wry backend: Linux only for now (ARCHITECTURE.md section 2.0). macOS
-# (WKWebView) and Windows (WebView2) are planned behind the same trait.
+# The wry backends (ARCHITECTURE.md section 2.0): webkit2gtk on Linux,
+# WKWebView on macOS and WebView2 on Windows, behind the same trait.
 [target.'cfg(target_os = "linux")'.dependencies]
 gdkx11.workspace = true
 gtk.workspace = true
@@ -22,3 +22,7 @@ raw-window-handle.workspace = true
 webkit2gtk.workspace = true
 wry.workspace = true
 x11-dl.workspace = true
+
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+raw-window-handle.workspace = true
+wry.workspace = true
