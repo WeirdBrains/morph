@@ -8,6 +8,7 @@ require_message = true
 tag_message = "{tag}: {title}"
 next = [
   "scripts/linux-dist.sh && scripts/linux-packages.sh   # tarball, zip, deb, rpm into dist/",
+  "gh run download (CI on the release commit) -n morph-macos-universal -n morph-windows-x86_64 -D dist/",
   "python3 scripts/weirdnet_release.py github {version}   # pre-release with GitHub-named SHA256SUMS",
   "python3 scripts/weirdnet_release.py assets {version}",
   "packaging/arch/*/PKGBUILD: pkgver={pkgver}, _ver={version}, the tarball's sha256; packaging/nix/release.json; .SRCINFO",
@@ -30,7 +31,9 @@ packages = ["morph-desktop"]
 [github]                        # `weirdnet_release.py github VERSION`
 files = ["dist/morph-{version}-x86_64-unknown-linux-gnu.tar.gz", "dist/morph-{version}-x86_64-unknown-linux-gnu.zip",
          "dist/morph_{debver}-*_amd64.deb", "dist/morph-standalone_{debver}-*_amd64.deb",
-         "dist/morph-{debver}-*.x86_64.rpm", "dist/morph-standalone-{debver}-*.x86_64.rpm"]
+         "dist/morph-{debver}-*.x86_64.rpm", "dist/morph-standalone-{debver}-*.x86_64.rpm",
+         "dist/morph-{version}-universal-apple-darwin.zip", "dist/morph-{version}-universal-apple-darwin.dmg",
+         "dist/morph-{version}-x86_64-pc-windows-msvc.zip", "dist/morph-{version}-x86_64-pc-windows-msvc.msi"]
 sums = "SHA256SUMS"
 
 [changelog]
@@ -67,11 +70,18 @@ assets = ["morph-{version}-x86_64-unknown-linux-gnu.tar.gz", "morph-{version}-x8
 
 [[platforms]]
 os = "macos"
-opt_out = "the GPUI shell is Linux-only for now; macOS (WKWebView child) is planned (docs/handoff.md, Later)"
+arch = ["universal"]
+formats = ["zip", "dmg", "app"]
+channels = ["github"]
+assets = ["morph-{version}-universal-apple-darwin.zip", "morph-{version}-universal-apple-darwin.dmg"]
 
 [[platforms]]
 os = "windows"
-opt_out = "the GPUI shell is Linux-only for now; Windows (WebView2 child) is planned (docs/handoff.md, Later)"
+arch = ["x86_64"]
+arch_note = "aarch64 not built yet (no Windows on ARM runner in CI)"
+formats = ["zip", "msi"]
+channels = ["github"]
+assets = ["morph-{version}-x86_64-pc-windows-msvc.zip", "morph-{version}-x86_64-pc-windows-msvc.msi"]
 
 [[platforms]]
 os = "android"

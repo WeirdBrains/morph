@@ -15,10 +15,15 @@
         <Component Id="MorphExe" Guid="*">
           <File Id="MorphExeFile" Source="$(var.Source)\morph.exe" KeyPath="yes" />
         </Component>
-        <Component Id="MorphDocs" Guid="*">
-          <File Source="$(var.Source)\LICENSE.txt" />
-          <File Source="$(var.Source)\README.md" />
-          <File Source="$(var.Source)\Morph.ico" />
+        <!-- One file a component, so WiX can derive each component's GUID. -->
+        <Component Id="MorphLicense" Guid="*">
+          <File Source="$(var.Source)\LICENSE.txt" KeyPath="yes" />
+        </Component>
+        <Component Id="MorphReadme" Guid="*">
+          <File Source="$(var.Source)\README.md" KeyPath="yes" />
+        </Component>
+        <Component Id="MorphIconFile" Guid="*">
+          <File Source="$(var.Source)\Morph.ico" KeyPath="yes" />
         </Component>
       </Directory>
     </StandardDirectory>
@@ -33,7 +38,9 @@
 
     <Feature Id="Main" Title="Morph">
       <ComponentRef Id="MorphExe" />
-      <ComponentRef Id="MorphDocs" />
+      <ComponentRef Id="MorphLicense" />
+      <ComponentRef Id="MorphReadme" />
+      <ComponentRef Id="MorphIconFile" />
       <ComponentRef Id="MorphShortcut" />
     </Feature>
   </Package>
