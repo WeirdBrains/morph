@@ -2,7 +2,6 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 /// On-disk location of a profile's platform web-view store, matching
 /// morph-core: `<morph home>/profiles/<id>/...`.
@@ -35,35 +34,15 @@ String _morphHome({
   return '$home$sep.morph';
 }
 
-/// Per-profile [WebViewEnvironment] (Windows) and a macOS data-store hook.
+/// Per-profile storage hooks over the native Android plugin
+/// (androidx.webkit profiles).
 class MorphProfileStore {
   MorphProfileStore({
-    this.macosChannel = const MethodChannel(
-      'org.weirdbrains.morph_webview/profile',
-    ),
+    this.channel = const MethodChannel('org.weirdbrains.morph_webview/profile'),
   });
 
   @visibleForTesting
-  final MethodChannel macosChannel;
-
-  final Map<String, Future<WebViewEnvironment>> _windows = {};
-
-  /// Windows WebView2 user data folder for [profileId], or null on other OSes.
-  Future<WebViewEnvironment?> windowsEnvironment(String profileId) async {
-    if (kIsWeb || !Platform.isWindows) {
-      return null;
-    }
-    return _windows.putIfAbsent(profileId, () async {
-      final dir = morphProfileStorageDir(
-        profileId: profileId,
-        leaf: 'webview2',
-      );
-      await Directory(dir).create(recursive: true);
-      return WebViewEnvironment.create(
-        settings: WebViewEnvironmentSettings(userDataFolder: dir),
-      );
-    });
-  }
+  final MethodChannel channel;
 
   /// Register the Android WebView that will be built with keep-alive id
   /// [viewKey] for [profileId]'s androidx.webkit profile. Returns whether the
@@ -75,7 +54,7 @@ class MorphProfileStore {
     if (kIsWeb || !Platform.isAndroid) {
       return null;
     }
-    return prepareAndroidVia(macosChannel, profileId, viewKey);
+    return prepareAndroidVia(channel, profileId, viewKey);
   }
 
   /// Forget a keep-alive id registered with [prepareAndroid].
@@ -84,7 +63,7 @@ class MorphProfileStore {
       return;
     }
     try {
-      await macosChannel.invokeMethod<void>('forgetView', {'viewKey': viewKey});
+      await channel.invokeMethod<void>('forgetView', {'viewKey': viewKey});
     } on MissingPluginException {
       // Host without the native hook.
     }
@@ -96,7 +75,7 @@ class MorphProfileStore {
       return false;
     }
     try {
-      return await macosChannel.invokeMethod<bool>('deleteAndroid', {
+      return await channel.invokeMethod<bool>('deleteAndroid', {
             'profileId': profileId,
           }) ??
           false;
@@ -112,31 +91,12 @@ class MorphProfileStore {
     }
     List<String> names;
     try {
-      names =
-          await macosChannel.invokeListMethod<String>('listAndroid') ??
-          const [];
+      names = await channel.invokeListMethod<String>('listAndroid') ?? const [];
     } on MissingPluginException {
       return;
     }
     for (final id in staleAndroidProfiles(names, liveProfileIds)) {
       await deleteAndroid(id);
-    }
-  }
-
-  /// Tell the macOS hook which [WKWebsiteDataStore] the next WKWebView should
-  /// use. No-op on other platforms or when the native plugin is absent.
-  Future<void> prepareMacos(String profileId) async {
-    if (kIsWeb || !Platform.isMacOS) {
-      return;
-    }
-    try {
-      await macosChannel.invokeMethod<void>('prepare', {
-        'profileId': profileId,
-      });
-    } on MissingPluginException {
-      // The Dart-only plugin path has no native hook yet in some hosts.
-    } on PlatformException {
-      // macOS < 14 cannot create a store for an identifier.
     }
   }
 }

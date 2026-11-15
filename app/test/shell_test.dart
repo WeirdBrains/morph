@@ -7,7 +7,6 @@ import 'package:morph/src/app.dart';
 import 'package:morph/src/incoming_links.dart';
 import 'package:morph/src/widgets/tab_switcher.dart';
 import 'package:morph/src/shell.dart';
-import 'package:morph/src/tabs/tab_position.dart';
 import 'package:morph/src/theme/morph_theme.dart';
 import 'package:morph/src/widgets/start_page.dart';
 import 'package:morph_webview/morph_webview.dart';
@@ -61,6 +60,52 @@ Future<void> _enterAndSubmitUrl(WidgetTester tester, String url) async {
     await tester.testTextInput.receiveAction(TextInputAction.go);
     await tester.pump();
   }
+}
+
+/// Scrolls the widget with [key] into view and taps it.
+Future<void> _tapVisible(WidgetTester tester, String key) async {
+  await tester.ensureVisible(find.byKey(Key(key)));
+  await tester.pumpAndSettle();
+  await tester.tap(find.byKey(Key(key)));
+}
+
+/// Opens the address sheet, which also lists the profiles.
+Future<void> _openSheet(WidgetTester tester) async {
+  await tester.tap(find.byKey(const Key('address-bar')));
+  await tester.pumpAndSettle();
+  expect(find.byKey(const Key('address-sheet')), findsOneWidget);
+}
+
+/// Opens the address sheet and taps the action with [key].
+Future<void> _sheetTap(WidgetTester tester, String key) async {
+  await _openSheet(tester);
+  await tester.scrollUntilVisible(
+    find.byKey(Key(key)),
+    200,
+    scrollable: find
+        .descendant(
+          of: find.byKey(const Key('address-sheet')),
+          matching: find.byType(Scrollable),
+        )
+        .first,
+  );
+  await tester.tap(find.byKey(Key(key)));
+}
+
+/// Opens the tab grid and shows the tab at [index].
+Future<void> _showTab(WidgetTester tester, int index) async {
+  await tester.tap(find.byKey(const Key('tab-count')));
+  await tester.pumpAndSettle();
+  await tester.tap(find.byType(MorphTabCard).at(index));
+  await tester.pump();
+}
+
+/// Opens a new tab from the tab grid.
+Future<void> _newTab(WidgetTester tester) async {
+  await tester.tap(find.byKey(const Key('tab-count')));
+  await tester.pumpAndSettle();
+  await tester.tap(find.byKey(const Key('tab-switcher-new')));
+  await tester.pump();
 }
 
 /// Stands in for a native platform view (Android WebView). Each mount is a new
@@ -184,27 +229,6 @@ void main() {
     expect(find.byKey(const Key('address-bar')), findsOneWidget);
   });
 
-  testWidgets('desktop chrome shows a close button', (tester) async {
-    const missingHome = '/tmp/morph-does-not-exist';
-    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
-    try {
-      await tester.pumpWidget(
-        MorphApp(
-          api: FakeMorphApi(),
-          home: missingHome,
-          subscribeToTicks: false,
-        ),
-      );
-      await _pumpUntilIdentity(tester);
-      expect(find.byKey(const Key('window-close')), findsOneWidget);
-      expect(find.byTooltip('Close'), findsOneWidget);
-      expect(find.byKey(const Key('address-bar')), findsOneWidget);
-      expect(find.byTooltip('Back'), findsOneWidget);
-    } finally {
-      debugDefaultTargetPlatformOverride = null;
-    }
-  });
-
   testWidgets('a restored tab opens its saved URL on a cold start', (
     tester,
   ) async {
@@ -296,36 +320,6 @@ void main() {
     }
   });
 
-  testWidgets('Go button submits the address bar', (tester) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
-    const missingHome = '/tmp/morph-does-not-exist';
-    try {
-      await tester.pumpWidget(
-        MorphApp(
-          api: FakeMorphApi(),
-          home: missingHome,
-          subscribeToTicks: false,
-          loadPageBridgeAsset: false,
-        ),
-      );
-      await _pumpUntilIdentity(tester);
-
-      await tester.enterText(
-        find.byKey(const Key('address-bar')),
-        'example.org',
-      );
-      await tester.tap(find.byKey(const Key('address-go')));
-      await tester.pump();
-      await _pumpUntilWebViewAttached(tester, fakeWebView);
-
-      expect(fakeWebView.lastSession, isNotNull);
-      expect(fakeWebView.lastSession!.history, contains('https://example.org'));
-      expect(find.byKey(const Key('start-page')), findsNothing);
-    } finally {
-      debugDefaultTargetPlatformOverride = null;
-    }
-  });
-
   testWidgets(
     'phone chrome hides debug chrome and keeps a wide address field',
     (tester) async {
@@ -377,17 +371,9 @@ void main() {
     },
   );
 
-  testWidgets('tapping the URL field selects all text on phone and desktop', (
-    tester,
-  ) async {
+  testWidgets('tapping the URL field selects all text', (tester) async {
     const missingHome = '/tmp/morph-does-not-exist';
-    for (final platform in [
-      TargetPlatform.android,
-      TargetPlatform.iOS,
-      TargetPlatform.linux,
-      TargetPlatform.macOS,
-      TargetPlatform.windows,
-    ]) {
+    for (final platform in [TargetPlatform.android, TargetPlatform.iOS]) {
       debugDefaultTargetPlatformOverride = platform;
       try {
         await tester.pumpWidget(
@@ -401,40 +387,20 @@ void main() {
         await _pumpUntilIdentity(tester);
 
         const url = 'https://example.com/path';
-        final mobile =
-            platform == TargetPlatform.android ||
-            platform == TargetPlatform.iOS;
-        if (mobile) {
-          await tester.tap(find.byKey(const Key('address-bar')));
-          await tester.pumpAndSettle();
-          expect(find.byKey(const Key('address-sheet')), findsOneWidget);
-          await tester.enterText(
-            find.byKey(const Key('address-sheet-url')),
-            url,
-          );
-          await tester.tap(find.byKey(const Key('address-sheet-url')));
-          await tester.pump();
-          final field = tester.widget<TextField>(
-            find.byKey(const Key('address-sheet-url')),
-          );
-          expect(
-            field.controller!.value.selection,
-            const TextSelection(baseOffset: 0, extentOffset: url.length),
-            reason: '$platform',
-          );
-        } else {
-          await tester.enterText(find.byKey(const Key('address-bar')), url);
-          await tester.tap(find.byKey(const Key('address-bar')));
-          await tester.pump();
-          final field = tester.widget<TextField>(
-            find.byKey(const Key('address-bar')),
-          );
-          expect(
-            field.controller!.value.selection,
-            const TextSelection(baseOffset: 0, extentOffset: url.length),
-            reason: '$platform',
-          );
-        }
+        await tester.tap(find.byKey(const Key('address-bar')));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('address-sheet')), findsOneWidget);
+        await tester.enterText(find.byKey(const Key('address-sheet-url')), url);
+        await tester.tap(find.byKey(const Key('address-sheet-url')));
+        await tester.pump();
+        final field = tester.widget<TextField>(
+          find.byKey(const Key('address-sheet-url')),
+        );
+        expect(
+          field.controller!.value.selection,
+          const TextSelection(baseOffset: 0, extentOffset: url.length),
+          reason: '$platform',
+        );
       } finally {
         debugDefaultTargetPlatformOverride = null;
         await tester.pumpWidget(const SizedBox.shrink());
@@ -558,7 +524,7 @@ void main() {
       await _pumpUntilIdentity(tester);
 
       expect(find.byKey(const Key('tab-count')), findsOneWidget);
-      await tester.tap(find.byKey(const Key('tab-new')));
+      await _newTab(tester);
       await tester.pump();
       await tester.tap(find.byKey(const Key('tab-count')));
       await tester.pumpAndSettle();
@@ -695,86 +661,12 @@ void main() {
     }
   });
 
-  testWidgets('switching desktop tabs restores each tab URL and page', (
-    tester,
-  ) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
-    final view = tester.view;
-    view.physicalSize = const Size(1280, 800);
-    view.devicePixelRatio = 1.0;
-    addTearDown(view.reset);
-    try {
-      await tester.pumpWidget(
-        MorphApp(
-          api: FakeMorphApi(),
-          home: '/tmp/morph-does-not-exist',
-          subscribeToTicks: false,
-          loadPageBridgeAsset: false,
-        ),
-      );
-      await _pumpUntilIdentity(tester);
-
-      await tester.enterText(
-        find.byKey(const Key('address-bar')),
-        'one.example',
-      );
-      await tester.tap(find.byKey(const Key('address-go')));
-      await tester.pump();
-      await _pumpUntilWebViewAttached(tester, fakeWebView);
-      expect(find.byKey(const Key('start-page')), findsNothing);
-
-      await tester.tap(find.byKey(const Key('tab-new')));
-      await tester.pumpAndSettle();
-      expect(find.byKey(const Key('start-page')), findsOneWidget);
-      expect(
-        tester
-            .widget<TextField>(find.byKey(const Key('address-bar')))
-            .controller!
-            .text,
-        isEmpty,
-      );
-
-      await tester.enterText(
-        find.byKey(const Key('address-bar')),
-        'two.example',
-      );
-      await tester.tap(find.byKey(const Key('address-go')));
-      await tester.pump();
-      await tester.pumpAndSettle();
-      expect(find.byKey(const Key('start-page')), findsNothing);
-
-      await tester.tap(find.byKey(const Key('tab-1')));
-      await tester.pumpAndSettle();
-      expect(find.byKey(const Key('start-page')), findsNothing);
-      expect(
-        tester
-            .widget<TextField>(find.byKey(const Key('address-bar')))
-            .controller!
-            .text,
-        'one.example',
-      );
-
-      await tester.tap(find.byKey(const Key('tab-2')));
-      await tester.pumpAndSettle();
-      expect(find.byKey(const Key('start-page')), findsNothing);
-      expect(
-        tester
-            .widget<TextField>(find.byKey(const Key('address-bar')))
-            .controller!
-            .text,
-        'two.example',
-      );
-    } finally {
-      debugDefaultTargetPlatformOverride = null;
-    }
-  });
-
   testWidgets('a hidden tab drops its buffering and gets it back on switch', (
     tester,
   ) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
     final view = tester.view;
-    view.physicalSize = const Size(1280, 800);
+    view.physicalSize = const Size(412, 915);
     view.devicePixelRatio = 1.0;
     addTearDown(view.reset);
     try {
@@ -787,23 +679,13 @@ void main() {
         ),
       );
       await _pumpUntilIdentity(tester);
-      await tester.enterText(
-        find.byKey(const Key('address-bar')),
-        'one.example',
-      );
-      await tester.tap(find.byKey(const Key('address-go')));
-      await tester.pump();
+      await _enterAndSubmitUrl(tester, 'one.example');
       await _pumpUntilWebViewAttached(tester, fakeWebView);
       final first = fakeWebView.lastSession!;
 
-      await tester.tap(find.byKey(const Key('tab-new')));
+      await _newTab(tester);
       await tester.pumpAndSettle();
-      await tester.enterText(
-        find.byKey(const Key('address-bar')),
-        'two.example',
-      );
-      await tester.tap(find.byKey(const Key('address-go')));
-      await tester.pump();
+      await _enterAndSubmitUrl(tester, 'two.example');
       await tester.pumpAndSettle();
       final second = fakeWebView.lastSession!;
       expect(identical(first, second), isFalse);
@@ -815,7 +697,7 @@ void main() {
       expect(first.bufferingChanges, [MorphBuffering.idle]);
       expect(second.bufferingChanges, isEmpty, reason: 'the visible tab');
 
-      await tester.tap(find.byKey(const Key('tab-1')));
+      await _showTab(tester, 0);
       await tester.pump();
       expect(first.bufferingChanges, [
         MorphBuffering.idle,
@@ -833,9 +715,9 @@ void main() {
   testWidgets('a crashed tab shows its own crash state and reloads', (
     tester,
   ) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
     final view = tester.view;
-    view.physicalSize = const Size(1280, 800);
+    view.physicalSize = const Size(412, 915);
     view.devicePixelRatio = 1.0;
     addTearDown(view.reset);
     try {
@@ -848,23 +730,13 @@ void main() {
         ),
       );
       await _pumpUntilIdentity(tester);
-      await tester.enterText(
-        find.byKey(const Key('address-bar')),
-        'one.example',
-      );
-      await tester.tap(find.byKey(const Key('address-go')));
-      await tester.pump();
+      await _enterAndSubmitUrl(tester, 'one.example');
       await _pumpUntilWebViewAttached(tester, fakeWebView);
       final first = fakeWebView.lastSession!;
 
-      await tester.tap(find.byKey(const Key('tab-new')));
+      await _newTab(tester);
       await tester.pumpAndSettle();
-      await tester.enterText(
-        find.byKey(const Key('address-bar')),
-        'two.example',
-      );
-      await tester.tap(find.byKey(const Key('address-go')));
-      await tester.pump();
+      await _enterAndSubmitUrl(tester, 'two.example');
       await tester.pumpAndSettle();
       expect(fakeWebView.sessions, hasLength(2));
       final second = fakeWebView.sessions.last;
@@ -876,10 +748,10 @@ void main() {
       expect(find.byKey(const Key('page-crashed')), findsOneWidget);
       expect(find.text('This page crashed'), findsOneWidget);
       // The shell keeps working: switch to the other tab, which is fine.
-      await tester.tap(find.byKey(const Key('tab-1')));
+      await _showTab(tester, 0);
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('page-crashed')), findsNothing);
-      await tester.tap(find.byKey(const Key('tab-2')));
+      await _showTab(tester, 1);
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('page-crashed')), findsOneWidget);
 
@@ -910,12 +782,7 @@ void main() {
       await tester.pump();
       await tester.pump();
       expect(find.byKey(const Key('page-crashed')), findsOneWidget);
-      await tester.enterText(
-        find.byKey(const Key('address-bar')),
-        'three.example',
-      );
-      await tester.testTextInput.receiveAction(TextInputAction.go);
-      await tester.pumpAndSettle();
+      await _enterAndSubmitUrl(tester, 'three.example');
       expect(second.rendererRecoveries, 2);
       expect(second.history.last, 'https://three.example');
       expect(find.byKey(const Key('page-crashed')), findsNothing);
@@ -925,7 +792,7 @@ void main() {
       await tester.pump();
       await tester.pump();
       expect(find.byKey(const Key('page-crashed')), findsNothing);
-      await tester.tap(find.byKey(const Key('tab-1')));
+      await _showTab(tester, 0);
       await tester.pumpAndSettle();
       expect(first.rendererRecoveries, 1);
       expect(find.byKey(const Key('page-crashed')), findsNothing);
@@ -934,55 +801,12 @@ void main() {
     }
   });
 
-  testWidgets(
-    'desktop profile button sits at the right of the nav row under the window buttons',
-    (tester) async {
-      const missingHome = '/tmp/morph-does-not-exist';
-      for (final platform in [
-        TargetPlatform.linux,
-        TargetPlatform.macOS,
-        TargetPlatform.windows,
-      ]) {
-        debugDefaultTargetPlatformOverride = platform;
-        final view = tester.view;
-        view.physicalSize = const Size(1280, 800);
-        view.devicePixelRatio = 1.0;
-        try {
-          await tester.pumpWidget(
-            MorphApp(
-              key: ValueKey('profile-placement-$platform'),
-              api: FakeMorphApi(),
-              home: missingHome,
-              subscribeToTicks: false,
-              loadPageBridgeAsset: false,
-            ),
-          );
-          await _pumpUntilIdentity(tester);
-          await tester.pumpAndSettle();
-
-          for (final position in MorphTabPosition.values) {
-            if (position != MorphTabPosition.top) {
-              await tester.tap(find.byKey(const Key('tab-position')));
-              await tester.pumpAndSettle();
-              await tester.tap(find.byKey(Key('tab-position-${position.key}')));
-              await tester.pumpAndSettle();
-            }
-            _assertProfileAtNavTrailing(tester, platform, position);
-          }
-        } finally {
-          debugDefaultTargetPlatformOverride = null;
-          view.reset();
-        }
-      }
-    },
-  );
-
-  testWidgets('each new profile is onboarded to its own identity on desktop', (
+  testWidgets('each new profile is onboarded to its own identity', (
     tester,
   ) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
     final view = tester.view;
-    view.physicalSize = const Size(1280, 1000);
+    view.physicalSize = const Size(412, 915);
     view.devicePixelRatio = 1.0;
     final api = FakeMorphApi()..onboarded = false;
     Future<void> createIdentity() async {
@@ -997,11 +821,11 @@ void main() {
         find.byKey(const Key('onboarding-confirm')),
         'long enough',
       );
-      await tester.tap(find.byKey(const Key('onboarding-submit')));
+      await _tapVisible(tester, 'onboarding-submit');
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('onboarding-saved')));
+      await _tapVisible(tester, 'onboarding-saved');
       await tester.pump();
-      await tester.tap(find.byKey(const Key('onboarding-done')));
+      await _tapVisible(tester, 'onboarding-done');
       await tester.pumpAndSettle();
     }
 
@@ -1018,7 +842,7 @@ void main() {
       await tester.pumpAndSettle();
 
       // First use of the default profile asks, and the barrier cannot dismiss.
-      await tester.tapAt(const Offset(4, 996));
+      await tester.tapAt(const Offset(200, 4));
       await tester.pumpAndSettle();
       await createIdentity();
       expect(find.byKey(const Key('identity-onboarding')), findsNothing);
@@ -1039,31 +863,27 @@ void main() {
       await tester.pumpAndSettle();
       expect(api.identitiesByProfile.containsKey(play), isFalse);
 
-      await tester.tap(find.byKey(const Key('profile-button')));
+      await _openSheet(tester);
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('profile-item-default')));
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('identity-onboarding')), findsNothing);
 
-      await tester.tap(find.byKey(const Key('nav-menu')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('menu-identity')));
+      await _sheetTap(tester, 'sheet-identity');
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('identity-dialog')), findsOneWidget);
       expect(find.text(first.userId), findsOneWidget);
       await tester.tap(find.text('Close'));
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byKey(const Key('profile-button')));
+      await _openSheet(tester);
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(Key('profile-item-$play')));
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('identity-onboarding')), findsNothing);
 
       // The menu still offers setup for the skipped profile.
-      await tester.tap(find.byKey(const Key('nav-menu')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('menu-identity')));
+      await _sheetTap(tester, 'sheet-identity');
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('identity-onboarding')), findsOneWidget);
     } finally {
@@ -1075,9 +895,9 @@ void main() {
   testWidgets('the identity dialog offers the recovery phrase and a backup', (
     tester,
   ) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
     final view = tester.view;
-    view.physicalSize = const Size(1280, 1000);
+    view.physicalSize = const Size(412, 915);
     view.devicePixelRatio = 1.0;
     final api = FakeMorphApi()..onboarded = false;
     try {
@@ -1099,17 +919,15 @@ void main() {
       for (final key in ['onboarding-password', 'onboarding-confirm']) {
         await tester.enterText(find.byKey(Key(key)), 'long enough');
       }
-      await tester.tap(find.byKey(const Key('onboarding-submit')));
+      await _tapVisible(tester, 'onboarding-submit');
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('onboarding-saved')));
+      await _tapVisible(tester, 'onboarding-saved');
       await tester.pump();
-      await tester.tap(find.byKey(const Key('onboarding-done')));
+      await _tapVisible(tester, 'onboarding-done');
       await tester.pumpAndSettle();
 
       Future<void> identityAction(String key) async {
-        await tester.tap(find.byKey(const Key('nav-menu')));
-        await tester.pumpAndSettle();
-        await tester.tap(find.byKey(const Key('menu-identity')));
+        await _sheetTap(tester, 'sheet-identity');
         await tester.pumpAndSettle();
         await tester.tap(find.byKey(Key(key)));
         await tester.pumpAndSettle();
@@ -1156,8 +974,8 @@ void main() {
 
   group('encrypted library unlock', () {
     Future<void> launch(WidgetTester tester, FakeMorphApi api) async {
-      debugDefaultTargetPlatformOverride = TargetPlatform.linux;
-      tester.view.physicalSize = const Size(1280, 1000);
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      tester.view.physicalSize = const Size(412, 915);
       tester.view.devicePixelRatio = 1.0;
       await tester.pumpWidget(
         MorphApp(
@@ -1280,10 +1098,10 @@ void main() {
     });
   });
 
-  testWidgets('desktop links a profile from another device, then adds one', (
+  testWidgets('a profile links from another device, then adds one', (
     tester,
   ) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
     final view = tester.view;
     view.physicalSize = const Size(1280, 1100);
     view.devicePixelRatio = 1.0;
@@ -1335,15 +1153,13 @@ void main() {
       expect(api.identitiesByProfile['default']!.linked, isTrue);
 
       // Existing device: Identity, then Add device, opens the pairing panel.
-      await tester.tap(find.byKey(const Key('nav-menu')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('menu-identity')));
+      await _sheetTap(tester, 'sheet-identity');
       await tester.pumpAndSettle();
       expect(find.text('Linked from another device.'), findsOneWidget);
       await tester.tap(find.byKey(const Key('identity-add-device')));
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('add-device-panel')), findsOneWidget);
-      // No camera on a desktop: paste only.
+      // No QR scanner available: paste only.
       expect(find.byKey(const Key('add-device-scan')), findsNothing);
       expect(find.byKey(const Key('add-device-link')), findsOneWidget);
     } finally {
@@ -1387,7 +1203,7 @@ void main() {
         find.byKey(const Key('onboarding-confirm')),
         'long enough',
       );
-      await tester.tap(find.byKey(const Key('onboarding-submit')));
+      await _tapVisible(tester, 'onboarding-submit');
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('identity-onboarding')), findsNothing);
       expect(api.identitiesByProfile['default']!.imported, isTrue);
@@ -1413,9 +1229,9 @@ void main() {
   testWidgets('profiles isolate tabs and refuse to delete the last profile', (
     tester,
   ) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
     final view = tester.view;
-    view.physicalSize = const Size(1280, 800);
+    view.physicalSize = const Size(412, 915);
     view.devicePixelRatio = 1.0;
     final api = FakeMorphApi();
     try {
@@ -1430,18 +1246,13 @@ void main() {
       await _pumpUntilIdentity(tester);
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byKey(const Key('profile-button')));
+      await _openSheet(tester);
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('profile-delete-default')), findsNothing);
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
 
-      await tester.enterText(
-        find.byKey(const Key('address-bar')),
-        'one.example',
-      );
-      await tester.tap(find.byKey(const Key('address-go')));
-      await tester.pump();
+      await _enterAndSubmitUrl(tester, 'one.example');
       await _pumpUntilWebViewAttached(tester, fakeWebView);
       expect(find.byKey(const Key('start-page')), findsNothing);
 
@@ -1459,7 +1270,7 @@ void main() {
       await _addNamedProfile(tester, 'Home');
       expect(api.profiles, hasLength(3));
 
-      await tester.tap(find.byKey(const Key('profile-button')));
+      await _openSheet(tester);
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('profile-item-default')));
       await tester.pumpAndSettle();
@@ -1472,7 +1283,7 @@ void main() {
         'one.example',
       );
 
-      await tester.tap(find.byKey(const Key('profile-button')));
+      await _openSheet(tester);
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('profile-item-p1')));
       await tester.pumpAndSettle();
@@ -1485,7 +1296,7 @@ void main() {
         isNot(contains('one.example')),
       );
 
-      await tester.tap(find.byKey(const Key('profile-button')));
+      await _openSheet(tester);
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('profile-delete-default')), findsOneWidget);
       await tester.tap(find.byKey(const Key('profile-delete-p2')));
@@ -1494,18 +1305,21 @@ void main() {
       await tester.pumpAndSettle();
       expect(api.profiles, hasLength(2));
       expect(api.profiles.any((profile) => profile.id == 'p2'), isFalse);
+      // The open sheet follows the catalog.
+      expect(find.byKey(const Key('profile-item-p2')), findsNothing);
 
-      await tester.tap(find.byKey(const Key('profile-button')));
-      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('profile-delete-p1')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('profile-delete-confirm')));
       await tester.pumpAndSettle();
       expect(api.profiles, hasLength(1));
       expect(api.currentProfileId, 'default');
+      expect(find.byKey(const Key('profile-delete-default')), findsNothing);
 
-      await tester.tap(find.byKey(const Key('profile-button')));
+      await tester.binding.handlePopRoute();
       await tester.pumpAndSettle();
+      await _openSheet(tester);
+      expect(find.byKey(const Key('profile-item-p1')), findsNothing);
       expect(find.byKey(const Key('profile-delete-default')), findsNothing);
     } finally {
       debugDefaultTargetPlatformOverride = null;
@@ -1850,9 +1664,9 @@ void main() {
   testWidgets('Ctrl+F finds in the active page and Escape closes it', (
     tester,
   ) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
     final view = tester.view;
-    view.physicalSize = const Size(1280, 800);
+    view.physicalSize = const Size(412, 915);
     view.devicePixelRatio = 1.0;
     try {
       await tester.pumpWidget(
@@ -1864,9 +1678,7 @@ void main() {
         ),
       );
       await _pumpUntilIdentity(tester);
-      await tester.enterText(find.byKey(const Key('address-bar')), 'f.example');
-      await tester.tap(find.byKey(const Key('address-go')));
-      await tester.pump();
+      await _enterAndSubmitUrl(tester, 'f.example');
       await _pumpUntilWebViewAttached(tester, fakeWebView);
       await tester.pump();
       final session = fakeWebView.lastSession!;
@@ -1898,12 +1710,12 @@ void main() {
     }
   });
 
-  testWidgets('desktop star bookmarks the page in the active profile only', (
+  testWidgets('the bookmark action saves the page in the active profile only', (
     tester,
   ) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
     final view = tester.view;
-    view.physicalSize = const Size(1280, 800);
+    view.physicalSize = const Size(412, 915);
     view.devicePixelRatio = 1.0;
     try {
       final api = FakeMorphApi();
@@ -1916,20 +1728,16 @@ void main() {
         ),
       );
       await _pumpUntilIdentity(tester);
-      await tester.enterText(find.byKey(const Key('address-bar')), 'b.example');
-      await tester.tap(find.byKey(const Key('address-go')));
-      await tester.pump();
+      await _enterAndSubmitUrl(tester, 'b.example');
       await _pumpUntilWebViewAttached(tester, fakeWebView);
       await tester.pumpAndSettle();
 
-      expect(find.byTooltip('Bookmark this page'), findsOneWidget);
-      await tester.tap(find.byKey(const Key('nav-bookmark')));
+      await _sheetTap(tester, 'sheet-bookmark');
       await tester.pumpAndSettle();
       expect((await api.listBookmarks('default')).map((b) => b.url), [
         'https://b.example',
       ]);
       expect(api.bookmarksByProfile.keys, ['default']);
-      expect(find.byTooltip('Remove bookmark'), findsOneWidget);
 
       // Ctrl+H opens this profile's history in a panel over the page.
       await _focusActiveWebView(tester);
@@ -1955,7 +1763,7 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('library-page')), findsNothing);
-      expect(find.byTooltip('Bookmark this page'), findsOneWidget);
+      expect(await api.listBookmarks('default'), isEmpty);
     } finally {
       debugDefaultTargetPlatformOverride = null;
       view.reset();
@@ -2080,55 +1888,12 @@ void main() {
     });
   }
 
-  testWidgets('desktop menu opens a bookmark and a history entry', (
-    tester,
-  ) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
-    final view = tester.view;
-    view.physicalSize = const Size(1280, 800);
-    view.devicePixelRatio = 1.0;
-    addTearDown(view.reset);
-    try {
-      final api = FakeMorphApi();
-      await api.addBookmark('default', 'https://b.example', 'B');
-      await api.recordVisit('default', 'https://h.example', 'H');
-      await tester.pumpWidget(
-        MorphApp(
-          api: api,
-          home: '/tmp/morph-does-not-exist',
-          subscribeToTicks: false,
-          loadPageBridgeAsset: false,
-        ),
-      );
-      await _pumpUntilIdentity(tester);
-      await _enterAndSubmitUrl(tester, 'first.example');
-      await _pumpUntilWebViewAttached(tester, fakeWebView);
-      await tester.pumpAndSettle();
-      final session = fakeWebView.lastSession!;
-      for (final (item, key, url) in [
-        ('bookmarks', 'bookmark-https://b.example', 'https://b.example'),
-        ('history', 'history-https://h.example', 'https://h.example'),
-      ]) {
-        await tester.tap(find.byKey(const Key('nav-menu')));
-        await tester.pumpAndSettle();
-        await tester.tap(find.byKey(Key('menu-$item')));
-        await tester.pumpAndSettle();
-        await tester.tap(find.byKey(Key(key)));
-        await tester.pumpAndSettle();
-        expect(find.byKey(const Key('library-page')), findsNothing);
-        expect(session.history.last, url, reason: 'from $item');
-      }
-    } finally {
-      debugDefaultTargetPlatformOverride = null;
-    }
-  });
-
   testWidgets('links from other apps open in the active profile', (
     tester,
   ) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
     final view = tester.view;
-    view.physicalSize = const Size(1280, 800);
+    view.physicalSize = const Size(412, 915);
     view.devicePixelRatio = 1.0;
     addTearDown(view.reset);
     try {
@@ -2166,12 +1931,10 @@ void main() {
     }
   });
 
-  testWidgets('desktop menu settings clear only the active profile history', (
-    tester,
-  ) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+  testWidgets('settings clear only the active profile history', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
     final view = tester.view;
-    view.physicalSize = const Size(1280, 800);
+    view.physicalSize = const Size(412, 915);
     view.devicePixelRatio = 1.0;
     try {
       final api = FakeMorphApi();
@@ -2185,19 +1948,14 @@ void main() {
         ),
       );
       await _pumpUntilIdentity(tester);
-      await tester.enterText(find.byKey(const Key('address-bar')), 's.example');
-      await tester.tap(find.byKey(const Key('address-go')));
-      await tester.pump();
+      await _enterAndSubmitUrl(tester, 's.example');
       await _pumpUntilWebViewAttached(tester, fakeWebView);
       await tester.pumpAndSettle();
       expect(await api.listHistory('default'), isNotEmpty);
 
-      await tester.tap(find.byKey(const Key('nav-menu')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('menu-settings')));
+      await _sheetTap(tester, 'sheet-settings');
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('settings-page')), findsOneWidget);
-      expect(find.byKey(const Key('settings-tab-position')), findsOneWidget);
 
       await tester.tap(find.byKey(const Key('settings-clear-history')));
       await tester.pumpAndSettle();
@@ -2283,9 +2041,9 @@ void main() {
   testWidgets(
     'shell shortcuts work while the web view has focus and are not forwarded',
     (tester) async {
-      debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
       final view = tester.view;
-      view.physicalSize = const Size(1280, 800);
+      view.physicalSize = const Size(412, 915);
       view.devicePixelRatio = 1.0;
       try {
         await tester.pumpWidget(
@@ -2297,16 +2055,12 @@ void main() {
           ),
         );
         await _pumpUntilIdentity(tester);
-        await tester.enterText(
-          find.byKey(const Key('address-bar')),
-          'one.example',
-        );
-        await tester.tap(find.byKey(const Key('address-go')));
-        await tester.pump();
+        await _enterAndSubmitUrl(tester, 'one.example');
         await _pumpUntilWebViewAttached(tester, fakeWebView);
         await tester.pump();
 
         final session = fakeWebView.lastSession!;
+        final state = tester.state<MorphShellState>(find.byType(MorphShell));
         await _focusActiveWebView(tester);
         session.keys.clear();
 
@@ -2325,7 +2079,7 @@ void main() {
           LogicalKeyboardKey.keyT,
         );
         await tester.pumpAndSettle();
-        expect(find.byKey(const Key('tab-2')), findsOneWidget);
+        expect(state.tabs.tabs, hasLength(2));
         expect(
           session.keys.map((event) => event.key),
           isNot(contains('T')),
@@ -2338,8 +2092,7 @@ void main() {
           LogicalKeyboardKey.keyW,
         );
         await tester.pumpAndSettle();
-        expect(find.byKey(const Key('tab-2')), findsNothing);
-        expect(find.byKey(const Key('tab-1')), findsOneWidget);
+        expect(state.tabs.tabs.map((tab) => tab.id), [1]);
 
         await _focusActiveWebView(tester);
         await _sendChord(
@@ -2348,11 +2101,11 @@ void main() {
           LogicalKeyboardKey.keyT,
         );
         await tester.pumpAndSettle();
-        expect(find.byKey(const Key('tab-3')), findsOneWidget);
+        expect(state.tabs.tabs.map((tab) => tab.id), [1, 3]);
 
-        await tester.tap(find.byKey(const Key('tab-new')));
+        await _newTab(tester);
         await tester.pumpAndSettle();
-        expect(find.byKey(const Key('tab-4')), findsOneWidget);
+        expect(state.tabs.activeId, 4);
 
         await _sendChord(
           tester,
@@ -2374,7 +2127,7 @@ void main() {
           LogicalKeyboardKey.digit9,
         );
         await tester.pumpAndSettle();
-        expect(find.byKey(const Key('tab-4')), findsOneWidget);
+        expect(state.tabs.activeId, 4);
 
         await _sendChord(
           tester,
@@ -2397,9 +2150,9 @@ void main() {
           shift: true,
         );
         await tester.pumpAndSettle();
-        expect(find.byKey(const Key('tab-4')), findsOneWidget);
+        expect(state.tabs.activeId, 4);
 
-        await tester.tap(find.byKey(const Key('tab-1')));
+        await _showTab(tester, 0);
         await tester.pumpAndSettle();
         await _focusActiveWebView(tester);
         final reloads = session.reloads;
@@ -2475,7 +2228,7 @@ Future<void> _focusActiveWebView(WidgetTester tester) async {
 }
 
 Future<void> _addNamedProfile(WidgetTester tester, String name) async {
-  await tester.tap(find.byKey(const Key('profile-button')));
+  await _openSheet(tester);
   await tester.pumpAndSettle();
   await tester.tap(find.byKey(const Key('profile-add')));
   await tester.pumpAndSettle();
@@ -2483,56 +2236,4 @@ Future<void> _addNamedProfile(WidgetTester tester, String name) async {
   await tester.enterText(find.byKey(const Key('profile-add-name')), name);
   await tester.tap(find.byKey(const Key('profile-add-confirm')));
   await tester.pumpAndSettle();
-}
-
-void _assertProfileAtNavTrailing(
-  WidgetTester tester,
-  TargetPlatform platform,
-  MorphTabPosition position,
-) {
-  final reason = '$platform $position';
-  expect(
-    find.byKey(const Key('profile-button')),
-    findsOneWidget,
-    reason: reason,
-  );
-  final nav = tester.getRect(find.byKey(const Key('nav-row')));
-  final profile = tester.getRect(find.byKey(const Key('profile-button')));
-  expect(profile.top, greaterThanOrEqualTo(nav.top - 0.5), reason: reason);
-  expect(profile.bottom, lessThanOrEqualTo(nav.bottom + 0.5), reason: reason);
-  expect(nav.right - profile.right, lessThan(24), reason: reason);
-
-  if (position == MorphTabPosition.top) {
-    final strip = tester.getRect(find.byKey(const Key('tab-strip')));
-    expect(
-      profile.top,
-      greaterThanOrEqualTo(strip.bottom - 0.5),
-      reason: reason,
-    );
-  } else {
-    final caption = tester.getRect(find.byKey(const Key('caption-bar')));
-    expect(
-      profile.top,
-      greaterThanOrEqualTo(caption.bottom - 0.5),
-      reason: reason,
-    );
-    if (position == MorphTabPosition.bottom) {
-      final strip = tester.getRect(find.byKey(const Key('tab-strip')));
-      expect(
-        profile.bottom,
-        lessThanOrEqualTo(strip.top + 0.5),
-        reason: reason,
-      );
-    }
-  }
-
-  if (find.byKey(const Key('window-close')).evaluate().isNotEmpty) {
-    final close = tester.getRect(find.byKey(const Key('window-close')));
-    expect(
-      profile.top,
-      greaterThanOrEqualTo(close.bottom - 0.5),
-      reason: reason,
-    );
-    expect((profile.right - close.right).abs(), lessThan(40), reason: reason);
-  }
 }

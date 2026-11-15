@@ -308,13 +308,6 @@ packages:
       relative: true
     source: path
     version: "0.1.0"
-  morph_webview_linux:
-    dependency: "direct main"
-    description:
-      path: "../morph_webview_linux"
-      relative: true
-    source: path
-    version: "0.1.0"
   path:
     dependency: transitive
     description:

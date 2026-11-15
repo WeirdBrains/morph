@@ -1,0 +1,196 @@
+//! Moving a profile identity between devices over a QR link. Sessions live
+//! here and are named by an id, so a shell only holds the id, the link text,
+//! the six-digit code and public identity facts; seeds, keys and passwords
+//! stay in Rust.
+
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard, OnceLock};
+
+pub use morph_identity::device_link::LinkState;
+use morph_identity::device_link::{AddDevice, NewDevice, net_config};
+use morph_identity::profile_identity::{self, ProfileIdentity, SecretString};
+
+use crate::home::{now_ms, profile_dir};
+use crate::{Error, Result};
+
+/// A new device's offer: show `link` as a QR code and as text.
+#[derive(Debug, Clone)]
+pub struct Offer {
+    pub session: u64,
+    pub link: String,
+    pub expires_ms: i64,
+}
+
+/// An existing device paired with a scanned link: compare `sas`, then send.
+#[derive(Debug, Clone)]
+pub struct Pairing {
+    pub session: u64,
+    pub sas: String,
+    pub device: String,
+}
+
+/// Open link sessions, both sides. One per process is enough
+/// ([`Links::global`]); tests may make their own.
+#[derive(Default)]
+pub struct Links {
+    next: AtomicU64,
+    hosts: Mutex<HashMap<u64, NewDevice>>,
+    pairings: Mutex<HashMap<u64, AddDevice>>,
+}
+
+fn guard<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+impl Links {
+    /// The process-wide sessions.
+    pub fn global() -> &'static Links {
+        static LINKS: OnceLock<Links> = OnceLock::new();
+        LINKS.get_or_init(Links::default)
+    }
+
+    fn next_id(&self) -> u64 {
+        self.next.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    /// New device: start listening and make a fresh offer. `device_name` is
+    /// shown on the other device.
+    pub fn new_device_start(&self, device_name: &str) -> Result<Offer> {
+        let device = NewDevice::start(device_name, net_config()).map_err(Error::failed)?;
+        let offer = Offer { session: self.next_id(), link: device.link().to_string(), expires_ms: device.expires_ms() };
+        guard(&self.hosts).insert(offer.session, device);
+        Ok(offer)
+    }
+
+    /// New device: where session `session` stands.
+    pub fn new_device_status(&self, session: u64) -> Result<LinkState> {
+        guard(&self.hosts).get(&session).map(NewDevice::state).ok_or(Error::LinkGone)
+    }
+
+    /// New device: the user confirmed that the codes match.
+    pub fn new_device_confirm(&self, session: u64) -> Result<()> {
+        guard(&self.hosts).get(&session).ok_or(Error::LinkGone)?.confirm();
+        Ok(())
+    }
+
+    /// New device: store the identity that arrived in `profile_id`, sealed
+    /// under `password`, and encrypt the profile's library. Ends the session
+    /// on success.
+    pub fn new_device_finish(&self, home: &Path, profile_id: &str, session: u64, password: &SecretString) -> Result<ProfileIdentity> {
+        let dir = profile_dir(home, profile_id)?;
+        let identity = {
+            let mut hosts = guard(&self.hosts);
+            let identity = hosts.get(&session).ok_or(Error::LinkGone)?.finish(&dir, password, now_ms()).map_err(Error::failed)?;
+            hosts.remove(&session);
+            identity
+        };
+        match profile_identity::library_key(&dir, password) {
+            Ok(key) => crate::library::adopt_new_identity(home, profile_id, &identity.user_id, &key),
+            Err(e) => eprintln!("Morph: library key for linked profile {profile_id}: {e}"),
+        }
+        Ok(identity)
+    }
+
+    /// New device: stop listening (screen closed, or the codes differ).
+    pub fn new_device_cancel(&self, session: u64) {
+        if let Some(device) = guard(&self.hosts).remove(&session) {
+            device.cancel();
+        }
+    }
+
+    /// Existing device: check `profile_id`'s password, read `link` and pair
+    /// with the new device.
+    pub fn add_device_start(&self, home: &Path, profile_id: &str, profile_name: &str, password: &SecretString, link: &str) -> Result<Pairing> {
+        let dir = profile_dir(home, profile_id)?;
+        let pairing = AddDevice::start(&dir, profile_name, password, link, net_config()).map_err(Error::failed)?;
+        let view = Pairing { session: self.next_id(), sas: pairing.sas().to_string(), device: pairing.device().to_string() };
+        guard(&self.pairings).insert(view.session, pairing);
+        Ok(view)
+    }
+
+    /// Existing device: the codes match; send the identity and end the session.
+    pub fn add_device_send(&self, session: u64) -> Result<()> {
+        let mut pairing = guard(&self.pairings).remove(&session).ok_or(Error::LinkGone)?;
+        pairing.send().map_err(Error::failed)
+    }
+
+    /// Existing device: the codes differ, or the user gave up.
+    pub fn add_device_cancel(&self, session: u64) {
+        if let Some(pairing) = guard(&self.pairings).remove(&session) {
+            let _ = pairing.cancel();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use morph_core::library_db::LibraryState;
+    use std::time::{Duration, Instant};
+
+    fn pw(s: &str) -> SecretString {
+        SecretString::from(s.to_string())
+    }
+
+    fn home_with_work() -> (tempfile::TempDir, std::path::PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("h");
+        morph_core::profiles::create(&home, "Work").unwrap();
+        (tmp, home)
+    }
+
+    fn wait(links: &Links, session: u64, done: impl Fn(&LinkState) -> bool) -> LinkState {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            let s = links.new_device_status(session).unwrap();
+            if done(&s) || Instant::now() > deadline {
+                return s;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// Both sides in one process over real TCP: the new home's "Work"
+    /// profile ends up with the old home's identity and an encrypted library.
+    #[test]
+    fn a_link_moves_an_identity_and_encrypts_the_library() {
+        let links = Links::default();
+        let (_a, old) = home_with_work();
+        let (_b, new) = home_with_work();
+        let made = crate::identity::create(&old, "p1", &pw("old password")).unwrap();
+
+        let offer = links.new_device_start("Morph test").unwrap();
+        assert!(offer.link.starts_with("weirdnet-morph://link/"));
+        assert_eq!(links.new_device_status(offer.session).unwrap(), LinkState::Waiting);
+        assert!(links.add_device_start(&old, "p1", "Work", &pw("wrong password"), &offer.link).is_err());
+        let pairing = links.add_device_start(&old, "p1", "Work", &pw("old password"), &offer.link).unwrap();
+        assert_eq!(pairing.device, "Morph test");
+        match wait(&links, offer.session, |s| matches!(s, LinkState::Paired { .. })) {
+            LinkState::Paired { sas } => assert_eq!(sas, pairing.sas),
+            other => panic!("{other:?}"),
+        }
+        links.new_device_confirm(offer.session).unwrap();
+        links.add_device_send(pairing.session).unwrap();
+        assert!(matches!(links.add_device_send(pairing.session), Err(Error::LinkGone)), "single use");
+        assert!(matches!(wait(&links, offer.session, |s| matches!(s, LinkState::Received { .. })), LinkState::Received { .. }));
+
+        let linked = links.new_device_finish(&new, "p1", offer.session, &pw("new password")).unwrap();
+        assert_eq!(linked.user_id, made.identity.user_id);
+        assert!(matches!(links.new_device_status(offer.session), Err(Error::LinkGone)), "session ended");
+        assert_eq!(crate::library::state(&new, "p1").unwrap(), LibraryState::Unlocked);
+        assert_eq!(*crate::identity::recovery_words(&new, "p1", &pw("new password")).unwrap(), *made.words);
+    }
+
+    #[test]
+    fn cancelling_ends_a_session_and_unknown_ids_are_gone() {
+        let links = Links::default();
+        let offer = links.new_device_start("Morph test").unwrap();
+        links.new_device_cancel(offer.session);
+        assert!(matches!(links.new_device_status(offer.session), Err(Error::LinkGone)));
+        assert!(matches!(links.new_device_confirm(999), Err(Error::LinkGone)));
+        links.add_device_cancel(12345);
+        assert!(std::ptr::eq(Links::global(), Links::global()));
+    }
+}

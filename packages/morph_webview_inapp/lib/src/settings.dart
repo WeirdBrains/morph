@@ -48,9 +48,7 @@ InAppWebViewSettings morphInAppWebViewSettings({
     mediaPlaybackRequiresUserGesture: false,
     allowsBackForwardNavigationGestures: true,
     // Persist cookies in the profile's store, not an incognito session.
-    // Windows tabs in the same profile share a WebView2 userDataFolder;
-    // macOS 14+ uses a per-profile WKWebsiteDataStore when the hook is
-    // installed. Android still uses the process-wide default store.
+    // Android keeps profiles apart with androidx.webkit profiles.
     incognito: false,
     cacheEnabled: true,
     sharedCookiesEnabled: true,

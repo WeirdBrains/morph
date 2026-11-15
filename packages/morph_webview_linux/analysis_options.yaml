@@ -1,6 +1,0 @@
-analyzer:
-  exclude:
-    - build/**
-    - linux/**
-    - lib/src/generated/**
-include: package:flutter_lints/flutter.yaml

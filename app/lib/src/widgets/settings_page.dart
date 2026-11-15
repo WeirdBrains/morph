@@ -3,12 +3,10 @@ import 'dart:async';
 import 'package:material_ui/material_ui.dart';
 
 import '../default_browser.dart';
-
-import '../tabs/tab_position.dart';
 import '../theme/morph_theme.dart';
 import 'library_page.dart';
 
-/// Morph settings: this profile's data, then app-wide layout and About.
+/// Morph settings: this profile's data, the default browser, and About.
 class MorphSettingsPage extends StatefulWidget {
   const MorphSettingsPage({
     super.key,
@@ -17,10 +15,6 @@ class MorphSettingsPage extends StatefulWidget {
     required this.renderPath,
     required this.onClearHistory,
     required this.onOpenLibrary,
-    this.tabPosition,
-    this.sidebarCollapsed,
-    this.onTabPositionChanged,
-    this.onSidebarCollapsedChanged,
     this.defaultBrowser,
   });
 
@@ -33,19 +27,11 @@ class MorphSettingsPage extends StatefulWidget {
   final Future<void> Function() onClearHistory;
   final ValueChanged<MorphLibraryTab> onOpenLibrary;
 
-  /// Desktop layout. Null hides the section (phones).
-  final MorphTabPosition? tabPosition;
-  final bool? sidebarCollapsed;
-  final ValueChanged<MorphTabPosition>? onTabPositionChanged;
-  final ValueChanged<bool>? onSidebarCollapsedChanged;
-
   @override
   State<MorphSettingsPage> createState() => _MorphSettingsPageState();
 }
 
 class _MorphSettingsPageState extends State<MorphSettingsPage> {
-  late MorphTabPosition? _position = widget.tabPosition;
-  late bool? _collapsed = widget.sidebarCollapsed;
   MorphDefaultBrowserState? _browserState;
   bool _askingDefault = false;
 
@@ -170,46 +156,6 @@ class _MorphSettingsPageState extends State<MorphSettingsPage> {
           if (widget.defaultBrowser?.supported ?? false) ...[
             const _Header('Browser · all profiles'),
             _defaultBrowserTile(),
-          ],
-          if (_position != null) ...[
-            const _Header('Layout · all profiles'),
-            ListTile(
-              leading: const Icon(Icons.tab_outlined),
-              title: const Text('Tab position'),
-              trailing: DropdownButton<MorphTabPosition>(
-                key: const Key('settings-tab-position'),
-                value: _position,
-                underline: const SizedBox.shrink(),
-                items: [
-                  for (final p in MorphTabPosition.values)
-                    DropdownMenuItem(
-                      value: p,
-                      child: Text(
-                        '${p.name[0].toUpperCase()}${p.name.substring(1)}',
-                      ),
-                    ),
-                ],
-                onChanged: (value) {
-                  if (value == null) {
-                    return;
-                  }
-                  setState(() => _position = value);
-                  widget.onTabPositionChanged?.call(value);
-                },
-              ),
-            ),
-            if (_collapsed != null)
-              SwitchListTile(
-                key: const Key('settings-sidebar-collapsed'),
-                secondary: const Icon(Icons.view_sidebar_outlined),
-                title: const Text('Collapse side tab list'),
-                value: _collapsed!,
-                activeThumbColor: MorphColors.cyan,
-                onChanged: (value) {
-                  setState(() => _collapsed = value);
-                  widget.onSidebarCollapsedChanged?.call(value);
-                },
-              ),
           ],
           const _Header('About'),
           ListTile(

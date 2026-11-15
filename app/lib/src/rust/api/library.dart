@@ -7,7 +7,7 @@ import '../frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `adopt_new_identity`, `needs_password`, `now_ms`, `ready`, `resolve_home`, `tree_view`, `view`, `views`
+// These functions are ignored because they are not marked as `pub`: `tree_view`, `view`, `views`
 
 /// The profile's bookmark tree.
 Future<BookmarkTreeView> bookmarkTree({

@@ -6,7 +6,7 @@ import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 import 'events.dart';
 import 'surface_health.dart';
 
-/// Backend contract implemented by `morph_webview_linux` (and later other platforms).
+/// Backend contract implemented by `morph_webview_inapp` (Android, iOS).
 abstract class MorphWebViewPlatform extends PlatformInterface {
   MorphWebViewPlatform() : super(token: _token);
 

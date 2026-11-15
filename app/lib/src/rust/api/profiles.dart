@@ -7,7 +7,7 @@ import '../frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `forget_library_key`, `from`, `from`, `load_view`, `resolve_home`
+// These functions are ignored because they are not marked as `pub`: `from`, `from`, `load_view`
 
 /// List profiles and the current id. Creates the default catalog on first use.
 Future<CatalogView> listProfiles({String? home}) =>
@@ -28,7 +28,8 @@ Future<CatalogView> renameProfile({
   name: name,
 );
 
-/// Delete a profile and its storage. Refuses to delete the last profile.
+/// Delete a profile and its storage (and its saved library key). Refuses to
+/// delete the last profile.
 Future<CatalogView> deleteProfile({String? home, required String id}) =>
     RustLib.instance.api.crateApiProfilesDeleteProfile(home: home, id: id);
 

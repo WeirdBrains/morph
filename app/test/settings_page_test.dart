@@ -1,7 +1,6 @@
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:morph/src/default_browser.dart';
-import 'package:morph/src/tabs/tab_position.dart';
 import 'package:morph/src/theme/morph_theme.dart';
 import 'package:morph/src/widgets/library_page.dart';
 import 'package:morph/src/widgets/settings_page.dart';
@@ -79,12 +78,10 @@ void main() {
     expect(find.byKey(const Key('settings-default-browser')), findsNothing);
   });
 
-  testWidgets('desktop settings change layout and clear only this profile', (
+  testWidgets('settings open the library and clear only this profile', (
     tester,
   ) async {
     var cleared = 0;
-    final positions = <MorphTabPosition>[];
-    final collapsed = <bool>[];
     final opened = <MorphLibraryTab>[];
     await tester.pumpWidget(
       MaterialApp(
@@ -92,28 +89,16 @@ void main() {
         home: MorphSettingsPage(
           profileName: 'Work',
           coreVersion: '0.1.0',
-          renderPath: 'webkitgtk-snapshot',
-          tabPosition: MorphTabPosition.top,
-          sidebarCollapsed: false,
+          renderPath: 'android-webview',
           onClearHistory: () async => cleared++,
           onOpenLibrary: opened.add,
-          onTabPositionChanged: positions.add,
-          onSidebarCollapsedChanged: collapsed.add,
         ),
       ),
     );
     expect(find.text('PROFILE · WORK'), findsOneWidget);
     expect(find.text('core 0.1.0'), findsOneWidget);
 
-    await tester.tap(find.byKey(const Key('settings-tab-position')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Left').last);
-    await tester.pumpAndSettle();
-    expect(positions, [MorphTabPosition.left]);
-
-    await tester.tap(find.byKey(const Key('settings-sidebar-collapsed')));
-    await tester.pump();
-    expect(collapsed, [true]);
+    expect(find.byKey(const Key('settings-tab-position')), findsNothing);
 
     await tester.tap(find.byKey(const Key('settings-history')));
     expect(opened, [MorphLibraryTab.history]);

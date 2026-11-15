@@ -6,8 +6,8 @@ Weirdnet.
 The desktop shell (Linux first, then macOS and Windows) is
 [GPUI](https://gpui.rs), Zed's Rust UI framework; Flutter stays the mobile shell
 (Android, iOS, F-Droid). Both shells sit on the same Rust crates. Linux has a
-working GPUI shell since phase 1 (`v0.2.0-alpha.1`); the Flutter desktop app is
-still in the tree until phase 2 removes it. See `ARCHITECTURE.md` (sections 1,
+working GPUI shell since phase 1 (`v0.2.0-alpha.1`); phase 2 (`v0.2.0-alpha.2`)
+removed the Flutter desktop app, so `app/` is mobile only. See `ARCHITECTURE.md` (sections 1,
 2.0 and 2a, and the 2026-11-14 decisions) and `docs/handoff.md` for the phases.
 
 Planning documents: `PLAN.md`, `PRIORITIES.md`, and `ARCHITECTURE.md`.
@@ -27,7 +27,7 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
-The Flutter app lives in `app/`:
+The Flutter app in `app/` is the mobile shell (Android, iOS):
 
 ```sh
 cd app
@@ -67,20 +67,6 @@ Packages and tests:
   xdotool (needs `Xvfb`, `xdotool`, and `openbox` for the F11 check): keys in
   pages and popups, tabs, the address bar, popups.
 
-Windows (on a Windows machine with Visual Studio 2022's C++ workload,
-Strawberry Perl, and `nuget.exe` on `PATH`):
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/build-windows.ps1
-```
-
-That builds `app/build/windows/x64/runner/Release/morph.exe` and zips it to
-`dist/morph-<version>-x86_64-pc-windows-msvc.zip`. The script points `TEMP`
-at `C:\t\morph` for the build. SQLCipher compiles OpenSSL with `nmake`, and
-the default user temp directory is long enough that `cl` cannot write the
-object files (`C1083`). Running the app needs the WebView2 Runtime installed;
-the build only needs the WebView2 SDK, which `nuget.exe` downloads.
-
 ## Layout
 
 - `crates/morph-core` — version, event ticks, page-bridge message contract, shell rules (tabs, address bar, profiles, library)
@@ -88,16 +74,17 @@ the build only needs the WebView2 SDK, which `nuget.exe` downloads.
 - `crates/morph-store`, `crates/morph-keystore` — encrypted library database and its key
 - `crates/morph-webview-control` — in-process gRPC control layer for web views
 - `crates/weirdnet-device-link` — device linking, moving to its own Weirdnet repo
-- `crates/morph-bridge` — thin flutter_rust_bridge surface (mobile shell)
+- `crates/morph-services` — the logic both shells share: Morph home, profiles, identity onboarding, the encrypted library's unlock, device linking
+- `crates/morph-bridge` — thin flutter_rust_bridge surface over `morph-services` (mobile shell)
 - `crates/morph-ui` — UI component model without a toolkit: kinds, layout slots, actions, keymap, text field, theme
 - `crates/morph-webview` — web view trait and events, the wry/webkit2gtk backend, a fake for tests
 - `crates/morph-browser` — the browser component: tabs, address bar, navigation, history
 - `crates/morph-desktop` — the GPUI desktop shell (binary `morph`): window and component host
-- `app/` — Flutter shell (mobile; its desktop targets go in phase 2)
+- `app/` — Flutter shell for Android and iOS (the desktop is `morph-desktop`)
 - `packaging/` — Linux desktop file and the Arch recipes (`morph`, `morph-bin`)
 - `third_party/` — patched copies of published crates (see its README)
 - `tests/xvfb/` — the page `scripts/xvfb-check.py` drives
 
 Crate versions are `0.1.0` (BSD-3-Clause, edition 2024), except `morph-desktop`,
-which carries the desktop build's version (`0.2.0-alpha.1`). They are not published
+which carries the desktop build's version (`0.2.0-alpha.2`). They are not published
 in this pass.

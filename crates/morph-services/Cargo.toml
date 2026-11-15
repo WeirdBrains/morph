@@ -1,0 +1,21 @@
+[package]
+name = "morph-services"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Morph logic both shells share, without a UI toolkit: profiles, the encrypted library's open and unlock, profile identities and device linking."
+publish = false
+
+[dependencies]
+morph-core.workspace = true
+morph-identity.workspace = true
+morph-keystore.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# Tests never touch the real OS keystore.
+morph-keystore = { workspace = true, features = ["mock"] }
+tempfile.workspace = true

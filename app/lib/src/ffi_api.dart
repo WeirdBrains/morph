@@ -7,9 +7,9 @@ import 'rust/api/device_link.dart' as rust_link;
 import 'rust/api/identity.dart' as rust_identity;
 import 'rust/api/info.dart' as rust_info;
 import 'rust/api/library.dart' as rust_library;
+import 'rust/api/omnibox.dart' as rust_omnibox;
 import 'rust/api/page.dart' as rust_page;
 import 'rust/api/profiles.dart' as rust_profiles;
-import 'rust/api/settings.dart' as rust_settings;
 
 /// Production `MorphApi` backed by flutter_rust_bridge.
 class FfiMorphApi implements MorphApi {
@@ -17,6 +17,10 @@ class FfiMorphApi implements MorphApi {
 
   @override
   String coreVersion() => rust_info.coreVersion();
+
+  @override
+  String? omniboxTarget(String input) =>
+      rust_omnibox.omniboxTarget(input: input);
 
   @override
   Future<IdentityStatusView> identityDirInfo({String? home}) async {
@@ -40,39 +44,6 @@ class FfiMorphApi implements MorphApi {
   @override
   Future<String> handlePageMessage({required String json}) =>
       rust_page.handlePageMessage(json: json);
-
-  @override
-  Future<String> loadTabPosition({String? home}) async {
-    final settings = await rust_settings.loadSettings(home: home);
-    return settings.tabPosition;
-  }
-
-  @override
-  Future<void> saveTabPosition(String position, {String? home}) async {
-    await rust_settings.setTabPosition(home: home, position: position);
-  }
-
-  @override
-  Future<bool> loadSidebarCollapsed({String? home}) async {
-    final settings = await rust_settings.loadSettings(home: home);
-    return settings.sidebarCollapsed;
-  }
-
-  @override
-  Future<void> saveSidebarCollapsed(bool collapsed, {String? home}) async {
-    await rust_settings.setSidebarCollapsed(home: home, collapsed: collapsed);
-  }
-
-  @override
-  Future<int> loadSidebarWidth({String? home}) async {
-    final settings = await rust_settings.loadSettings(home: home);
-    return settings.sidebarWidth;
-  }
-
-  @override
-  Future<void> saveSidebarWidth(int width, {String? home}) async {
-    await rust_settings.setSidebarWidth(home: home, width: width);
-  }
 
   @override
   Future<ProfileCatalog> listProfiles({String? home}) async {

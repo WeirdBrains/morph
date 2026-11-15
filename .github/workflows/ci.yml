@@ -54,6 +54,8 @@ jobs:
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked -p morph-core -p morph-store -p morph-keystore
 
+  # The mobile app's Dart side: analyze and widget tests (the bridge builds
+  # for the host so flutter test can load it).
   flutter:
     runs-on: ubuntu-22.04
     defaults:
@@ -83,44 +85,6 @@ jobs:
       - name: morph_webview_inapp tests
         run: flutter test
         working-directory: packages/morph_webview_inapp
-      - name: morph_webview_linux tests
-        run: flutter test
-        working-directory: packages/morph_webview_linux
-
-  linux:
-    runs-on: ubuntu-22.04
-    defaults:
-      run:
-        working-directory: app
-    env:
-      CARGO_TARGET_DIR: /tmp/morph-cargo-target
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          flutter-version: 3.50.0
-          cache: true
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            crates/morph-bridge -> ../../app/.dart_tool/hooks_runner
-            . -> /tmp/morph-cargo-target
-      - name: Linux build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libwebkit2gtk-4.1-dev libegl-dev xvfb
-        working-directory: .
-      - name: Persistent webview session check
-        working-directory: packages/morph_webview_linux/linux
-        run: |
-          c++ -o /tmp/morph-session-check session_check.cc session.cc media_check.cc $(pkg-config --cflags --libs webkit2gtk-4.1 gtk+-3.0 libsoup-3.0 gmodule-2.0)
-          xvfb-run -a env WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 LIBGL_ALWAYS_SOFTWARE=1 /tmp/morph-session-check
-          c++ -o /tmp/morph-frame-check frame_check.cc frame.cc session.cc $(pkg-config --cflags --libs webkit2gtk-4.1 gtk+-3.0 libsoup-3.0)
-          xvfb-run -a env WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 LIBGL_ALWAYS_SOFTWARE=1 /tmp/morph-frame-check
-      - run: flutter pub get
-      - run: flutter build linux
 
   android:
     runs-on: ubuntu-22.04
@@ -169,36 +133,6 @@ jobs:
         with:
           name: morph-android-debug
           path: app/build/app/outputs/flutter-apk/app-debug.apk
-          if-no-files-found: error
-
-  # The Flutter Windows app. Rust tests already run on windows-latest; this
-  # job produces morph.exe. OpenSSL's nmake build needs the short TEMP that
-  # scripts/build-windows.ps1 sets, plus nuget.exe for WebView2.
-  windows:
-    runs-on: windows-latest
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          flutter-version: 3.50.0
-          cache: true
-      - name: Build the Windows release zip
-        shell: pwsh
-        run: |
-          if (-not (Get-Command nuget -ErrorAction SilentlyContinue)) {
-            throw "nuget.exe is not on PATH. flutter_inappwebview_windows needs it for the WebView2 SDK."
-          }
-          if (-not (Get-Command perl -ErrorAction SilentlyContinue)) {
-            throw "perl is not on PATH. SQLCipher's vendored OpenSSL needs Strawberry Perl."
-          }
-          .\scripts\build-windows.ps1
-      - uses: actions/upload-artifact@v4
-        with:
-          name: morph-windows-x64
-          path: dist/morph-*-x86_64-pc-windows-msvc.zip
           if-no-files-found: error
 
   # The GPUI desktop shell: release tarball (scripts/linux-dist.sh) and the

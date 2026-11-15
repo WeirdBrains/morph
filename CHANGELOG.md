@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- `v0.2.0-alpha.2` (phase 2): the Flutter desktop app (Linux, macOS, Windows
+  runners, `morph_webview_linux`, window chrome, `window_manager`,
+  `scripts/build-windows.ps1`) is removed; the desktop is the GPUI shell and
+  `app/` is the Android/iOS app. New `morph-services` crate with the logic both
+  shells share; the mobile app uses the Rust address-bar rule; the desktop opens
+  an encrypted library from the system keystore. Android Gradle Plugin 9.1.1.
 - Linux builds on Flutter 3.50 / Dart 3.14. `window_manager` 0.7 brings
   `nativeapi` 0.6, whose ordinary import no longer compiles `Isolate.create`
   (removed in Dart 3.14). `nativeapi` 0.5.10, locked for Flutter 3.47, does.

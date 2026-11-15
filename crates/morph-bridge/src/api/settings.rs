@@ -1,8 +1,7 @@
 //! Persisted shell preferences stored in the Morph home.
 
+use crate::home::resolve as resolve_home;
 use morph_core::settings::{self, TabPosition};
-use morph_identity::Paths;
-use std::path::PathBuf;
 
 /// Snapshot of `settings.json` for the Flutter shell.
 pub struct SettingsView {
@@ -19,11 +18,6 @@ impl SettingsView {
             sidebar_width: settings.sidebar_width,
         }
     }
-}
-
-fn resolve_home(home: Option<String>) -> Result<PathBuf, String> {
-    let explicit = home.filter(|h| !h.is_empty()).map(PathBuf::from);
-    Ok(Paths::resolve(explicit).map_err(|e| e.to_string())?.home)
 }
 
 /// Load preferences from the Morph home. A missing file returns defaults.

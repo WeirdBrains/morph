@@ -37,6 +37,12 @@ with phrases as searches, back/forward/reload/stop, history, Morph-made popups),
 handling in pages and popups checked in Xvfb, and Arch packages (`morph`, `morph-bin`).
 Build `v0.2.0-alpha.1`.
 
+2026-11-15: phase 2 is in. The Flutter desktop app is removed (the desktop is the GPUI
+shell only; Flutter is the Android/iOS app), and the logic both shells share (profiles,
+identity onboarding, library unlock, device linking) is in the `morph-services` crate. The
+mobile app uses the Rust address-bar rule, and the desktop opens an encrypted library from
+the system keystore. Build `v0.2.0-alpha.2`.
+
 1. Webview _(moved up: everything else plugs into it)_
     - System web views: WebView2 (Windows), WKWebView (Apple), WebKit (Linux: WPE + webkit2gtk), Android WebView _(changed 2026-11-11)_
         - Linux: build our own WebKit plugin _(changed 2026-11-11)_

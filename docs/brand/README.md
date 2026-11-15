@@ -22,8 +22,8 @@ rendered from those SVGs with cairosvg.
 | `svg/favicon.svg` | Alias of the rounded icon, for the future Jaspr site. |
 
 PNG renders of the same files live in `png/`. Platform-sized icons are
-wired into the Flutter app under `app/android`, `app/ios`, `app/macos`,
-`app/windows`, and `app/linux`.
+wired into the Flutter app under `app/android` and `app/ios`; the desktop
+uses `packaging/linux` (the GPUI shell).
 
 ## Colour
 

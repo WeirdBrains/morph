@@ -10,6 +10,8 @@ mod address;
 mod browser_view;
 mod cli;
 #[cfg(target_os = "linux")]
+mod library;
+#[cfg(target_os = "linux")]
 mod shell;
 
 use std::process::ExitCode;

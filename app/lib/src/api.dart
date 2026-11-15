@@ -2,16 +2,14 @@
 /// on the Dart VM without loading generated FFI bindings or `libmorph_bridge.so`.
 abstract class MorphApi {
   String coreVersion();
+
+  /// What typing [input] into the address bar opens (`morph-core`'s rule,
+  /// shared with the desktop shell): an address, a search, or null if blank.
+  String? omniboxTarget(String input);
   Future<IdentityStatusView> identityDirInfo({String? home});
   Stream<int> eventTicks();
   Future<EphemeralUser> newEphemeralUser();
   Future<String> handlePageMessage({required String json});
-  Future<String> loadTabPosition({String? home});
-  Future<void> saveTabPosition(String position, {String? home});
-  Future<bool> loadSidebarCollapsed({String? home});
-  Future<void> saveSidebarCollapsed(bool collapsed, {String? home});
-  Future<int> loadSidebarWidth({String? home});
-  Future<void> saveSidebarWidth(int width, {String? home});
   Future<ProfileCatalog> listProfiles({String? home});
   Future<ProfileCatalog> createProfile(
     String name, {

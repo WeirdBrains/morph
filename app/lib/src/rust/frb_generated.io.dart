@@ -9,6 +9,7 @@ import 'api/events.dart';
 import 'api/identity.dart';
 import 'api/info.dart';
 import 'api/library.dart';
+import 'api/omnibox.dart';
 import 'api/page.dart';
 import 'api/profiles.dart';
 import 'api/settings.dart';
