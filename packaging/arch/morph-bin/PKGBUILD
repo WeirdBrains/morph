@@ -1,6 +1,6 @@
 # Maintainer: Michael Christenson II <m3talsmith@gmail.com>
 # Binary package: installs the prebuilt GPUI desktop shell attached to a
-# published GitHub release (morph-<ver>-<arch>-unknown-linux-gnu.tar.gz from
+# GitHub pre-release built from main (morph-<ver>-<arch>-unknown-linux-gnu.tar.gz from
 # scripts/linux-dist.sh). No Rust needed, but the release must exist and be
 # downloadable (public repo). The upstream tarball is not code-signed; this
 # package is likewise unsigned. To build from a checkout, see ../morph.

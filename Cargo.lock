@@ -5454,6 +5454,7 @@ dependencies = [
 name = "morph-webview"
 version = "0.1.0"
 dependencies = [
+ "gdkx11",
  "gtk",
  "raw-window-handle",
  "thiserror 2.0.21",
