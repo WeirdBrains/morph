@@ -883,7 +883,10 @@ def gdk_scale_ignored(m, r, binary, display):
     the page size and pixel ratio the running one shows (both are read once
     they settle; the first report can come before GTK knows the output's
     scale, which the next frame corrects)."""
-    size = lambda s: (s or {}).get("w"), (s or {}).get("h"), (s or {}).get("d")
+    def size(s):
+        s = s or {}
+        return s.get("w"), s.get("h"), s.get("d")
+
     m2 = Driver(binary, display, tempfile.mkdtemp(prefix="morph-xvfb-gdkscale-"), extra_env={"GDK_SCALE": "2", "GDK_DPI_SCALE": "1.5"})
     try:
         ok = wait_for(lambda: state(m2) and size(state(m2)) == size(state(m)), 20)
