@@ -4,12 +4,17 @@
 //! per tab, made by a [`Backend`], and polls the backend for [`Event`]s. The
 //! [`fake`] backend drives tests without a display; the wry backend
 //! (`wry_linux`) places real webkit2gtk views as child windows of the
-//! desktop shell's window.
+//! desktop shell's X11 window, and the off-screen backend (`offscreen`)
+//! renders them into [`Frame`]s the shell draws itself and takes [`Input`]
+//! from the shell (native Wayland, where there are no child windows).
 
 use std::path::PathBuf;
 use std::rc::Rc;
 
 pub mod fake;
+pub mod keys;
+#[cfg(target_os = "linux")]
+pub mod offscreen;
 #[cfg(target_os = "linux")]
 pub mod wry_linux;
 
@@ -257,6 +262,111 @@ pub trait WebView {
     fn terminate(&self) -> Result<()> {
         Ok(())
     }
+    /// The page as drawn since the last call, for backends whose pages the
+    /// shell draws ([`Backend::draws_pages`]); `None` when nothing changed or
+    /// the view is hidden.
+    fn take_frame(&self) -> Option<Frame> {
+        None
+    }
+    /// Pointer, wheel and key input for the page, for backends whose pages
+    /// the shell draws. Coordinates are logical pixels from the page's
+    /// top-left corner.
+    fn input(&self, _input: Input) {}
+    /// The pointer shape the page wants where the pointer last was.
+    fn cursor(&self) -> PageCursor {
+        PageCursor::Default
+    }
+}
+
+/// A page drawn off screen: premultiplied BGRA (Cairo's ARGB32 on a
+/// little-endian machine), `width * 4` bytes a row, in device pixels.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Frame {
+    pub width: u32,
+    pub height: u32,
+    pub pixels: Vec<u8>,
+}
+
+impl std::fmt::Debug for Frame {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Frame({}x{})", self.width, self.height)
+    }
+}
+
+/// The pointer shapes a page asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PageCursor {
+    #[default]
+    Default,
+    /// Over a link.
+    Pointer,
+    /// Over editable or selectable text.
+    Text,
+}
+
+/// Modifier keys held during pointer input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Modifiers {
+    pub shift: bool,
+    pub control: bool,
+    pub alt: bool,
+    pub super_key: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseButton {
+    Left,
+    Middle,
+    Right,
+    Back,
+    Forward,
+}
+
+/// One key event for a page. `keycode` and `keyval` are what X11 and GDK
+/// use: the XKB keycode (evdev code + 8) and the keysym. A `keycode` of 0
+/// means unknown; the backend looks one up for `keyval`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Key {
+    pub pressed: bool,
+    pub keycode: u32,
+    pub keyval: u32,
+    /// X11/GDK modifier state: Shift 1, Lock 2, Control 4, Mod1 (Alt) 8,
+    /// Mod2 (Num Lock) 16, Mod4 (Super) 64.
+    pub state: u32,
+    pub group: u32,
+    pub is_modifier: bool,
+}
+
+/// Input the shell hands a page it draws ([`WebView::input`]).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Input {
+    PointerMove {
+        x: f64,
+        y: f64,
+        modifiers: Modifiers,
+    },
+    PointerButton {
+        x: f64,
+        y: f64,
+        button: MouseButton,
+        pressed: bool,
+        modifiers: Modifiers,
+    },
+    /// The pointer left the page.
+    PointerLeave,
+    /// A wheel or touchpad scroll; `dx`/`dy` in wheel steps (positive
+    /// scrolls right/down), or pixels when `precise`.
+    Scroll {
+        x: f64,
+        y: f64,
+        dx: f64,
+        dy: f64,
+        precise: bool,
+        modifiers: Modifiers,
+    },
+    Key(Key),
+    /// Text an input method committed.
+    Text(String),
 }
 
 /// The page bridge a backend injects into every page: `script` runs at
@@ -294,6 +404,21 @@ pub trait Backend {
     fn set_shortcuts(&mut self, _keystrokes: &[String]) {}
     /// Inject `bridge` into the pages of views created from now on.
     fn set_page_bridge(&mut self, _bridge: PageBridge) {}
+    /// Whether the shell draws the pages ([`WebView::take_frame`]) and
+    /// hands them input ([`WebView::input`]), instead of the pages being
+    /// windows of their own.
+    fn draws_pages(&self) -> bool {
+        false
+    }
+    /// The view that has the keyboard (the last one [`WebView::focus`]ed,
+    /// unless [`Backend::focus_host`] took it back since). Backends whose
+    /// pages are windows leave this to the window system and say `None`.
+    fn keyboard(&self) -> Option<ViewId> {
+        None
+    }
+    /// The host window's scale (device pixels per logical pixel), for
+    /// backends that render pages themselves.
+    fn set_scale(&mut self, _scale: f64) {}
 }
 
 #[cfg(test)]

@@ -14,7 +14,7 @@ use morph_core::omnibox;
 use morph_core::tabs::{TabId, TabSet};
 use morph_ui::actions::Action;
 use morph_ui::text::TextField;
-use morph_webview::{Backend, ErrorKind, Event, LoadError, Rect, Spec, ViewId, WebView};
+use morph_webview::{Backend, ErrorKind, Event, Frame, Input, LoadError, PageCursor, Rect, Spec, ViewId, WebView};
 
 /// Called with `(url, title)` when a page finishes loading or its title
 /// changes afterwards. The desktop shell writes it to the profile's history.
@@ -608,6 +608,46 @@ impl Browser {
             self.blur_address();
         }
         let _ = self.active_page().view.focus();
+    }
+
+    /// Whether the shell draws the pages ([`Browser::take_frame`]) and hands
+    /// them input ([`Browser::page_input`]).
+    pub fn draws_pages(&self) -> bool {
+        self.backend.draws_pages()
+    }
+
+    /// The active page as drawn since the last call, when the shell draws
+    /// pages and the page shows (not covered or hidden).
+    pub fn take_frame(&self) -> Option<Frame> {
+        let page = self.active_page();
+        if !self.shown || page.cover.is_some() {
+            return None;
+        }
+        page.view.take_frame()
+    }
+
+    /// Hand the active page pointer or key input (pages the shell draws).
+    pub fn page_input(&self, input: Input) {
+        let page = self.active_page();
+        if self.shown && page.cover.is_none() {
+            page.view.input(input);
+        }
+    }
+
+    /// The pointer shape the active page wants.
+    pub fn page_cursor(&self) -> PageCursor {
+        self.active_page().view.cursor()
+    }
+
+    /// Whether the active page has the keyboard, for backends that track it
+    /// ([`Backend::keyboard`]).
+    pub fn page_has_keyboard(&self) -> bool {
+        self.backend.keyboard() == Some(self.active_page().view.id())
+    }
+
+    /// The window's scale, for backends that render pages themselves.
+    pub fn set_scale(&mut self, scale: f64) {
+        self.backend.set_scale(scale);
     }
 
     /// Drain the backend's events into tab state.

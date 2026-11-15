@@ -55,14 +55,14 @@ impl HasWindowHandle for XlibParent {
     }
 }
 
-type Queue = Rc<RefCell<Vec<(ViewId, Event)>>>;
+pub(crate) type Queue = Rc<RefCell<Vec<(ViewId, Event)>>>;
 
 /// WebKitGTK leaves undo and redo to the embedding app (Epiphany binds them
 /// as app shortcuts). Morph does it in the page, after the page's own
 /// handlers: if nothing called `preventDefault()` on Ctrl+Z, Ctrl+Shift+Z or
 /// Ctrl+Y, the page's editing undo or redo runs. Pages with their own undo
 /// (editors) keep it.
-const UNDO_REDO_SCRIPT: &str = r#"(() => {
+pub(crate) const UNDO_REDO_SCRIPT: &str = r#"(() => {
   addEventListener("keydown", (e) => {
     if (!e.ctrlKey || e.altKey || e.metaKey) return;
     const key = e.key.toLowerCase();
@@ -72,12 +72,12 @@ const UNDO_REDO_SCRIPT: &str = r#"(() => {
   });
 })();"#;
 
-struct Popup {
-    window: gtk::Window,
+pub(crate) struct Popup {
+    pub(crate) window: gtk::Window,
     _view: wry::WebView,
 }
 
-type Popups = Rc<RefCell<HashMap<ViewId, Vec<Popup>>>>;
+pub(crate) type Popups = Rc<RefCell<HashMap<ViewId, Vec<Popup>>>>;
 
 /// The wry backend for one shell window.
 pub struct WryBackend {
@@ -308,7 +308,7 @@ fn wry_rect(bounds: Rect) -> wry::Rect {
     wry::Rect { position: LogicalPosition::new(bounds.x, bounds.y).into(), size: size.into() }
 }
 
-fn backend_err(e: impl std::fmt::Display) -> Error {
+pub(crate) fn backend_err(e: impl std::fmt::Display) -> Error {
     Error::Backend(e.to_string())
 }
 
@@ -351,7 +351,7 @@ fn keystroke(event: &gtk::gdk::EventKey) -> Option<String> {
 }
 
 /// Report page signals for `id` into `queue` and route shell shortcuts.
-fn watch(view: &webkit2gtk::WebView, id: ViewId, queue: &Queue, shortcuts: &Rc<RefCell<HashSet<String>>>) {
+pub(crate) fn watch(view: &webkit2gtk::WebView, id: ViewId, queue: &Queue, shortcuts: &Rc<RefCell<HashSet<String>>>) {
     let q = queue.clone();
     view.connect_uri_notify(move |v| {
         if let Some(uri) = v.uri() {
@@ -437,7 +437,7 @@ const BRIDGE_SHIM: &str = r#"(() => {
 })();"#;
 
 /// Inject the page bridge's scripts (if any).
-fn with_bridge<'a>(builder: WebViewBuilder<'a>, bridge: &Option<PageBridge>) -> WebViewBuilder<'a> {
+pub(crate) fn with_bridge<'a>(builder: WebViewBuilder<'a>, bridge: &Option<PageBridge>) -> WebViewBuilder<'a> {
     match bridge {
         Some(bridge) => builder.with_initialization_script(BRIDGE_SHIM).with_initialization_script(&*bridge.script),
         None => builder,
@@ -446,7 +446,7 @@ fn with_bridge<'a>(builder: WebViewBuilder<'a>, bridge: &Option<PageBridge>) -> 
 
 /// Answer the bridge's messages from `engine`'s pages in the page that sent
 /// them.
-fn attach_bridge(engine: &webkit2gtk::WebView, bridge: &Option<PageBridge>) {
+pub(crate) fn attach_bridge(engine: &webkit2gtk::WebView, bridge: &Option<PageBridge>) {
     let Some(bridge) = bridge.clone() else {
         return;
     };
@@ -470,7 +470,7 @@ fn attach_bridge(engine: &webkit2gtk::WebView, bridge: &Option<PageBridge>) {
 /// itself, a GTK window holding a web view related to the opener (same
 /// process and storage, so `window.opener` and `postMessage` work). wry's
 /// default response would panic for a child web view.
-fn popup_handler(
+pub(crate) fn popup_handler(
     tab: ViewId,
     queue: Queue,
     popups: Popups,
@@ -682,7 +682,7 @@ impl WebView for WryView {
 }
 
 /// Matches counted and highlighted at most, as other browsers cap them.
-const FIND_MAX_MATCHES: u32 = 1000;
+pub(crate) const FIND_MAX_MATCHES: u32 = 1000;
 
 impl Drop for WryView {
     fn drop(&mut self) {
