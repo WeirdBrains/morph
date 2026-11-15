@@ -1,21 +1,25 @@
 //! The browser component's GPUI view: tab strip, toolbar and address bar,
 //! drawn from `morph_browser::Browser`, with the page area left to the web
-//! view. Menus and panels never draw over the page (the web view is a child
-//! window above GPUI's surface), so everything sits beside it.
+//! view. On X11 the web view is a child window above GPUI's surface, so
+//! menus and panels never draw over the page and everything sits beside it.
+//! On Wayland the page is rendered off screen and this view draws it and
+//! hands it pointer and key input (`page_input`), keeping the shell's own
+//! shortcuts.
 
 use std::ops::Range;
 use std::path::Path;
+use std::sync::Arc;
 
 use gpui::{
-    App, Bounds, ClipboardItem, Context, CursorStyle, Entity, EntityInputHandler, FocusHandle, Focusable, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, Point, ShapedLine, SharedString, Subscription, UTF16Selection, Window, actions, canvas, div, point,
-    prelude::*, px, rgb,
+    App, Bounds, ClipboardItem, Context, Corners, CursorStyle, DispatchPhase, Entity, EntityInputHandler, FocusHandle, Focusable, Hitbox,
+    HitboxBehavior, KeyDownEvent, KeyUpEvent, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
+    RenderImage, ScrollEvent, ShapedLine, SharedString, Subscription, UTF16Selection, Window, actions, canvas, div, point, prelude::*, px, rgb, size,
 };
 use morph_browser::{Browser, Config, Cover};
 use morph_ui::actions::Action;
 use morph_ui::chrome::{TabStrip, WindowButtons};
 use morph_ui::theme::Theme;
-use morph_webview::Rect;
+use morph_webview::{Input, PageCursor, Rect};
 
 use crate::address::AddressElement;
 use crate::text_input::{TextInput, TextInputEvent};
@@ -28,6 +32,10 @@ pub const ADDRESS_CONTEXT: &str = "AddressBar";
 pub const TAB_STRIP_HEIGHT: f32 = 34.;
 pub const TOOLBAR_HEIGHT: f32 = 42.;
 pub const FIND_BAR_HEIGHT: f32 = 38.;
+
+/// The key context of a page the shell draws: only the shell's global
+/// shortcuts apply there, every other key goes to the page.
+pub const PAGE_CONTEXT: &str = "Page";
 
 pub struct BrowserView {
     browser: Browser,
@@ -49,6 +57,15 @@ pub struct BrowserView {
     caption: Option<WindowButtons>,
     /// The caption was pressed; moving the pointer now drags the window.
     caption_pressed: bool,
+    /// Pages the shell draws (off-screen backend): the page's keyboard
+    /// focus in GPUI, the last frame as an image, the pointer buttons held
+    /// in the page, whether the pointer is over it, and the modifiers last
+    /// seen (to report modifier keys).
+    page_focus: FocusHandle,
+    page_image: Option<Arc<RenderImage>>,
+    page_buttons: u32,
+    page_pointer: bool,
+    page_modifiers: gpui::Modifiers,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -80,25 +97,31 @@ impl BrowserView {
             strip: TabStrip::Top,
             caption: None,
             caption_pressed: false,
+            page_focus: cx.focus_handle(),
+            page_image: None,
+            page_buttons: 0,
+            page_pointer: false,
+            page_modifiers: gpui::Modifiers::default(),
             _subscriptions: vec![find_events],
         }
     }
 
-    /// A browser on the real web view backend, children of `window`.
+    /// A browser on the real web view backend: child windows of `window`
+    /// on X11, pages rendered off screen on Wayland.
     pub fn create(home: &Path, profile: &str, start: &str, window: &Window, keystrokes: &[String]) -> Result<Browser, String> {
-        use raw_window_handle::HasWindowHandle;
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
         let raw = HasWindowHandle::window_handle(window).map_err(|e| format!("no window handle: {e}"))?.as_raw();
-        let xid = morph_webview::wry_linux::x11_window_id(raw).ok_or(
-            "Morph's desktop shell needs X11 (or XWayland with DISPLAY set): the system web view cannot be embedded in a native Wayland window yet",
-        )?;
-        let mut backend = morph_webview::wry_linux::WryBackend::new(xid);
-        morph_webview::Backend::set_page_bridge(
-            &mut backend,
-            morph_webview::PageBridge {
-                script: morph_core::page_bridge::BRIDGE_SCRIPT.into(),
-                handler: std::rc::Rc::new(morph_core::page_bridge::answer),
-            },
-        );
+        let mut backend: Box<dyn morph_webview::Backend> = match raw {
+            RawWindowHandle::Wayland(_) => Box::new(morph_webview::offscreen::OffscreenBackend::new(f64::from(window.scale_factor()))),
+            raw => {
+                let xid = morph_webview::wry_linux::x11_window_id(raw).ok_or("Morph's desktop shell runs on X11 or Wayland only")?;
+                Box::new(morph_webview::wry_linux::WryBackend::new(xid))
+            }
+        };
+        backend.set_page_bridge(morph_webview::PageBridge {
+            script: morph_core::page_bridge::BRIDGE_SCRIPT.into(),
+            handler: std::rc::Rc::new(morph_core::page_bridge::answer),
+        });
         let home_for_history = home.to_path_buf();
         let profile_id = profile.to_string();
         let sink: morph_browser::HistorySink = Box::new(move |url: &str, title: &str| {
@@ -111,7 +134,7 @@ impl BrowserView {
             history: Some(sink),
             log_events: std::env::var_os("MORPH_LOG_EVENTS").is_some_and(|v| v == "1"),
         };
-        let mut browser = Browser::new(Box::new(backend), config).map_err(|e| e.to_string())?;
+        let mut browser = Browser::new(backend, config).map_err(|e| e.to_string())?;
         browser.set_shortcuts(keystrokes);
         Ok(browser)
     }
@@ -215,7 +238,8 @@ impl BrowserView {
     fn window_controls(&self, cx: &mut Context<Self>) -> Option<gpui::Div> {
         let buttons = self.caption?;
         let t = self.theme;
-        let control = |id: &'static str, label: &'static str| {
+        // The hover colour is the control's own: GPUI takes one hover style.
+        let control = |id: &'static str, label: &'static str, hover: u32| {
             div()
                 .id(id)
                 .flex()
@@ -225,7 +249,7 @@ impl BrowserView {
                 .h(px(26.))
                 .rounded(px(6.))
                 .text_color(rgb(t.text_secondary))
-                .hover(|s| s.bg(rgb(t.surface_variant)).text_color(rgb(t.text_primary)))
+                .hover(move |s| s.bg(rgb(hover)).text_color(rgb(t.text_primary)))
                 .cursor_pointer()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(label)
@@ -233,11 +257,11 @@ impl BrowserView {
         let mut row = div().flex().flex_row().items_center().gap(px(2.)).pl(px(8.));
         if buttons == WindowButtons::All {
             row = row
-                .child(control("window-minimize", "—").on_click(|_, window, _| window.minimize_window()))
-                .child(control("window-maximize", "□").on_click(|_, window, _| window.zoom_window()));
+                .child(control("window-minimize", "—", t.surface_variant).on_click(|_, window, _| window.minimize_window()))
+                .child(control("window-maximize", "□", t.surface_variant).on_click(|_, window, _| window.zoom_window()));
         }
         let _ = cx;
-        Some(row.child(control("window-close", "×").hover(|s| s.bg(rgb(t.error))).on_click(|_, window, _| window.remove_window())))
+        Some(row.child(control("window-close", "×", t.error).on_click(|_, window, _| window.remove_window())))
     }
 
     pub fn set_marked(&mut self, marked: bool, cx: &mut Context<Self>) {
@@ -266,6 +290,7 @@ impl BrowserView {
             window.blur(cx);
         }
         self.browser.close_find();
+        self.sync_focus(window, cx);
         cx.notify();
     }
 
@@ -276,14 +301,103 @@ impl BrowserView {
             self.sync_focus(window, cx);
             cx.notify();
         }
+        if self.browser.draws_pages() {
+            self.browser.set_scale(f64::from(window.scale_factor()));
+            if let Some(frame) = self.browser.take_frame() {
+                self.set_page_frame(frame, window);
+                cx.notify();
+            }
+        }
         polled.shortcuts
+    }
+
+    /// Show a new frame of the page (and free the old one's texture).
+    fn set_page_frame(&mut self, frame: morph_webview::Frame, window: &mut Window) {
+        let Some(buffer) = image::RgbaImage::from_raw(frame.width, frame.height, frame.pixels) else {
+            return;
+        };
+        // The pixels are BGRA already, which is what GPUI's images hold.
+        let image = Arc::new(RenderImage::new(vec![image::Frame::new(buffer)]));
+        if let Some(old) = self.page_image.replace(image) {
+            let _ = window.drop_image(old);
+        }
+    }
+
+    /// A pointer press in a page the shell draws: the page takes the
+    /// keyboard and gets the press.
+    fn page_mouse_down(&mut self, event: &MouseDownEvent, origin: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        self.browser.focus_page();
+        self.sync_focus(window, cx);
+        window.focus(&self.page_focus, cx);
+        self.page_buttons += 1;
+        let (x, y) = local(event.position, origin);
+        let modifiers = crate::page_input::modifiers(&event.modifiers);
+        self.browser.page_input(Input::PointerButton { x, y, button: crate::page_input::button(event.button), pressed: true, modifiers });
+        cx.notify();
+    }
+
+    fn page_mouse_up(&mut self, event: &MouseUpEvent, origin: Point<Pixels>) {
+        self.page_buttons = self.page_buttons.saturating_sub(1);
+        let (x, y) = local(event.position, origin);
+        let modifiers = crate::page_input::modifiers(&event.modifiers);
+        self.browser.page_input(Input::PointerButton { x, y, button: crate::page_input::button(event.button), pressed: false, modifiers });
+    }
+
+    fn page_mouse_move(&mut self, event: &MouseMoveEvent, origin: Point<Pixels>, inside: bool) {
+        if inside || self.page_buttons > 0 {
+            self.page_pointer = true;
+            let (x, y) = local(event.position, origin);
+            self.browser.page_input(Input::PointerMove { x, y, modifiers: crate::page_input::modifiers(&event.modifiers) });
+        } else if self.page_pointer {
+            self.page_pointer = false;
+            self.browser.page_input(Input::PointerLeave);
+        }
+    }
+
+    fn page_scroll(&mut self, event: &ScrollEvent, origin: Point<Pixels>) {
+        let (x, y) = local(event.position, origin);
+        let (dx, dy, precise) = crate::page_input::scroll(&event.delta);
+        let modifiers = crate::page_input::modifiers(&event.modifiers);
+        self.browser.page_input(Input::Scroll { x, y, dx, dy, precise, modifiers });
+    }
+
+    /// Keys the shell's bindings did not take go to the page, as long as
+    /// it has the keyboard (a click on the toolbar takes it back).
+    fn page_key_down(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.browser.page_has_keyboard() {
+            return;
+        }
+        if let Some(input) = crate::page_input::key(&event.keystroke, true, gpui_linux::raw_key::current()) {
+            self.browser.page_input(input);
+            cx.stop_propagation();
+        }
+    }
+
+    fn page_key_up(&mut self, event: &KeyUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.browser.page_has_keyboard() {
+            return;
+        }
+        if let Some(input) = crate::page_input::key(&event.keystroke, false, gpui_linux::raw_key::current()) {
+            self.browser.page_input(input);
+            cx.stop_propagation();
+        }
+    }
+
+    fn page_modifiers_changed(&mut self, event: &ModifiersChangedEvent, _: &mut Window, _: &mut Context<Self>) {
+        let before = std::mem::replace(&mut self.page_modifiers, event.modifiers);
+        if self.browser.page_has_keyboard() {
+            for input in crate::page_input::modifier_keys(&before, &event.modifiers) {
+                self.browser.page_input(input);
+            }
+        }
     }
 
     pub fn set_shown(&mut self, shown: bool) {
         self.browser.set_shown(shown);
     }
 
-    /// Mirror the browser's address-bar focus into GPUI's focus.
+    /// Mirror the browser's address-bar focus into GPUI's focus (and, for
+    /// pages the shell draws, the page's).
     fn sync_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let want = self.browser.address_focused();
         if want && !self.address_focus.is_focused(window) {
@@ -292,6 +406,9 @@ impl BrowserView {
             window.blur(cx);
         }
         self.mirrored_focus = want;
+        if !want && self.browser.draws_pages() && self.browser.page_has_keyboard() && !self.page_focus.is_focused(window) {
+            window.focus(&self.page_focus, cx);
+        }
     }
 
     fn edit(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut morph_ui::text::TextField)) {
@@ -722,15 +839,24 @@ impl BrowserView {
     fn page_area(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = self.theme;
         let cover = self.browser.cover().cloned();
+        let drawn = self.browser.draws_pages();
         let this = cx.entity();
+        let paint_this = cx.entity();
         div()
             .id("page")
             .flex_1()
             .relative()
             .bg(rgb(t.background))
+            .when(drawn, |d| {
+                d.track_focus(&self.page_focus)
+                    .key_context(PAGE_CONTEXT)
+                    .on_key_down(cx.listener(Self::page_key_down))
+                    .on_key_up(cx.listener(Self::page_key_up))
+                    .on_modifiers_changed(cx.listener(Self::page_modifiers_changed))
+            })
             .child(
                 canvas(
-                    move |bounds, _, cx| {
+                    move |bounds, window, cx| {
                         let area = Rect::new(
                             f64::from(f32::from(bounds.origin.x)),
                             f64::from(f32::from(bounds.origin.y)),
@@ -738,14 +864,77 @@ impl BrowserView {
                             f64::from(f32::from(bounds.size.height)),
                         );
                         this.update(cx, |view, _| view.browser.set_page_area(area));
+                        drawn.then(|| window.insert_hitbox(bounds, HitboxBehavior::Normal))
                     },
-                    |_, _, _, _| {},
+                    move |bounds, hitbox, window, cx| {
+                        if let Some(hitbox) = hitbox {
+                            paint_page(&paint_this, bounds, hitbox, window, cx);
+                        }
+                    },
                 )
                 .absolute()
                 .size_full(),
             )
             .children(cover.map(|cover| self.cover_panel(&cover, cx)))
     }
+}
+
+/// `position` relative to `origin`, in logical pixels.
+fn local(position: Point<Pixels>, origin: Point<Pixels>) -> (f64, f64) {
+    (f64::from(f32::from(position.x - origin.x)), f64::from(f32::from(position.y - origin.y)))
+}
+
+/// Draw a page the shell draws and route the pointer to it: presses,
+/// moves and wheel over the page, and moves and releases anywhere while a
+/// button pressed in the page is held (dragging a selection out of it).
+fn paint_page(view: &Entity<BrowserView>, bounds: Bounds<Pixels>, hitbox: Hitbox, window: &mut Window, cx: &mut App) {
+    let (image, covered, cursor) = {
+        let v = view.read(cx);
+        (v.page_image.clone(), v.browser.cover().is_some(), v.browser.page_cursor())
+    };
+    if covered {
+        return;
+    }
+    if let Some(image) = image {
+        let device = image.size(0);
+        let scale = window.scale_factor();
+        let shown = Bounds::new(bounds.origin, size(px(device.width.0 as f32 / scale), px(device.height.0 as f32 / scale)));
+        let _ = window.paint_image(bounds, shown, Corners::default(), image, 0, false);
+    }
+    let style = match cursor {
+        PageCursor::Default => CursorStyle::Arrow,
+        PageCursor::Pointer => CursorStyle::PointingHand,
+        PageCursor::Text => CursorStyle::IBeam,
+    };
+    window.set_cursor_style(style, &hitbox);
+    let origin = bounds.origin;
+    let (v, h) = (view.clone(), hitbox.clone());
+    window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
+        if phase == DispatchPhase::Bubble && h.is_hovered(window) {
+            v.update(cx, |view, cx| view.page_mouse_down(event, origin, window, cx));
+            cx.stop_propagation();
+        }
+    });
+    let v = view.clone();
+    window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
+        if phase == DispatchPhase::Bubble && v.read(cx).page_buttons > 0 {
+            v.update(cx, |view, _| view.page_mouse_up(event, origin));
+        }
+    });
+    let (v, h) = (view.clone(), hitbox.clone());
+    window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+        if phase == DispatchPhase::Bubble {
+            let inside = h.is_hovered(window);
+            v.update(cx, |view, _| view.page_mouse_move(event, origin, inside));
+        }
+    });
+    let (v, h) = (view.clone(), hitbox);
+    window.on_mouse_event(move |event: &ScrollEvent, phase, window, cx| {
+        if phase == DispatchPhase::Bubble && h.is_hovered(window) {
+            v.update(cx, |view, _| view.page_scroll(event, origin));
+            cx.stop_propagation();
+        }
+    });
 }
 
 impl Focusable for BrowserView {

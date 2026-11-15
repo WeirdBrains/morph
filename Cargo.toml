@@ -42,6 +42,10 @@ unicode-segmentation = "1"
 # crates.io gpui 0.2.2 cannot hand out an X11 window handle. Bump on purpose.
 gpui = { git = "https://github.com/zed-industries/zed", rev = "703b5ac3f4ffe1e87a073123ae56e22f72f095c4" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "703b5ac3f4ffe1e87a073123ae56e22f72f095c4", features = ["font-kit", "wayland", "x11"] }
+# GPUI's Linux platform, patched (third_party/gpui_linux): the raw key behind a key event.
+gpui_linux = { git = "https://github.com/zed-industries/zed", rev = "703b5ac3f4ffe1e87a073123ae56e22f72f095c4", default-features = false, features = ["wayland", "x11"] }
+# Pages the shell draws itself (off-screen web views on Wayland) become GPUI images.
+image = { version = "0.25", default-features = false }
 wry = "=0.57.2"
 gtk = "0.18"
 gdkx11 = "0.18"
