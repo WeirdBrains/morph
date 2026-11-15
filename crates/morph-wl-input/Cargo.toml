@@ -1,0 +1,17 @@
+[package]
+name = "morph-wl-input"
+description = "Test input for Morph under a headless wlroots compositor: a virtual keyboard (evdev keycodes, US layout) and pointer driven from stdin"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+
+[target.'cfg(target_os = "linux")'.dependencies]
+wayland-client.workspace = true
+wayland-protocols-misc.workspace = true
+wayland-protocols-wlr.workspace = true
+xkbcommon.workspace = true

@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["crates/morph-core", "crates/morph-identity", "crates/morph-store", "crates/morph-keystore", "crates/morph-bridge", "crates/morph-webview-control", "crates/weirdnet-device-link", "crates/morph-ui", "crates/morph-webview", "crates/morph-browser", "crates/morph-services", "crates/morph-desktop"]
-default-members = ["crates/morph-core", "crates/morph-identity", "crates/morph-store", "crates/morph-keystore", "crates/morph-bridge", "crates/morph-webview-control", "crates/weirdnet-device-link", "crates/morph-ui", "crates/morph-webview", "crates/morph-browser", "crates/morph-services", "crates/morph-desktop"]
+members = ["crates/morph-core", "crates/morph-identity", "crates/morph-store", "crates/morph-keystore", "crates/morph-bridge", "crates/morph-webview-control", "crates/weirdnet-device-link", "crates/morph-ui", "crates/morph-webview", "crates/morph-browser", "crates/morph-services", "crates/morph-desktop", "crates/morph-wl-input"]
+default-members = ["crates/morph-core", "crates/morph-identity", "crates/morph-store", "crates/morph-keystore", "crates/morph-bridge", "crates/morph-webview-control", "crates/weirdnet-device-link", "crates/morph-ui", "crates/morph-webview", "crates/morph-browser", "crates/morph-services", "crates/morph-desktop", "crates/morph-wl-input"]
 
 [workspace.package]
 version = "0.1.0"
@@ -47,6 +47,11 @@ gpui_linux = { git = "https://github.com/zed-industries/zed", rev = "703b5ac3f4f
 # Pages the shell draws itself (off-screen web views on Wayland) become GPUI images.
 image = { version = "0.25", default-features = false }
 wry = "=0.57.2"
+# morph-wl-input (the Wayland key suite's keyboard and pointer).
+wayland-client = "0.31"
+wayland-protocols-misc = { version = "0.3", features = ["client"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+xkbcommon = { version = "0.8", default-features = false }
 gtk = "0.18"
 gdkx11 = "0.18"
 webkit2gtk = { version = "=2.0.2", features = ["v2_38"] }
