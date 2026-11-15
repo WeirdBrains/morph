@@ -880,7 +880,7 @@ def media(m, r, binary):
 def gdk_scale_ignored(m, r, binary, display):
     """GDK_SCALE and GDK_DPI_SCALE (set by some desktops for GTK apps) do not
     make pages larger than the shell: a Morph started with them settles on
-    the page size and pixel ratio the running one shows (both are read once
+    the pixel ratio (on X11 also the page size) the running one shows (both are read once
     they settle; the first report can come before GTK knows the output's
     scale, which the next frame corrects)."""
     def size(s):
@@ -889,7 +889,14 @@ def gdk_scale_ignored(m, r, binary, display):
 
     m2 = Driver(binary, display, tempfile.mkdtemp(prefix="morph-xvfb-gdkscale-"), extra_env={"GDK_SCALE": "2", "GDK_DPI_SCALE": "1.5"})
     try:
-        ok = wait_for(lambda: state(m2) and size(state(m2)) == size(state(m)), 20)
+        # The device pixel ratio says it: GDK_SCALE=2 doubles it. Sizes are
+        # only compared on X11: a tiling compositor (sway) halves the first
+        # window when the second opens, and the first page's report of its
+        # new size can lag (two flaky runs on 2026-11-15).
+        def settled():
+            a, b = size(state(m2)), size(state(m))
+            return state(m2) and a[2] == b[2] and (Driver is WaylandMorph or a == b)
+        ok = wait_for(settled, 20)
         r.check("scale", "with GDK_SCALE=2 the page matches the shell's scale", ok, f"{state(m2)} vs {state(m)}")
     finally:
         m2.stop()
