@@ -393,7 +393,7 @@ class _InAppSession extends MorphWebViewSession {
   /// Stable wrapper so the shell never sees the widget change; a rebuild swaps
   /// the keyed [InAppWebView] inside it for a fresh native view.
   @override
-  late final Widget platformView = MorphPopupOverlay(
+  late final MorphPopupOverlay platformView = MorphPopupOverlay(
     stack: _popups,
     onClose: (windowId) => unawaited(_closePopup(windowId)),
     child: ValueListenableBuilder<int>(

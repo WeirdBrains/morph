@@ -91,7 +91,8 @@ class MorphDesktopWindow {
       // bottom of the window. The shell and dialogs fit 640x300
       // (short_window_test).
       window.minimumSize = minimumSize.toNative();
-    } catch (_) {
+    } catch (e) {
+      debugPrint('Error applying chromeless: $e');
       // Incomplete native backends or a test FFI load must not crash the shell.
     }
   }

@@ -25,6 +25,7 @@ dependencies:
   path_provider_android: '>=2.2.5 <2.3.0'
   file_selector: ^1.1.0
   qr: ^4.0.1
+  material_ui: ^1.11.0
 
 dev_dependencies:
   flutter_test:

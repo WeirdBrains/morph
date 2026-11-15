@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// Morph brand and theme colours. Dark is the default theme.
 ///
@@ -6,6 +6,17 @@ import 'package:flutter/material.dart';
 /// dark surface; on light surfaces use [cyanText] and [magentaText] for
 /// labels and links. See `docs/brand/palette.md` for contrast ratios.
 abstract final class MorphColors {
+  static const List<Color> profilePalette = [
+    MorphColors.cyan,
+    MorphColors.magenta,
+    MorphColors.successDark,
+    MorphColors.warningDark,
+    MorphColors.infoDark,
+    MorphColors.errorDark,
+    Color(0xFFB388FF),
+    Color(0xFF64FFDA),
+  ];
+
   static const Color charcoal = Color(0xFF0D0D12);
   static const Color white = Color(0xFFFFFFFF);
   static const Color cyan = Color(0xFF00E5FF);

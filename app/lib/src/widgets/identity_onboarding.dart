@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import '../api.dart';
 import '../identity_files.dart';
@@ -311,6 +311,13 @@ class _MorphIdentityOnboardingState extends State<MorphIdentityOnboarding> {
     final importing = _step == _Step.import;
     final fromBackup = _step == _Step.backup;
     final sealed = _backupFileKind == MorphBackupKind.sealed;
+    bool revealPassword = false;
+    void toggleRevealPassword() {
+      setState(() {
+        revealPassword = !revealPassword;
+      });
+    }
+
     return AutofillGroup(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -382,13 +389,17 @@ class _MorphIdentityOnboardingState extends State<MorphIdentityOnboarding> {
             label: 'Password',
             autofillHints: const [AutofillHints.newPassword],
             textInputAction: TextInputAction.next,
+            obscureText: !revealPassword,
+            onVisibilityChanged: toggleRevealPassword,
           ),
           const SizedBox(height: 12),
           MorphPasswordField(
             key: const Key('onboarding-confirm'),
             controller: _confirm,
             label: 'Confirm password',
+            obscureText: !revealPassword,
             onSubmitted: (_) => _busy ? null : _submit(),
+            onVisibilityChanged: toggleRevealPassword,
           ),
           if (_error != null) ...[
             const SizedBox(height: 12),

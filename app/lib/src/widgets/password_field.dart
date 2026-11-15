@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// The one password input Morph uses: obscured by default, with an eye
 /// button to show or hide what was typed. Every password and confirmation
@@ -11,6 +11,8 @@ class MorphPasswordField extends StatefulWidget {
     this.autofillHints,
     this.onSubmitted,
     this.textInputAction,
+    this.onVisibilityChanged,
+    this.obscureText = true,
   });
 
   final TextEditingController controller;
@@ -18,7 +20,8 @@ class MorphPasswordField extends StatefulWidget {
   final Iterable<String>? autofillHints;
   final ValueChanged<String>? onSubmitted;
   final TextInputAction? textInputAction;
-
+  final VoidCallback? onVisibilityChanged;
+  final bool obscureText;
   @override
   State<MorphPasswordField> createState() => _MorphPasswordFieldState();
 }
@@ -30,7 +33,7 @@ class _MorphPasswordFieldState extends State<MorphPasswordField> {
   Widget build(BuildContext context) {
     return TextField(
       controller: widget.controller,
-      obscureText: !_visible,
+      obscureText: widget.obscureText ? !_visible : false,
       autocorrect: false,
       enableSuggestions: false,
       enableIMEPersonalizedLearning: false,
@@ -44,7 +47,10 @@ class _MorphPasswordFieldState extends State<MorphPasswordField> {
           key: const Key('password-visibility'),
           tooltip: _visible ? 'Hide password' : 'Show password',
           icon: Icon(_visible ? Icons.visibility_off : Icons.visibility),
-          onPressed: () => setState(() => _visible = !_visible),
+          onPressed: () {
+            setState(() => _visible = !_visible);
+            widget.onVisibilityChanged?.call();
+          },
         ),
       ),
     );

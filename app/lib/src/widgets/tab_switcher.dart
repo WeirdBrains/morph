@@ -1,6 +1,6 @@
 import 'dart:typed_data';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import '../tabs/tab_set.dart';
 import '../theme/morph_theme.dart';

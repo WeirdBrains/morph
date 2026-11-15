@@ -1,6 +1,6 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import '../tabs/tab_overflow.dart';
 import '../tabs/tab_position.dart';
@@ -555,6 +555,8 @@ class _MeasureExtent extends StatelessWidget {
       if (box == null || !box.hasSize) {
         return;
       }
+      // debugPrint('box.size.width: ${box.size.width}');
+      // debugPrint('box.size.height: ${box.size.height}');
       onExtent(axis == Axis.horizontal ? box.size.width : box.size.height);
     });
     return child;

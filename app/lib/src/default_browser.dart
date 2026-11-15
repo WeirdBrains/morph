@@ -147,7 +147,16 @@ class MorphLinuxDefaultBrowser extends MorphDefaultBrowser {
     if (xdg != null && xdg.isNotEmpty) {
       return xdg;
     }
-    return '${_env['HOME'] ?? ''}/.local/share';
+    return '${_env['HOME'] ?? '~'}/.local/share';
+  }
+
+  Future<void> _ensureDataHome() async {
+    String home = _dataHome;
+    if (await File(home).exists()) {
+      return;
+    }
+    await File(home).parent.create(recursive: true);
+    return;
   }
 
   List<String> get _dataDirs {
@@ -173,6 +182,7 @@ Type=Application
 Categories=Network;WebBrowser;
 MimeType=x-scheme-handler/http;x-scheme-handler/https;text/html;
 StartupWMClass=org.weirdbrains.morph
+Icon=org.weirdbrains.morph
 $generatedKey=true
 ''';
   }
@@ -198,6 +208,7 @@ $generatedKey=true
   /// Writes (or refreshes) Morph's own user-level desktop entry, unless a
   /// packaged one is installed. Returns the path it wrote, or null.
   Future<String?> ensureDesktopEntry() async {
+    await _ensureDataHome();
     final user = File(userEntryPath);
     if (await user.exists()) {
       final text = await user.readAsString();
