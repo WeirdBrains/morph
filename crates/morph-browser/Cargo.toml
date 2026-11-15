@@ -1,0 +1,18 @@
+[package]
+name = "morph-browser"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Morph's browser component without a UI toolkit: tabs, address bar, navigation and history over the morph-webview boundary."
+publish = false
+
+[dependencies]
+morph-core.workspace = true
+morph-ui.workspace = true
+morph-webview.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

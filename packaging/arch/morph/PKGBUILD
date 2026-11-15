@@ -1,0 +1,45 @@
+# Maintainer: Michael Christenson II <m3talsmith@gmail.com>
+# Source package: builds the GPUI desktop shell from this checkout (the
+# repository this PKGBUILD lives in) with cargo, so `makepkg -si` here
+# installs what is checked out. For the prebuilt release, see ../morph-bin.
+pkgname=morph
+pkgver=0.2.0alpha1
+pkgrel=1
+pkgdesc="Distributed web browser with local AI (GPUI desktop shell)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/WeirdBrains/morph"
+license=('BSD-3-Clause')
+depends=('webkit2gtk-4.1' 'gtk3' 'glib2' 'libxkbcommon-x11' 'libxcb' 'vulkan-icd-loader'
+         'fontconfig' 'freetype2' 'openssl' 'hicolor-icon-theme' 'glibc' 'gcc-libs')
+makedepends=('cargo' 'git' 'clang' 'cmake' 'pkgconf' 'python')
+optdepends=('vulkan-driver: GPU rendering (mesa or the vendor driver)')
+options=('!lto' '!debug')
+
+_repo() {
+  realpath "$startdir/../../.."
+}
+
+build() {
+  cd "$(_repo)"
+  export CARGO_TARGET_DIR="$srcdir/target"
+  cargo build --locked --release -p morph-desktop
+}
+
+check() {
+  "$srcdir/target/release/morph" --version
+}
+
+package() {
+  local repo
+  repo="$(_repo)"
+  install -Dm755 "$srcdir/target/release/morph" "$pkgdir/usr/bin/morph"
+  install -Dm644 "$repo/packaging/linux/morph.desktop" "$pkgdir/usr/share/applications/morph.desktop"
+  local size
+  for size in 16 24 32 48 64 128 256 512; do
+    install -Dm644 "$repo/docs/brand/png/morph-icon-$size.png" \
+      "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps/morph.png"
+  done
+  install -Dm644 "$repo/docs/brand/svg/morph-icon.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/morph.svg"
+  install -Dm644 "$repo/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 "$repo/README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
+}
