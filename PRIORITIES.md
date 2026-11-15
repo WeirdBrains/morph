@@ -31,6 +31,12 @@ longer plan Dart extensions, page scripts or templates. Items that depend on Flu
 desktop are open decisions in ARCHITECTURE.md (2026-11-14 entries). Plan and progress:
 `docs/handoff.md`.
 
+2026-11-14, later: the GPUI work is merged into `main`. Phase 1 is in: a GPUI desktop shell
+on Linux (XWayland on Wayland sessions) hosting the browser component (tabs, address bar
+with phrases as searches, back/forward/reload/stop, history, Morph-made popups), with key
+handling in pages and popups checked in Xvfb, and Arch packages (`morph`, `morph-bin`).
+Build `v0.2.0-alpha.1`.
+
 1. Webview _(moved up: everything else plugs into it)_
     - System web views: WebView2 (Windows), WKWebView (Apple), WebKit (Linux: WPE + webkit2gtk), Android WebView _(changed 2026-11-11)_
         - Linux: build our own WebKit plugin _(changed 2026-11-11)_

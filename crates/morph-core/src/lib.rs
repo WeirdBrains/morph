@@ -1,4 +1,5 @@
-//! Morph core wiring: version, a tick event, and the page-bridge message contract.
+//! Morph core wiring: version, a tick event, the page-bridge message contract, and the
+//! shell rules every front end shares (tabs, the address bar, profiles, the library).
 //!
 //! Domain crates stay testable without Flutter. The `flutter_rust_bridge` surface lives
 //! in `morph-bridge`.
@@ -7,6 +8,7 @@
 pub mod bookmarks;
 pub mod library;
 pub mod library_db;
+pub mod omnibox;
 pub mod page_bridge;
 pub mod profiles;
 pub mod settings;

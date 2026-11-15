@@ -1,0 +1,20 @@
+[package]
+name = "morph-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Morph's UI component model with no UI toolkit: component kinds, layout slots, named actions, keymap, text fields, theme tokens."
+publish = false
+
+[dependencies]
+morph-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+unicode-segmentation.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

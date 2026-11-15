@@ -10,13 +10,13 @@ policy (6b). Later still the same day: Linux web view decisions in section 2
 (GTK 3 now / GTK 4 later, DMA-BUF default with snapshot fallback, Wayland first).
 Later still: a Weirdnet URL-scheme registry tying schemes such as `weirdnet-morph://` to apps
 (section 5c), and access policy moved upstream to `weirdnet-access` (section 6).
-Updated 2026-11-14 on the `gpui` branch: the desktop shell moves to GPUI and Flutter stays
-for mobile (sections 1, 2.0, 2a and 3, and the 2026-11-14 decision entries), and Dart is no
+Updated 2026-11-14 (planned on the `gpui` branch, merged into `main` the same day): the
+desktop shell moves to GPUI and Flutter stays for mobile (sections 1, 2.0, 2a and 3, and the 2026-11-14 decision entries), and Dart is no
 longer an extension language.
 
 ## 1. Shape of the app
 
-_(changed 2026-11-14, `gpui` branch)_ Morph has two shells over one Rust 2024 core.
+_(changed 2026-11-14, GPUI switch)_ Morph has two shells over one Rust 2024 core.
 The **desktop** shell (Linux, macOS, Windows) is written in Rust with
 [GPUI](https://gpui.rs), Zed's GPU-accelerated UI framework. The **mobile** shell
 (Android, iOS, F-Droid) stays Flutter. Linux comes first; macOS and Windows on
@@ -62,7 +62,7 @@ Rules:
 
 ## 2. Web view
 
-### 2.0 Desktop web view on GPUI _(new 2026-11-14, `gpui` branch)_
+### 2.0 Desktop web view on GPUI _(new 2026-11-14, GPUI switch)_
 
 Decision: on desktop each tab's page is a **native system web view placed as a
 child window** inside the GPUI window, through [wry](https://crates.io/crates/wry)
@@ -387,7 +387,7 @@ backend per platform.
 M1 exists to prove this design, with a frame-rate and input check. If the texture
 paths fall short, the overlay fallback above is ready to use.
 
-## 2a. UI components: the desktop shell is a host _(new 2026-11-14, `gpui` branch)_
+## 2a. UI components: the desktop shell is a host _(new 2026-11-14, GPUI switch)_
 
 Browsing is one part of Morph; chat, notes and journals, projects and Code
 Spaces, AI and peers are the rest (`PLAN.md`: "Swappable UI", "Themable
@@ -479,7 +479,7 @@ packages/
 `morph-bridge` stays thin so the generated surface is small and stable. Each domain crate
 is testable without Flutter.
 
-_(2026-11-14, `gpui` branch)_ Desktop crates added by the plan in
+_(2026-11-14, GPUI switch)_ Desktop crates added by the plan in
 `docs/handoff.md` (none exist yet):
 
 ```
@@ -1567,7 +1567,7 @@ language; see the 2026-11-14 decision entry. Kept for the reasoning.)_
 
 ## 9a. Updating the Flutter app over the air _(changed 2026-11-11: decided)_
 
-_(2026-11-14, `gpui` branch)_ This section now covers the Flutter mobile builds. Desktop
+_(2026-11-14, GPUI switch)_ This section now covers the Flutter mobile builds. Desktop
 builds are GPUI and get signed full updates, as desktop builds already did; downloaded UI
 (RFW) has no GPUI counterpart. See open decision 5 in the 2026-11-14 entries.
 
@@ -1739,7 +1739,7 @@ uses it. **Morph** means work inside Morph. **Grindvakt** means App Maker's in-f
 Each milestone ends with a demo on the listed platforms and CI building them. W-rows are
 upstream Weirdnet releases; the Morph milestone after each one only consumes them.
 
-_(2026-11-14, `gpui` branch)_ On desktop, M1 and M2 are met by the GPUI shell (phases 1
+_(2026-11-14, GPUI switch)_ On desktop, M1 and M2 are met by the GPUI shell (phases 1
 and 3 in `docs/handoff.md`): the texture, DMA-BUF and hidden-text-layer criteria apply to the
 Flutter shell on `main` and to a future native-Wayland path (open decision 1), not to the
 child web view. Android criteria are unchanged. Dart items below are superseded by the
@@ -2289,7 +2289,7 @@ since Morph started under XWayland had it, not only bd4c4ff.
 
 ### 2026-11-14 — Desktop shell moves to GPUI; Flutter stays for mobile
 
-m3talsmith's decision, on the `gpui` branch. Flutter's trouble was on Linux:
+m3talsmith's decision (planned on the `gpui` branch, merged into `main`). Flutter's trouble was on Linux:
 no platform views in the GTK embedder, so the web view became a texture with
 forwarded input, and the popup bug (typed text invisible, DOM changes not
 repainted) lives in that layer. The `Isolate.create` break from Dart 3.14
@@ -2338,7 +2338,8 @@ later" in the phase 2 list. `PRIORITIES.md` keeps its original Dart lines; its
 
 ### 2026-11-14 — Open decisions from the GPUI switch
 
-For m3talsmith. Each says what GPUI means for the item; none is decided yet.
+For m3talsmith. Each says what GPUI means for the item. Items 1, 2, 8 and 10 were
+decided for phase 1 (next entry); the others are still open.
 
 1. **Native Wayland web view.** Phase 1 runs the desktop shell through
    XWayland (section 2.0), against "Wayland first" (`PRIORITIES.md` 1 item 1,
@@ -2379,3 +2380,56 @@ For m3talsmith. Each says what GPUI means for the item; none is decided yet.
     from `main`, and `morph-bin` needs a GitHub Release per phase. Tag phase
     builds from `gpui` as pre-releases (`pkgver` cannot contain `-`, so
     `v0.2.0-gpui.1` becomes `0.2.0.gpui.1`), or release only after a merge?
+
+### 2026-11-14 — Phase 1 decisions (m3talsmith), and what phase 1 settled
+
+m3talsmith approved phase 1 with the proposed defaults:
+
+- **Open decision 1: XWayland for now.** On a Wayland session the desktop shell
+  removes `WAYLAND_DISPLAY` and sets `GDK_BACKEND=x11` before GPUI and GTK start,
+  when `DISPLAY` is set (`crates/morph-desktop/src/main.rs`). Native Wayland
+  stays open as future work.
+- **Open decision 2: GPUI pinned to a Zed commit** (`703b5ac`), in the workspace
+  `Cargo.toml`; bumps are their own commits after the quality bar.
+- **Open decision 8: menus, suggestion lists and the find bar sit beside the
+  page**, never over it.
+- **Open decision 10: phase builds are pre-releases from `main`.** `gpui` was
+  merged into `main` (fast-forward) on 2026-11-14 and work continues there; the
+  remote `gpui` branch is left as it was. The first build is tagged
+  `v0.2.0-alpha.1` (rather than `v0.2.0-gpui.1`: it reads better now that the
+  work is on `main`); later phase builds count up (`-alpha.2`, ...). `pkgver` is
+  `0.2.0alpha1`, which pacman sorts after 0.1.0 and before a final 0.2.0
+  (`0.2.0_alpha.1` and `0.2.0.gpui.1` would sort after 0.2.0). Only
+  `morph-desktop` carries the pre-release version; the other crates stay 0.1.0.
+
+Settled while building phase 1 (details in section 2.0 and `docs/handoff.md`):
+
+- **Keys while the shell has focus.** X11 sends a key to the window under the
+  pointer when the focused window is its ancestor, and the web views are child
+  windows of the shell's window. So after Ctrl+T or Ctrl+L with the pointer
+  over the page, keys would reach the page's window instead of the address bar.
+  While the shell has focus, the page's GTK window hands key events on to the
+  shell's window unchanged (`XSendEvent`, `morph-webview` `HostKeys`); a click
+  into a page gives the keys back. Turning off key events on the page windows
+  does not work: GTK selects them through XInput2.
+- **Shell keys while a page has focus.** The shell's window gets no keys then,
+  so the page's web view reports the keystrokes the shell uses (Ctrl+T, Ctrl+W,
+  Ctrl+L, Ctrl+R, F5, Ctrl+Tab, Ctrl+Shift+Tab, Ctrl+1..9, Alt+Left/Right, F11,
+  Ctrl+Q) as `Event::Shortcut` and does not pass them to the page. Every other
+  key goes to the page, Ctrl+F included until find in page exists (phase 3).
+  Popups have no shell around them: F5 and Ctrl+R reload a popup, Ctrl+W
+  closes it, and every other key goes to its page.
+- **Undo and redo.** WebKitGTK leaves Ctrl+Z to the embedding app (Epiphany
+  binds it as an app shortcut). Morph injects a small script into pages and
+  popups that runs the editing undo or redo after the page's own handlers, only
+  when none of them called `preventDefault()`, so editors with their own undo
+  keep it.
+- **Zero-size web views.** X11 rejects a zero-size window, which is what the
+  page area is before the first layout, so the backend never sizes a view below
+  1x1, and it restores a view's bounds after showing it again (GTK resets a
+  shown-again window to its default size).
+- **`libp2p-swarm` patched copy.** GPUI's wgpu needs `js-sys` 0.3.104+, and
+  `libp2p-swarm` 0.48.0 (through `weirdnet-net`) pins its wasm-only
+  `wasm-bindgen-futures` exactly, which pins `js-sys` 0.3.85. Cargo resolves one
+  lockfile for all targets, so the workspace carries `third_party/libp2p-swarm`
+  with that one pin relaxed (`third_party/README.md`), until upstream drops it.

@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["crates/morph-core", "crates/morph-identity", "crates/morph-store", "crates/morph-keystore", "crates/morph-bridge", "crates/morph-webview-control", "crates/weirdnet-device-link"]
-default-members = ["crates/morph-core", "crates/morph-identity", "crates/morph-store", "crates/morph-keystore", "crates/morph-bridge", "crates/morph-webview-control", "crates/weirdnet-device-link"]
+members = ["crates/morph-core", "crates/morph-identity", "crates/morph-store", "crates/morph-keystore", "crates/morph-bridge", "crates/morph-webview-control", "crates/weirdnet-device-link", "crates/morph-ui", "crates/morph-webview", "crates/morph-browser", "crates/morph-desktop"]
+default-members = ["crates/morph-core", "crates/morph-identity", "crates/morph-store", "crates/morph-keystore", "crates/morph-bridge", "crates/morph-webview-control", "crates/weirdnet-device-link", "crates/morph-ui", "crates/morph-webview", "crates/morph-browser", "crates/morph-desktop"]
 
 [workspace.package]
 version = "0.1.0"
@@ -19,6 +19,9 @@ morph-store = { path = "crates/morph-store" }
 morph-keystore = { path = "crates/morph-keystore" }
 morph-webview-control = { path = "crates/morph-webview-control" }
 weirdnet-device-link = { path = "crates/weirdnet-device-link" }
+morph-ui = { path = "crates/morph-ui" }
+morph-webview = { path = "crates/morph-webview" }
+morph-browser = { path = "crates/morph-browser" }
 weirdnet-keys = "=0.1.0"
 weirdnet-net = "=0.1.0"
 thiserror = "2"
@@ -30,6 +33,18 @@ hkdf = "0.13.0"
 sha2 = "0.11.1"
 jni-sys = "0.4.1"
 ndk-context = "0.1.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+unicode-segmentation = "1"
+# Desktop shell (ARCHITECTURE.md section 2.0). GPUI is pinned to a Zed commit:
+# crates.io gpui 0.2.2 cannot hand out an X11 window handle. Bump on purpose.
+gpui = { git = "https://github.com/zed-industries/zed", rev = "703b5ac3f4ffe1e87a073123ae56e22f72f095c4" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "703b5ac3f4ffe1e87a073123ae56e22f72f095c4", features = ["font-kit", "wayland", "x11"] }
+wry = "=0.57.2"
+gtk = "0.18"
+webkit2gtk = { version = "=2.0.2", features = ["v2_38"] }
+raw-window-handle = "0.6"
+x11-dl = "2.21"
 
 # Shipped builds favour size: the Android APK must stay under 25 MB.
 [profile.release]
@@ -37,3 +52,8 @@ opt-level = "s"
 lto = "fat"
 codegen-units = 1
 strip = "symbols"
+
+# Patched copies of published crates; why and when they go away:
+# third_party/README.md.
+[patch.crates-io]
+libp2p-swarm = { path = "third_party/libp2p-swarm" }

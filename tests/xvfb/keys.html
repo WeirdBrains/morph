@@ -1,0 +1,57 @@
+<!doctype html>
+<!-- Key and scroll logger for scripts/xvfb-check.py. Reports its state as a
+     JSON document title, which the shell prints with MORPH_LOG_EVENTS=1. -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>loading</title>
+<style>
+  body { margin: 0; font: 14px sans-serif; }
+  #bar { position: fixed; top: 0; left: 0; right: 0; height: 40px; background: #eee; }
+  #a { position: fixed; top: 8px; left: 10px; width: 200px; }
+  #b { position: fixed; top: 8px; left: 240px; width: 200px; }
+  #open { position: fixed; top: 8px; left: 470px; }
+  #tall { height: 6000px; padding-top: 60px; }
+</style>
+</head>
+<body>
+<div id="bar"><input id="a" autocomplete="off"><input id="b" autocomplete="off"><button id="open">popup</button></div>
+<div id="tall">Tall page for scrolling.</div>
+<script>
+  const popup = new URLSearchParams(location.search).has("popup");
+  const loadId = Math.random().toString(36).slice(2, 8);
+  const st = { n: 0, k: "", c: "", m: "", log: [] };
+  function mods(e) {
+    return (e.ctrlKey ? "C" : "") + (e.shiftKey ? "S" : "") + (e.altKey ? "A" : "") + (e.metaKey ? "M" : "");
+  }
+  function report() {
+    const el = document.activeElement;
+    const state = {
+      p: popup ? 1 : 0, id: loadId, n: st.n, k: st.k, c: st.c, m: st.m,
+      y: Math.round(scrollY), f: el && el.id ? el.id : (el ? el.tagName.toLowerCase() : ""),
+      a: a.value, b: b.value, s: el && "selectionStart" in el ? el.selectionStart : -1,
+      w: innerWidth, h: innerHeight, log: st.log.slice(-8),
+    };
+    document.title = (popup ? "P" : "M") + JSON.stringify(state);
+    if (popup && window.opener) window.opener.postMessage({ fromPopup: state }, "*");
+  }
+  const MODIFIERS = ["Control", "Shift", "Alt", "Meta", "NumLock"];
+  document.addEventListener("keydown", (e) => {
+    if (MODIFIERS.includes(e.key)) return;  // only real keys count
+    st.n += 1; st.k = e.key; st.c = e.code; st.m = mods(e);
+    st.log.push(st.m + ":" + e.code);
+    setTimeout(report, 0);
+  }, true);
+  document.addEventListener("keyup", () => setTimeout(report, 30), true);
+  addEventListener("scroll", () => setTimeout(report, 0));
+  addEventListener("resize", () => setTimeout(report, 0));
+  document.addEventListener("focusin", () => setTimeout(report, 0));
+  document.addEventListener("input", () => setTimeout(report, 0));
+  document.getElementById("open").addEventListener("click", () => {
+    window.open(location.pathname + "?popup=1", "keys-popup", "width=700,height=500");
+  });
+  addEventListener("message", (e) => { if (e.data && e.data.fromPopup) st.popupSeen = e.data.fromPopup.n; });
+  report();
+</script>
+</body>
+</html>

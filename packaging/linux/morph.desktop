@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Morph
+GenericName=Web Browser
+Comment=Distributed web browser with local AI
+Exec=morph %u
+Icon=morph
+Terminal=false
+StartupWMClass=morph
+Categories=Network;WebBrowser;
+MimeType=text/html;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;
+Keywords=browser;web;internet;
