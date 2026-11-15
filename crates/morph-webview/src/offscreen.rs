@@ -143,7 +143,14 @@ impl Backend for OffscreenBackend {
             own.offscreen_window_set_embedder(&embedder);
         }
         let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        window.add(&vbox);
+        // WebKit only counts a page as "in a window", which it needs before
+        // it loads any media, when the page's top-level widget is an
+        // on-screen `GtkWindow`; an off-screen window never qualifies, so
+        // every `<video>` stayed empty. The page is built inside the
+        // (realized, never shown) embedder window, which WebKit then takes
+        // as its window, and moved into its off-screen window unannounced.
+        let embedder = &self.shared.embedder;
+        embedder.add(&vbox);
         let builder = WebViewBuilder::new_with_web_context(context)
             .with_url(url)
             .with_initialization_script(UNDO_REDO_SCRIPT)
@@ -151,12 +158,17 @@ impl Backend for OffscreenBackend {
         let view = match with_bridge(builder, &self.bridge).build_gtk(&vbox) {
             Ok(view) => view,
             Err(e) => {
+                self.shared.embedder.remove(&vbox);
                 // SAFETY: the window was never shown or shared.
                 unsafe { window.destroy() };
                 return Err(backend_err(e));
             }
         };
         let engine = view.webview();
+        let quiet = engine.connect_hierarchy_changed(|engine, _| engine.stop_signal_emission_by_name("hierarchy-changed"));
+        embedder.remove(&vbox);
+        window.add(&vbox);
+        engine.disconnect(quiet);
         attach_bridge(&engine, &self.bridge);
         watch(&engine, id, &self.queue, &self.shortcuts);
         let dirty = Rc::new(Cell::new(true));
