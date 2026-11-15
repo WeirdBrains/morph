@@ -1,0 +1,9 @@
+<!doctype html>
+<!-- Opened by opener.html: like a sign-in popup, it tells the opener it is
+     done and closes itself. -->
+<html><head><title>Signing in</title></head><body>
+<p>Signed in.</p>
+<script>
+setTimeout(() => { window.opener && window.opener.postMessage("signed-in", "*"); window.close(); }, 500);
+</script>
+</body></html>
