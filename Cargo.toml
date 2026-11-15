@@ -61,3 +61,6 @@ strip = "symbols"
 # third_party/README.md.
 [patch.crates-io]
 libp2p-swarm = { path = "third_party/libp2p-swarm" }
+
+[patch."https://github.com/zed-industries/zed"]
+gpui_linux = { path = "third_party/gpui_linux" }
