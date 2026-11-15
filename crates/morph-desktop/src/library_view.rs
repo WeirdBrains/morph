@@ -60,8 +60,8 @@ impl LibraryView {
                 }
                 TextInputEvent::Cancel => cx.emit(ShellRequest::ClosePanel),
             }),
-            cx.subscribe_in(&password, window, |this, input, event, _, cx| match event {
-                TextInputEvent::Submit { .. } => this.unlock(cx),
+            cx.subscribe_in(&password, window, |this, input, event, window, cx| match event {
+                TextInputEvent::Submit { .. } => this.unlock(window, cx),
                 TextInputEvent::Cancel => cx.emit(ShellRequest::ClosePanel),
                 TextInputEvent::Changed => {
                     let _ = input;
@@ -153,7 +153,7 @@ impl LibraryView {
         })
     }
 
-    fn unlock(&mut self, cx: &mut Context<Self>) {
+    fn unlock(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let text = self.password.read(cx).text().to_string();
         if text.is_empty() {
             return;
@@ -161,6 +161,14 @@ impl LibraryView {
         self.library.unlock(&text);
         self.password.update(cx, |p, cx| p.set_text("", cx));
         self.reload(cx);
+        if self.library.is_locked() {
+            return;
+        }
+        if std::env::var_os("MORPH_LOG_EVENTS").is_some_and(|v| v == "1") {
+            println!("morph-event library unlocked");
+        }
+        // The password field is gone: the keyboard goes to the search.
+        self.focus(window, cx);
         // History starts recording now that writes succeed.
         cx.emit(ShellRequest::LibraryUnlocked);
     }
@@ -221,7 +229,12 @@ impl LibraryView {
                     .child("Enter the profile password to see bookmarks and history and to record new visits."),
             )
             .child(div().flex().child(self.password.clone()))
-            .child(div().flex().flex_row().child(button(t, "lib-unlock", "Unlock", true).on_click(cx.listener(|this, _, _, cx| this.unlock(cx)))))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .child(button(t, "lib-unlock", "Unlock", true).on_click(cx.listener(|this, _, window, cx| this.unlock(window, cx)))),
+            )
     }
 
     fn edit_row(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
