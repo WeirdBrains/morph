@@ -84,15 +84,23 @@ window system, and popups are real windows.
   - *macOS (planned, not started):* WKWebView as a child `NSView`, same wry call.
   - *Windows (planned, not started):* WebView2 as a child `HWND`, same wry call.
     The WebView2 Runtime stays a requirement, as on main.
-- **Wayland.** Phase 1 runs the desktop shell through **XWayland** on Wayland
-  sessions: when `DISPLAY` is set, `morph-desktop` starts GPUI on X11 before it
-  opens a window. That matches what the Flutter shell already does on NVIDIA
-  (section 2.1). It conflicts with "Wayland first" in `PRIORITIES.md` and the
-  collective rules, so a native Wayland path is an open decision (see the
-  2026-11-14 decision entries): the candidates are WPE WebKit rendering into a
-  DMA-BUF that GPUI imports (needs an external-texture API in GPUI, which does
-  not exist yet) or a Wayland subsurface (no WebKit API for a foreign
-  `wl_surface` today).
+- **Wayland (since phase 6, 2026-11-15).** On a Wayland session the shell runs
+  natively and pages come from `morph_webview::offscreen`: each page is a
+  WebKitGTK view in a GTK offscreen window (GDK's Wayland backend), embedded in
+  a never-shown window so it renders at the monitor's scale; damage marks a
+  new frame, which the shell draws as a GPUI image in the page area. The shell
+  forwards pointer, wheel, keys and input-method commits as synthetic GDK
+  events; keys carry the keyboard's own keycode, keysym and XKB state (from a
+  patched `gpui_linux`, `third_party/`), so WebKit's `KeyboardEvent.code`
+  matches X11, keypad included. Keys reach the page only after GPUI's
+  bindings, so shell shortcuts never do. `MORPH_BACKEND=x11|wayland` overrides
+  the choice; XWayland is the fallback when GTK cannot use Wayland. On X11 nothing
+  changed: web views are child windows. Costs: a frame is a copy of the page
+  (BGRA, device pixels) into a GPUI texture only when the page drew; overlay
+  scrollbars are turned off (`GTK_OVERLAY_SCROLLING=0`) because their animation
+  redrew idle pages about 12 times a second. Not done: inline IME preedit (the
+  input method shows the composition; commits reach the page), `<select>`
+  option menus and WebKit's context menu (GTK menus need an on-screen parent).
 - **What GPUI cannot do here:** draw over the page. The child window sits above
   GPUI's surface, so menus, the address-bar suggestion list and the find bar are
   laid out beside the page area (or the page area shrinks while they are open).
@@ -2456,6 +2464,57 @@ Settled while building phase 1 (details in section 2.0 and `docs/handoff.md`):
   widget-test fake.
 - **Mobile CI:** the password-field test failure is fixed and the Android Gradle
   Plugin is 9.1.1 (Flutter 3.50's minimum).
+
+### 2026-11-15 — Phase 6: native Wayland through off-screen pages
+
+- **Open decision 1 is settled for Linux: native Wayland** by drawing
+  off-screen pages in GPUI (the snapshot path), not WPE/DMA-BUF (GPUI has no
+  external-texture API) or subsurfaces (no WebKit API). X11 keeps child
+  windows.
+- **Same keys on both:** the Xvfb key suite runs unchanged on a headless sway
+  (`scripts/xvfb-check.py --wayland`, scale 1 and 2, in CI), driven by
+  `morph-wl-input` (virtual keyboard with the standard evdev keymap and virtual
+  pointer); `wtype` uploads its own keymap, so codes would be wrong.
+- **No vendor checks (m3talsmith, 2026-11-15).** Nothing is chosen by GPU
+  vendor. Black pages on my-desktop (Hyprland through XWayland, NVIDIA GPU,
+  nvidia-open 615.78, webkit2gtk 2.54.1, "Failed to create GBM buffer of
+  size 2x2: Invalid argument") are handled by detecting the failure:
+  `morph --probe-dmabuf`, run as a child at start, allocates a 2x2 ARGB8888
+  GBM buffer for rendering with the modifiers the EGL display offers (what
+  WebKit's DMA-BUF renderer does) on the first render node. Only if that
+  fails does Morph set WebKit's own fallback before GTK starts:
+  `WEBKIT_DMABUF_RENDERER_DISABLE_GBM=1` (buffers exported from GL textures,
+  still on the GPU) when EGL has `EGL_MESA_image_dma_buf_export`, else
+  `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1`. GL compositing stays on; the
+  hardware-acceleration policy is never set. A user-set WebKit renderer
+  variable or `MORPH_DMABUF_PROBE=0` skips the probe. Not verified on
+  NVIDIA here (no GPU on the build box: the probe reports "unavailable"
+  and changes nothing); whether the modifier list itself can be narrowed to
+  one the driver takes needs a knob WebKit does not have
+  (`WEBKIT_DMABUF_RENDERER_BUFFER_FORMAT` picks the format, not modifiers).
+- **Video:** WebKit's media settings are on by default (media, MSE, Web
+  Audio); muted autoplay works. GStreamer's VA-API decoders are ranked first
+  (`GST_PLUGIN_FEATURE_RANK`, unless the user set it or `MORPH_VAAPI=0`);
+  the `va` plugin registers only decoders its VA driver can run, so this is
+  a no-op without VA-API. The bundled clips (`tests/xvfb/video.html`, VP8
+  WebM and H.264 MP4) play under Xvfb and headless sway in software.
+- **Page scale = shell scale.** `GDK_SCALE` and `GDK_DPI_SCALE` are removed
+  before GTK starts (with `GDK_SCALE=2` under a scale-1 compositor pages
+  were twice the shell's size), and pages are zoomed by the shell's scale
+  over GTK's on X11 (the off-screen backend sizes its pages the same way).
+- **Popups close on `window.close()`.** wry answers WebKit's `close` signal
+  by destroying the web view, which also dropped Morph's own handler, so the
+  popup's window stayed open, empty, and the popup count never went down
+  (the LinkedIn sign-in popup). The window now follows the web view's
+  `destroy`. Checked by `tests/xvfb/opener.html`: the popup posts to its
+  opener, calls `window.close()`, and its window must go.
+- **Off-screen pages count as "in a window".** WebKit loads media only when
+  a page's top-level widget is an on-screen `GtkWindow`, which an offscreen
+  window never is, so on Wayland every `<video>` stayed empty
+  (`networkState` NO_SOURCE, no `loadstart`). Each page is built inside the
+  never-shown embedder window, which WebKit takes as its window, then moved
+  into its offscreen window with the move hidden from WebKit (its
+  `hierarchy-changed` handler is stopped for that one reparent).
 
 ### 2026-11-15 — Phase 5: page bridge on Linux, packages, Wayland stays XWayland
 

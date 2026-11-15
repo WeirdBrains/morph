@@ -12,7 +12,7 @@ removed the Flutter desktop app, so `app/` is mobile only; phase 3
 history, profiles, settings and a frameless window; phase 4 (`v0.2.0-alpha.4`)
 added identity onboarding and backups, device linking, "make default browser" and
 single instance; phase 5 (`v0.2.0-alpha.5`) added the page bridge and zip, deb, rpm and
-Nix packages. See `ARCHITECTURE.md` (sections 1,
+Nix packages; phase 6 (`v0.2.0-alpha.6`) runs natively on Wayland. See `ARCHITECTURE.md` (sections 1,
 2.0 and 2a, and the 2026-11-14 decisions) and `docs/handoff.md` for the phases.
 
 Planning documents: `PLAN.md`, `PRIORITIES.md`, and `ARCHITECTURE.md`.
@@ -59,8 +59,11 @@ MORPH_HOME=$(mktemp -d) cargo run -p morph-desktop --release -- example.com
 
 On Debian or Ubuntu the build packages are listed in `DESKTOP_DEPS` in
 `.github/workflows/ci.yml`, plus a Vulkan driver (`mesa-vulkan-drivers` for
-Mesa). On a Wayland session the shell runs through XWayland for now
-(`ARCHITECTURE.md` section 2.0).
+Mesa). On a Wayland session the shell runs natively: pages are rendered off
+screen and drawn by the shell (`ARCHITECTURE.md` section 2.0).
+`MORPH_BACKEND=x11` forces XWayland, `MORPH_BACKEND=wayland` native Wayland.
+Other switches: `MORPH_DMABUF_PROBE=0` (skip the start-up DMA-BUF check),
+`MORPH_VAAPI=0` (do not rank VA-API video decoders first).
 
 Packages and tests:
 
@@ -93,5 +96,5 @@ Packages and tests:
 - `tests/xvfb/` — the page `scripts/xvfb-check.py` drives
 
 Crate versions are `0.1.0` (BSD-3-Clause, edition 2024), except `morph-desktop`,
-which carries the desktop build's version (`0.2.0-alpha.5`). They are not published
+which carries the desktop build's version (`0.2.0-alpha.6`). They are not published
 in this pass.

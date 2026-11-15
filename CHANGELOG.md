@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- `v0.2.0-alpha.6` (phase 6), GPUI desktop shell: native Wayland. Pages are
+  rendered off screen (WebKitGTK in a GTK offscreen window) and drawn by the
+  shell at the window's scale, with pointer, wheel, keys and input-method text
+  forwarded; shell shortcuts never reach the page. `MORPH_BACKEND=x11|wayland`
+  overrides the automatic choice; XWayland is the fallback. The key suite
+  also runs on a headless sway (`scripts/xvfb-check.py --wayland`, new
+  `morph-wl-input`), at scale 1 and 2.
+  Fixed: black pages where the GPU refuses the buffers WebKit's DMA-BUF
+  renderer allocates ("Failed to create GBM buffer"): Morph makes the same
+  allocation in a child process at start and, only if it fails, uses
+  WebKit's GL-texture export (`WEBKIT_DMABUF_RENDERER_DISABLE_GBM=1`) or
+  shared-memory fallback (`MORPH_DMABUF_PROBE=0` skips the check). Pages
+  twice the shell's size with `GDK_SCALE=2`: pages follow the shell's scale.
+  Sign-in popups that call `window.close()` close (and the popup count goes
+  down). Video plays on native Wayland. VA-API decoders, when GStreamer's `va` plugin has them, are ranked
+  first for video (`MORPH_VAAPI=0` leaves ranks alone).
 - `v0.2.0-alpha.5` (phase 5), GPUI desktop shell: the page bridge
   (`window.MorphBridge`) works on Linux; zip, deb, rpm and Nix flake packages,
   each with and without the desktop entry. Fixed: the window stopped
