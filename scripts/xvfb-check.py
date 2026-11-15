@@ -877,15 +877,56 @@ def media(m, r, binary):
         r.check("media", f"a {kind} clip plays (currentTime moves)", ok, f"{a} -> {b}")
 
 
-def gdk_scale_ignored(r, binary, display, start):
+def gdk_scale_ignored(m, r, binary, display):
     """GDK_SCALE and GDK_DPI_SCALE (set by some desktops for GTK apps) do not
-    make pages larger than the shell: a Morph started with them shows the
-    page at the same size and pixel ratio as one without."""
+    make pages larger than the shell: a Morph started with them settles on
+    the page size and pixel ratio the running one shows (both are read once
+    they settle; the first report can come before GTK knows the output's
+    scale, which the next frame corrects)."""
+    size = lambda s: (s or {}).get("w"), (s or {}).get("h"), (s or {}).get("d")
     m2 = Driver(binary, display, tempfile.mkdtemp(prefix="morph-xvfb-gdkscale-"), extra_env={"GDK_SCALE": "2", "GDK_DPI_SCALE": "1.5"})
     try:
-        s = wait_for(lambda: state(m2), 20) or {}
-        ok = (s.get("w"), s.get("h"), s.get("d")) == (start.get("w"), start.get("h"), start.get("d"))
-        r.check("scale", "with GDK_SCALE=2 the page matches the shell's scale", ok, f"{s} vs {start}")
+        ok = wait_for(lambda: state(m2) and size(state(m2)) == size(state(m)), 20)
+        r.check("scale", "with GDK_SCALE=2 the page matches the shell's scale", ok, f"{state(m2)} vs {state(m)}")
+    finally:
+        m2.stop()
+
+def render_check(r, binary, display):
+    """The start-up render check (crates/morph-desktop/src/render_check.rs).
+    The child side reports what real GPUs hit: an off-screen window cannot
+    make a GL context (WebKit aborted on that with a GPU buffer), and a test
+    page paints where the shell's pages live. A Morph with the check forced
+    (no GPU here, so it would not run by itself) starts and shows its page;
+    on Wayland it hands off-screen pages shared-memory buffers."""
+    env = Driver.session_env(display)
+    wayland = "WAYLAND_DISPLAY" in env
+
+    def child(where, what, extra=None):
+        e = dict(env, GDK_BACKEND="wayland" if wayland else "x11", **(extra or {}))
+        try:
+            return subprocess.run([binary, "--probe-render", where, what], env=e, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30).returncode
+        except subprocess.TimeoutExpired:
+            return "timeout"
+
+    code = child("offscreen", "gl")
+    r.check("render", "an off-screen window reports no GL context", code == 20, f"exit {code}")
+    if wayland:
+        code = child("offscreen", "page", {"WEBKIT_DMABUF_RENDERER_FORCE_SHM": "1"})
+        r.check("render", "an off-screen test page paints with shared-memory buffers", code == 0, f"exit {code}")
+    else:
+        code = child("window", "page")
+        r.check("render", "a test page in an off-screen-placed window paints", code == 0, f"exit {code}")
+    m2 = Driver(binary, display, tempfile.mkdtemp(prefix="morph-xvfb-render-"), extra_env={"MORPH_DMABUF_PROBE": "1"})
+    try:
+        s = wait_for(lambda: state(m2), 30)
+        notes = m2.lines(r"^morph: ")
+        if wayland:
+            ok = s and any("WEBKIT_DMABUF_RENDERER_FORCE_SHM=1" in n for n in notes)
+            name = "with the render check forced, pages show on shared memory"
+        else:
+            ok = s and not notes
+            name = "with the render check forced, pages show and nothing changes"
+        r.check("render", name, ok, f"{s} {notes}")
     finally:
         m2.stop()
 
@@ -946,7 +987,6 @@ def main():
         win = wait_for(lambda: m.window("Morph"), 20)
         r.check("shell", "window opens", win)
         r.check("shell", "page loads", wait_for(lambda: state(m), 20))
-        start = dict(state(m) or {})
         if not win:
             return finish(r, args)
         # The page area starts below the tab strip (34) and toolbar (42).
@@ -1010,7 +1050,8 @@ def main():
         bridge_round_trip(m, r, args.bin)
         popup_close(m, r, args.bin)
         media(m, r, args.bin)
-        gdk_scale_ignored(r, args.bin, display, start)
+        gdk_scale_ignored(m, r, args.bin, display)
+        render_check(r, args.bin, display)
         # GPUI draws the frame itself only where the window manager supports
         # _GTK_FRAME_EXTENTS and a compositor runs; xfwm4 has both.
         if wm and not args.wayland and shutil.which("xfwm4"):
