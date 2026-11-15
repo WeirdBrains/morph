@@ -467,9 +467,8 @@ packages/
   morph_bridge/              # generated frb bindings + Dart-friendly wrappers
   morph_ui/                  # core component set (tabs, address bar, panel, list, editor)
   morph_webview/             # web view interface, page bridge, scheme handling
-  morph_webview_linux/       # Morph-owned WebKit backend: WPE DMA-BUF default,
-                             # webkit2gtk-4.1 snapshot fallback; GTK 4 later
-                             # other platforms: flutter_inappwebview behind the interface
+  morph_webview_inapp/       # flutter_inappwebview backend (Android, iOS)
+                             # (morph_webview_linux was removed in phase 2)
   morph_chat/                # chat component
   morph_notes/               # notes + projects views
   morph_theme/               # theme tokens (later fed by weirdnet-themes hex output)
@@ -494,7 +493,7 @@ crates/
 shell. Logic both shells need moves out of `morph-bridge` into a toolkit-neutral
 crate (`morph-services`, phase 2) so the bridge stays a thin wrapper and the
 desktop shell calls the same functions. `morph_webview_linux` and the Flutter
-desktop runners go in phase 2. The `weirdnet_webview` (Dart) candidate in the
+desktop runners went in phase 2 (2026-11-15). The `weirdnet_webview` (Dart) candidate in the
 table above becomes a Rust candidate, `weirdnet-webview`, from `morph-webview`.
 
 Shared outside Morph: **`weirdnet-model`** (section 8), used by Mouser and Morph.
@@ -2433,3 +2432,27 @@ Settled while building phase 1 (details in section 2.0 and `docs/handoff.md`):
   `wasm-bindgen-futures` exactly, which pins `js-sys` 0.3.85. Cargo resolves one
   lockfile for all targets, so the workspace carries `third_party/libp2p-swarm`
   with that one pin relaxed (`third_party/README.md`), until upstream drops it.
+
+### 2026-11-15 — Phase 2: Flutter desktop removed, `morph-services`
+
+- **Removed:** `app/linux`, `app/macos`, `app/windows`,
+  `packages/morph_webview_linux`, `packages/morph_webview_inapp/macos`,
+  `scripts/build-windows.ps1`, the Flutter `linux` and `windows` CI jobs and the
+  desktop-only Dart (window chrome, `window_manager`, the desktop nav row, tab
+  strip, sidebar, tab position, Linux/Windows default-browser code). `app/` is
+  the Android/iOS app and always lays out as a phone. The earlier entries about
+  the Flutter Linux texture plugin, `window_manager` and the Windows build are
+  history now. `morph-webview-control` stays (its C ABI has no user today).
+- **`morph-services`** holds the logic both shells need, with no UI toolkit:
+  Morph home, library open/unlock with the system keystore, adopting a new
+  identity's key, profile deletion (with its saved key), identity onboarding
+  (create, import, restore a backup, recovery words, export) and device linking.
+  `morph-bridge` wraps it without changing a function signature;
+  `morph-desktop` uses it to open the profile's library at launch (history is
+  off for the session if the library stays locked; the password prompt is
+  phase 3).
+- **One address-bar rule.** The mobile app calls `morph_core::omnibox::target`
+  through the bridge (`omnibox_target`, sync); the Dart copy only backs the
+  widget-test fake.
+- **Mobile CI:** the password-field test failure is fixed and the Android Gradle
+  Plugin is 9.1.1 (Flutter 3.50's minimum).

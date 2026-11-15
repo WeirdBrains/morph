@@ -1,8 +1,7 @@
 //! Chrome-style user profiles exposed to the Flutter shell.
 
+use crate::home::resolve as resolve_home;
 use morph_core::profiles::{self, Catalog, Profile};
-use morph_identity::Paths;
-use std::path::PathBuf;
 
 /// A single profile in the catalog. Storage is keyed by [Self::id].
 pub struct ProfileView {
@@ -40,11 +39,6 @@ pub struct ProfilePathsView {
     pub cookies_path: String,
 }
 
-fn resolve_home(home: Option<String>) -> Result<PathBuf, String> {
-    let explicit = home.filter(|h| !h.is_empty()).map(PathBuf::from);
-    Ok(Paths::resolve(explicit).map_err(|e| e.to_string())?.home)
-}
-
 fn load_view(home: &std::path::Path) -> Result<CatalogView, String> {
     let catalog = profiles::load_catalog(home).map_err(|e| e.to_string())?;
     Ok(CatalogView::from(&catalog))
@@ -70,29 +64,12 @@ pub fn rename_profile(home: Option<String>, id: String, name: String) -> Result<
     load_view(&home)
 }
 
-/// Delete a profile and its storage. Refuses to delete the last profile.
+/// Delete a profile and its storage (and its saved library key). Refuses to
+/// delete the last profile.
 pub fn delete_profile(home: Option<String>, id: String) -> Result<CatalogView, String> {
     let home = resolve_home(home)?;
-    forget_library_key(&home, &id);
-    profiles::delete(&home, &id).map_err(|e| e.to_string())?;
-    load_view(&home)
-}
-
-/// Drop the profile's library key from the system keystore before its files go
-/// (the entry is found by the profile's directory). Only profiles that ever had
-/// an identity or an encrypted library can have one.
-fn forget_library_key(home: &std::path::Path, id: &str) {
-    if profiles::require(home, id).is_err() {
-        return;
-    }
-    let dir = profiles::profile_dir(home, id);
-    let encrypted = morph_core::library_db::state(home, id).is_ok_and(|s| s != morph_core::library_db::LibraryState::Plain);
-    let had_identity = morph_identity::profile_identity::identity_dir(&dir).exists();
-    if (had_identity || encrypted)
-        && let Err(e) = morph_keystore::forget(&dir)
-    {
-        eprintln!("Morph: library key of deleted profile {id} not removed: {e}");
-    }
+    let catalog = morph_services::profiles::delete(&home, &id).map_err(|e| e.to_string())?;
+    Ok(CatalogView::from(&catalog))
 }
 
 /// Switch the current profile. Existing web views should be recreated by the shell.

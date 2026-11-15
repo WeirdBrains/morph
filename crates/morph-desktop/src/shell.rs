@@ -294,11 +294,15 @@ pub fn run(home: PathBuf, args: Args) {
         })
         .detach();
 
-        let profile = match morph_core::profiles::load_catalog(&home) {
-            Ok(catalog) => catalog.current().id.clone(),
+        let (profile, history) = match morph_core::profiles::load_catalog(&home) {
+            Ok(catalog) => {
+                let profile = catalog.current().id.clone();
+                let history = crate::library::open_at_launch(&home, &profile);
+                (profile, history)
+            }
             Err(e) => {
                 eprintln!("morph: profiles: {e}; using the default profile without history");
-                morph_core::profiles::DEFAULT_PROFILE_ID.to_string()
+                (morph_core::profiles::DEFAULT_PROFILE_ID.to_string(), false)
             }
         };
         let saved_layout = layout::load(&home, &profile);
@@ -318,7 +322,7 @@ pub fn run(home: PathBuf, args: Args) {
                 catalog.register(kind);
             }
             let (components, error): (Vec<Box<dyn Hosted>>, Option<String>) =
-                match BrowserView::create(&home, &profile, &start, true, window, &keystrokes) {
+                match BrowserView::create(&home, &profile, &start, history, window, &keystrokes) {
                     Ok(browser) => {
                         let view = cx.new(|cx| BrowserView::new(browser, theme, cx));
                         (vec![Box::new(view)], None)

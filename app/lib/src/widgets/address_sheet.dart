@@ -51,7 +51,7 @@ class MorphAddressSheet extends StatefulWidget {
   final VoidCallback? onIdentity;
   final String? identityLabel;
 
-  /// Optional profiles section (mobile). Desktop uses the nav-row button.
+  /// Optional profiles section, listed under the actions.
   final Widget? profiles;
 
   @override

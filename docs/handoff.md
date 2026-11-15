@@ -1,10 +1,11 @@
 # Handoff
 
-Updated 2026-11-14. This file is the resume point for moving Morph's desktop shell to
-GPUI. **Phase 1 is done and pushed to `main`**, with pre-release `v0.2.0-alpha.1`
-(https://github.com/WeirdBrains/morph/releases/tag/v0.2.0-alpha.1) and the `morph-bin`
-recipe for TAUR. m3talsmith said to keep going through the phases without waiting for
-him; phase 2 is next.
+Updated 2026-11-15. This file is the resume point for moving Morph's desktop shell to
+GPUI. **Phases 1 and 2 are done and pushed to `main`**: pre-releases `v0.2.0-alpha.1`
+(https://github.com/WeirdBrains/morph/releases/tag/v0.2.0-alpha.1) and `v0.2.0-alpha.2`
+(https://github.com/WeirdBrains/morph/releases/tag/v0.2.0-alpha.2), each with a
+`morph-bin` recipe for TAUR. m3talsmith said to keep going through the phases without
+waiting for him; phase 3 is next.
 
 ## Where things stand
 
@@ -15,17 +16,58 @@ him; phase 2 is next.
   `gpui` branch is left as it was.
 - Phase 1 (below) is in `main`: crates `morph-ui`, `morph-webview`,
   `morph-browser`, `morph-desktop` (binary `morph`), the Arch recipes, the Xvfb key
-  checks and the CI jobs. Flutter is untouched; both shells live side by side
-  until phase 2.
+  checks and the CI jobs.
+- Phase 2 (below) is in `main`: the Flutter desktop targets are gone, so `app/`
+  is the mobile app only (Android, iOS); the logic both shells share is in the
+  new `morph-services` crate.
 - The throwaway spike from planning stays in `docs/evidence/gpui-spike/` (not a
   workspace member).
 - Builds are tagged `v0.2.0-alpha.N` from `main` (chosen over `v0.2.0-gpui.N`
   since the work is on `main` now), `pkgver` `0.2.0alphaN`. Only `morph-desktop`
   carries that version.
-- CI on `main`: the `flutter` and `android` jobs were already failing on
-  `fbb5af9` before phase 1 (a password-field widget test, and the Android Gradle
-  Plugin 9.1.0 being below Flutter's 9.1.1 minimum). Phase 1 leaves Flutter alone,
-  so they still fail; phase 2 touches that code.
+- CI on `main`: the `flutter` and `android` jobs failed from `fbb5af9` until
+  phase 2 (a password-field widget test, and the Android Gradle Plugin 9.1.0
+  being below Flutter's 9.1.1 minimum); phase 2 fixed both. The Flutter `linux`
+  and `windows` jobs are gone with their targets.
+
+## Phase 2 result: what changed and how it was checked
+
+- **Flutter desktop removed.** `app/linux`, `app/macos`, `app/windows`,
+  `packages/morph_webview_linux`, `packages/morph_webview_inapp/macos`,
+  `scripts/build-windows.ps1`, the Flutter `linux` and `windows` CI jobs, and the
+  desktop-only Dart: window chrome and `window_manager`, the desktop nav row,
+  profile button and menu, tab strip, sidebar and tab-position settings, tab
+  overflow, the Linux and Windows default-browser code. The shell always builds
+  the phone layout (address sheet, tab grid, edge gestures). Kept on purpose:
+  keyboard shortcuts and the find bar (hardware keyboards on phones and tablets)
+  and the mouse drag path in the bookmark manager (tablets with a mouse).
+- **`morph-services`** (new crate, no UI toolkit): Morph home resolution,
+  library open/unlock (keystore first, password otherwise, a wrong saved key is
+  forgotten), adopting a new identity's key, profile deletion with its saved key,
+  identity onboarding (create, import words, restore a backup, recovery words,
+  export a backup) and device linking (new device and add device, the link
+  registry). 12 tests, including a real TCP link and the mock keystore.
+  `morph-bridge`'s `api/*` now call it; every bridge function keeps its signature,
+  so the existing Dart bindings only differ in generated comments.
+- **Mobile on the Rust address-bar rule.** New sync bridge function
+  `omnibox_target` (`morph_core::omnibox::target`); `MorphShell` calls it through
+  `MorphApi.omniboxTarget`, and the Dart copy of the rule now only backs
+  `FakeMorphApi` in widget tests (held to the Rust test cases).
+- **Desktop history with an encrypted library.** At launch `morph` opens the
+  current profile's library with the key in the system keystore
+  (`morph-services`); if that fails (no key, no keystore, wrong key) history is
+  off for the session and a line goes to stderr. The password prompt is phase 3.
+- **Mobile fixes.** The password field's show/hide is its own state again (the
+  pre-existing `password_field_test` failure); AGP is 9.1.1. Adding a profile
+  from the address sheet closes the sheet (the new profile's onboarding used to
+  open under it), and the sheet's profile list follows renames and deletes.
+- **Checks on this box:** `cargo fmt --check`, `cargo build --locked`, `cargo
+  clippy --workspace --all-targets -D warnings`, `cargo test --workspace` all
+  clean; `flutter analyze` clean and `flutter test` 115/115 (desktop-only widget
+  tests went with their code; the rest run as phone tests), `morph_webview`
+  48/48, `morph_webview_inapp` 29/29; Xvfb key checks 72/72 on the
+  `0.2.0-alpha.2` release build. No Android SDK here, so the APK build and the
+  Gradle unit tests are checked by the `android` CI job only.
 
 ## Phase 1 result: what works and how it was checked
 
@@ -179,7 +221,7 @@ export CARGO_TARGET_DIR=<scratch-dir>/cargo-target/morph
 MORPH_HOME=$(mktemp -d) cargo run -p morph-desktop --release
 
 # 2. Or build and install the Arch package from the checkout:
-cd packaging/arch/morph && makepkg -si      # morph 0.2.0alpha1-1
+cd packaging/arch/morph && makepkg -si      # morph 0.2.0alpha2-1
 morph                                        # or "Morph" in the launcher
 
 # 3. Or the prebuilt release from TAUR (once uploaded):
@@ -190,6 +232,15 @@ morph                                        # or "Morph" in the launcher
 `<scratch-dir>`), so the first build takes a while. Without `MORPH_HOME` the
 installed `morph` uses the normal profile directory. On Hyprland it runs
 through XWayland (needs `xorg-xwayland`, which Hyprland normally has).
+
+## Release and TAUR (phase 2)
+
+- Pre-release `v0.2.0-alpha.2` on GitHub, from `main`, with
+  `morph-0.2.0-alpha.2-x86_64-unknown-linux-gnu.tar.gz` and `SHA256SUMS`.
+- `packaging/arch/morph-bin` is `pkgver=0.2.0alpha2` with that tarball's
+  sha256; `packaging/arch/morph` is `0.2.0alpha2` too. The recipe archive is
+  `morph-bin-0.2.0alpha2.tar.gz` (upload from m3talsmith's side with `taurctl pkg
+  upload morph-bin-0.2.0alpha2.tar.gz --org WeirdBrains`, dry run first).
 
 ## Release and TAUR (phase 1)
 
@@ -344,7 +395,10 @@ Flutter is untouched in this phase; both shells live side by side.
   then browse, tabs, address bar, sign-in popups (no real account needed for the
   check, but he may try his own).
 
-### Phase 2 — Flutter desktop removed, shared logic moved down
+### Phase 2 — Flutter desktop removed, shared logic moved down (done)
+
+Result above ("Phase 2 result"). The plan was:
+
 
 - Remove `app/linux`, `app/macos`, `app/windows`, `packages/morph_webview_linux`,
   desktop-only Dart (window chrome, `window_manager`, desktop chrome widgets), the
@@ -420,7 +474,7 @@ cd /workspace/morph            # or ~/src/WeirdBrains/morph
 git switch main && git pull --rebase origin main
 ```
 
-Next is phase 2. Commit as m3talsmith, run the quality bar before each commit,
+Next is phase 3. Commit as m3talsmith, run the quality bar before each commit,
 `git pull --rebase origin main` before each push, push to `origin/main`; no pull
 requests, no force-push, leave the remote `gpui` branch alone. Do not modify
 `PLAN.md`; `PRIORITIES.md` gets dated progress notes only. Do not touch

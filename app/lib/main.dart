@@ -7,11 +7,9 @@ import 'src/ffi_api.dart';
 import 'src/morph_home.dart';
 import 'src/rust/api/control.dart' as rust_control;
 import 'src/rust/frb_generated.dart';
-import 'src/window/morph_desktop_window.dart';
 
 Future<void> main(List<String> arguments) async {
   WidgetsFlutterBinding.ensureInitialized();
-  MorphDesktopWindow.applyChromeless();
   await RustLib.init();
   final home = await defaultMorphHome();
   MorphWebViewControl.start = () => _startControl(controlSocketDir(home));

@@ -1,4 +1,5 @@
-//! C ABI used by `morph_webview_linux` (and later other native backends).
+//! C ABI for native web-view backends (the removed Flutter Linux plugin was
+//! the first; none links it today).
 use crate::endpoint::ControlEndpoint;
 use crate::server::ControlBackend;
 use crate::{start_global, stop_global, with_global};

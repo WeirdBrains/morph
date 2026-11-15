@@ -2,10 +2,15 @@ import 'dart:convert';
 
 import 'package:morph/src/api.dart';
 
+import 'omnibox_rule.dart';
+
 /// In-memory [MorphApi] for widget tests.
 class FakeMorphApi implements MorphApi {
   @override
   String coreVersion() => '0.1.0';
+
+  @override
+  String? omniboxTarget(String input) => omniboxRule(input);
 
   @override
   Future<IdentityStatusView> identityDirInfo({String? home}) async {
@@ -30,34 +35,6 @@ class FakeMorphApi implements MorphApi {
   @override
   Future<String> handlePageMessage({required String json}) async {
     return '{"id":"1","type":"pong"}';
-  }
-
-  String tabPosition = 'top';
-  bool sidebarCollapsed = false;
-  int sidebarWidth = 220;
-
-  @override
-  Future<String> loadTabPosition({String? home}) async => tabPosition;
-
-  @override
-  Future<void> saveTabPosition(String position, {String? home}) async {
-    tabPosition = position;
-  }
-
-  @override
-  Future<bool> loadSidebarCollapsed({String? home}) async => sidebarCollapsed;
-
-  @override
-  Future<void> saveSidebarCollapsed(bool collapsed, {String? home}) async {
-    sidebarCollapsed = collapsed;
-  }
-
-  @override
-  Future<int> loadSidebarWidth({String? home}) async => sidebarWidth;
-
-  @override
-  Future<void> saveSidebarWidth(int width, {String? home}) async {
-    sidebarWidth = width;
   }
 
   String currentProfileId = 'default';

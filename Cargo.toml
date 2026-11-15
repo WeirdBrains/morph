@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["crates/morph-core", "crates/morph-identity", "crates/morph-store", "crates/morph-keystore", "crates/morph-bridge", "crates/morph-webview-control", "crates/weirdnet-device-link", "crates/morph-ui", "crates/morph-webview", "crates/morph-browser", "crates/morph-desktop"]
-default-members = ["crates/morph-core", "crates/morph-identity", "crates/morph-store", "crates/morph-keystore", "crates/morph-bridge", "crates/morph-webview-control", "crates/weirdnet-device-link", "crates/morph-ui", "crates/morph-webview", "crates/morph-browser", "crates/morph-desktop"]
+members = ["crates/morph-core", "crates/morph-identity", "crates/morph-store", "crates/morph-keystore", "crates/morph-bridge", "crates/morph-webview-control", "crates/weirdnet-device-link", "crates/morph-ui", "crates/morph-webview", "crates/morph-browser", "crates/morph-services", "crates/morph-desktop"]
+default-members = ["crates/morph-core", "crates/morph-identity", "crates/morph-store", "crates/morph-keystore", "crates/morph-bridge", "crates/morph-webview-control", "crates/weirdnet-device-link", "crates/morph-ui", "crates/morph-webview", "crates/morph-browser", "crates/morph-services", "crates/morph-desktop"]
 
 [workspace.package]
 version = "0.1.0"
@@ -22,6 +22,7 @@ weirdnet-device-link = { path = "crates/weirdnet-device-link" }
 morph-ui = { path = "crates/morph-ui" }
 morph-webview = { path = "crates/morph-webview" }
 morph-browser = { path = "crates/morph-browser" }
+morph-services = { path = "crates/morph-services" }
 weirdnet-keys = "=0.1.0"
 weirdnet-net = "=0.1.0"
 thiserror = "2"

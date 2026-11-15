@@ -1,6 +1,6 @@
 [package]
 name = "morph-desktop"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -23,9 +23,12 @@ gpui.workspace = true
 gpui_platform.workspace = true
 morph-browser.workspace = true
 morph-identity.workspace = true
+morph-services.workspace = true
 morph-ui.workspace = true
 morph-webview.workspace = true
 raw-window-handle.workspace = true
 
 [dev-dependencies]
+# Tests never touch the real OS keystore.
+morph-keystore = { workspace = true, features = ["mock"] }
 tempfile.workspace = true

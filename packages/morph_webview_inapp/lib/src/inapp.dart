@@ -17,7 +17,7 @@ import 'profile_store.dart';
 import 'renderer_watch.dart';
 import 'settings.dart';
 
-/// macOS (WKWebView), Windows (WebView2), and Android WebView implementation of [MorphWebViewPlatform].
+/// Android WebView (and later iOS WKWebView) implementation of [MorphWebViewPlatform].
 class MorphWebViewInApp extends MorphWebViewPlatform {
   MorphWebViewInApp();
 
@@ -76,8 +76,6 @@ class MorphWebViewInApp extends MorphWebViewPlatform {
     final bindings = await MorphWebViewControl.ensureStarted();
     final client = await _ensureClient();
     final viewId = _nextViewId++;
-    await morphProfileStore.prepareMacos(profileId);
-    final environment = await morphProfileStore.windowsEnvironment(profileId);
     final android = await _AndroidView.prepare(viewId, profileId);
     final session = _InAppSession(
       viewId: viewId,
@@ -89,7 +87,6 @@ class MorphWebViewInApp extends MorphWebViewPlatform {
       client: client,
       bindings: bindings,
       onDispose: () => _forget(viewId),
-      webViewEnvironment: environment,
       android: android,
     );
     _sessions[viewId] = session;
@@ -116,9 +113,6 @@ class MorphWebViewInApp extends MorphWebViewPlatform {
 }
 
 String _renderPathForHost() {
-  if (Platform.isWindows) {
-    return 'webview2';
-  }
   if (Platform.isAndroid) {
     return 'android-webview';
   }
@@ -126,15 +120,12 @@ String _renderPathForHost() {
 }
 
 String _renderReasonForHost(String profileId, {required bool isolated}) {
-  if (Platform.isWindows) {
-    return 'webview2 userDataFolder profiles/$profileId/webview2';
-  }
   if (Platform.isAndroid) {
     return isolated
         ? 'androidx.webkit profile ${morphAndroidProfileName(profileId)}'
         : 'android WebView lacks MULTI_PROFILE; profile $profileId blocked';
   }
-  return 'wkwebview; per-profile WKWebsiteDataStore on macOS 14+';
+  return 'wkwebview; shared WKWebsiteDataStore';
 }
 
 /// One native Android WebView bound to a Morph profile.
@@ -189,7 +180,6 @@ class _InAppSession extends MorphWebViewSession {
     required this._client,
     required this._bindings,
     required this._onDispose,
-    this.webViewEnvironment,
     _AndroidView? android,
   }) : assert(profileId.isNotEmpty),
        _android = android,
@@ -223,7 +213,6 @@ class _InAppSession extends MorphWebViewSession {
       initialData: isolated
           ? null
           : InAppWebViewInitialData(data: morphAndroidUnisolatedHtml),
-      webViewEnvironment: webViewEnvironment,
       initialSettings: _settings(),
       initialUserScripts: UnmodifiableListView<UserScript>([
         UserScript(
@@ -361,7 +350,6 @@ class _InAppSession extends MorphWebViewSession {
   final MorphControlClient _client;
   final MorphControlBindings _bindings;
   final Future<void> Function() _onDispose;
-  final WebViewEnvironment? webViewEnvironment;
   _AndroidView? _android;
 
   /// False when this profile's storage cannot be kept apart on this device;
@@ -430,7 +418,6 @@ class _InAppSession extends MorphWebViewSession {
         key: ValueKey<String>('morph-popup-$windowId'),
         windowId: windowId,
         keepAlive: android?.keepAlive,
-        webViewEnvironment: webViewEnvironment,
         initialSettings: morphInAppWebViewSettings(),
         onCreateWindow: (controller, next) => _openPopup(next),
         onCloseWindow: (controller) => unawaited(_closePopup(windowId)),

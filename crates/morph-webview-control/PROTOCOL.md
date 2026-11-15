@@ -3,10 +3,9 @@
 The in-process gRPC `WebViewControl.Session` stream is the shared contract
 between the Flutter shell and every platform web-view backend.
 
-This document is the note for macOS (WKWebView) and Windows (WebView2)
-implementers. Linux (`morph_webview_linux`, webkit2gtk snapshot and the WPE
-path when it shares the same dispatch code) already implements the messages
-below.
+This document is the note for backend implementers. The Flutter Linux plugin
+(`morph_webview_linux`) implemented the messages below; it was removed with the
+Flutter desktop targets (the desktop is now the GPUI shell, `morph-desktop`).
 
 ## Pointer
 

@@ -1,11 +1,9 @@
 import 'default_browser.dart';
 import 'incoming_links.dart';
-import 'omnibox.dart';
 
 import 'dart:async';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:morph_webview/morph_webview.dart';
@@ -16,12 +14,9 @@ import 'shell_shortcuts.dart';
 import 'host_friendly_url.dart';
 export 'host_friendly_url.dart';
 import 'theme/morph_theme.dart';
-import 'tabs/tab_overflow.dart';
-import 'tabs/tab_position.dart';
 import 'tabs/tab_set.dart';
 import 'widgets/address_sheet.dart';
 import 'widgets/brand.dart';
-import 'widgets/desktop_chrome.dart';
 import 'widgets/find_bar.dart';
 import 'widgets/device_link.dart';
 import 'widgets/identity_backup.dart';
@@ -35,13 +30,12 @@ import 'widgets/profile_menu.dart';
 import 'widgets/settings_page.dart';
 import 'widgets/start_page.dart';
 import 'widgets/tab_switcher.dart';
-import 'widgets/window_chrome.dart';
-import 'window/morph_desktop_window.dart';
-import 'window/window_buttons.dart';
 import 'qr_scanner.dart';
 import 'surface_watch.dart';
 
-/// Morph shell: address-bar chrome, Linux web-view texture, and Rust wiring.
+/// Morph's mobile shell (Android, iOS): address bar and sheet, tab grid,
+/// platform web views, and the Rust wiring. The desktop shell is the GPUI
+/// app (`crates/morph-desktop`).
 class MorphShell extends StatefulWidget {
   const MorphShell({
     super.key,
@@ -101,13 +95,16 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
   /// same-page URL updates.
   final _navLoading = <int, bool>{};
   final _visited = <int, bool>{};
-  MorphTabPosition _tabPosition = MorphTabPosition.top;
-  bool _sidebarCollapsed = false;
-  double _sidebarWidth = MorphTabOverflow.defaultSidebarWidth;
-  ProfileCatalog _catalog = const ProfileCatalog(
-    current: 'default',
-    profiles: [ProfileInfo(id: 'default', name: 'Default')],
+
+  /// Notifies the open address sheet, whose profile list outlives a build.
+  final _catalogNotifier = ValueNotifier<ProfileCatalog>(
+    const ProfileCatalog(
+      current: 'default',
+      profiles: [ProfileInfo(id: 'default', name: 'Default')],
+    ),
   );
+  ProfileCatalog get _catalog => _catalogNotifier.value;
+  set _catalog(ProfileCatalog value) => _catalogNotifier.value = value;
   String _profileId = 'default';
   final _recorded = <int, String>{};
   bool _findOpen = false;
@@ -278,22 +275,6 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
         homeExists = info.homeExists;
         error = null;
       });
-      try {
-        final position = MorphTabPosition.fromKey(
-          await widget.api.loadTabPosition(home: _home),
-        );
-        final collapsed = await widget.api.loadSidebarCollapsed(home: _home);
-        final width = await widget.api.loadSidebarWidth(home: _home);
-        if (mounted) {
-          setState(() {
-            _tabPosition = position;
-            _sidebarCollapsed = collapsed;
-            _sidebarWidth = width.toDouble();
-          });
-        }
-      } catch (_) {
-        // A missing or unreadable preference stays at the defaults.
-      }
       try {
         final catalog = await widget.api.listProfiles(home: _home);
         final snapshot = await widget.api.loadProfileTabs(
@@ -476,7 +457,7 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
   }
 
   Future<void> _submitUrl(String raw) async {
-    final url = omniboxTarget(raw);
+    final url = widget.api.omniboxTarget(raw);
     if (url == null) {
       return;
     }
@@ -510,7 +491,7 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
   void _scheduleSurfaceCheck([
     Duration delay = const Duration(milliseconds: 400),
   ]) {
-    if (!_isMobile || !mounted) {
+    if (!mounted) {
       return;
     }
     _surfaceTimer?.cancel();
@@ -544,6 +525,7 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _catalogNotifier.dispose();
     unawaited(_linkSub?.cancel());
     WidgetsBinding.instance.removeObserver(this);
     morphSurfaceWatch.removeListener(_onOverlayClosed);
@@ -563,20 +545,6 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
     addressFocus.dispose();
     address.dispose();
     super.dispose();
-  }
-
-  bool get _isMobile {
-    switch (defaultTargetPlatform) {
-      case TargetPlatform.android:
-      case TargetPlatform.iOS:
-        return true;
-      default:
-        return false;
-    }
-  }
-
-  bool _isCompact(BuildContext context) {
-    return _isMobile || MediaQuery.sizeOf(context).width < 700;
   }
 
   void _toggleDebugPanel() {
@@ -695,84 +663,6 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
     }
   }
 
-  Widget _menuButton(ButtonStyle iconStyle) {
-    return PopupMenuButton<String>(
-      key: const Key('nav-menu'),
-      tooltip: 'Menu',
-      icon: const Icon(Icons.more_vert),
-      style: iconStyle,
-      onSelected: (value) {
-        switch (value) {
-          case 'find':
-            _openFind();
-          case 'bookmarks':
-            unawaited(_openLibrary(MorphLibraryTab.bookmarks));
-          case 'history':
-            unawaited(_openLibrary(MorphLibraryTab.history));
-          case 'settings':
-            unawaited(_openSettings());
-          case 'identity':
-            unawaited(_openIdentity());
-        }
-      },
-      itemBuilder: (context) => const [
-        PopupMenuItem(
-          key: Key('menu-find'),
-          value: 'find',
-          child: ListTile(
-            leading: Icon(Icons.search),
-            title: Text('Find in page'),
-            trailing: Text('Ctrl+F'),
-          ),
-        ),
-        PopupMenuItem(
-          key: Key('menu-bookmarks'),
-          value: 'bookmarks',
-          child: ListTile(
-            leading: Icon(Icons.bookmarks_outlined),
-            title: Text('Bookmarks'),
-          ),
-        ),
-        PopupMenuItem(
-          key: Key('menu-history'),
-          value: 'history',
-          child: ListTile(
-            leading: Icon(Icons.history),
-            title: Text('History'),
-            trailing: Text('Ctrl+H'),
-          ),
-        ),
-        PopupMenuDivider(),
-        PopupMenuItem(
-          key: Key('menu-identity'),
-          value: 'identity',
-          child: ListTile(
-            leading: Icon(Icons.fingerprint),
-            title: Text('Identity'),
-          ),
-        ),
-        PopupMenuItem(
-          key: Key('menu-settings'),
-          value: 'settings',
-          child: ListTile(
-            leading: Icon(Icons.settings_outlined),
-            title: Text('Settings'),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _profileButton() {
-    return MorphProfileButton(
-      catalog: _catalog,
-      onSwitch: (id) => unawaited(_switchProfile(id)),
-      onAdd: _addProfile,
-      onRename: _renameProfile,
-      onDelete: _deleteProfile,
-    );
-  }
-
   MorphProfileSheetSection _profileSheetSection() {
     return MorphProfileSheetSection(
       catalog: _catalog,
@@ -782,7 +672,14 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
         }
         unawaited(_switchProfile(id));
       },
-      onAdd: _addProfile,
+      onAdd: (name, color) async {
+        // The new profile becomes current: close the sheet, which still
+        // shows the old catalog, so its onboarding is not under it.
+        if (Navigator.of(context).canPop()) {
+          Navigator.of(context).pop();
+        }
+        await _addProfile(name, color);
+      },
       onRename: _renameProfile,
       onDelete: _deleteProfile,
     );
@@ -856,14 +753,6 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
     } catch (_) {
       tabs.applySnapshot(ProfileTabSnapshot.empty);
     }
-    try {
-      _tabPosition = MorphTabPosition.fromKey(
-        await widget.api.loadTabPosition(home: _home),
-      );
-      _sidebarCollapsed = await widget.api.loadSidebarCollapsed(home: _home);
-      _sidebarWidth = (await widget.api.loadSidebarWidth(home: _home))
-          .toDouble();
-    } catch (_) {}
     for (final tab in tabs.tabs) {
       if (tab.url.isNotEmpty && tab.url != 'about:blank') {
         _visited[tab.id] = true;
@@ -955,25 +844,6 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _setTabPosition(MorphTabPosition position) async {
-    setState(() => _tabPosition = position);
-    try {
-      await widget.api.saveTabPosition(position.key, home: _home);
-    } catch (_) {
-      // The in-memory choice still applies if persistence fails.
-    }
-  }
-
-  Future<void> _toggleSidebar() async {
-    final next = !_sidebarCollapsed;
-    setState(() => _sidebarCollapsed = next);
-    try {
-      await widget.api.saveSidebarCollapsed(next, home: _home);
-    } catch (_) {
-      // The in-memory choice still applies if persistence fails.
-    }
-  }
-
   static String _pageKey(String url) =>
       url.trim().replaceFirst(RegExp(r'/+$'), '');
 
@@ -1050,34 +920,20 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
     if (!mounted) {
       return;
     }
-    if (_isMobile) {
-      await showModalBottomSheet<void>(
-        context: context,
-        isScrollControlled: true,
-        useSafeArea: true,
-        isDismissible: dismissible,
-        enableDrag: dismissible,
-        builder: (context) => FractionallySizedBox(
-          heightFactor: 0.94,
-          child: ClipRRect(
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-            child: builder(context),
-          ),
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      isDismissible: dismissible,
+      enableDrag: dismissible,
+      builder: (context) => FractionallySizedBox(
+        heightFactor: 0.94,
+        child: ClipRRect(
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+          child: builder(context),
         ),
-      );
-    } else {
-      await showDialog<void>(
-        context: context,
-        barrierDismissible: dismissible,
-        builder: (context) => Dialog(
-          clipBehavior: Clip.antiAlias,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 720, maxHeight: 680),
-            child: builder(context),
-          ),
-        ),
-      );
-    }
+      ),
+    );
     _onOverlayClosed();
   }
 
@@ -1428,20 +1284,11 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
       widget.defaultBrowser ?? MorphDefaultBrowser.forPlatform();
 
   Future<void> _openSettings() async {
-    final desktop = !_isMobile;
     await _showPanel(
       (panel) => MorphSettingsPage(
         profileName: _profileName,
         coreVersion: coreVersionLabel ?? '…',
         renderPath: '${webView.renderPath}',
-        tabPosition: desktop ? _tabPosition : null,
-        sidebarCollapsed: desktop ? _sidebarCollapsed : null,
-        onTabPositionChanged: (p) => unawaited(_setTabPosition(p)),
-        onSidebarCollapsedChanged: (value) {
-          if (value != _sidebarCollapsed) {
-            unawaited(_toggleSidebar());
-          }
-        },
         onClearHistory: () {
           final profileId = _profileId;
           return _libraryWrite(
@@ -1489,23 +1336,6 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
       morphFindScript(query, backward: backward, reset: reset),
     );
     return parseMorphFindResult(reply);
-  }
-
-  void _setSidebarWidth(double width) {
-    setState(() => _sidebarWidth = width);
-  }
-
-  Future<void> _commitSidebarWidth() async {
-    try {
-      await widget.api.saveSidebarWidth(_sidebarWidth.round(), home: _home);
-    } catch (_) {
-      // The in-memory choice still applies if persistence fails.
-    }
-  }
-
-  Future<void> _resetSidebarWidth() async {
-    setState(() => _sidebarWidth = MorphTabOverflow.defaultSidebarWidth);
-    await _commitSidebarWidth();
   }
 
   KeyEventResult _onShellKey(KeyEvent event) {
@@ -1606,7 +1436,10 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
           onHistory: () => unawaited(_openLibrary(MorphLibraryTab.history)),
           onBookmarks: () => unawaited(_openLibrary(MorphLibraryTab.bookmarks)),
           onSettings: () => unawaited(_openSettings()),
-          profiles: _profileSheetSection(),
+          profiles: ValueListenableBuilder<ProfileCatalog>(
+            valueListenable: _catalogNotifier,
+            builder: (context, catalog, child) => _profileSheetSection(),
+          ),
         );
       },
     );
@@ -1650,14 +1483,11 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
-    final compact = _isCompact(context);
     final iconStyle = IconButton.styleFrom(
-      visualDensity: compact ? VisualDensity.compact : VisualDensity.standard,
-      minimumSize: compact ? const Size(40, 40) : const Size(48, 48),
-      tapTargetSize: compact
-          ? MaterialTapTargetSize.shrinkWrap
-          : MaterialTapTargetSize.padded,
-      padding: compact ? const EdgeInsets.all(8) : null,
+      visualDensity: VisualDensity.compact,
+      minimumSize: const Size(40, 40),
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      padding: const EdgeInsets.all(8),
     );
 
     final content = Column(
@@ -1681,64 +1511,18 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
       ],
     );
 
-    final body = MorphDesktopWindow.isDesktop
-        ? Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Expanded(
-                child: MorphDesktopChrome(
-                  tabs: tabs.tabs,
-                  activeId: tabs.activeId,
-                  position: _tabPosition,
-                  sidebarCollapsed: _sidebarCollapsed,
-                  sidebarWidth: _sidebarWidth,
-                  buttonMode: MorphWindowChrome.mode(),
-                  useNativeMacButtons:
-                      MorphDesktopWindow.usesNativeMacTrafficLights,
-                  leadingInset: MorphDesktopWindow.leadingInset(),
-                  isMaximized: MorphDesktopWindow.isMaximized,
-                  navigation: _navRow(
-                    context,
-                    iconStyle: iconStyle,
-                    compact: compact,
-                    includeChrome: false,
-                  ),
-                  content: content,
-                  onSelectTab: _switchTab,
-                  onCloseTab: _closeTab,
-                  onNewTab: _openTab,
-                  onPositionChanged: _setTabPosition,
-                  onToggleSidebar: _toggleSidebar,
-                  onSidebarWidthChanged: _setSidebarWidth,
-                  onSidebarWidthCommit: () {
-                    unawaited(_commitSidebarWidth());
-                  },
-                  onSidebarWidthReset: () {
-                    unawaited(_resetSidebarWidth());
-                  },
-                  onDebugLongPress: _toggleDebugPanel,
-                ),
-              ),
-              if (_debugOpen) _debugPanel(colors),
-            ],
-          )
-        : Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              _navRow(
-                context,
-                iconStyle: iconStyle,
-                compact: compact,
-                includeChrome: true,
-              ),
-              const MorphGlitchRule(),
-              Expanded(child: content),
-              if (_debugOpen) _debugPanel(colors),
-            ],
-          );
+    final body = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _navRow(context, iconStyle: iconStyle),
+        const MorphGlitchRule(),
+        Expanded(child: content),
+        if (_debugOpen) _debugPanel(colors),
+      ],
+    );
 
     final browser = PopScope(
-      canPop: !_isMobile || (!_showSwitcher && !navigation.canGoBack),
+      canPop: !_showSwitcher && !navigation.canGoBack,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) {
           return;
@@ -1760,9 +1544,6 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
       ),
     );
 
-    if (!_isMobile) {
-      return browser;
-    }
     // Keep the browser (and every tab's platform web view) mounted under the
     // grid. Swapping the tree out would dispose each AndroidView/UiKitView;
     // remounting then creates a fresh native WebView on its initial URL, which
@@ -1791,69 +1572,28 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
     );
   }
 
-  Widget _navRow(
-    BuildContext context, {
-    required ButtonStyle iconStyle,
-    required bool compact,
-    required bool includeChrome,
-  }) {
+  Widget _navRow(BuildContext context, {required ButtonStyle iconStyle}) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     return Material(
       color: theme.scaffoldBackgroundColor,
       child: SafeArea(
         bottom: false,
-        top: includeChrome,
         child: SizedBox(
-          height: compact ? 48 : 52,
+          height: 48,
           key: const Key('nav-row'),
           child: Padding(
-            padding: EdgeInsets.fromLTRB(
-              compact ? 4 : 8,
-              compact ? 4 : 8,
-              compact ? 4 : 4,
-              compact ? 4 : 8,
-            ),
+            padding: const EdgeInsets.all(4),
             child: Row(
               children: [
-                if (includeChrome)
-                  MorphWindowDragArea(
-                    child: GestureDetector(
-                      key: const Key('debug-toggle'),
-                      onLongPress: _toggleDebugPanel,
-                      child: const Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 4),
-                        child: MorphMark(size: 28),
-                      ),
-                    ),
+                GestureDetector(
+                  key: const Key('debug-toggle'),
+                  onLongPress: _toggleDebugPanel,
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 4),
+                    child: MorphMark(size: 28),
                   ),
-                if (!_isMobile) ...[
-                  IconButton(
-                    key: const Key('nav-back'),
-                    style: iconStyle,
-                    onPressed: navigation.canGoBack ? webView.goBack : null,
-                    tooltip: 'Back',
-                    icon: const Icon(Icons.arrow_back),
-                  ),
-                  IconButton(
-                    key: const Key('nav-forward'),
-                    style: iconStyle,
-                    onPressed: navigation.canGoForward
-                        ? webView.goForward
-                        : null,
-                    tooltip: 'Forward',
-                    icon: const Icon(Icons.arrow_forward),
-                  ),
-                  IconButton(
-                    key: const Key('nav-reload'),
-                    style: iconStyle,
-                    onPressed: webView.isAttached && !_onStartPage
-                        ? webView.reload
-                        : null,
-                    tooltip: 'Reload',
-                    icon: const Icon(Icons.refresh),
-                  ),
-                ],
+                ),
                 Expanded(
                   child: TextField(
                     key: const Key('address-bar'),
@@ -1861,74 +1601,40 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
                     focusNode: addressFocus,
                     style: MorphTheme.monoStyle(
                       color: colors.onSurface,
-                      size: compact ? 13 : 14,
+                      size: 13,
                     ),
-                    decoration: InputDecoration(
+                    decoration: const InputDecoration(
                       hintText: 'Enter an address',
-                      isDense: compact,
+                      isDense: true,
                       contentPadding: EdgeInsets.symmetric(
-                        horizontal: compact ? 10 : 12,
-                        vertical: compact ? 8 : 10,
+                        horizontal: 10,
+                        vertical: 8,
                       ),
                     ),
                     keyboardType: TextInputType.url,
                     textInputAction: TextInputAction.go,
-                    readOnly: _isMobile,
+                    readOnly: true,
                     onTap: () {
-                      if (_isMobile) {
-                        addressFocus.unfocus();
-                        unawaited(_openAddressSheet());
-                      } else {
-                        _selectAllAddress();
-                      }
+                      addressFocus.unfocus();
+                      unawaited(_openAddressSheet());
                     },
                     onSubmitted: _submitUrl,
                   ),
                 ),
-                if (!_isMobile)
-                  IconButton(
-                    key: const Key('address-go'),
-                    style: iconStyle,
-                    onPressed: () => unawaited(_submitUrl(address.text)),
-                    tooltip: 'Go',
-                    icon: const Icon(Icons.arrow_outward),
-                  ),
-                if (!_isMobile) ...[
-                  IconButton(
-                    key: const Key('nav-bookmark'),
-                    style: iconStyle,
-                    onPressed: _hasPage
-                        ? () => unawaited(_toggleBookmark())
-                        : null,
-                    tooltip: _currentBookmarked
-                        ? 'Remove bookmark'
-                        : 'Bookmark this page',
-                    icon: Icon(
-                      _currentBookmarked ? Icons.star : Icons.star_border,
-                      color: _currentBookmarked ? MorphColors.cyan : null,
-                    ),
-                  ),
-                  _menuButton(iconStyle),
-                ],
-                if (_isMobile) ...[
-                  IconButton(
-                    key: const Key('tab-count'),
-                    style: iconStyle,
-                    onPressed: () => unawaited(_openSwitcher()),
-                    tooltip: 'Tabs',
-                    icon: _TabCountIcon(count: tabs.length),
-                  ),
-                  IconButton(
-                    key: const Key('tab-new'),
-                    style: iconStyle,
-                    onPressed: _openTab,
-                    tooltip: 'New tab',
-                    icon: const Icon(Icons.add),
-                  ),
-                ],
-                if (!_isMobile) _profileButton(),
-                if (includeChrome && MorphDesktopWindow.isDesktop)
-                  const MorphWindowCloseButton(),
+                IconButton(
+                  key: const Key('tab-count'),
+                  style: iconStyle,
+                  onPressed: () => unawaited(_openSwitcher()),
+                  tooltip: 'Tabs',
+                  icon: _TabCountIcon(count: tabs.length),
+                ),
+                IconButton(
+                  key: const Key('tab-new'),
+                  style: iconStyle,
+                  onPressed: _openTab,
+                  tooltip: 'New tab',
+                  icon: const Icon(Icons.add),
+                ),
               ],
             ),
           ),
@@ -1971,9 +1677,6 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
         if (_onStartPage) const MorphStartPage(),
       ],
     );
-    if (!_isMobile) {
-      return stack;
-    }
     return MorphMobileGestures(
       canGoBack: navigation.canGoBack,
       canGoForward: navigation.canGoForward,

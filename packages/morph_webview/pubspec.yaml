@@ -1,5 +1,5 @@
 name: morph_webview
-description: Morph's cross-platform web view interface, page bridge, and navigation API.
+description: Morph's mobile web view interface, page bridge, and navigation API.
 version: 0.1.0
 publish_to: none
 homepage: https://github.com/WeirdBrains/morph
@@ -17,8 +17,6 @@ dependencies:
   grpc: ^5.2.0
   protobuf: ^6.1.0
   fixnum: ^1.1.1
-  morph_webview_linux:
-    path: ../morph_webview_linux
   morph_webview_inapp:
     path: ../morph_webview_inapp
 
@@ -31,11 +29,5 @@ dev_dependencies:
 flutter:
   plugin:
     platforms:
-      linux:
-        default_package: morph_webview_linux
-      macos:
-        default_package: morph_webview_inapp
-      windows:
-        default_package: morph_webview_inapp
       android:
         default_package: morph_webview_inapp

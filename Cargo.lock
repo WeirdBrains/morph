@@ -5351,6 +5351,7 @@ dependencies = [
  "morph-core",
  "morph-identity",
  "morph-keystore",
+ "morph-services",
  "morph-webview-control",
  "ndk-context",
  "tempfile",
@@ -5381,13 +5382,15 @@ dependencies = [
 
 [[package]]
 name = "morph-desktop"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 dependencies = [
  "gpui",
  "gpui_platform",
  "morph-browser",
  "morph-core",
  "morph-identity",
+ "morph-keystore",
+ "morph-services",
  "morph-ui",
  "morph-webview",
  "raw-window-handle",
@@ -5425,6 +5428,17 @@ dependencies = [
  "windows-native-keyring-store",
  "zbus-secret-service-keyring-store",
  "zeroize",
+]
+
+[[package]]
+name = "morph-services"
+version = "0.1.0"
+dependencies = [
+ "morph-core",
+ "morph-identity",
+ "morph-keystore",
+ "tempfile",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

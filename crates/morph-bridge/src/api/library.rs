@@ -1,11 +1,9 @@
 //! Per-profile bookmarks (folders, tags) and history for the Flutter shell.
 
-use morph_core::profiles::ProfileError;
+use crate::home::{now_ms, resolve as resolve_home};
 use morph_core::{bookmarks, library, library_db};
-use morph_identity::Paths;
-use morph_identity::profile_identity;
-use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use morph_services::SecretString;
+use morph_services::library::LibraryOpen;
 
 /// A saved page.
 pub struct BookmarkView {
@@ -48,15 +46,6 @@ pub struct HistoryEntryView {
     pub url: String,
     pub title: String,
     pub visited_ms: i64,
-}
-
-fn resolve_home(home: Option<String>) -> Result<PathBuf, String> {
-    let explicit = home.filter(|h| !h.is_empty()).map(PathBuf::from);
-    Ok(Paths::resolve(explicit).map_err(|e| e.to_string())?.home)
-}
-
-fn now_ms() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
 fn view(b: bookmarks::Bookmark) -> BookmarkView {
@@ -222,7 +211,7 @@ pub enum LibraryStateView {
 /// Whether `profile_id`'s library is plaintext, locked or unlocked.
 pub fn library_state(home: Option<String>, profile_id: String) -> Result<LibraryStateView, String> {
     let home = resolve_home(home)?;
-    Ok(match library_db::state(&home, &profile_id).map_err(|e| e.to_string())? {
+    Ok(match morph_services::library::state(&home, &profile_id).map_err(|e| e.to_string())? {
         library_db::LibraryState::Plain => LibraryStateView::Plain,
         library_db::LibraryState::Locked => LibraryStateView::Locked,
         library_db::LibraryState::Unlocked => LibraryStateView::Unlocked,
@@ -239,41 +228,16 @@ pub struct LibraryOpenView {
     pub reason: Option<String>,
 }
 
-impl LibraryOpenView {
-    fn ready() -> Self {
-        Self { ready: true, needs_password: false, reason: None }
-    }
-
-    fn needs_password(reason: Option<String>) -> Self {
-        Self { ready: false, needs_password: true, reason }
-    }
-}
-
 /// At launch or on a profile switch: open `profile_id`'s encrypted library
 /// with the key kept in the system keystore, without a prompt. If there is no
 /// usable key there, say so, and the shell asks for the password
 /// ([`unlock_library`]).
 pub fn open_library(home: Option<String>, profile_id: String) -> Result<LibraryOpenView, String> {
-    let dir = crate::api::identity::profile_dir(home.clone(), &profile_id)?;
     let home = resolve_home(home)?;
-    let Some(identity) = profile_identity::load(&dir).map_err(|e| e.to_string())? else {
-        return Ok(LibraryOpenView::ready());
-    };
-    if library_db::state(&home, &profile_id).map_err(|e| e.to_string())? == library_db::LibraryState::Unlocked {
-        return Ok(LibraryOpenView::ready());
-    }
-    match morph_keystore::load(&dir, &identity.user_id) {
-        Ok(Some(key)) => match library_db::unlock(&home, &profile_id, &key) {
-            Ok(()) => Ok(LibraryOpenView::ready()),
-            Err(ProfileError::Store(e)) if e.is_wrong_key() => {
-                let _ = morph_keystore::forget(&dir);
-                Ok(LibraryOpenView::needs_password(Some("the saved key no longer opens this library".into())))
-            }
-            Err(e) => Err(e.to_string()),
-        },
-        Ok(None) => Ok(LibraryOpenView::needs_password(None)),
-        Err(e) => Ok(LibraryOpenView::needs_password(Some(e.to_string()))),
-    }
+    Ok(match morph_services::library::open(&home, &profile_id).map_err(|e| e.to_string())? {
+        LibraryOpen::Ready => LibraryOpenView { ready: true, needs_password: false, reason: None },
+        LibraryOpen::NeedsPassword { reason } => LibraryOpenView { ready: false, needs_password: true, reason },
+    })
 }
 
 /// The outcome of unlocking with the password.
@@ -289,39 +253,22 @@ pub struct LibraryUnlockView {
 /// the key in the system keystore. The first unlock moves the plaintext
 /// library into the encrypted database.
 pub fn unlock_library(home: Option<String>, profile_id: String, password: String) -> Result<LibraryUnlockView, String> {
-    let dir = crate::api::identity::profile_dir(home.clone(), &profile_id)?;
-    let identity = profile_identity::load(&dir).map_err(|e| e.to_string())?.ok_or("this profile has no identity yet")?;
-    let password = profile_identity::SecretString::from(password);
-    let key = profile_identity::library_key(&dir, &password).map_err(|e| e.to_string())?;
-    library_db::unlock(resolve_home(home)?, &profile_id, &key).map_err(|e| e.to_string())?;
-    Ok(match morph_keystore::save(&dir, &identity.user_id, &key) {
-        Ok(()) => LibraryUnlockView { remembered: true, reason: None },
-        Err(e) => LibraryUnlockView { remembered: false, reason: Some(e.to_string()) },
-    })
-}
-
-/// A profile just got an identity (created, imported or linked) and its key is
-/// in hand: encrypt the library now and keep the key in the keystore. Neither
-/// failing undoes the identity; the next launch asks for the password instead.
-pub(crate) fn adopt_new_identity(home: &Path, profile_id: &str, dir: &Path, user_id: &str, key: &profile_identity::LibraryKey) {
-    if let Err(e) = library_db::unlock_new_identity(home, profile_id, key, now_ms()) {
-        eprintln!("Morph: could not open the library of profile {profile_id}: {e}");
-        return;
-    }
-    if let Err(e) = morph_keystore::save(dir, user_id, key) {
-        eprintln!("Morph: library key not kept for profile {profile_id}: {e}");
-    }
+    let home = resolve_home(home)?;
+    let unlocked = morph_services::library::unlock(&home, &profile_id, &SecretString::from(password)).map_err(|e| e.to_string())?;
+    Ok(LibraryUnlockView { remembered: unlocked.remembered, reason: unlocked.reason })
 }
 
 /// Close `profile_id`'s library and forget its key until the next unlock.
 pub fn lock_library(home: Option<String>, profile_id: String) -> Result<(), String> {
-    library_db::lock(resolve_home(home)?, &profile_id);
+    morph_services::library::lock(&resolve_home(home)?, &profile_id);
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use morph_identity::profile_identity;
+    use std::path::PathBuf;
 
     #[test]
     fn bookmarks_and_history_round_trip_per_profile() {

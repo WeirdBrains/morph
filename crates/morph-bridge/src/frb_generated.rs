@@ -39,7 +39,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.13.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 263466014;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 450084424;
 
 // Section: executor
 
@@ -1097,6 +1097,29 @@ fn wire__crate__api__identity__new_ephemeral_user_impl(
                     std::result::Result::Ok(output_ok)
                 })())
             }
+        },
+    )
+}
+fn wire__crate__api__omnibox__omnibox_target_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "omnibox_target",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe { flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(ptr_, rust_vec_len_, data_len_) };
+            let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_input = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok = Ok::<_, ()>(crate::api::omnibox::omnibox_target(api_input))?;
+                std::result::Result::Ok(output_ok)
+            })())
         },
     )
 }
@@ -2198,26 +2221,26 @@ fn pde_ffi_dispatcher_primary_impl(
         36 => wire__crate__api__library__lock_library_impl(port, ptr, rust_vec_len, data_len),
         37 => wire__crate__api__library__move_bookmark_item_impl(port, ptr, rust_vec_len, data_len),
         38 => wire__crate__api__identity__new_ephemeral_user_impl(port, ptr, rust_vec_len, data_len),
-        39 => wire__crate__api__library__open_library_impl(port, ptr, rust_vec_len, data_len),
-        40 => wire__crate__api__identity__profile_identity_impl(port, ptr, rust_vec_len, data_len),
-        41 => wire__crate__api__profiles__profile_paths_impl(port, ptr, rust_vec_len, data_len),
-        42 => wire__crate__api__identity__profile_recovery_words_impl(port, ptr, rust_vec_len, data_len),
-        43 => wire__crate__api__library__record_visit_impl(port, ptr, rust_vec_len, data_len),
-        44 => wire__crate__api__library__remove_bookmark_impl(port, ptr, rust_vec_len, data_len),
-        45 => wire__crate__api__library__rename_bookmark_folder_impl(port, ptr, rust_vec_len, data_len),
-        46 => wire__crate__api__profiles__rename_profile_impl(port, ptr, rust_vec_len, data_len),
-        47 => wire__crate__api__identity__restore_profile_backup_impl(port, ptr, rust_vec_len, data_len),
-        48 => wire__crate__api__library__search_bookmarks_impl(port, ptr, rust_vec_len, data_len),
-        49 => wire__crate__api__profiles__set_current_profile_impl(port, ptr, rust_vec_len, data_len),
-        50 => wire__crate__api__settings__set_sidebar_collapsed_impl(port, ptr, rust_vec_len, data_len),
-        51 => wire__crate__api__settings__set_sidebar_width_impl(port, ptr, rust_vec_len, data_len),
-        52 => wire__crate__api__settings__set_tab_position_impl(port, ptr, rust_vec_len, data_len),
-        53 => wire__crate__api__control__start_webview_control_impl(port, ptr, rust_vec_len, data_len),
-        54 => wire__crate__api__control__start_webview_control_in_impl(port, ptr, rust_vec_len, data_len),
-        55 => wire__crate__api__control__start_webview_control_loopback_impl(port, ptr, rust_vec_len, data_len),
-        56 => wire__crate__api__control__stop_webview_control_impl(port, ptr, rust_vec_len, data_len),
-        57 => wire__crate__api__library__unlock_library_impl(port, ptr, rust_vec_len, data_len),
-        58 => wire__crate__api__library__update_bookmark_impl(port, ptr, rust_vec_len, data_len),
+        40 => wire__crate__api__library__open_library_impl(port, ptr, rust_vec_len, data_len),
+        41 => wire__crate__api__identity__profile_identity_impl(port, ptr, rust_vec_len, data_len),
+        42 => wire__crate__api__profiles__profile_paths_impl(port, ptr, rust_vec_len, data_len),
+        43 => wire__crate__api__identity__profile_recovery_words_impl(port, ptr, rust_vec_len, data_len),
+        44 => wire__crate__api__library__record_visit_impl(port, ptr, rust_vec_len, data_len),
+        45 => wire__crate__api__library__remove_bookmark_impl(port, ptr, rust_vec_len, data_len),
+        46 => wire__crate__api__library__rename_bookmark_folder_impl(port, ptr, rust_vec_len, data_len),
+        47 => wire__crate__api__profiles__rename_profile_impl(port, ptr, rust_vec_len, data_len),
+        48 => wire__crate__api__identity__restore_profile_backup_impl(port, ptr, rust_vec_len, data_len),
+        49 => wire__crate__api__library__search_bookmarks_impl(port, ptr, rust_vec_len, data_len),
+        50 => wire__crate__api__profiles__set_current_profile_impl(port, ptr, rust_vec_len, data_len),
+        51 => wire__crate__api__settings__set_sidebar_collapsed_impl(port, ptr, rust_vec_len, data_len),
+        52 => wire__crate__api__settings__set_sidebar_width_impl(port, ptr, rust_vec_len, data_len),
+        53 => wire__crate__api__settings__set_tab_position_impl(port, ptr, rust_vec_len, data_len),
+        54 => wire__crate__api__control__start_webview_control_impl(port, ptr, rust_vec_len, data_len),
+        55 => wire__crate__api__control__start_webview_control_in_impl(port, ptr, rust_vec_len, data_len),
+        56 => wire__crate__api__control__start_webview_control_loopback_impl(port, ptr, rust_vec_len, data_len),
+        57 => wire__crate__api__control__stop_webview_control_impl(port, ptr, rust_vec_len, data_len),
+        58 => wire__crate__api__library__unlock_library_impl(port, ptr, rust_vec_len, data_len),
+        59 => wire__crate__api__library__update_bookmark_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -2231,6 +2254,7 @@ fn pde_ffi_dispatcher_sync_impl(
     // Codec=Pde (Serialization + dispatch), see doc to use other codecs
     match func_id {
         9 => wire__crate__api__info__core_version_impl(ptr, rust_vec_len, data_len),
+        39 => wire__crate__api__omnibox__omnibox_target_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
