@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The shared WeirdBrains release script (weirdnet-project-helpers).
 
-    release.py [cut] [--major|--minor|--patch|--version X.Y.Z] [--dry-run] [--yes]
+    release.py [cut] [--major|--minor|--patch] [--pre alpha|beta|rc] [--version V] [--dry-run] [--yes]
                [--no-push] [--no-fetch] [--skip-checks] [--skip-hooks] [--skip-crates]
                [--expect-head SHA] [--date YYYY-MM-DD] [--section NAME]
                [--allow-empty-changelog] [MESSAGE ...]
@@ -11,6 +11,7 @@
     release.py taur-srcinfo [DIR]          write DIR/.SRCINFO from DIR/PKGBUILD
     release.py taur-check VERSION [DIR]    is the recipe ready for TAUR
     release.py assets VERSION              check the GitHub release has every [[platforms]] asset
+    release.py github VERSION [--dry-run] [--notes-file F]   create the GitHub release ([github] files)
     release.py version                     print this script's version
 
 `cut` (the default) follows the collective AGENTS.md order: preflight, bump every version
@@ -19,7 +20,10 @@ annotated tag `vX.Y.Z`, one atomic push of main and that tag (never forced), the
 affected public crates to crates.io and print the project's next steps (TAUR and so on).
 [[requires]] crates released in lockstep (e.g. an app's library) must already be on crates.io:
 checked before any edit, pinned in the manifest, and matched in Cargo.lock against the index.
-MINOR is the default bump. Python 3.9+, standard library only (3.11+ reads release.toml with
+MINOR is the default bump. Pre-releases (since 0.3.0) are X.Y.Z-alpha.N, -beta.N or -rc.N:
+`--pre alpha` starts or continues one, a plain bump from a pre-release finishes it, and
+{pkgver} (0.2.0alpha8, for PKGBUILDs) and {debver} (0.2.0~alpha.8) map it for packages.
+Python 3.9+, standard library only (3.11+ reads release.toml with
 tomllib; older Pythons use a small built-in parser for the subset it needs). See README.md.
 """
 from __future__ import annotations
@@ -49,12 +53,13 @@ try:
 except ImportError:  # Python < 3.11 (e.g. Ubuntu 22.04 runners): mini_toml() below
     tomllib = None
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 CONFIG = "release.toml"
 ORDER = ["Added", "Changed", "Deprecated", "Removed", "Fixed", "Security"]
-SEMVER = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
-PLACEHOLDER = re.compile(r"\{(version|old|tag|old_tag|date|title|title_cell|build|project|work)\}")
+SEMVER = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(alpha|beta|rc)\.([1-9]\d*))?$")
+PRE_STAGES = ("alpha", "beta", "rc")
+PLACEHOLDER = re.compile(r"\{(version|old|tag|old_tag|date|title|title_cell|build|project|work|pkgver|debver|prerelease|gh_prerelease)\}")
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -69,21 +74,67 @@ def out(msg=""):
 # ---- versions ------------------------------------------------------------------------------
 
 def parse_version(v):
+    """A sortable key: (MAJOR, MINOR, PATCH, stage, N), where a release sorts after its
+    pre-releases (alpha < beta < rc < release)."""
     m = SEMVER.match(str(v).strip())
     if not m:
-        raise ReleaseError(f"version {v!r} is not MAJOR.MINOR.PATCH (no v prefix, prerelease or build)")
-    return tuple(int(x) for x in m.groups())
+        raise ReleaseError(f"version {v!r} is not MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-(alpha|beta|rc).N "
+                           "(no v prefix or build metadata)")
+    ma, mi, pa, stage, n = m.groups()
+    rank = PRE_STAGES.index(stage) if stage else len(PRE_STAGES)
+    return (int(ma), int(mi), int(pa), rank, int(n or 0))
 
 
-def bump(version, part):
-    ma, mi, pa = parse_version(version)
-    if part == "major":
-        return f"{ma + 1}.0.0"
-    if part == "minor":
-        return f"{ma}.{mi + 1}.0"
-    if part == "patch":
-        return f"{ma}.{mi}.{pa + 1}"
-    raise ReleaseError(f"unknown bump {part!r}")
+def is_prerelease(version):
+    return parse_version(version)[3] < len(PRE_STAGES)
+
+
+def bump(version, part, pre=None):
+    """The next version. A plain bump from a pre-release finishes it the way semver tools do
+    (1.2.0-rc.1 --minor is 1.2.0, 1.2.3-rc.1 --minor is 1.3.0). With pre (alpha|beta|rc):
+    without a part it continues the current pre-release (alpha.7 -> alpha.8, alpha -> beta.1)
+    or starts one on the next minor; with a part it starts one on that bump of X.Y.Z."""
+    ma, mi, pa, rank, n = parse_version(version)
+    cur_pre = rank < len(PRE_STAGES)
+    if pre is not None and pre not in PRE_STAGES:
+        raise ReleaseError(f"unknown pre-release stage {pre!r} (alpha, beta or rc)")
+    if pre is not None and part is None and cur_pre:
+        want = PRE_STAGES.index(pre)
+        if want < rank:
+            raise ReleaseError(f"{version} is past {pre}; use --pre {PRE_STAGES[rank]} or a later stage")
+        return f"{ma}.{mi}.{pa}-{pre}.{n + 1 if want == rank else 1}"
+
+    def plain(p):
+        if p == "major":
+            return f"{ma}.0.0" if cur_pre and pre is None and mi == 0 and pa == 0 else f"{ma + 1}.0.0"
+        if p == "minor":
+            return f"{ma}.{mi}.0" if cur_pre and pre is None and pa == 0 else f"{ma}.{mi + 1}.0"
+        if p == "patch":
+            return f"{ma}.{mi}.{pa}" if cur_pre and pre is None else f"{ma}.{mi}.{pa + 1}"
+        raise ReleaseError(f"unknown bump {p!r}")
+
+    base = plain(part or "minor")
+    return f"{base}-{pre}.1" if pre else base
+
+
+def pkgver(version):
+    """Arch pkgver for a version: 0.2.0-alpha.8 -> 0.2.0alpha8 (no '-' allowed; vercmp sorts it
+    before 0.2.0)."""
+    ma, mi, pa, rank, n = parse_version(version)
+    return f"{ma}.{mi}.{pa}" + (f"{PRE_STAGES[rank]}{n}" if rank < len(PRE_STAGES) else "")
+
+
+def debver(version):
+    """Debian/RPM upstream version: 0.2.0-alpha.8 -> 0.2.0~alpha.8 (~ sorts before 0.2.0)."""
+    ma, mi, pa, rank, n = parse_version(version)
+    return f"{ma}.{mi}.{pa}" + (f"~{PRE_STAGES[rank]}.{n}" if rank < len(PRE_STAGES) else "")
+
+
+def version_ctx(version):
+    """Placeholders derived from a version: {pkgver}, {debver}, {prerelease}, {gh_prerelease}."""
+    pre = is_prerelease(version)
+    return {"pkgver": pkgver(version), "debver": debver(version), "prerelease": "true" if pre else "false",
+            "gh_prerelease": "--prerelease" if pre else ""}
 
 
 def today(tz="America/New_York"):
@@ -373,7 +424,7 @@ def read_current(root, cfg):
     elif kind == "cargo-package":
         v = _table_version(text, "package")
     elif kind == "pubspec":
-        m = re.search(r"^version:\s*([0-9.]+)(\+\d+)?\s*$", text, re.M)
+        m = re.search(r"^version:\s*([0-9.]+(?:-[0-9A-Za-z.]+)?)(\+\d+)?\s*$", text, re.M)
         v = m.group(1) if m else None
     elif kind == "regex" and e.get("read"):
         m = re.search(e["read"], text, re.M)
@@ -716,9 +767,11 @@ def run_cmds(root, cmds, ctx, env, label, dry):
 
 def hook_env(env, ctx, dry):
     e = dict(env)
-    for k in ("version", "old", "tag", "old_tag", "date", "title", "build", "project"):
+    for k in ("version", "old", "tag", "old_tag", "date", "title", "build", "project", "pkgver", "debver"):
         if ctx.get(k) is not None:
             e[f"RELEASE_{k.upper()}"] = str(ctx[k])
+    if ctx.get("prerelease") is not None:
+        e["RELEASE_PRERELEASE"] = "1" if ctx["prerelease"] == "true" else "0"
     e["RELEASE_DRY_RUN"] = "1" if dry else "0"
     return e
 
@@ -954,13 +1007,15 @@ def cut(a, root):
     D = "[dry-run] " if dry else ""
     old = read_current(root, cfg)
     pfx = cfg.get("tag_prefix", "v")
+    if a.version and a.pre:
+        raise ReleaseError("--pre and --version don't mix (write the pre-release into --version)")
     if a.version:
         new = a.version
         parse_version(new)
         part = "explicit"
     else:
-        part = a.part or "minor"
-        new = bump(old, part)
+        part = a.part or ("pre" if a.pre else "minor")
+        new = bump(old, a.part, a.pre) if a.pre else bump(old, part)
     if parse_version(new) <= parse_version(old):
         raise ReleaseError(f"version must increase ({old} -> {new})")
     tag = f"{pfx}{new}"
@@ -975,7 +1030,8 @@ def cut(a, root):
     title = re.sub(r"^(" + "|".join(ORDER) + r"):\s+", "", title).rstrip(".").strip()
     prev = tags(root, pfx)
     ctx = {"version": new, "old": old, "tag": tag, "old_tag": f"{pfx}{old}", "date": date, "title": title,
-           "title_cell": title.replace("|", "/"), "project": cfg["project"], "tag_prefix": pfx, "build": ""}
+           "title_cell": title.replace("|", "/"), "project": cfg["project"], "tag_prefix": pfx, "build": "",
+           **version_ctx(new)}
     head = preflight(root, cfg, tag, new, a.expect_head, fetch=not a.no_fetch)
     henv = hook_env(env, ctx, dry)
     hooks = cfg.get("hooks") or {}
@@ -1268,8 +1324,8 @@ def taur_check(version, pkgdir, pkg=None):
     errs = []
     if pkg.get("name") and v.get("pkgname") != pkg["name"]:
         errs.append(f"PKGBUILD pkgname is {v.get('pkgname')!r}, not {pkg['name']!r}")
-    if v.get("pkgver") != version:
-        errs.append(f"PKGBUILD pkgver is {v.get('pkgver')!r}, not {version!r}")
+    if v.get("pkgver") != pkgver(version):
+        errs.append(f"PKGBUILD pkgver is {v.get('pkgver')!r}, not {pkgver(version)!r}")
     if not re.fullmatch(r"\d+", str(v.get("pkgrel", ""))):
         errs.append(f"PKGBUILD pkgrel {v.get('pkgrel')!r} is not a number")
     sums = [k for k in v if re.fullmatch(r"sha256sums(_\w+)?", k)]
@@ -1278,7 +1334,7 @@ def taur_check(version, pkgdir, pkg=None):
     for k in sums:
         if not v[k] or not all(HEX64.match(s) for s in v[k]):
             errs.append(f"{k} {v[k]!r} is not all real sha256 (SKIP and placeholders can't be published)")
-    want = fill(pkg.get("source_contains", "v{version}"), {"version": version})
+    want = fill(pkg.get("source_contains", "v{version}"), {"version": version, **version_ctx(version)})
     for k in [k for k in v if re.fullmatch(r"source(_\w+)?", k)]:
         for s in v[k]:
             if "://" in s and want not in s:
@@ -1313,7 +1369,7 @@ def taur_pack(pkgdir, out_dir, version, srcinfo_text=None):
     for n in extra:
         if n not in ("PKGBUILD", ".SRCINFO"):
             files.append((n, (pkgdir / n).read_bytes()))
-    res = Path(out_dir) / f"{base}-{version}-taur.tar.gz"
+    res = Path(out_dir) / f"{base}-{v.get('pkgver') or version}-taur.tar.gz"
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w", format=tarfile.PAX_FORMAT) as t:
         d = tarfile.TarInfo(base)
@@ -1393,7 +1449,7 @@ def taur(a, root):
             raise ReleaseError(f"no [[taur.packages]] named {a.package}")
     org = tc.get("org", "WeirdBrains")
     taurctl = a.taurctl or os.environ.get("TAURCTL", "taurctl")
-    ctx = {"version": version, "tag": f"{cfg.get('tag_prefix', 'v')}{version}", "project": cfg["project"]}
+    ctx = {"version": version, "tag": f"{cfg.get('tag_prefix', 'v')}{version}", "project": cfg["project"], **version_ctx(version)}
     for pkg in pkgs:
         work = Path(tempfile.mkdtemp(prefix=f"taur-{pkg.get('name', 'pkg')}-"))
         try:
@@ -1432,7 +1488,7 @@ def taur(a, root):
                 raise ReleaseError(f"taurctl is not signed in ({(who.stderr or who.stdout).strip()[:200]}); run: taurctl login NAME")
             out(f"taurctl: {who.stdout.strip()}")
             v = parse_pkgbuild((pkgdir / "PKGBUILD").read_text())
-            name, want = v["pkgname"], f"{version}-{v['pkgrel']}"
+            name, want = v["pkgname"], f"{pkgver(version)}-{v['pkgrel']}"
             cur = taur_version(taurctl, name)
             if cur == want:
                 out(f"TAUR already has {name} {want}; nothing to upload")
@@ -1532,10 +1588,11 @@ def assets(a, root):
     if not plats:
         raise ReleaseError(f"{CONFIG} has no [[platforms]] with assets")
     version = a.version.lstrip("v")
-    ctx = {"version": version, "tag": f"{cfg.get('tag_prefix', 'v')}{version}", "project": cfg["project"]}
+    parse_version(version)
+    ctx = {"version": version, "tag": f"{cfg.get('tag_prefix', 'v')}{version}", "project": cfg["project"], **version_ctx(version)}
     slug = github_slug(root)
     gh = os.environ.get("WEIRDNET_RELEASE_GH", "gh")
-    r = subprocess.run([gh, "release", "view", ctx["tag"], "-R", slug, "--json", "assets,isDraft"], capture_output=True, text=True)
+    r = subprocess.run([gh, "release", "view", ctx["tag"], "-R", slug, "--json", "assets,isDraft,isPrerelease"], capture_output=True, text=True)
     if r.returncode != 0:
         raise ReleaseError(f"gh release view {ctx['tag']}: {(r.stderr or r.stdout).strip()[:300]}")
     rel = json.loads(r.stdout)
@@ -1549,9 +1606,91 @@ def assets(a, root):
             bad += not hit
     if rel.get("isDraft"):
         out(f"note: {ctx['tag']} is still a draft")
+    if "isPrerelease" in rel and bool(rel["isPrerelease"]) != is_prerelease(version):
+        out(f"WRONG {ctx['tag']} is {'' if rel['isPrerelease'] else 'not '}marked pre-release")
+        bad += 1
     if bad:
         raise ReleaseError(f"{bad} expected asset(s) missing from {ctx['tag']}")
     return 0
+
+
+def github_asset_name(name):
+    """The name GitHub gives an uploaded file: characters outside letters, digits and ._-+ become
+    '.' (a deb's 0.2.0~alpha.8 is stored as 0.2.0.alpha.8)."""
+    return re.sub(r"[^A-Za-z0-9._+-]", ".", name)
+
+
+def changelog_notes(text, version):
+    """The body of the changelog section for VERSION (keepachangelog `## [V]` or raw `## vV`)."""
+    m = re.search(r"^## \[?v?" + re.escape(version) + r"\]?(?:[ (].*)?$", text, re.M)
+    if not m:
+        return ""
+    rest = text[m.end():]
+    end = re.search(r"^## |^\[[^\]]+\]: ", rest, re.M)
+    return (rest[:end.start()] if end else rest).strip()
+
+
+def github_release(a, root):
+    """Create the GitHub release for an existing tag: the [github] files (globs, each must match),
+    an optional checksum file written with the names GitHub will give the files, notes from the
+    changelog section, marked pre-release for X.Y.Z-(alpha|beta|rc).N. Uploads to an existing
+    release instead (replacing files of the same name)."""
+    cfg = load_config(root, a.config)
+    gc = cfg.get("github") or {}
+    version = a.version.lstrip("v")
+    parse_version(version)
+    pfx = cfg.get("tag_prefix", "v")
+    ctx = {"version": version, "tag": f"{pfx}{version}", "project": cfg["project"], **version_ctx(version)}
+    files = []
+    for pat in gc.get("files") or []:
+        hit = sorted(globmod.glob(str(root / fill(pat, ctx))))
+        if not hit:
+            raise ReleaseError(f"[github] files: nothing matches {fill(pat, ctx)}")
+        files += [Path(h) for h in hit if Path(h) not in files]
+    if not files:
+        raise ReleaseError(f"{CONFIG} has no [github] files")
+    names = [github_asset_name(f.name) for f in files]
+    if len(set(names)) != len(names):
+        raise ReleaseError("two files get the same name on GitHub: " + ", ".join(names))
+    work = Path(tempfile.mkdtemp(prefix="gh-release-"))
+    try:
+        upload = list(files)
+        if gc.get("sums"):
+            sums = work / fill(gc["sums"], ctx)
+            lines = [f"{hashlib.sha256(f.read_bytes()).hexdigest()}  {n}" for f, n in zip(files, names)]
+            sums.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            upload.append(sums)
+        if a.notes_file:
+            notes = Path(a.notes_file).read_text(encoding="utf-8")
+        else:
+            cl = cfg.get("changelog") or {}
+            text = (root / cl.get("path", "CHANGELOG.md")).read_text(encoding="utf-8") if cl else ""
+            notes = changelog_notes(text, version) or fill(gc.get("notes", "{project} {version}"), ctx)
+        (work / "notes.md").write_text(notes + "\n", encoding="utf-8")
+        slug = github_slug(root)
+        if not slug:
+            raise ReleaseError("origin is not a GitHub repository")
+        gh = os.environ.get("WEIRDNET_RELEASE_GH", "gh")
+        exists = subprocess.run([gh, "release", "view", ctx["tag"], "-R", slug, "--json", "tagName"], capture_output=True, text=True).returncode == 0
+        if exists:
+            cmd = [gh, "release", "upload", ctx["tag"], "-R", slug, "--clobber", *map(str, upload)]
+        else:
+            cmd = [gh, "release", "create", ctx["tag"], "-R", slug, "--verify-tag", "--title", fill(gc.get("title", "{tag}"), ctx),
+                   "--notes-file", str(work / "notes.md"), *(["--prerelease"] if is_prerelease(version) else []), *map(str, upload)]
+        shown = " ".join(shlex.quote(c) for c in [Path(cmd[0]).name, *cmd[1:]])
+        if a.dry_run:
+            out(f"[dry-run] {shown}")
+            for f, n in zip(files, names):
+                out(f"[dry-run]   {f.name}" + (f" (on GitHub: {n})" if n != f.name else ""))
+            return 0
+        out(shown)
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode != 0:
+            raise ReleaseError(f"gh release {'upload' if exists else 'create'} failed: {(r.stderr or r.stdout).strip()[:400]}")
+        out(f"{'uploaded to' if exists else 'created'} {ctx['tag']}{' (pre-release)' if is_prerelease(version) and not exists else ''}: {len(upload)} file(s)")
+        return 0
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
 
 
 # ---- main ----------------------------------------------------------------------------------
@@ -1574,7 +1713,9 @@ def parser():
     g.add_argument("--major", dest="part", action="store_const", const="major")
     g.add_argument("--minor", dest="part", action="store_const", const="minor", help="the default")
     g.add_argument("--patch", dest="part", action="store_const", const="patch")
-    g.add_argument("--version", help="explicit X.Y.Z (must increase)")
+    g.add_argument("--version", help="explicit X.Y.Z or X.Y.Z-(alpha|beta|rc).N (must increase)")
+    c.add_argument("--pre", choices=PRE_STAGES, help="a pre-release: continue the current one (alpha.7 -> alpha.8) "
+                   "or start one (with --major/--minor/--patch, default the next minor)")
     c.add_argument("message", nargs="*", help="changelog bullets / commit body (`Fixed: ...` picks a section)")
     c.add_argument("--dry-run", action="store_true", help="print every step and diff; change nothing")
     c.add_argument("--yes", "-y", action="store_true", help="don't ask for confirmation")
@@ -1607,13 +1748,17 @@ def parser():
     ck.add_argument("dir", nargs="?")
     sa = sub.add_parser("assets", help="check the GitHub release has every [[platforms]] asset")
     sa.add_argument("version")
+    gr = sub.add_parser("github", help="create the GitHub release for an existing tag from [github] files")
+    gr.add_argument("version")
+    gr.add_argument("--notes-file", help="release notes (default: the version's changelog section)")
+    gr.add_argument("--dry-run", action="store_true")
     sub.add_parser("version", help="print the script version")
     return ap
 
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
-    cmds = {"cut", "validate", "assets", "crates", "taur", "taur-srcinfo", "taur-check", "version", "-h", "--help"}
+    cmds = {"cut", "validate", "assets", "github", "crates", "taur", "taur-srcinfo", "taur-check", "version", "-h", "--help"}
     # `cut` is the default subcommand: insert it after the global options.
     i = 0
     while i < len(argv) and argv[i] in ("--repo", "--config"):
@@ -1648,13 +1793,17 @@ def main(argv=None):
             return taur(a, root)
         if a.cmd == "assets":
             return assets(a, root)
+        if a.cmd == "github":
+            return github_release(a, root)
         if a.cmd == "validate":
             cfg = load_config(root, a.config)
             old = read_current(root, cfg)
-            new = bump(old, "minor")
+            # From a pre-release, plan the next one of the same stage (what such projects cut).
+            new = bump(old, None, PRE_STAGES[parse_version(old)[3]]) if is_prerelease(old) else bump(old, "minor")
             pfx = cfg.get("tag_prefix", "v")
             ctx = {"version": new, "old": old, "tag": f"{pfx}{new}", "old_tag": f"{pfx}{old}", "date": "2000-01-01",
-                   "title": "validate", "title_cell": "validate", "project": cfg["project"], "tag_prefix": pfx, "build": ""}
+                   "title": "validate", "title_cell": "validate", "project": cfg["project"], "tag_prefix": pfx, "build": "",
+                   **version_ctx(new)}
             plan = plan_files(root, cfg, ctx)
             plan_requires(plan, required_crates(root, cfg, ctx, online=False))
             cl = cfg.get("changelog")
@@ -1674,7 +1823,8 @@ def main(argv=None):
                 out("platforms:")
                 for l in lines:
                     out(l)
-            out(f"{cfg['project']}: release.toml ok (helpers {__version__}); next minor {old} -> {new} rewrites {len(plan.edits) + (1 if cl else 0)} files")
+            kind = "pre-release" if is_prerelease(new) else "minor"
+            out(f"{cfg['project']}: release.toml ok (helpers {__version__}); next {kind} {old} -> {new} rewrites {len(plan.edits) + (1 if cl else 0)} files")
             return 0
         if a.cmd == "crates":
             cfg = load_config(root, a.config)
