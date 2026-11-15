@@ -30,7 +30,7 @@
       p: popup ? 1 : 0, id: loadId, n: st.n, k: st.k, c: st.c, m: st.m,
       y: Math.round(scrollY), f: el && el.id ? el.id : (el ? el.tagName.toLowerCase() : ""),
       a: a.value, b: b.value, s: el && "selectionStart" in el ? el.selectionStart : -1,
-      w: innerWidth, h: innerHeight, log: st.log.slice(-8),
+      w: innerWidth, h: innerHeight, d: devicePixelRatio, log: st.log.slice(-8),
     };
     document.title = (popup ? "P" : "M") + JSON.stringify(state);
     if (popup && window.opener) window.opener.postMessage({ fromPopup: state }, "*");
