@@ -14,8 +14,6 @@ mod cli;
 #[cfg(target_os = "linux")]
 mod default_browser;
 #[cfg(target_os = "linux")]
-mod dmabuf;
-#[cfg(target_os = "linux")]
 mod identity;
 #[cfg(target_os = "linux")]
 mod identity_view;
@@ -29,6 +27,8 @@ mod page_input;
 mod profiles;
 #[cfg(target_os = "linux")]
 mod profiles_view;
+#[cfg(target_os = "linux")]
+mod render_check;
 #[cfg(target_os = "linux")]
 mod settings_view;
 #[cfg(target_os = "linux")]
@@ -58,9 +58,10 @@ fn main() -> ExitCode {
 
 #[cfg(target_os = "linux")]
 fn main() -> ExitCode {
-    // The DMA-BUF probe runs in a child of Morph (see `dmabuf`).
-    if std::env::args().nth(1).as_deref() == Some("--probe-dmabuf") {
-        return ExitCode::from(dmabuf::probe().code() as u8);
+    // The start-up render check runs in a child of Morph (see `render_check`).
+    if std::env::args().nth(1).as_deref() == Some(render_check::CHILD_FLAG) {
+        let arg = |n: usize, yes: &str| std::env::args().nth(n).as_deref() == Some(yes);
+        return ExitCode::from(morph_webview::render_probe::run(arg(2, "offscreen"), arg(3, "gl")));
     }
     let args = match cli::parse(std::env::args().skip(1)) {
         Ok(cli::Command::Run(args)) => args,
