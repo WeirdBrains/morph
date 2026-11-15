@@ -79,7 +79,7 @@ changed), so the browser and the panels do not know each other.
   clean; Xvfb checks 119/119 on the `0.2.0-alpha.3` release build (find, error page,
   library, profiles, settings including a relaunch with saved settings, and the
   frameless window under xfwm4 with its compositor: no frame, drag, maximize,
-  close). Both Arch recipes built and installed in an `archlinux` container.
+  close). In an `archlinux` container: `morph-bin` built (`makepkg`), installed (`pacman -U`), `morph --version` printed `0.2.0-alpha.3` and its window opened under Xvfb; for the source recipe `morph` only `makepkg --printsrcinfo` (the CI `arch-package` job builds it).
 - **Known flake:** under Xvfb, right after a panel closes (Escape), the page
   sometimes drops the first key (about one in four in a loop of
   Ctrl+, / Escape / a letter typed by xdotool; X focus is on the page and the
