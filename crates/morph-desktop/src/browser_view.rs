@@ -91,7 +91,14 @@ impl BrowserView {
         let xid = morph_webview::wry_linux::x11_window_id(raw).ok_or(
             "Morph's desktop shell needs X11 (or XWayland with DISPLAY set): the system web view cannot be embedded in a native Wayland window yet",
         )?;
-        let backend = morph_webview::wry_linux::WryBackend::new(xid);
+        let mut backend = morph_webview::wry_linux::WryBackend::new(xid);
+        morph_webview::Backend::set_page_bridge(
+            &mut backend,
+            morph_webview::PageBridge {
+                script: morph_core::page_bridge::BRIDGE_SCRIPT.into(),
+                handler: std::rc::Rc::new(morph_core::page_bridge::answer),
+            },
+        );
         let home_for_history = home.to_path_buf();
         let profile_id = profile.to_string();
         let sink: morph_browser::HistorySink = Box::new(move |url: &str, title: &str| {

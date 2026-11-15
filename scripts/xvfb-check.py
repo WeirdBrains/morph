@@ -614,6 +614,26 @@ def identity_link(m, r, binary, display, user_id):
     r.check("link", "Escape closes the panel on the first device", wait_for(lambda: (state(m) or {}).get("w") == w0), f"{w0} vs {(state(m) or {}).get('w')}")
 
 
+def bridge_round_trip(m, r, binary):
+    """The page bridge: a page asks Rust through window.MorphBridge (ping,
+    an echoed event, a bad message) and gets each answer back."""
+    before = len(m.events())
+    page = (ROOT / "tests" / "xvfb" / "bridge.html").as_uri()
+    subprocess.run([binary, page], env=m.env, capture_output=True, timeout=15)
+
+    def answer():
+        for _, n, a in m.events()[before:]:
+            if n == "TitleChanged" and a and '"B{' in a:
+                return json.loads(json.loads(a)[1:])
+        return None
+
+    got = wait_for(answer, 10) or {}
+    r.check("bridge", "pages have window.MorphBridge", got.get("has") is True, str(got))
+    r.check("bridge", "ping comes back as pong", got.get("ping") == "pong", str(got))
+    r.check("bridge", "a message comes back with its name and payload", got.get("echo") == "ok:xvfb:7", str(got))
+    r.check("bridge", "a bad message is rejected with Rust's error", got.get("error") == "rejected", str(got))
+
+
 def error_page(m, r, win, top):
     """A load that fails shows Morph's error page (the web view is hidden)
     and keeps the shell's keys working: F5 tries again, Alt+Left goes back."""
@@ -719,6 +739,7 @@ def main():
         m = Morph(args.bin, display, home)
         settings_relaunch(m, r, w0, h0)
         single_instance(m, r, args.bin)
+        bridge_round_trip(m, r, args.bin)
         # GPUI draws the frame itself only where the window manager supports
         # _GTK_FRAME_EXTENTS and a compositor runs; xfwm4 has both.
         if wm and shutil.which("xfwm4"):

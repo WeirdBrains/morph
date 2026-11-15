@@ -28,6 +28,26 @@ pub struct PageReply {
     pub error: Option<String>,
 }
 
+/// The page side of the contract (`window.MorphBridge`), injected at document
+/// start. One file for every backend: the Flutter app ships the same one.
+pub const BRIDGE_SCRIPT: &str = include_str!("../../../packages/morph_webview_inapp/assets/morph-bridge.js");
+
+/// The reply to hand back to the page for `json`: the answer, or an error
+/// reply when the message has an id but cannot be handled. `None` when there
+/// is no id to answer to.
+pub fn answer(json: &str) -> Option<String> {
+    match handle_page_message(json) {
+        Ok(reply) => Some(reply),
+        Err(error) => {
+            let id = serde_json::from_str::<serde_json::Value>(json).ok()?.get("id")?.as_str()?.to_string();
+            if id.is_empty() {
+                return None;
+            }
+            serde_json::to_string(&PageReply { id, kind: "error".into(), payload: None, error: Some(error) }).ok()
+        }
+    }
+}
+
 /// Handle one page message. `ping` is answered with `pong`. Other types are echoed as
 /// `ok` so a later hook can take over without changing the envelope.
 pub fn handle_page_message(json: &str) -> Result<String, String> {
@@ -68,6 +88,23 @@ mod tests {
         let reply: PageReply = serde_json::from_str(&raw).unwrap();
         assert_eq!(reply.kind, "ok");
         assert_eq!(reply.payload.unwrap()["name"], "click");
+    }
+
+    #[test]
+    fn answers_carry_errors_back_to_the_page() {
+        let raw = answer(r#"{"id":"9","type":""}"#).unwrap();
+        let reply: PageReply = serde_json::from_str(&raw).unwrap();
+        assert_eq!(reply.id, "9");
+        assert!(reply.error.unwrap().contains("needs id and type"));
+        assert!(answer("not-json").is_none());
+        assert!(answer(r#"{"type":"ping"}"#).is_none());
+        assert_eq!(answer(r#"{"id":"1","type":"ping"}"#).unwrap(), handle_page_message(r#"{"id":"1","type":"ping"}"#).unwrap());
+    }
+
+    #[test]
+    fn the_script_exposes_the_bridge() {
+        assert!(BRIDGE_SCRIPT.contains("window.MorphBridge"));
+        assert!(BRIDGE_SCRIPT.contains("morphRust.postMessage"));
     }
 
     #[test]

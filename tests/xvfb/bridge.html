@@ -1,0 +1,27 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>bridge</title>
+<p>Morph page bridge round trip (scripts/xvfb-check.py).</p>
+<script>
+  // Ask Rust three things through window.MorphBridge and put the answers in
+  // the title as "B{...}" for the harness.
+  const within = (p) => Promise.race([p, new Promise((_, no) => setTimeout(() => no(new Error("no answer")), 3000))]);
+  (async () => {
+    const out = { has: !!window.MorphBridge, host: typeof (window.morphRust && window.morphRust.postMessage) };
+    try {
+      const pong = await within(window.MorphBridge.ping());
+      out.ping = pong.type;
+      const echo = await within(window.MorphBridge.post({ type: "event", name: "xvfb", payload: { n: 7 } }));
+      out.echo = echo.type + ":" + echo.payload.name + ":" + echo.payload.echo.n;
+      try {
+        await within(window.MorphBridge.post({ id: "bad", type: "" }));
+        out.error = "none";
+      } catch (e) {
+        out.error = String(e.message).includes("needs id and type") ? "rejected" : String(e.message);
+      }
+    } catch (e) {
+      out.fail = String(e && e.message);
+    }
+    document.title = "B" + JSON.stringify(out);
+  })();
+</script>
