@@ -35,6 +35,18 @@ class Morph:
         self.home = Path(home)
         self.env = dict(os.environ, DISPLAY=display, MORPH_HOME=home, MORPH_LOG_EVENTS="1")
         self.env.pop("WAYLAND_DISPLAY", None)
+        # A desktop of its own for the default-browser check: morph.desktop
+        # and a `morph` on PATH (xdg-settings wants both), fresh config.
+        xdg = Path(home) / "xdg"
+        (xdg / "data" / "applications").mkdir(parents=True, exist_ok=True)
+        (xdg / "config").mkdir(parents=True, exist_ok=True)
+        (xdg / "bin").mkdir(parents=True, exist_ok=True)
+        shutil.copy(ROOT / "packaging" / "linux" / "morph.desktop", xdg / "data" / "applications" / "morph.desktop")
+        if not (xdg / "bin" / "morph").exists():
+            (xdg / "bin" / "morph").symlink_to(Path(binary).resolve())
+        self.env.update(XDG_DATA_HOME=str(xdg / "data"), XDG_CONFIG_HOME=str(xdg / "config"), PATH=f"{xdg / 'bin'}:{os.environ.get('PATH', '')}")
+        for var in ("BROWSER", "XDG_CURRENT_DESKTOP", "DESKTOP_SESSION"):
+            self.env.pop(var, None)
         self.log_path = Path(home) / "morph.log"
         self.log = open(self.log_path, "w")
         self.proc = subprocess.Popen([binary, PAGE.as_uri()], env=self.env, stdout=self.log, stderr=subprocess.STDOUT)
@@ -369,6 +381,10 @@ def settings_panel(m, r, win, top):
     w0, h0 = s0.get("w", 0), s0.get("h", 0)
     m.key("ctrl+comma", delay=0.8)
     r.check("settings", "Ctrl+, opens the settings beside the page", wait_for(lambda: (state(m) or {}).get("w", 0) < w0), f"{w0} -> {(state(m) or {}).get('w')}")
+    if shutil.which("xdg-settings"):
+        get = lambda: subprocess.run(["xdg-settings", "get", "default-web-browser"], env=m.env, capture_output=True, text=True).stdout.strip()  # noqa: E731
+        m.key("d", delay=1.5)
+        r.check("settings", "d makes Morph the default browser (xdg-settings)", wait_for(lambda: get() == "morph.desktop"), get())
     m.key("Left", delay=0.8)
     r.check("settings", "Left moves the tabs to the left (saved)", wait_for(lambda: '"left"' in settings_file(m)), settings_file(m))
     r.check("settings", "the page grows taller without the tab row", wait_for(lambda: (state(m) or {}).get("h", 0) == h0 + 34), f"{h0} -> {(state(m) or {}).get('h')}")
@@ -437,6 +453,23 @@ def frameless(m, r):
     _, _, w, _ = m.geometry(win)
     m.click(win, w - 22, 18)
     r.check("frame", "the close button closes the window", wait_for(lambda: m.proc.poll() is not None, 5), "still running")
+
+
+def single_instance(m, r, binary):
+    """A second `morph URL` for the same home hands the URL to the running
+    window (a new tab there) and exits."""
+    before = len(m.events())
+    start = time.time()
+    try:
+        done = subprocess.run([binary, PAGE.as_uri() + "?handed"], env=m.env, capture_output=True, text=True, timeout=15)
+        code, took = done.returncode, time.time() - start
+    except subprocess.TimeoutExpired:
+        code, took = None, 15.0
+    r.check("single", "a second launch exits at once", code == 0 and took < 5, f"exit {code} after {took:.1f}s")
+    # The running window had one tab; the handed URL (the keys page) loads in a second.
+    handed = wait_for(lambda: any(t > 1 and n == "TitleChanged" and "M{" in (a or "") for t, n, a in m.events()[before:]))
+    r.check("single", "and its URL opens in a new tab of the running window", handed, str(m.events()[before:][-4:]))
+    r.check("single", "the first Morph keeps running", m.proc.poll() is None)
 
 
 def error_page(m, r, win, top):
@@ -543,6 +576,7 @@ def main():
         m.stop()
         m = Morph(args.bin, display, home)
         settings_relaunch(m, r, w0, h0)
+        single_instance(m, r, args.bin)
         # GPUI draws the frame itself only where the window manager supports
         # _GTK_FRAME_EXTENTS and a compositor runs; xfwm4 has both.
         if wm and shutil.which("xfwm4"):

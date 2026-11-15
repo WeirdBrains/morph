@@ -290,6 +290,8 @@ pub struct Shell {
     buttons: WindowButtons,
     /// The caption last passed to the main component.
     last_caption: Option<Option<WindowButtons>>,
+    /// Later launches' URLs (single instance).
+    listener: Option<crate::single::Listener>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -333,6 +335,7 @@ impl Shell {
             last_marked: None,
             buttons: chrome::window_buttons(&|k| std::env::var(k).ok()),
             last_caption: None,
+            listener: None,
             _subscriptions: subscriptions,
             profile_subscriptions: Vec::new(),
         };
@@ -557,6 +560,15 @@ impl Shell {
         if window.focused(cx).is_none() {
             window.focus(&self.focus, cx);
         }
+        let handed = self.listener.as_ref().map(|l| l.take()).unwrap_or_default();
+        for request in handed {
+            if let crate::single::Request::Open(url) = &request
+                && let Some(main) = self.main()
+            {
+                main.open_url(url, true, window, cx);
+            }
+            window.activate_window();
+        }
         let mut shortcuts = Vec::new();
         for component in &self.components {
             shortcuts.extend(component.tick(window, cx));
@@ -756,7 +768,7 @@ fn page_shortcuts(keymap: &Keymap) -> Vec<String> {
 }
 
 /// Open the window and run until it closes.
-pub fn run(home: PathBuf, args: Args) {
+pub fn run(home: PathBuf, args: Args, listener: Option<crate::single::Listener>) {
     gpui_platform::application().run(move |cx: &mut App| {
         let keymap = Keymap::default();
         let mut bindings = address_bindings();
@@ -799,8 +811,13 @@ pub fn run(home: PathBuf, args: Args) {
             ..Default::default()
         };
         let start = args.open.clone().unwrap_or_default();
+        let mut listener = listener;
         let opened = cx.open_window(options, |window, cx| {
-            cx.new(|cx| Shell::new(home.clone(), profile.clone(), &start, Theme::default(), keymap.clone(), saved_layout, window, cx))
+            cx.new(|cx| {
+                let mut shell = Shell::new(home.clone(), profile.clone(), &start, Theme::default(), keymap.clone(), saved_layout, window, cx);
+                shell.listener = listener.take();
+                shell
+            })
         });
         let window = match opened {
             Ok(window) => window,
