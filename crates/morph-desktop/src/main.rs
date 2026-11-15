@@ -14,6 +14,8 @@ mod cli;
 #[cfg(target_os = "linux")]
 mod default_browser;
 #[cfg(target_os = "linux")]
+mod dmabuf;
+#[cfg(target_os = "linux")]
 mod identity;
 #[cfg(target_os = "linux")]
 mod identity_view;
@@ -56,6 +58,10 @@ fn main() -> ExitCode {
 
 #[cfg(target_os = "linux")]
 fn main() -> ExitCode {
+    // The DMA-BUF probe runs in a child of Morph (see `dmabuf`).
+    if std::env::args().nth(1).as_deref() == Some("--probe-dmabuf") {
+        return ExitCode::from(dmabuf::probe().code() as u8);
+    }
     let args = match cli::parse(std::env::args().skip(1)) {
         Ok(cli::Command::Run(args)) => args,
         Ok(cli::Command::Print(text)) => {
