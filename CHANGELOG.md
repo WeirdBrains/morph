@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- `v0.2.0-alpha.4` (phase 4), GPUI desktop shell: the identity panel
+  (Ctrl+Shift+L; create, restore from recovery words or a backup file, show the
+  words, save a backup), device linking (a link with its QR code, a code to
+  compare on both devices), "Make default browser" in settings
+  (`xdg-settings`), single instance (a second `morph URL` opens the URL in the
+  running window). Fixed: the page lost the first key after a panel closed;
+  after unlocking the library the keyboard was left nowhere.
 - `v0.2.0-alpha.3` (phase 3), GPUI desktop shell: find in page (a find bar
   beside the page, Ctrl+F, F3/Ctrl+G), Morph error pages for failed loads, a
   crash and hang panel per tab, the library panel (bookmarks with folders, tags
