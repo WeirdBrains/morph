@@ -1,4 +1,5 @@
-//! Which display backend the shell runs on (`MORPH_BACKEND=x11|wayland`).
+//! Which display backend the shell runs on (`MORPH_BACKEND=x11|wayland`),
+//! and the environment GTK and WebKit start with.
 //!
 //! On a Wayland session the shell runs natively and pages are rendered off
 //! screen and drawn by GPUI (`morph_webview::offscreen`). On X11, and under
@@ -7,13 +8,14 @@
 //! `WAYLAND_DISPLAY` is set, and GTK follows `GDK_BACKEND`, so the choice
 //! is made in the environment before either starts.
 //!
-//! With NVIDIA's proprietary driver the automatic choice stays on X11 when
-//! XWayland is there: WebKitGTK's accelerated rendering under GDK's Wayland
-//! backend has a history of failing on that driver (ARCHITECTURE.md 2.1,
-//! NVIDIA caveat). `MORPH_BACKEND=wayland` still runs natively there.
+//! Nothing here is chosen by hardware vendor: the DMA-BUF fallback follows
+//! a probe of the allocation WebKit makes (`crate::dmabuf`), VA-API decode
+//! follows the GStreamer decoders that registered, and pages follow the
+//! shell's own scale (GDK_SCALE and GDK_DPI_SCALE are the shell's business,
+//! not WebKit's: with GDK_SCALE=2 under a scale-1 compositor pages came out
+//! twice the shell's size).
 
 use std::ffi::OsStr;
-use std::path::Path;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Backend {
@@ -21,15 +23,13 @@ pub enum Backend {
     Wayland,
 }
 
-/// The backend for `MORPH_BACKEND`, the session's displays and whether
-/// NVIDIA's driver is loaded, and whether X11 is there to fall back on.
-/// `None` for `MORPH_BACKEND` is automatic.
-pub fn choose(wanted: Option<&OsStr>, wayland: Option<&OsStr>, x11: Option<&OsStr>, nvidia: bool) -> Result<(Backend, bool), String> {
+/// The backend for `MORPH_BACKEND` and the session's displays, and whether
+/// X11 is there to fall back on. `None` for `MORPH_BACKEND` is automatic.
+pub fn choose(wanted: Option<&OsStr>, wayland: Option<&OsStr>, x11: Option<&OsStr>) -> Result<(Backend, bool), String> {
     let set = |v: Option<&OsStr>| v.is_some_and(|v| !v.is_empty());
     let (wayland, x11) = (set(wayland), set(x11));
     match wanted.map(|w| w.to_string_lossy().trim().to_ascii_lowercase()).as_deref() {
         None | Some("") | Some("auto") => match (wayland, x11) {
-            (true, true) if nvidia => Ok((Backend::X11, false)),
             (true, x11) => Ok((Backend::Wayland, x11)),
             (false, true) => Ok((Backend::X11, false)),
             (false, false) => Err("no display: neither WAYLAND_DISPLAY nor DISPLAY is set".into()),
@@ -42,40 +42,40 @@ pub fn choose(wanted: Option<&OsStr>, wayland: Option<&OsStr>, x11: Option<&OsSt
     }
 }
 
-/// Whether NVIDIA's driver (proprietary or open kernel modules) is loaded,
-/// looked up under `root` (`/` normally; a fake tree in tests).
-pub fn nvidia_driver(root: &Path) -> bool {
-    root.join("proc/driver/nvidia/version").exists() || root.join("sys/module/nvidia_drm").exists()
+/// GStreamer's VA-API decoders (the `va` plugin registers only those the
+/// VA driver can run), ranked first so WebKit's decodebin picks them.
+pub const VA_DECODERS: &str = "vah264dec:MAX,vah265dec:MAX,vavp8dec:MAX,vavp9dec:MAX,vaav1dec:MAX,vampeg2dec:MAX";
+
+/// The `GST_PLUGIN_FEATURE_RANK` to set, if any: the VA decoders first,
+/// unless the user ranks plugins already or `MORPH_VAAPI=0`.
+pub fn va_ranks(current: Option<&OsStr>, morph_vaapi: Option<&OsStr>) -> Option<&'static str> {
+    (current.is_none() && morph_vaapi.is_none_or(|v| v != "0")).then_some(VA_DECODERS)
 }
 
-/// Whether to set `WEBKIT_DISABLE_DMABUF_RENDERER=1`: on NVIDIA's driver
-/// WebKitGTK's DMA-BUF renderer fails ("Failed to create GBM buffer") and
-/// pages stay black, so it is turned off there unless the user already set
-/// the variable or asked to keep the renderer (`MORPH_DMABUF=1`).
-pub fn disable_dmabuf(nvidia: bool, already_set: bool, keep: Option<&OsStr>) -> bool {
-    nvidia && !already_set && keep.is_none_or(|v| v != "1")
-}
-
-/// Pick the backend and start GTK on it. Call first thing in `main`,
-/// before any other thread exists (it changes the environment).
+/// Prepare the environment, pick the backend and start GTK on it. Call
+/// first thing in `main`, before any other thread exists (it changes the
+/// environment).
 pub fn start() -> Result<Backend, String> {
-    let nvidia = nvidia_driver(Path::new("/"));
-    if disable_dmabuf(nvidia, std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_some(), std::env::var_os("MORPH_DMABUF").as_deref()) {
-        eprintln!(
-            "morph: NVIDIA driver found; setting WEBKIT_DISABLE_DMABUF_RENDERER=1 (black pages otherwise; MORPH_DMABUF=1 keeps the DMA-BUF renderer)"
-        );
-        // SAFETY: no other thread exists yet (see above). The web processes
-        // WebKit starts inherit it.
-        unsafe { std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1") };
+    // SAFETY (every `set_var`/`remove_var` below): no other thread exists
+    // yet; the web processes WebKit starts inherit the result.
+    unsafe {
+        std::env::remove_var("GDK_SCALE");
+        std::env::remove_var("GDK_DPI_SCALE");
     }
-    let (backend, fallback) = choose(
-        std::env::var_os("MORPH_BACKEND").as_deref(),
-        std::env::var_os("WAYLAND_DISPLAY").as_deref(),
-        std::env::var_os("DISPLAY").as_deref(),
-        nvidia,
-    )?;
+    if let Some(ranks) = va_ranks(std::env::var_os("GST_PLUGIN_FEATURE_RANK").as_deref(), std::env::var_os("MORPH_VAAPI").as_deref()) {
+        unsafe { std::env::set_var("GST_PLUGIN_FEATURE_RANK", ranks) };
+    }
+    let chosen = crate::dmabuf::USER_CHOICES.iter().any(|v| std::env::var_os(v).is_some());
+    if !chosen && std::env::var_os("MORPH_DMABUF_PROBE").is_none_or(|v| v != "0") {
+        let probe = crate::dmabuf::probe_in_child();
+        if let Some(var) = crate::dmabuf::fallback(probe) {
+            eprintln!("morph: this GPU refused the DMA-BUF buffers WebKit renders into; setting {var}=1 (MORPH_DMABUF_PROBE=0 skips this check)");
+            unsafe { std::env::set_var(var, "1") };
+        }
+    }
+    let (backend, fallback) =
+        choose(std::env::var_os("MORPH_BACKEND").as_deref(), std::env::var_os("WAYLAND_DISPLAY").as_deref(), std::env::var_os("DISPLAY").as_deref())?;
     if backend == Backend::Wayland {
-        // SAFETY: no other thread exists yet (see above).
         unsafe {
             std::env::set_var("GDK_BACKEND", "wayland");
             // Overlay scrollbars in an off-screen page keep animating,
@@ -90,7 +90,6 @@ pub fn start() -> Result<Backend, String> {
             Err(e) => return Err(e.to_string()),
         }
     }
-    // SAFETY: as above.
     unsafe {
         std::env::remove_var("WAYLAND_DISPLAY");
         std::env::set_var("GDK_BACKEND", "x11");
@@ -104,7 +103,7 @@ mod tests {
     use super::*;
 
     fn pick(wanted: Option<&str>, wayland: Option<&str>, x11: Option<&str>) -> Result<(Backend, bool), String> {
-        choose(wanted.map(OsStr::new), wayland.map(OsStr::new), x11.map(OsStr::new), false)
+        choose(wanted.map(OsStr::new), wayland.map(OsStr::new), x11.map(OsStr::new))
     }
 
     #[test]
@@ -116,42 +115,19 @@ mod tests {
     }
 
     #[test]
-    fn nvidia_is_found_by_its_proc_file_or_drm_module() {
-        let root = tempfile::tempdir().unwrap();
-        assert!(!nvidia_driver(root.path()));
-        std::fs::create_dir_all(root.path().join("proc/driver/nvidia")).unwrap();
-        assert!(!nvidia_driver(root.path()), "the directory alone is not the driver");
-        std::fs::write(root.path().join("proc/driver/nvidia/version"), "NVRM version: 615.78\n").unwrap();
-        assert!(nvidia_driver(root.path()));
-        let open = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(open.path().join("sys/module/nvidia_drm")).unwrap();
-        assert!(nvidia_driver(open.path()));
-    }
-
-    #[test]
-    fn the_dmabuf_renderer_goes_off_on_nvidia_unless_kept() {
-        assert!(disable_dmabuf(true, false, None));
-        assert!(disable_dmabuf(true, false, Some(OsStr::new("0"))));
-        assert!(!disable_dmabuf(true, false, Some(OsStr::new("1"))));
-        assert!(!disable_dmabuf(true, true, None), "the user's own setting wins");
-        assert!(!disable_dmabuf(false, false, None));
-    }
-
-    #[test]
-    fn nvidia_stays_on_xwayland_unless_asked() {
-        let nvidia =
-            |wanted: Option<&str>, x11: Option<&str>| choose(wanted.map(OsStr::new), Some(OsStr::new("wayland-1")), x11.map(OsStr::new), true);
-        assert_eq!(nvidia(None, Some(":0")), Ok((Backend::X11, false)));
-        assert_eq!(nvidia(None, None), Ok((Backend::Wayland, false)));
-        assert_eq!(nvidia(Some("wayland"), Some(":0")), Ok((Backend::Wayland, false)));
-    }
-
-    #[test]
     fn morph_backend_overrides_and_never_falls_back() {
         assert_eq!(pick(Some("x11"), Some("wayland-0"), Some(":0")), Ok((Backend::X11, false)));
         assert_eq!(pick(Some("Wayland"), Some("wayland-0"), Some(":0")), Ok((Backend::Wayland, false)));
         assert!(pick(Some("x11"), Some("wayland-0"), None).unwrap_err().contains("DISPLAY"));
         assert!(pick(Some("wayland"), None, Some(":0")).unwrap_err().contains("WAYLAND_DISPLAY"));
         assert!(pick(Some("gtk"), Some("wayland-0"), Some(":0")).unwrap_err().contains("x11 or wayland"));
+    }
+
+    #[test]
+    fn va_decoders_go_first_unless_the_user_ranks_plugins() {
+        assert_eq!(va_ranks(None, None), Some(VA_DECODERS));
+        assert_eq!(va_ranks(Some(OsStr::new("nvh264dec:MAX")), None), None);
+        assert_eq!(va_ranks(None, Some(OsStr::new("0"))), None);
+        assert_eq!(va_ranks(None, Some(OsStr::new("1"))), Some(VA_DECODERS));
     }
 }

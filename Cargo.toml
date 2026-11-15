@@ -30,6 +30,8 @@ dirs = "7.0.0"
 zeroize = { version = "1", features = ["derive"] }
 flutter_rust_bridge = "=2.13.0"
 tempfile = "3"
+# morph-desktop: the DMA-BUF probe loads the system GBM and EGL at run time.
+libloading = "0.8"
 hkdf = "0.13.0"
 sha2 = "0.11.1"
 jni-sys = "0.4.1"
