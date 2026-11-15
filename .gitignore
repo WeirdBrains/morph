@@ -43,3 +43,4 @@ app/android/app/release
 *.pem
 *.p12
 *.keystore
+__pycache__/
