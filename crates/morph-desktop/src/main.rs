@@ -10,6 +10,8 @@ mod address;
 mod browser_view;
 mod cli;
 #[cfg(target_os = "linux")]
+mod default_browser;
+#[cfg(target_os = "linux")]
 mod library;
 #[cfg(target_os = "linux")]
 mod library_view;
@@ -21,6 +23,8 @@ mod profiles_view;
 mod settings_view;
 #[cfg(target_os = "linux")]
 mod shell;
+#[cfg(target_os = "linux")]
+mod single;
 #[cfg(target_os = "linux")]
 mod text_input;
 #[cfg(target_os = "linux")]
@@ -63,11 +67,28 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // A Morph already running for this home takes the URL (a new tab) and
+    // this launch ends here.
+    let socket = single::socket_for(&paths.home);
+    let request = match &args.open {
+        Some(url) => single::Request::Open(url.clone()),
+        None => single::Request::Show,
+    };
+    if single::hand_off(&socket, &request) {
+        return ExitCode::SUCCESS;
+    }
+    let listener = match single::Listener::bind(&socket) {
+        Ok(listener) => Some(listener),
+        Err(e) => {
+            eprintln!("morph: links from other apps will open new windows: {e}");
+            None
+        }
+    };
     if let Err(e) = morph_webview::wry_linux::init() {
         eprintln!("morph: {e}");
         return ExitCode::FAILURE;
     }
-    shell::run(paths.home, args);
+    shell::run(paths.home, args, listener);
     ExitCode::SUCCESS
 }
 

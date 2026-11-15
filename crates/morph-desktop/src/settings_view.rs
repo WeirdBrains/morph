@@ -10,6 +10,7 @@ use morph_core::settings::{self, Settings, TabPosition};
 use morph_ui::chrome::SettingsChange;
 use morph_ui::theme::Theme;
 
+use crate::default_browser::{self, Status};
 use crate::shell::ShellRequest;
 use crate::widgets::{button, chip, heading, icon};
 
@@ -19,13 +20,24 @@ pub struct SettingsView {
     theme: Theme,
     focus: FocusHandle,
     error: Option<String>,
+    /// Whether Morph opens links, read when the panel opens.
+    browser: Option<Status>,
+    browser_note: Option<String>,
 }
 
 impl EventEmitter<ShellRequest> for SettingsView {}
 
 impl SettingsView {
     pub fn new(home: &Path, theme: Theme, cx: &mut Context<Self>) -> Self {
-        let mut view = Self { home: home.to_path_buf(), settings: Settings::default(), theme, focus: cx.focus_handle(), error: None };
+        let mut view = Self {
+            home: home.to_path_buf(),
+            settings: Settings::default(),
+            theme,
+            focus: cx.focus_handle(),
+            error: None,
+            browser: None,
+            browser_note: None,
+        };
         view.reload();
         view
     }
@@ -47,6 +59,8 @@ impl SettingsView {
 
     /// The panel opened: it takes the keyboard (arrows move the tabs).
     pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.browser = Some(default_browser::status(&default_browser::system));
+        self.browser_note = None;
         window.focus(&self.focus, cx);
         cx.emit(ShellRequest::FocusShell);
         cx.notify();
@@ -68,6 +82,15 @@ impl SettingsView {
         cx.notify();
     }
 
+    fn make_default(&mut self, cx: &mut Context<Self>) {
+        self.browser_note = Some(match default_browser::make_default(&default_browser::system) {
+            Ok(()) => "Links from other apps now open in Morph.".into(),
+            Err(e) => format!("Could not make Morph the default: {e}"),
+        });
+        self.browser = Some(default_browser::status(&default_browser::system));
+        cx.notify();
+    }
+
     fn on_key(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let k = &event.keystroke;
         if k.modifiers.control || k.modifiers.alt || k.modifiers.platform {
@@ -79,6 +102,11 @@ impl SettingsView {
             return;
         }
         let key = k.key_char.as_deref().filter(|c| matches!(*c, "+" | "=" | "-")).unwrap_or(k.key.as_str());
+        if key == "d" {
+            self.make_default(cx);
+            cx.stop_propagation();
+            return;
+        }
         if let Some(change) = SettingsChange::for_key(key) {
             self.change(change, cx);
             cx.stop_propagation();
@@ -147,6 +175,22 @@ impl Render for SettingsView {
                             ),
                     )
             })
+            .child(heading(t, "Default browser"))
+            .child(div().text_size(px(12.)).child(match &self.browser {
+                Some(Status::Default) => "Morph opens links from other apps.".to_string(),
+                Some(Status::Other(id)) => format!("Links open in {id}."),
+                Some(Status::Unknown(e)) => format!("Unknown: {e}"),
+                None => String::new(),
+            }))
+            .when(self.browser != Some(Status::Default), |d| {
+                d.child(
+                    div().flex().flex_row().child(
+                        button(t, "settings-default-browser", "Make Morph the default (d)", true)
+                            .on_click(cx.listener(|this, _, _, cx| this.make_default(cx))),
+                    ),
+                )
+            })
+            .children(self.browser_note.clone().map(|n| div().text_size(px(12.)).text_color(rgb(t.text_secondary)).child(n)))
             .children(self.error.clone().map(|e| div().text_size(px(12.)).text_color(rgb(t.error)).child(e)))
     }
 }
