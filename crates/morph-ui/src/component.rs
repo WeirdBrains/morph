@@ -60,6 +60,9 @@ pub const LIBRARY: &str = "morph.library";
 /// Switching, creating, renaming and deleting profiles.
 pub const PROFILES: &str = "morph.profiles";
 
+/// The profile's preferences: where the tabs go and how wide their list is.
+pub const SETTINGS: &str = "morph.settings";
+
 /// Kinds that ship with Morph. Later phases add chat, notes and projects
 /// here as they are built.
 pub fn builtin() -> Vec<ComponentKind> {
@@ -67,6 +70,7 @@ pub fn builtin() -> Vec<ComponentKind> {
         ComponentKind::new(BROWSER, "Browser", "globe", &[Needs::WebView, Needs::Library]),
         ComponentKind::new(LIBRARY, "Library", "bookmark", &[Needs::Library]),
         ComponentKind::new(PROFILES, "Profiles", "person", &[]),
+        ComponentKind::new(SETTINGS, "Settings", "gear", &[]),
     ]
 }
 

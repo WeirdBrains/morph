@@ -13,6 +13,7 @@ use gpui::{
 };
 use morph_browser::{Browser, Config, Cover};
 use morph_ui::actions::Action;
+use morph_ui::chrome::{TabStrip, WindowButtons};
 use morph_ui::theme::Theme;
 use morph_webview::Rect;
 
@@ -41,6 +42,13 @@ pub struct BrowserView {
     /// The active page is bookmarked (the star), as the shell reports it.
     marked: bool,
     profile_label: String,
+    /// Where the tabs go, from the profile's settings.
+    strip: TabStrip,
+    /// The window is frameless: the tab row (or the toolbar) is its caption
+    /// and draws these buttons.
+    caption: Option<WindowButtons>,
+    /// The caption was pressed; moving the pointer now drags the window.
+    caption_pressed: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -69,6 +77,9 @@ impl BrowserView {
             find_input,
             marked: false,
             profile_label: String::new(),
+            strip: TabStrip::Top,
+            caption: None,
+            caption_pressed: false,
             _subscriptions: vec![find_events],
         }
     }
@@ -152,6 +163,76 @@ impl BrowserView {
         cx.notify();
     }
 
+    pub fn apply_settings(&mut self, settings: &morph_core::settings::Settings, cx: &mut Context<Self>) {
+        let strip = TabStrip::from_settings(settings);
+        if strip != self.strip {
+            self.strip = strip;
+            cx.notify();
+        }
+    }
+
+    pub fn set_caption(&mut self, caption: Option<WindowButtons>, cx: &mut Context<Self>) {
+        if caption != self.caption {
+            self.caption = caption;
+            cx.notify();
+        }
+    }
+
+    /// A press on the caption's empty space: a double click maximizes, a
+    /// press and move drags the window (started on the move, so the window
+    /// manager does not swallow the second click of a double click).
+    fn caption_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, _cx: &mut Context<Self>) {
+        if self.caption.is_none() {
+            return;
+        }
+        self.caption_pressed = event.click_count < 2;
+        if event.click_count >= 2 {
+            window.zoom_window();
+        }
+    }
+
+    fn caption_mouse_move(&mut self, event: &MouseMoveEvent, window: &mut Window, _cx: &mut Context<Self>) {
+        if self.caption_pressed {
+            self.caption_pressed = false;
+            if event.pressed_button == Some(MouseButton::Left) {
+                window.start_window_move();
+            }
+        }
+    }
+
+    fn caption_mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, _: &mut Context<Self>) {
+        self.caption_pressed = false;
+    }
+
+    /// Minimize, maximize and close (or close alone on tiling desktops).
+    fn window_controls(&self, cx: &mut Context<Self>) -> Option<gpui::Div> {
+        let buttons = self.caption?;
+        let t = self.theme;
+        let control = |id: &'static str, label: &'static str| {
+            div()
+                .id(id)
+                .flex()
+                .items_center()
+                .justify_center()
+                .w(px(32.))
+                .h(px(26.))
+                .rounded(px(6.))
+                .text_color(rgb(t.text_secondary))
+                .hover(|s| s.bg(rgb(t.surface_variant)).text_color(rgb(t.text_primary)))
+                .cursor_pointer()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(label)
+        };
+        let mut row = div().flex().flex_row().items_center().gap(px(2.)).pl(px(8.));
+        if buttons == WindowButtons::All {
+            row = row
+                .child(control("window-minimize", "—").on_click(|_, window, _| window.minimize_window()))
+                .child(control("window-maximize", "□").on_click(|_, window, _| window.zoom_window()));
+        }
+        let _ = cx;
+        Some(row.child(control("window-close", "×").hover(|s| s.bg(rgb(t.error))).on_click(|_, window, _| window.remove_window())))
+    }
+
     pub fn set_marked(&mut self, marked: bool, cx: &mut Context<Self>) {
         if self.marked != marked {
             self.marked = marked;
@@ -229,6 +310,7 @@ impl BrowserView {
     }
 
     fn on_address_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        cx.stop_propagation();
         let index = self.index_for_point(event.position);
         if !self.browser.address_focused() {
             // First click focuses and selects everything, as browsers do.
@@ -299,62 +381,115 @@ impl BrowserView {
             .rounded(px(6.))
             .text_color(rgb(if enabled { t.text_primary } else { t.border }))
             .when(enabled, |d| d.hover(|s| s.bg(rgb(t.surface_variant))).cursor_pointer())
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(label)
     }
 
+    /// One tab: a rounded header in a row, a line in the side list, or
+    /// just its first letter in a collapsed list.
+    fn tab_item(&self, index: usize, tab: morph_browser::TabLabel, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
+        let t = self.theme;
+        let id = tab.id;
+        let collapsed = matches!(self.strip, TabStrip::Side { collapsed: true, .. });
+        let label: SharedString = if collapsed {
+            let letter = tab.label.chars().find(|c| c.is_alphanumeric()).map(|c| c.to_uppercase().to_string()).unwrap_or_else(|| "·".into());
+            if tab.loading { "…".into() } else { letter.into() }
+        } else if tab.loading {
+            format!("… {}", tab.label).into()
+        } else {
+            tab.label.into()
+        };
+        let item = div()
+            .id(("tab", index))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(6.))
+            .h(px(30.))
+            .bg(rgb(if tab.active { t.surface } else { t.background }))
+            .text_color(rgb(if tab.active { t.text_primary } else { t.text_secondary }))
+            .text_size(px(13.))
+            .cursor_pointer()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.browser.select(id);
+                this.sync_focus(window, cx);
+                cx.notify();
+            }));
+        let item = match self.strip {
+            TabStrip::Top => item.min_w(px(80.)).max_w(px(220.)).px(px(10.)).rounded_t(px(8.)),
+            TabStrip::Bottom => item.min_w(px(80.)).max_w(px(220.)).px(px(10.)).rounded_b(px(8.)),
+            TabStrip::Side { .. } if collapsed => item.justify_center().rounded(px(6.)),
+            TabStrip::Side { .. } => item.w_full().px(px(8.)).rounded(px(6.)),
+        };
+        let item = item
+            .child(div().flex_1().overflow_hidden().whitespace_nowrap().text_ellipsis().when(collapsed, |d| d.flex().justify_center()).child(label));
+        if collapsed {
+            return item;
+        }
+        item.child(
+            div()
+                .id(("close", index))
+                .px(px(4.))
+                .rounded(px(4.))
+                .hover(|s| s.bg(rgb(t.surface_variant)))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    cx.stop_propagation();
+                    this.browser.close_tab(id);
+                    this.sync_focus(window, cx);
+                    cx.notify();
+                }))
+                .child("×"),
+        )
+    }
+
+    fn new_tab_button(&self, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
+        self.button("new-tab", "+", true).on_click(cx.listener(|this, _, window, cx| {
+            this.dispatch(Action::NewTab, window, cx);
+        }))
+    }
+
+    /// The tabs as a row (above the toolbar or below the page).
     fn tab_strip(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = self.theme;
         let tabs = self.browser.tabs();
         div()
+            .id("tab-strip")
             .flex()
             .flex_row()
-            .items_end()
+            .when(self.strip == TabStrip::Bottom, |d| d.items_start())
+            .when(self.strip != TabStrip::Bottom, |d| d.items_end())
             .h(px(TAB_STRIP_HEIGHT))
             .px(px(6.))
             .gap(px(2.))
             .bg(rgb(t.background))
-            .children(tabs.into_iter().enumerate().map(|(index, tab)| {
-                let id = tab.id;
-                let label: SharedString = if tab.loading { format!("… {}", tab.label).into() } else { tab.label.into() };
-                div()
-                    .id(("tab", index))
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(6.))
-                    .h(px(30.))
-                    .min_w(px(80.))
-                    .max_w(px(220.))
-                    .px(px(10.))
-                    .rounded_t(px(8.))
-                    .bg(rgb(if tab.active { t.surface } else { t.background }))
-                    .text_color(rgb(if tab.active { t.text_primary } else { t.text_secondary }))
-                    .text_size(px(13.))
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.browser.select(id);
-                        this.sync_focus(window, cx);
-                        cx.notify();
-                    }))
-                    .child(div().flex_1().overflow_hidden().whitespace_nowrap().text_ellipsis().child(label))
-                    .child(
-                        div()
-                            .id(("close", index))
-                            .px(px(4.))
-                            .rounded(px(4.))
-                            .hover(|s| s.bg(rgb(t.surface_variant)))
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                cx.stop_propagation();
-                                this.browser.close_tab(id);
-                                this.sync_focus(window, cx);
-                                cx.notify();
-                            }))
-                            .child("×"),
-                    )
-            }))
-            .child(self.button("new-tab", "+", true).on_click(cx.listener(|this, _, window, cx| {
-                this.dispatch(Action::NewTab, window, cx);
-            })))
+            .children(tabs.into_iter().enumerate().map(|(index, tab)| self.tab_item(index, tab, cx)))
+            .child(self.new_tab_button(cx))
+            .when(self.strip == TabStrip::Top, |d| {
+                d.on_mouse_down(MouseButton::Left, cx.listener(Self::caption_mouse_down))
+                    .on_mouse_move(cx.listener(Self::caption_mouse_move))
+                    .on_mouse_up(MouseButton::Left, cx.listener(Self::caption_mouse_up))
+                    .child(div().flex_1().h_full())
+                    .children(self.window_controls(cx).map(|c| c.h_full().items_center()))
+            })
+    }
+
+    /// The tabs as a vertical list beside the toolbar and page.
+    fn tab_list(&self, width: u32, collapsed: bool, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = self.theme;
+        let tabs = self.browser.tabs();
+        div()
+            .id("tab-list")
+            .flex()
+            .flex_col()
+            .w(px(width as f32))
+            .h_full()
+            .p(px(6.))
+            .gap(px(2.))
+            .bg(rgb(t.background))
+            .overflow_y_scroll()
+            .children(tabs.into_iter().enumerate().map(|(index, tab)| self.tab_item(index, tab, cx)))
+            .child(div().flex().flex_row().when(collapsed, |d| d.justify_center()).child(self.new_tab_button(cx)))
     }
 
     fn toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -369,6 +504,11 @@ impl BrowserView {
             .h(px(TOOLBAR_HEIGHT))
             .px(px(8.))
             .bg(rgb(t.surface))
+            .when(!self.strip.is_caption(), |d| {
+                d.on_mouse_down(MouseButton::Left, cx.listener(Self::caption_mouse_down))
+                    .on_mouse_move(cx.listener(Self::caption_mouse_move))
+                    .on_mouse_up(MouseButton::Left, cx.listener(Self::caption_mouse_up))
+            })
             .child(self.button("back", "←", state.can_back).on_click(cx.listener(|this, _, w, cx| {
                 this.dispatch(Action::Back, w, cx);
             })))
@@ -445,6 +585,7 @@ impl BrowserView {
                         .bg(rgb(t.surface_variant))
                         .text_size(px(12.))
                         .cursor_pointer()
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(label)
                         .on_click(cx.listener(|_, _, window, cx| {
                             window.dispatch_action(Box::new(crate::shell::ShowProfiles), cx);
@@ -455,6 +596,7 @@ impl BrowserView {
                 let label: SharedString = if state.popups == 1 { "1 popup".into() } else { format!("{} popups", state.popups).into() };
                 d.child(div().px(px(8.)).text_size(px(12.)).text_color(rgb(t.accent_alt)).child(label))
             })
+            .when(!self.strip.is_caption(), |d| d.children(self.window_controls(cx)))
     }
 
     /// The find bar: a row between the toolbar and the page, so the page
@@ -617,7 +759,22 @@ impl Render for BrowserView {
             window.focus(&self.address_focus, cx);
             self.mirrored_focus = true;
         }
-        div().flex().flex_col().size_full().child(self.tab_strip(cx)).child(self.toolbar(cx)).children(self.find_bar(cx)).child(self.page_area(cx))
+        let content = div().flex().flex_col().min_w(px(0.)).min_h(px(0.));
+        let content = if matches!(self.strip, TabStrip::Side { .. }) { content.flex_1().h_full() } else { content.size_full() };
+        match self.strip {
+            TabStrip::Top => {
+                content.child(self.tab_strip(cx)).child(self.toolbar(cx)).children(self.find_bar(cx)).child(self.page_area(cx)).into_any_element()
+            }
+            TabStrip::Bottom => {
+                content.child(self.toolbar(cx)).children(self.find_bar(cx)).child(self.page_area(cx)).child(self.tab_strip(cx)).into_any_element()
+            }
+            TabStrip::Side { left, width, collapsed } => {
+                let content = content.child(self.toolbar(cx)).children(self.find_bar(cx)).child(self.page_area(cx));
+                let list = self.tab_list(width, collapsed, cx);
+                let row = div().flex().flex_row().size_full();
+                if left { row.child(list).child(content) } else { row.child(content).child(list) }.into_any_element()
+            }
+        }
     }
 }
 

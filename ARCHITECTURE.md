@@ -2456,3 +2456,28 @@ Settled while building phase 1 (details in section 2.0 and `docs/handoff.md`):
   widget-test fake.
 - **Mobile CI:** the password-field test failure is fixed and the Android Gradle
   Plugin is 9.1.1 (Flutter 3.50's minimum).
+
+### 2026-11-15 — Phase 3: panels as components, settings and the frameless window
+
+- **Panels are components.** The library (`morph.library`), profiles
+  (`morph.profiles`) and settings (`morph.settings`) are hosted beside the
+  browser in the sidebar slot through the `Hosted` trait (`morph-desktop`,
+  `shell.rs`); one panel at a time (`Layout::toggle_kind`), saved in the
+  profile's layout. They never draw over the page (the web view is a child X
+  window), and they ask the host for things with `ShellRequest` events (open a
+  URL in the main component, close, take the keyboard, switch profile, settings
+  changed) instead of reaching into the browser. A profile switch rebuilds the
+  per-profile components (browser, library) in place.
+- **Find, error and crash covers live in `morph-browser`** (`FindBar`, `Cover`);
+  the web view trait gained `find`, `find_next`, `find_clear`, `terminate` and
+  the `LoadFailed`, `Unresponsive` and `FindResult` events, with the fake
+  backend recording them for tests.
+- **Chrome placement is data** (`morph_ui::chrome`): `TabStrip` from the
+  profile's `Settings` (top, bottom, or a side list with its width or a 48 px
+  collapsed list) and the window-button rule ported from the Flutter shell
+  (close only on tiling window managers, `MORPH_WINDOW_BUTTONS` overrides).
+- **Frameless on X11 depends on the window manager.** GPUI draws client-side
+  decorations only when the WM lists `_GTK_FRAME_EXTENTS` and a compositor
+  runs; otherwise it keeps server decorations, and the shell then draws no
+  window buttons except close on tiling WMs (which draw no frame).
+
