@@ -255,7 +255,7 @@ jobs:
         run: |
           version="$(cargo metadata --no-deps --format-version 1 | python -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "morph-desktop"))')"
           rm -rf /c/smoke && mkdir -p /c/smoke
-          unzip -q dist/morph-*-x86_64-pc-windows-msvc.zip -d /c/smoke
+          python -c "import glob,zipfile,sys; z=zipfile.ZipFile(glob.glob('dist/morph-*-x86_64-pc-windows-msvc.zip')[0]); bad=[n for n in z.namelist() if chr(92) in n]; sys.exit(f'backslashes in zip: {bad}') if bad else z.extractall('C:/smoke')"
           python scripts/desktop-smoke.py /c/smoke/morph-*/morph.exe --version "$version" --screenshot dist/smoke-windows.png
       - name: MSI installs, starts and uninstalls
         shell: pwsh
