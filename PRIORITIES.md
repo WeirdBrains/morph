@@ -71,6 +71,11 @@ a start-up DMA-BUF check with WebKit's own fallbacks (black pages on some GPUs),
 the shell's scale whatever GDK_SCALE says, popups that close themselves, VA-API video
 decoders first. Build `v0.2.0-alpha.6`.
 
+2026-11-15, alpha.7: alpha.6 on Michael's GPU aborted on Wayland (no GL for off-screen
+windows) and showed black pages on X11 (WebKit's GBM buffers refused). The start-up check
+now tries real pages in a child process and keeps what paints; off-screen pages use
+shared-memory buffers. Build `v0.2.0-alpha.7`.
+
 1. Webview _(moved up: everything else plugs into it)_
     - System web views: WebView2 (Windows), WKWebView (Apple), WebKit (Linux: WPE + webkit2gtk), Android WebView _(changed 2026-11-11)_
         - Linux: build our own WebKit plugin _(changed 2026-11-11)_

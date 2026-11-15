@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- `v0.2.0-alpha.7`, GPUI desktop shell: fixes for alpha.6 on a real GPU
+  (RTX 3060, nvidia-open, Hyprland). Native Wayland no longer aborts with
+  "GDK is not able to create a GL context": GTK 3's off-screen windows have
+  no GL, so off-screen pages get WebKit's shared-memory buffers (WebKit still
+  renders with the GPU). Black pages under X11 ("Failed to create GBM buffer
+  of size 1x1"): the start-up check now loads a real test page in a child
+  process and keeps the first WebKit setting that paints it (defaults,
+  `WEBKIT_DMABUF_RENDERER_DISABLE_GBM`, `..._FORCE_SHM`,
+  `WEBKIT_DISABLE_DMABUF_RENDERER`), falling back to XWayland when nothing
+  paints natively. It runs where a DRM device exists (`MORPH_DMABUF_PROBE=1`
+  forces it, `=0` skips the page check). No vendor checks.
 - `v0.2.0-alpha.6` (phase 6), GPUI desktop shell: native Wayland. Pages are
   rendered off screen (WebKitGTK in a GTK offscreen window) and drawn by the
   shell at the window's scale, with pointer, wheel, keys and input-method text

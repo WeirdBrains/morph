@@ -2465,6 +2465,47 @@ Settled while building phase 1 (details in section 2.0 and `docs/handoff.md`):
 - **Mobile CI:** the password-field test failure is fixed and the Android Gradle
   Plugin is 9.1.1 (Flutter 3.50's minimum).
 
+### 2026-11-15 — alpha.7: the render check replaces the GBM probe
+
+alpha.6 on alien-blue (Hyprland, RTX 3060, nvidia-open 615.78.08, webkit2gtk
+2.54.1) failed both ways; nothing below names a vendor.
+
+- **Native Wayland aborted** with "GDK is not able to create a GL context: The
+  current backend does not support OpenGL". GTK 3's off-screen windows never
+  make GL contexts (reproduced on the build box, Xvfb and sway alike: a
+  toplevel or popup gets one, a `GtkOffscreenWindow` does not), and WebKit
+  calls `g_error` when it receives a GPU (DMA-BUF) buffer for a view that has
+  none. The build box never hit it because it has no DRM device, so WebKit
+  used shared memory. Now a child process (`morph --probe-render offscreen
+  gl`) asks GTK, and when there is no GL, pages get
+  `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1`: the web process still renders with
+  the GPU and copies the frame into shared memory, which costs no more than
+  the off-screen backend's own copy. This check runs whenever a DRM device
+  exists, even with `MORPH_DMABUF_PROBE=0`.
+- **Black pages under X11** ("Failed to create GBM buffer of size 1x1:
+  Invalid argument"). The alpha.6 probe allocated a 2x2 ARGB8888 buffer with
+  the modifiers of an EGL display on the GBM platform, which is not what
+  WebKit asks for (an opaque XRGB8888 buffer, modifiers intersected between
+  the UI and web processes' EGL displays), so it passed. It is replaced by
+  the real thing: a child (`morph --probe-render window page`) loads a page
+  with a known colour into a WebKit view where the shell's pages live (an
+  off-screen-placed popup window on X11, an off-screen window on Wayland),
+  draws the view into memory until that colour shows, and the parent kills
+  it early when WebKit reports a failed buffer on standard error. Settings
+  are tried best first: WebKit's defaults, `WEBKIT_DMABUF_RENDERER_DISABLE_GBM=1`,
+  `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1`, `WEBKIT_DISABLE_DMABUF_RENDERER=1`;
+  the first that paints is kept. On Wayland, when nothing paints natively
+  and X11 is there, the shell uses XWayland with the first X11 setting that
+  paints. The page check runs where a DRM device exists or with
+  `MORPH_DMABUF_PROBE=1`; `=0` or any WebKit renderer variable set by the
+  user skips it. Cost: one WebKit start in a child (about 0.35 s in a debug
+  build on the box) before the window opens, more only where settings fail.
+- **Not verified on NVIDIA here** (no GPU on the box); the decisions are
+  unit-tested with made-up outcomes, and the child's checks run under Xvfb
+  and sway in `scripts/xvfb-check.py`.
+- The `_gdk_frame_clock_freeze` critical on X11 is older (alpha.5 prints it
+  on the box too) and does not affect drawing.
+
 ### 2026-11-15 — Phase 6: native Wayland through off-screen pages
 
 - **Open decision 1 is settled for Linux: native Wayland** by drawing

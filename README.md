@@ -62,7 +62,8 @@ On Debian or Ubuntu the build packages are listed in `DESKTOP_DEPS` in
 Mesa). On a Wayland session the shell runs natively: pages are rendered off
 screen and drawn by the shell (`ARCHITECTURE.md` section 2.0).
 `MORPH_BACKEND=x11` forces XWayland, `MORPH_BACKEND=wayland` native Wayland.
-Other switches: `MORPH_DMABUF_PROBE=0` (skip the start-up DMA-BUF check),
+Other switches: `MORPH_DMABUF_PROBE=0` (skip the start-up check that a test page
+paints; `=1` runs it even without a DRM device),
 `MORPH_VAAPI=0` (do not rank VA-API video decoders first).
 
 Packages and tests:
@@ -96,5 +97,5 @@ Packages and tests:
 - `tests/xvfb/` — the page `scripts/xvfb-check.py` drives
 
 Crate versions are `0.1.0` (BSD-3-Clause, edition 2024), except `morph-desktop`,
-which carries the desktop build's version (`0.2.0-alpha.6`). They are not published
+which carries the desktop build's version (`0.2.0-alpha.7`). They are not published
 in this pass.
