@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use morph_ui::actions::{Action, Keymap};
 use morph_webview::fake::{Call, FakeBackend};
-use morph_webview::{ErrorKind, Event, LoadError, Rect, ViewId};
+use morph_webview::{ErrorKind, Event, Frame, Input, LoadError, Modifiers, MouseButton, Rect, ViewId};
 
 use super::{Browser, Config, Cover, FindBar, error_text};
 
@@ -458,4 +458,69 @@ fn clicking_into_the_page_blurs_the_address_bar() {
     b.poll();
     assert!(!b.address_focused());
     assert_eq!(b.address().text(), "https://a.test");
+}
+
+fn drawing_browser(start: &str) -> (Browser, FakeBackend) {
+    let fake = FakeBackend::drawing();
+    let b = Browser::new(Box::new(fake.clone()), Config { start_url: start.into(), ..Config::default() }).unwrap();
+    (b, fake)
+}
+
+fn frame(width: u32) -> Frame {
+    Frame { width, height: 1, pixels: vec![0; width as usize * 4] }
+}
+
+#[test]
+fn drawn_pages_hand_out_the_active_tabs_frames_and_input() {
+    let (mut b, fake) = drawing_browser("a.test");
+    assert!(b.draws_pages());
+    let first = fake.created()[0];
+    fake.push_frame(first, frame(3));
+    assert_eq!(b.take_frame(), Some(frame(3)));
+    assert_eq!(b.take_frame(), None, "nothing new");
+    let click = Input::PointerButton { x: 1.0, y: 2.0, button: MouseButton::Left, pressed: true, modifiers: Modifiers::default() };
+    b.page_input(click.clone());
+    assert_eq!(fake.inputs(first), vec![click.clone()]);
+    b.new_tab("b.test");
+    let second = fake.created()[1];
+    fake.push_frame(first, frame(4));
+    assert_eq!(b.take_frame(), None, "a background tab's frame is not drawn");
+    b.page_input(click.clone());
+    assert_eq!(fake.inputs(second), vec![click]);
+}
+
+#[test]
+fn a_covered_page_gets_no_input_and_draws_nothing() {
+    let (mut b, fake) = drawing_browser("a.test");
+    let view = fake.created()[0];
+    fake.emit(view, Event::Crashed);
+    b.poll();
+    fake.push_frame(view, frame(2));
+    assert_eq!(b.take_frame(), None);
+    b.page_input(Input::PointerLeave);
+    assert!(fake.inputs(view).is_empty());
+}
+
+#[test]
+fn the_keyboard_follows_page_and_shell_focus() {
+    let (mut b, fake) = drawing_browser("a.test");
+    b.focus_page();
+    assert!(b.page_has_keyboard());
+    b.focus_address();
+    assert!(!b.page_has_keyboard());
+    b.close_find();
+    b.dispatch(Action::Find);
+    assert!(!b.page_has_keyboard(), "the find bar takes the keyboard");
+    b.close_find();
+    assert!(b.page_has_keyboard(), "closing it gives it back");
+    let _ = fake;
+}
+
+#[test]
+fn window_backends_leave_the_keyboard_to_the_window_system() {
+    let (mut b, _fake) = browser("a.test");
+    assert!(!b.draws_pages());
+    b.focus_page();
+    assert!(!b.page_has_keyboard());
+    assert_eq!(b.take_frame(), None);
 }

@@ -4,7 +4,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::{Backend, Event, Rect, Result, Spec, ViewId, WebView};
+use crate::{Backend, Event, Frame, Input, Rect, Result, Spec, ViewId, WebView};
 
 /// A call a fake web view received.
 #[derive(Debug, Clone, PartialEq)]
@@ -22,6 +22,7 @@ pub enum Call {
     FindNext(bool),
     FindClear,
     Terminate,
+    Input(Input),
     Dropped,
 }
 
@@ -31,6 +32,10 @@ struct Shared {
     calls: Vec<(ViewId, Call)>,
     pending: Vec<(ViewId, Event)>,
     focus_host: usize,
+    /// The shell draws the pages (an off-screen backend).
+    draws: bool,
+    keyboard: Option<ViewId>,
+    frames: Vec<(ViewId, Frame)>,
 }
 
 /// The fake backend. Clone it to keep a handle for assertions after handing
@@ -43,6 +48,31 @@ pub struct FakeBackend {
 impl FakeBackend {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A fake whose pages the shell draws, like the off-screen backend: it
+    /// tracks which view has the keyboard and hands out frames given to
+    /// [`FakeBackend::push_frame`].
+    pub fn drawing() -> Self {
+        let fake = Self::default();
+        fake.shared.borrow_mut().draws = true;
+        fake
+    }
+
+    /// The next frame `id` hands out.
+    pub fn push_frame(&self, id: ViewId, frame: Frame) {
+        self.shared.borrow_mut().frames.push((id, frame));
+    }
+
+    /// Input handed to `id`, oldest first.
+    pub fn inputs(&self, id: ViewId) -> Vec<Input> {
+        self.calls_for(id)
+            .into_iter()
+            .filter_map(|c| match c {
+                Call::Input(i) => Some(i),
+                _ => None,
+            })
+            .collect()
     }
 
     /// Every call so far, oldest first.
@@ -107,7 +137,18 @@ impl Backend for FakeBackend {
     }
 
     fn focus_host(&self) {
-        self.shared.borrow_mut().focus_host += 1;
+        let mut shared = self.shared.borrow_mut();
+        shared.focus_host += 1;
+        shared.keyboard = None;
+    }
+
+    fn draws_pages(&self) -> bool {
+        self.shared.borrow().draws
+    }
+
+    fn keyboard(&self) -> Option<ViewId> {
+        let shared = self.shared.borrow();
+        if shared.draws { shared.keyboard } else { None }
     }
 }
 
@@ -150,6 +191,7 @@ impl WebView for FakeView {
     }
     fn focus(&self) -> Result<()> {
         self.backend.record(self.id, Call::Focus);
+        self.backend.shared.borrow_mut().keyboard = Some(self.id);
         Ok(())
     }
     fn find(&self, query: &str) -> Result<()> {
@@ -167,6 +209,14 @@ impl WebView for FakeView {
     fn terminate(&self) -> Result<()> {
         self.backend.record(self.id, Call::Terminate);
         Ok(())
+    }
+    fn take_frame(&self) -> Option<Frame> {
+        let mut shared = self.backend.shared.borrow_mut();
+        let at = shared.frames.iter().position(|(id, _)| *id == self.id)?;
+        Some(shared.frames.remove(at).1)
+    }
+    fn input(&self, input: Input) {
+        self.backend.record(self.id, Call::Input(input));
     }
 }
 
