@@ -4,6 +4,29 @@
 //! third_party/), pointer buttons, wheel steps and modifier keys.
 
 use gpui::{Keystroke, Modifiers, MouseButton, NavigationDirection, ScrollDelta};
+
+/// The key the keyboard sent behind a GPUI key event (Linux: GPUI's
+/// platform patched in third_party/). Other platforms have none; the
+/// shell draws pages only on Wayland.
+#[cfg(target_os = "linux")]
+pub use gpui_linux::raw_key::RawKey;
+
+#[cfg(not(target_os = "linux"))]
+#[derive(Debug, Clone, Copy)]
+pub struct RawKey {
+    pub keycode: u32,
+    pub keysym: u32,
+    pub mods: u32,
+    pub group: u32,
+}
+
+/// The raw key behind the key event being handled, if the platform says.
+pub fn current_raw_key() -> Option<RawKey> {
+    #[cfg(target_os = "linux")]
+    return gpui_linux::raw_key::current();
+    #[cfg(not(target_os = "linux"))]
+    None
+}
 use morph_webview::keys;
 use morph_webview::{Input, Key};
 
@@ -25,7 +48,7 @@ pub fn button(button: MouseButton) -> morph_webview::MouseButton {
 /// A key event for the page. With the raw key (from the keyboard) it is
 /// exactly what the keyboard sent; without one (an input method's text) a
 /// single character goes as its keysym and longer text as text.
-pub fn key(keystroke: &Keystroke, pressed: bool, raw: Option<gpui_linux::raw_key::RawKey>) -> Option<Input> {
+pub fn key(keystroke: &Keystroke, pressed: bool, raw: Option<RawKey>) -> Option<Input> {
     if let Some(raw) = raw {
         return Some(Input::Key(Key { pressed, keycode: raw.keycode, keyval: raw.keysym, state: raw.mods, group: raw.group, is_modifier: false }));
     }
@@ -77,7 +100,7 @@ mod tests {
 
     #[test]
     fn a_raw_key_goes_as_the_keyboard_sent_it() {
-        let raw = gpui_linux::raw_key::RawKey { keycode: 87, keysym: 0xffb1, mods: 16, group: 0 };
+        let raw = RawKey { keycode: 87, keysym: 0xffb1, mods: 16, group: 0 };
         let Some(Input::Key(k)) = key(&stroke("1", Some("1")), true, Some(raw)) else { panic!() };
         assert_eq!((k.keycode, k.keyval, k.state, k.pressed), (87, 0xffb1, 16, true));
     }

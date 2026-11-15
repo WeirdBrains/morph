@@ -821,13 +821,43 @@ fn address_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("enter", Submit, c),
         KeyBinding::new("escape", Cancel, c),
     ]
+    .into_iter()
+    .chain(
+        MAC.then(|| {
+            [
+                KeyBinding::new("cmd-a", SelectAll, c),
+                KeyBinding::new("cmd-v", Paste, c),
+                KeyBinding::new("cmd-c", Copy, c),
+                KeyBinding::new("cmd-x", Cut, c),
+            ]
+        })
+        .into_iter()
+        .flatten(),
+    )
+    .collect()
+}
+
+/// macOS: every Ctrl shortcut also works with Cmd, as Mac users expect.
+pub const MAC: bool = cfg!(target_os = "macos");
+
+/// `keystroke`, and on macOS (`mac`) its Cmd form for a Ctrl shortcut
+/// (not Ctrl+Tab: Cmd+Tab belongs to the system).
+pub fn platform_keystrokes(keystroke: &str, mac: bool) -> Vec<String> {
+    let mut out = vec![keystroke.to_string()];
+    if mac
+        && let Some(rest) = keystroke.strip_prefix("ctrl-")
+        && !rest.ends_with("tab")
+    {
+        out.push(format!("cmd-{rest}"));
+    }
+    out
 }
 
 /// Keys the shell takes even while a page has focus: every bound shortcut
 /// (Ctrl+F opens the find bar). Everything else (Ctrl+C/V/X/A/Z, arrows,
 /// Page Up/Down, Space, Tab, keypad) goes to the page.
 fn page_shortcuts(keymap: &Keymap) -> Vec<String> {
-    keymap.bindings().iter().map(|b| b.keystroke.clone()).collect()
+    keymap.bindings().iter().flat_map(|b| platform_keystrokes(&b.keystroke, MAC)).collect()
 }
 
 /// Open the window and run until it closes.
@@ -837,9 +867,11 @@ pub fn run(home: PathBuf, args: Args, listener: Option<crate::single::Listener>)
         let mut bindings = address_bindings();
         bindings.extend(crate::text_input::bindings());
         for binding in keymap.bindings() {
-            match KeyBinding::load(&binding.keystroke, gpui_action(binding.action), None, false, None, cx) {
-                Ok(b) => bindings.push(b),
-                Err(e) => eprintln!("morph: ignoring key {}: {e:?}", binding.keystroke),
+            for keystroke in platform_keystrokes(&binding.keystroke, MAC) {
+                match KeyBinding::load(&keystroke, gpui_action(binding.action), None, false, None, cx) {
+                    Ok(b) => bindings.push(b),
+                    Err(e) => eprintln!("morph: ignoring key {keystroke}: {e:?}"),
+                }
             }
         }
         cx.bind_keys(bindings);
@@ -869,8 +901,9 @@ pub fn run(home: PathBuf, args: Args, listener: Option<crate::single::Listener>)
             window_min_size: Some(size(px(480.), px(320.))),
             // Frameless where the desktop can draw it (a compositor runs):
             // the tab row is the caption. GPUI keeps server decorations
-            // otherwise.
-            window_decorations: Some(WindowDecorations::Client),
+            // otherwise. macOS and Windows keep their own title bar and
+            // window buttons.
+            window_decorations: Some(if cfg!(target_os = "linux") { WindowDecorations::Client } else { WindowDecorations::Server }),
             ..Default::default()
         };
         let start = args.open.clone().unwrap_or_default();
@@ -938,6 +971,16 @@ mod tests {
         for page in ["ctrl-c", "ctrl-v", "ctrl-x", "ctrl-a", "ctrl-z", "pageup", "space", "tab"] {
             assert!(!keys.iter().any(|k| k == page), "{page}");
         }
+    }
+
+    #[test]
+    fn mac_shortcuts_also_take_cmd() {
+        assert_eq!(platform_keystrokes("ctrl-t", false), ["ctrl-t"]);
+        assert_eq!(platform_keystrokes("ctrl-t", true), ["ctrl-t", "cmd-t"]);
+        assert_eq!(platform_keystrokes("ctrl-shift-g", true), ["ctrl-shift-g", "cmd-shift-g"]);
+        assert_eq!(platform_keystrokes("ctrl-tab", true), ["ctrl-tab"]);
+        assert_eq!(platform_keystrokes("ctrl-shift-tab", true), ["ctrl-shift-tab"]);
+        assert_eq!(platform_keystrokes("f5", true), ["f5"]);
     }
 
     #[test]

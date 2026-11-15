@@ -54,6 +54,21 @@ pub fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("shift-enter", SubmitBack, c),
         KeyBinding::new("escape", Cancel, c),
     ]
+    .into_iter()
+    .chain(
+        crate::shell::MAC
+            .then(|| {
+                [
+                    KeyBinding::new("cmd-a", SelectAll, c),
+                    KeyBinding::new("cmd-v", Paste, c),
+                    KeyBinding::new("cmd-c", Copy, c),
+                    KeyBinding::new("cmd-x", Cut, c),
+                ]
+            })
+            .into_iter()
+            .flatten(),
+    )
+    .collect()
 }
 
 pub struct TextInput {

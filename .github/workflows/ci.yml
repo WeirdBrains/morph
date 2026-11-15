@@ -191,6 +191,97 @@ jobs:
             dist/wayland-hidpi-checks.md
           if-no-files-found: warn
 
+  # The GPUI desktop shell on macOS (WKWebView child views): clippy and the
+  # shell's tests, a universal Morph.app (arm64 + x86_64) in a zip and a dmg
+  # (scripts/macos-dist.sh), and the smoke test: a window, a page from a
+  # local server, the page bridge (scripts/desktop-smoke.py).
+  desktop-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: desktop-macos
+      - run: cargo clippy --locked -p morph-desktop -p morph-webview -p morph-browser --all-targets -- -D warnings
+      - run: cargo test --locked -p morph-desktop -p morph-webview -p morph-browser
+      - name: Morph.app (zip, dmg)
+        run: scripts/macos-dist.sh
+      - name: Smoke test
+        run: |
+          version="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "morph-desktop"))')"
+          rm -rf /tmp/smoke && mkdir -p /tmp/smoke
+          ditto -x -k dist/morph-*-universal-apple-darwin.zip /tmp/smoke
+          hdiutil verify dist/morph-*-universal-apple-darwin.dmg
+          python3 scripts/desktop-smoke.py /tmp/smoke/Morph.app/Contents/MacOS/morph --version "$version" --screenshot dist/smoke-macos.png
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: morph-macos-universal
+          path: |
+            dist/morph-*-universal-apple-darwin.zip
+            dist/morph-*-universal-apple-darwin.dmg
+            dist/SHA256SUMS-macos
+            dist/smoke-macos.png
+          if-no-files-found: warn
+
+  # The GPUI desktop shell on Windows (WebView2 child views): clippy and the
+  # shell's tests, morph.exe in a zip and an MSI (scripts/windows-dist.ps1,
+  # WiX v5), the MSI installed and started, and the smoke test. The short
+  # target dir keeps OpenSSL's object paths under MAX_PATH.
+  desktop-windows:
+    runs-on: windows-latest
+    env:
+      CARGO_TARGET_DIR: C:\t\morph
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: desktop-windows
+      - run: cargo clippy --locked -p morph-desktop -p morph-webview -p morph-browser --all-targets -- -D warnings
+      - run: cargo test --locked -p morph-desktop -p morph-webview -p morph-browser
+      - name: WiX v5
+        run: dotnet tool install --global wix --version 5.0.2
+      - name: morph.exe (zip, msi)
+        run: powershell -ExecutionPolicy Bypass -File scripts/windows-dist.ps1
+      - name: Smoke test
+        shell: bash
+        run: |
+          version="$(cargo metadata --no-deps --format-version 1 | python -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "morph-desktop"))')"
+          rm -rf /c/smoke && mkdir -p /c/smoke
+          unzip -q dist/morph-*-x86_64-pc-windows-msvc.zip -d /c/smoke
+          python scripts/desktop-smoke.py /c/smoke/morph-*/morph.exe --version "$version" --screenshot dist/smoke-windows.png
+      - name: MSI installs, starts and uninstalls
+        shell: pwsh
+        run: |
+          $msi = (Get-ChildItem dist\morph-*-x86_64-pc-windows-msvc.msi).FullName
+          $p = Start-Process msiexec -ArgumentList "/i `"$msi`" /qn /l*v msi-install.log" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content msi-install.log -Tail 50; throw "install failed: $($p.ExitCode)" }
+          $exe = "$env:ProgramFiles\Morph\morph.exe"
+          $out = & $exe --version | Out-String
+          Write-Host $out
+          if ($out -notmatch "^morph ") { throw "morph --version printed: $out" }
+          if (-not (Test-Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Morph.lnk")) { throw "no Start menu shortcut" }
+          $p = Start-Process msiexec -ArgumentList "/x `"$msi`" /qn" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "uninstall failed: $($p.ExitCode)" }
+          if (Test-Path $exe) { throw "morph.exe left behind" }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: morph-windows-x86_64
+          path: |
+            dist/morph-*-x86_64-pc-windows-msvc.zip
+            dist/morph-*-x86_64-pc-windows-msvc.msi
+            dist/SHA256SUMS-windows
+            dist/smoke-windows.png
+          if-no-files-found: warn
+
   # The Nix flake: both packages (from the release in packaging/nix/release.json)
   # build, patch and start.
   nix:

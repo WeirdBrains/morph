@@ -2,63 +2,49 @@
 //!
 //! The window is a host for components. Phase 1 has one, the browser, in the
 //! main slot; the layout model (`morph_ui::layout`) already has the sidebar
-//! and bottom slots later components use.
+//! and bottom slots later components use. It runs on Linux (X11 and
+//! Wayland), macOS and Windows.
 
-#[cfg(target_os = "linux")]
+// A GUI app on Windows (no console window of its own); see `attach_console`.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod address;
 #[cfg(target_os = "linux")]
 mod backend;
-#[cfg(target_os = "linux")]
 mod browser_view;
 mod cli;
-#[cfg(target_os = "linux")]
 mod default_browser;
-#[cfg(target_os = "linux")]
 mod identity;
-#[cfg(target_os = "linux")]
 mod identity_view;
-#[cfg(target_os = "linux")]
 mod library;
-#[cfg(target_os = "linux")]
 mod library_view;
-#[cfg(target_os = "linux")]
 mod page_input;
-#[cfg(target_os = "linux")]
 mod profiles;
-#[cfg(target_os = "linux")]
 mod profiles_view;
 #[cfg(target_os = "linux")]
 mod render_check;
-#[cfg(target_os = "linux")]
 mod settings_view;
-#[cfg(target_os = "linux")]
 mod shell;
-#[cfg(target_os = "linux")]
 mod single;
-#[cfg(target_os = "linux")]
 mod text_input;
-#[cfg(target_os = "linux")]
 mod widgets;
 
 use std::process::ExitCode;
 
-#[cfg(not(target_os = "linux"))]
-fn main() -> ExitCode {
-    match cli::parse(std::env::args().skip(1)) {
-        Ok(cli::Command::Print(text)) => {
-            println!("{text}");
-            ExitCode::SUCCESS
-        }
-        _ => {
-            eprintln!("morph: the GPUI desktop shell runs on Linux only so far; macOS and Windows are planned");
-            ExitCode::FAILURE
-        }
-    }
+/// Print to the console Morph was started from, if any (Windows GUI apps
+/// have none of their own). Redirected output is left alone.
+#[cfg(windows)]
+fn attach_console() {
+    use windows_sys::Win32::System::Console::{ATTACH_PARENT_PROCESS, AttachConsole};
+    // SAFETY: no arguments to get wrong; failure (no parent console) is fine.
+    unsafe { AttachConsole(ATTACH_PARENT_PROCESS) };
 }
 
-#[cfg(target_os = "linux")]
 fn main() -> ExitCode {
+    #[cfg(windows)]
+    attach_console();
     // The start-up render check runs in a child of Morph (see `render_check`).
+    #[cfg(target_os = "linux")]
     if std::env::args().nth(1).as_deref() == Some(render_check::CHILD_FLAG) {
         let arg = |n: usize, yes: &str| std::env::args().nth(n).as_deref() == Some(yes);
         return ExitCode::from(morph_webview::render_probe::run(arg(2, "offscreen"), arg(3, "gl")));
@@ -74,6 +60,7 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    #[cfg(target_os = "linux")]
     if let Err(e) = backend::start() {
         eprintln!("morph: {e}");
         return ExitCode::FAILURE;
