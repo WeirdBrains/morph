@@ -2457,6 +2457,22 @@ Settled while building phase 1 (details in section 2.0 and `docs/handoff.md`):
 - **Mobile CI:** the password-field test failure is fixed and the Android Gradle
   Plugin is 9.1.1 (Flutter 3.50's minimum).
 
+### 2026-11-15 — Phase 5: page bridge on Linux, packages, Wayland stays XWayland
+
+- **The page bridge has one script for every backend**
+  (`morph_core::page_bridge::BRIDGE_SCRIPT`, the mobile app's
+  `morph-bridge.js`); a backend only maps `window.morphRust.postMessage` onto
+  its channel (Linux: a WebKit script message handler, not wry's IPC, which
+  drops `file://` pages) and hands replies to `MorphBridge.deliver`.
+- **Desktop integration commands never run on the UI thread**
+  (`xdg-settings` was one; it can take seconds).
+- **Packages are made from the release tarball**, so every format ships the
+  same binary: zip, deb, rpm and the Nix flake, each with and without the
+  desktop entry.
+- **Native Wayland: still XWayland** (open decision 1). wry has no child web
+  view on Wayland; the way forward is an offscreen web view drawn by GPUI with
+  forwarded input (checked to work under GDK's Wayland backend).
+
 ### 2026-11-15 — Phase 4: identity panel, device links, single instance
 
 - **The identity panel is a per-profile component** (`morph.identity`) like the

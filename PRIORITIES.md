@@ -57,6 +57,12 @@ instance (a second launch hands its URL to the running window). The first key af
 a panel no longer goes missing. The page bridge round trip is not in yet. Build
 `v0.2.0-alpha.4`.
 
+2026-11-15, phase 5: the page bridge works in the GPUI shell on Linux, and Morph ships as a
+zip, deb, rpm and Nix flake (each with and without the desktop entry) besides the tarball
+and Arch packages. The shared release script is vendored with Morph's `release.toml`; it
+does not cut pre-releases yet. Native Wayland is not in yet (XWayland, checked under a
+headless sway). Build `v0.2.0-alpha.5`.
+
 1. Webview _(moved up: everything else plugs into it)_
     - System web views: WebView2 (Windows), WKWebView (Apple), WebKit (Linux: WPE + webkit2gtk), Android WebView _(changed 2026-11-11)_
         - Linux: build our own WebKit plugin _(changed 2026-11-11)_
