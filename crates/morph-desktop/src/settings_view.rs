@@ -23,6 +23,8 @@ pub struct SettingsView {
     /// Whether Morph opens links, read when the panel opens.
     browser: Option<Status>,
     browser_note: Option<String>,
+    /// A running `xdg-settings` (never on the UI thread).
+    browser_check: Option<default_browser::Check>,
 }
 
 impl EventEmitter<ShellRequest> for SettingsView {}
@@ -37,6 +39,7 @@ impl SettingsView {
             error: None,
             browser: None,
             browser_note: None,
+            browser_check: None,
         };
         view.reload();
         view
@@ -59,7 +62,9 @@ impl SettingsView {
 
     /// The panel opened: it takes the keyboard (arrows move the tabs).
     pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.browser = Some(default_browser::status(&default_browser::system));
+        if self.browser_check.is_none() {
+            self.browser_check = Some(default_browser::Check::status(default_browser::system));
+        }
         self.browser_note = None;
         window.focus(&self.focus, cx);
         cx.emit(ShellRequest::FocusShell);
@@ -83,11 +88,22 @@ impl SettingsView {
     }
 
     fn make_default(&mut self, cx: &mut Context<Self>) {
-        self.browser_note = Some(match default_browser::make_default(&default_browser::system) {
+        self.browser_check = Some(default_browser::Check::make_default(default_browser::system));
+        self.browser_note = Some("Asking the desktop…".into());
+        cx.notify();
+    }
+
+    /// Pick up a finished `xdg-settings`; called by the host's tick.
+    pub fn poll(&mut self, cx: &mut Context<Self>) {
+        let Some((status, made)) = self.browser_check.as_ref().and_then(|c| c.take()) else {
+            return;
+        };
+        self.browser_check = None;
+        self.browser = Some(status);
+        self.browser_note = made.map(|made| match made {
             Ok(()) => "Links from other apps now open in Morph.".into(),
             Err(e) => format!("Could not make Morph the default: {e}"),
         });
-        self.browser = Some(default_browser::status(&default_browser::system));
         cx.notify();
     }
 

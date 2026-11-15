@@ -44,6 +44,13 @@ class Morph:
         shutil.copy(ROOT / "packaging" / "linux" / "morph.desktop", xdg / "data" / "applications" / "morph.desktop")
         if not (xdg / "bin" / "morph").exists():
             (xdg / "bin" / "morph").symlink_to(Path(binary).resolve())
+        # xdg-settings can take seconds on a real desktop; for Morph it takes
+        # two here, so a window that waited for it would miss keys (the
+        # checks' own calls, without MORPH_HOME, are not slowed).
+        real = shutil.which("xdg-settings", path=os.environ.get("PATH"))
+        if real and not (xdg / "bin" / "xdg-settings").exists():
+            (xdg / "bin" / "xdg-settings").write_text(f'#!/bin/sh\n[ -n "$MORPH_HOME" ] && sleep 2\nexec {real} "$@"\n')
+            (xdg / "bin" / "xdg-settings").chmod(0o755)
         self.env.update(XDG_DATA_HOME=str(xdg / "data"), XDG_CONFIG_HOME=str(xdg / "config"), PATH=f"{xdg / 'bin'}:{os.environ.get('PATH', '')}")
         for var in ("BROWSER", "XDG_CURRENT_DESKTOP", "DESKTOP_SESSION"):
             self.env.pop(var, None)
@@ -387,12 +394,17 @@ def settings_panel(m, r, win, top):
     m.key("ctrl+comma", delay=0.8)
     r.check("settings", "Ctrl+, opens the settings beside the page", wait_for(lambda: (state(m) or {}).get("w", 0) < w0), f"{w0} -> {(state(m) or {}).get('w')}")
     if shutil.which("xdg-settings"):
-        get = lambda: subprocess.run(["xdg-settings", "get", "default-web-browser"], env=m.env, capture_output=True, text=True).stdout.strip()  # noqa: E731
-        m.key("d", delay=1.5)
-        r.check("settings", "d makes Morph the default browser (xdg-settings)", wait_for(lambda: get() == "morph.desktop"), get())
+        env = {k: v for k, v in m.env.items() if k != "MORPH_HOME"}
+        get = lambda: subprocess.run(["xdg-settings", "get", "default-web-browser"], env=env, capture_output=True, text=True).stdout.strip()  # noqa: E731
+        m.key("d", delay=0.3)
+        settings_check = time.time()
     m.key("Left", delay=0.8)
     r.check("settings", "Left moves the tabs to the left (saved)", wait_for(lambda: '"left"' in settings_file(m)), settings_file(m))
     r.check("settings", "the page grows taller without the tab row", wait_for(lambda: (state(m) or {}).get("h", 0) == h0 + 34), f"{h0} -> {(state(m) or {}).get('h')}")
+    if shutil.which("xdg-settings"):
+        # The slow xdg-settings is still running: the keys above did not wait.
+        r.check("settings", "the arrow keys did not wait for xdg-settings", time.time() - settings_check < 4.0, f"{time.time() - settings_check:.1f}s")
+        r.check("settings", "d makes Morph the default browser (xdg-settings)", wait_for(lambda: get() == "morph.desktop", 15), get())
     m.key("Escape", delay=0.8)
     side = wait_for(lambda: (state(m) or {}).get("w") == w0 - 220 and w0 - 220)
     r.check("settings", "Escape closes it; the tab list takes 220 px", side, f"{w0} -> {(state(m) or {}).get('w')}")
