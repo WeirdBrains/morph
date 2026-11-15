@@ -1,0 +1,13 @@
+<!doctype html>
+<!-- Popup close check: a click opens closer.html, which posts a message
+     here and calls window.close(). The title reports what the opener saw:
+     O{"opened":bool,"msg":"…","closed":bool} -->
+<html><body style="height:100vh;margin:0" onclick="open_popup()">
+<p>Click anywhere to open a popup that signs in and closes itself.</p>
+<script>
+let popup = null, msg = "";
+function open_popup() { if (!popup) popup = window.open("closer.html", "signin", "width=420,height=320"); }
+window.addEventListener("message", (e) => { msg = String(e.data); });
+setInterval(() => { document.title = "O" + JSON.stringify({ opened: !!popup, msg, closed: popup ? popup.closed : false }); }, 200);
+</script>
+</body></html>

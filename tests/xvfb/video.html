@@ -1,0 +1,12 @@
+<!doctype html>
+<!-- Media check: two small bundled clips (VP8 WebM, H.264 MP4), muted
+     autoplay. The title reports each clip's playback as JSON:
+     V{"webm":{"t":currentTime,"r":readyState,"e":error code},"mp4":{...}} -->
+<html><body>
+<video id="webm" src="media/clip.webm" muted autoplay loop playsinline width="160" height="120"></video>
+<video id="mp4" src="media/clip.mp4" muted autoplay loop playsinline width="160" height="120"></video>
+<script>
+const clip = (id) => { const v = document.getElementById(id); return { t: Math.round(v.currentTime * 100) / 100, r: v.readyState, e: v.error ? v.error.code : 0, p: v.paused }; };
+setInterval(() => { document.title = "V" + JSON.stringify({ webm: clip("webm"), mp4: clip("mp4") }); }, 300);
+</script>
+</body></html>

@@ -35,11 +35,11 @@ EVENT = re.compile(r'^morph-event tab=(\d+) (\w+)(?:\((.*)\))?')
 
 
 class Morph:
-    def __init__(self, binary, display, home):
+    def __init__(self, binary, display, home, extra_env=None):
         self.display = display
         self.home = Path(home)
         self.env = self.session_env(display)
-        self.env.update(MORPH_HOME=home, MORPH_LOG_EVENTS="1")
+        self.env.update(MORPH_HOME=home, MORPH_LOG_EVENTS="1", **(extra_env or {}))
         # A desktop of its own for the default-browser check: morph.desktop
         # and a `morph` on PATH (xdg-settings wants both), fresh config.
         xdg = Path(home) / "xdg"
@@ -828,6 +828,68 @@ def bridge_round_trip(m, r, binary):
     r.check("bridge", "a bad message is rejected with Rust's error", got.get("error") == "rejected", str(got))
 
 
+def popup_close(m, r, binary):
+    """A sign-in style popup that posts to its opener and calls
+    window.close() closes, and the tab's popup count goes back down."""
+    before = len(m.events())
+    page = (ROOT / "tests" / "xvfb" / "opener.html").as_uri()
+    subprocess.run([binary, page], env=m.env, capture_output=True, timeout=15)
+
+    def opener():
+        for _, n, a in reversed(m.events()[before:]):
+            if n == "TitleChanged" and a and '"O{' in a:
+                return json.loads(json.loads(a)[1:])
+        return None
+
+    r.check("popup", "the opener page loads in a new tab", wait_for(opener, 10), "no opener title")
+    win = wait_for(m.own_window, 10)
+    m.activate(win)
+    m.click(win, 400, 76 + 300)
+    r.check("popup", "a click opens the sign-in popup", wait_for(lambda: (opener() or {}).get("opened"), 5), str(opener()))
+    got = wait_for(lambda: (opener() or {}).get("closed"), 10)
+    r.check("popup", "the popup's message reached the opener", (opener() or {}).get("msg") == "signed-in", str(opener()))
+    r.check("popup", "window.close() closes the popup", got, str(opener()))
+    names = [n for _, n, _ in m.events()[before:]]
+    r.check("popup", "and the tab's popup count goes back down", names.count("PopupOpened") >= 1 and names.count("PopupOpened") == names.count("PopupClosed"), str([n for n in names if n.startswith("Popup")]))
+    r.check("popup", "no popup window is left", wait_for(lambda: m.window(r"^Signing in") is None, 3), "still open")
+
+
+def media(m, r, binary):
+    """Bundled clips (VP8 WebM, H.264 MP4) play: muted autoplay, and
+    currentTime keeps moving."""
+    before = len(m.events())
+    page = (ROOT / "tests" / "xvfb" / "video.html").as_uri()
+    subprocess.run([binary, page], env=m.env, capture_output=True, timeout=15)
+
+    def clips():
+        for _, n, a in reversed(m.events()[before:]):
+            if n == "TitleChanged" and a and '"V{' in a:
+                return json.loads(json.loads(a)[1:])
+        return None
+
+    wait_for(lambda: clips() and all(c["r"] >= 2 for c in clips().values()), 10)
+    first = clips() or {}
+    time.sleep(1.5)
+    second = clips() or {}
+    for kind in ("webm", "mp4"):
+        a, b = first.get(kind, {}), second.get(kind, {})
+        ok = a.get("e") == 0 and b.get("e") == 0 and b.get("r", 0) >= 2 and a.get("t") != b.get("t") and not b.get("p", True)
+        r.check("media", f"a {kind} clip plays (currentTime moves)", ok, f"{a} -> {b}")
+
+
+def gdk_scale_ignored(r, binary, display, start):
+    """GDK_SCALE and GDK_DPI_SCALE (set by some desktops for GTK apps) do not
+    make pages larger than the shell: a Morph started with them shows the
+    page at the same size and pixel ratio as one without."""
+    m2 = Driver(binary, display, tempfile.mkdtemp(prefix="morph-xvfb-gdkscale-"), extra_env={"GDK_SCALE": "2", "GDK_DPI_SCALE": "1.5"})
+    try:
+        s = wait_for(lambda: state(m2), 20) or {}
+        ok = (s.get("w"), s.get("h"), s.get("d")) == (start.get("w"), start.get("h"), start.get("d"))
+        r.check("scale", "with GDK_SCALE=2 the page matches the shell's scale", ok, f"{s} vs {start}")
+    finally:
+        m2.stop()
+
+
 def error_page(m, r, win, top):
     """A load that fails shows Morph's error page (the web view is hidden)
     and keeps the shell's keys working: F5 tries again, Alt+Left goes back."""
@@ -884,6 +946,7 @@ def main():
         win = wait_for(lambda: m.window("Morph"), 20)
         r.check("shell", "window opens", win)
         r.check("shell", "page loads", wait_for(lambda: state(m), 20))
+        start = dict(state(m) or {})
         if not win:
             return finish(r, args)
         # The page area starts below the tab strip (34) and toolbar (42).
@@ -945,6 +1008,9 @@ def main():
         settings_relaunch(m, r, w0, h0)
         single_instance(m, r, args.bin)
         bridge_round_trip(m, r, args.bin)
+        popup_close(m, r, args.bin)
+        media(m, r, args.bin)
+        gdk_scale_ignored(r, args.bin, display, start)
         # GPUI draws the frame itself only where the window manager supports
         # _GTK_FRAME_EXTENTS and a compositor runs; xfwm4 has both.
         if wm and not args.wayland and shutil.which("xfwm4"):
