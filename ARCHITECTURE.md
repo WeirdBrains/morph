@@ -2457,6 +2457,23 @@ Settled while building phase 1 (details in section 2.0 and `docs/handoff.md`):
 - **Mobile CI:** the password-field test failure is fixed and the Android Gradle
   Plugin is 9.1.1 (Flutter 3.50's minimum).
 
+### 2026-11-15 — Phase 4: identity panel, device links, single instance
+
+- **The identity panel is a per-profile component** (`morph.identity`) like the
+  library: a plain model (`morph-desktop` `identity.rs`, steps and submit rules,
+  unit-tested with real homes and a real TCP link) under a GPUI view. It calls
+  `morph-services` (identity, backups, `device_link`) and tells the host
+  `ShellRequest::IdentityChanged`, which reopens the now encrypted library.
+- **Link sessions are polled from the host's tick**, like the page events; the
+  panel never blocks the UI thread, and dropping the model ends its sessions.
+- **Single instance is a Unix socket per Morph home**, not D-Bus: two homes
+  (profiles directories) are two instances, and the line protocol (`open URL`,
+  `show`) needs nothing beyond std. It is bound before the web view starts.
+- **Default browser goes through `xdg-settings`** (works across desktops) and
+  is read back to report the result.
+- **WebKit's resent keys pass `HostKeys`** (`SeenKeys`): stopping them made
+  WebKit drop the next key.
+
 ### 2026-11-15 — Phase 3: panels as components, settings and the frameless window
 
 - **Panels are components.** The library (`morph.library`), profiles

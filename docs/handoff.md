@@ -1,12 +1,13 @@
 # Handoff
 
 Updated 2026-11-15. This file is the resume point for moving Morph's desktop shell to
-GPUI. **Phases 1, 2 and 3 are done and pushed to `main`**: pre-releases `v0.2.0-alpha.1`
+GPUI. **Phases 1 to 4 are done and pushed to `main`**: pre-releases `v0.2.0-alpha.1`
 (https://github.com/WeirdBrains/morph/releases/tag/v0.2.0-alpha.1), `v0.2.0-alpha.2`
-(https://github.com/WeirdBrains/morph/releases/tag/v0.2.0-alpha.2) and `v0.2.0-alpha.3`
-(https://github.com/WeirdBrains/morph/releases/tag/v0.2.0-alpha.3), each with a
+(https://github.com/WeirdBrains/morph/releases/tag/v0.2.0-alpha.2), `v0.2.0-alpha.3`
+(https://github.com/WeirdBrains/morph/releases/tag/v0.2.0-alpha.3) and `v0.2.0-alpha.4`
+(https://github.com/WeirdBrains/morph/releases/tag/v0.2.0-alpha.4), each with a
 `morph-bin` recipe for TAUR. m3talsmith said to keep going through the phases without
-waiting for him; phase 4 is next.
+waiting for him; phase 5 is next.
 
 ## Where things stand
 
@@ -30,6 +31,52 @@ waiting for him; phase 4 is next.
   phase 2 (a password-field widget test, and the Android Gradle Plugin 9.1.0
   being below Flutter's 9.1.1 minimum); phase 2 fixed both. The Flutter `linux`
   and `windows` jobs are gone with their targets.
+
+## Phase 4 result: what changed and how it was checked
+
+Identity and links in the GPUI shell (`v0.2.0-alpha.4`).
+
+- **First key after closing a panel (fixed first).** WebKit hands a key the
+  page did not use back through GTK and expects to see that copy again; the
+  shell's `HostKeys` stopped the copy, so WebKit skipped the next real key.
+  `SeenKeys` (`morph-webview`) lets those copies through. Proof:
+  `scripts/xvfb-focus-loop.py --runs 50` for Ctrl+, / Escape, Ctrl+H / Escape
+  and Ctrl+F / Escape, 50 of 50 keys reached the page in each (150 total; about
+  1 in 4 was lost before), and the Xvfb checks press every key exactly once.
+- **Identity panel** (`morph.identity`, Ctrl+Shift+L, `identity.rs` model and
+  `identity_view.rs`): without an identity, 1 create (password twice; the 24
+  recovery words are shown once), 2 restore from the words, 3 restore from a
+  backup file (its password, a new profile password), 4 link from another
+  device. With one: w show the recovery words (password), b save a backup
+  (profile password, a backup password, a path; the file is written 0600 and
+  never overwrites one), a add a device. Every way in encrypts the profile's
+  library (`morph-services`), and the shell opens it right away.
+- **Device linking** (`morph_services::device_link`): the new device shows a
+  link and its QR code (`qrcode`, drawn in GPUI) and a Copy link button; the
+  other device pastes the link with its password; both show the same short
+  code, Enter on each confirms, and the new device chooses its own password.
+  Sessions end when the panel closes.
+- **Default browser** (settings panel, `d` or the button): `xdg-settings set
+  default-web-browser morph.desktop`, then reads it back; explains a set
+  `$BROWSER` and a missing `morph.desktop`. `morph.desktop` already lists the
+  http/https/html MimeTypes.
+- **Single instance** (`single.rs`): one Unix socket per Morph home in
+  `$XDG_RUNTIME_DIR` (`morph-<hash>.sock`); a second `morph URL` hands the URL
+  over (a new tab in the running window, which is raised) and exits; a second
+  `morph` alone raises the window. A stale socket is replaced.
+- **Library:** after unlocking, the keyboard goes to the search (it was left
+  nowhere, so Escape did nothing).
+- **Checks on this box:** fmt, build, clippy `-D warnings`, `cargo test
+  --workspace` clean; Xvfb checks 146/146 on the release build: everything
+  from phase 3 plus the default browser (in an isolated XDG environment),
+  single instance, creating an identity, saving a backup, restoring it in a
+  second home, linking a third home (offer, add, confirm on both, password)
+  and, after a relaunch, unlocking the library with the identity's password.
+- **Not done:** the page bridge round trip listed for phase 4.
+- **Not checked:** linking with the phone app (only desktop to desktop under
+  Xvfb), the real system keyring (Xvfb has none, so the library asks for the
+  password at each launch there), `xdg-settings` on m3talsmith's desktop and
+  links opened from other apps, the QR code with a real camera.
 
 ## Phase 3 result: what changed and how it was checked
 
@@ -287,7 +334,7 @@ export CARGO_TARGET_DIR=<scratch-dir>/cargo-target/morph
 MORPH_HOME=$(mktemp -d) cargo run -p morph-desktop --release
 
 # 2. Or build and install the Arch package from the checkout:
-cd packaging/arch/morph && makepkg -si      # morph 0.2.0alpha2-1
+cd packaging/arch/morph && makepkg -si      # morph 0.2.0alpha4-1
 morph                                        # or "Morph" in the launcher
 
 # 3. Or the prebuilt release from TAUR (once uploaded):
@@ -298,6 +345,15 @@ morph                                        # or "Morph" in the launcher
 `<scratch-dir>`), so the first build takes a while. Without `MORPH_HOME` the
 installed `morph` uses the normal profile directory. On Hyprland it runs
 through XWayland (needs `xorg-xwayland`, which Hyprland normally has).
+
+## Release and TAUR (phase 4)
+
+- Pre-release `v0.2.0-alpha.4` on GitHub, from `main`, with
+  `morph-0.2.0-alpha.4-x86_64-unknown-linux-gnu.tar.gz` and `SHA256SUMS`.
+- `packaging/arch/morph-bin` is `pkgver=0.2.0alpha4` with that tarball's
+  sha256; `packaging/arch/morph` is `0.2.0alpha4` too. The recipe archive is
+  `morph-bin-0.2.0alpha4.tar.gz` (upload from m3talsmith's side with `taurctl pkg
+  upload morph-bin-0.2.0alpha4.tar.gz --org WeirdBrains`, dry run first).
 
 ## Release and TAUR (phase 3)
 
@@ -498,7 +554,7 @@ managers), downloads to a chosen folder.
 - **m3talsmith tests:** the updated Arch package; daily browsing with bookmarks,
   history and two profiles.
 
-### Phase 4 — Identity and links on Linux
+### Phase 4 — Identity and links on Linux (done, `v0.2.0-alpha.4`; page bridge round trip not done)
 
 Identity onboarding (create, restore from words or a backup file), recovery
 phrase and backups, device linking (QR offer shown, SAS check), "Make default
@@ -550,7 +606,7 @@ cd /workspace/morph            # or ~/src/WeirdBrains/morph
 git switch main && git pull --rebase origin main
 ```
 
-Next is phase 4. Commit as m3talsmith, run the quality bar before each commit,
+Next is phase 5 (and the page bridge round trip left from phase 4). Commit as m3talsmith, run the quality bar before each commit,
 `git pull --rebase origin main` before each push, push to `origin/main`; no pull
 requests, no force-push, leave the remote `gpui` branch alone. Do not modify
 `PLAN.md`; `PRIORITIES.md` gets dated progress notes only. Do not touch

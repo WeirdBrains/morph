@@ -9,7 +9,9 @@ The desktop shell (Linux first, then macOS and Windows) is
 working GPUI shell since phase 1 (`v0.2.0-alpha.1`); phase 2 (`v0.2.0-alpha.2`)
 removed the Flutter desktop app, so `app/` is mobile only; phase 3
 (`v0.2.0-alpha.3`) added find in page, error and crash pages, bookmarks and
-history, profiles, settings and a frameless window. See `ARCHITECTURE.md` (sections 1,
+history, profiles, settings and a frameless window; phase 4 (`v0.2.0-alpha.4`)
+added identity onboarding and backups, device linking, "make default browser" and
+single instance. See `ARCHITECTURE.md` (sections 1,
 2.0 and 2a, and the 2026-11-14 decisions) and `docs/handoff.md` for the phases.
 
 Planning documents: `PLAN.md`, `PRIORITIES.md`, and `ARCHITECTURE.md`.
@@ -90,5 +92,5 @@ Packages and tests:
 - `tests/xvfb/` — the page `scripts/xvfb-check.py` drives
 
 Crate versions are `0.1.0` (BSD-3-Clause, edition 2024), except `morph-desktop`,
-which carries the desktop build's version (`0.2.0-alpha.3`). They are not published
+which carries the desktop build's version (`0.2.0-alpha.4`). They are not published
 in this pass.

@@ -50,6 +50,13 @@ position, side tab list) and a frameless window (close only on tiling window man
 a component beside the page. Downloads to a chosen folder are not in yet. Build
 `v0.2.0-alpha.3`.
 
+2026-11-15, phase 4: the GPUI desktop shell has the identity panel (create, restore from
+the recovery words or a backup file, show the words, save a backup), device linking with a
+QR link and a code to compare, "make default browser" through `xdg-settings`, and single
+instance (a second launch hands its URL to the running window). The first key after closing
+a panel no longer goes missing. The page bridge round trip is not in yet. Build
+`v0.2.0-alpha.4`.
+
 1. Webview _(moved up: everything else plugs into it)_
     - System web views: WebView2 (Windows), WKWebView (Apple), WebKit (Linux: WPE + webkit2gtk), Android WebView _(changed 2026-11-11)_
         - Linux: build our own WebKit plugin _(changed 2026-11-11)_
