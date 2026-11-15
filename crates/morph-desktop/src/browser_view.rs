@@ -301,12 +301,13 @@ impl BrowserView {
             self.sync_focus(window, cx);
             cx.notify();
         }
-        if self.browser.draws_pages() {
-            self.browser.set_scale(f64::from(window.scale_factor()));
-            if let Some(frame) = self.browser.take_frame() {
-                self.set_page_frame(frame, window);
-                cx.notify();
-            }
+        // Pages follow the shell's scale on either backend.
+        self.browser.set_scale(f64::from(window.scale_factor()));
+        if self.browser.draws_pages()
+            && let Some(frame) = self.browser.take_frame()
+        {
+            self.set_page_frame(frame, window);
+            cx.notify();
         }
         polled.shortcuts
     }

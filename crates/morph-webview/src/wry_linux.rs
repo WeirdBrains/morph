@@ -89,6 +89,23 @@ pub struct WryBackend {
     shortcuts: Rc<RefCell<HashSet<String>>>,
     keys: HostKeys,
     bridge: Option<PageBridge>,
+    /// The shell's scale and every page's engine, so pages are zoomed to
+    /// the shell's scale wherever GTK's own differs (GTK reads its scale
+    /// from the X settings, GPUI from Xft.dpi).
+    scale: f64,
+    engines: Vec<gtk::glib::WeakRef<webkit2gtk::WebView>>,
+}
+
+/// The zoom that makes a page as large as the shell around it.
+pub(crate) fn page_zoom(shell_scale: f64, gtk_scale: i32) -> f64 {
+    shell_scale.max(0.5) / f64::from(gtk_scale.max(1))
+}
+
+fn apply_zoom(engine: &webkit2gtk::WebView, shell_scale: f64) {
+    let zoom = page_zoom(shell_scale, engine.scale_factor());
+    if (engine.zoom_level() - zoom).abs() > 1e-6 {
+        engine.set_zoom_level(zoom);
+    }
 }
 
 /// An Xlib connection of the backend's own, for focus changes and forwarded
@@ -297,6 +314,8 @@ impl WryBackend {
             shortcuts: Rc::default(),
             keys: HostKeys { conn: XConn::open().map(Rc::new), host: window, active: Rc::default(), pending: Rc::default(), seen: Rc::default() },
             bridge: None,
+            scale: 1.0,
+            engines: Vec::new(),
         }
     }
 }
@@ -521,10 +540,15 @@ pub(crate) fn popup_handler(
             }
             _ => Propagation::Proceed,
         });
-        // `window.close()` in the popup closes its window.
+        // `window.close()` in the popup closes its window. wry answers
+        // WebKit's `close` signal by destroying the web view, which also
+        // drops every other handler of that signal, so the window follows
+        // the web view's `destroy` instead (the popup stayed open, empty,
+        // after a sign-in page closed itself).
         let closing = window.clone();
-        engine.connect_close(move |_| {
-            // SAFETY: GTK owns the window; destroying it runs `destroy` below.
+        engine.connect_destroy(move |_| {
+            // SAFETY: GTK owns the window; destroying it runs `destroy`
+            // below (a second destroy, from Ctrl+W, is a no-op).
             unsafe { closing.destroy() };
         });
         let q = queue.clone();
@@ -559,6 +583,9 @@ impl Backend for WryBackend {
         let engine = view.webview();
         attach_bridge(&engine, &self.bridge);
         watch(&engine, id, &self.queue, &self.shortcuts);
+        apply_zoom(&engine, self.scale);
+        self.engines.retain(|e| e.upgrade().is_some());
+        self.engines.push(engine.downgrade());
         let keys = self.keys.clone();
         engine.connect_button_press_event(move |engine, _| {
             keys.focus_page(page_window(engine));
@@ -602,6 +629,16 @@ impl Backend for WryBackend {
 
     fn set_page_bridge(&mut self, bridge: PageBridge) {
         self.bridge = Some(bridge);
+    }
+
+    fn set_scale(&mut self, scale: f64) {
+        if (self.scale - scale).abs() < 1e-9 {
+            return;
+        }
+        self.scale = scale;
+        for engine in self.engines.iter().filter_map(|e| e.upgrade()) {
+            apply_zoom(&engine, scale);
+        }
     }
 }
 
