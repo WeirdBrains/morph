@@ -5384,7 +5384,9 @@ name = "morph-desktop"
 version = "0.2.0-alpha.5"
 dependencies = [
  "gpui",
+ "gpui_linux",
  "gpui_platform",
+ "image",
  "morph-browser",
  "morph-core",
  "morph-identity",

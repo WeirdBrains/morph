@@ -7,6 +7,8 @@
 #[cfg(target_os = "linux")]
 mod address;
 #[cfg(target_os = "linux")]
+mod backend;
+#[cfg(target_os = "linux")]
 mod browser_view;
 mod cli;
 #[cfg(target_os = "linux")]
@@ -19,6 +21,8 @@ mod identity_view;
 mod library;
 #[cfg(target_os = "linux")]
 mod library_view;
+#[cfg(target_os = "linux")]
+mod page_input;
 #[cfg(target_os = "linux")]
 mod profiles;
 #[cfg(target_os = "linux")]
@@ -63,7 +67,10 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    prefer_x11();
+    if let Err(e) = backend::start() {
+        eprintln!("morph: {e}");
+        return ExitCode::FAILURE;
+    }
     let paths = match morph_identity::Paths::resolve(None) {
         Ok(paths) => paths,
         Err(e) => {
@@ -88,25 +95,6 @@ fn main() -> ExitCode {
             None
         }
     };
-    if let Err(e) = morph_webview::wry_linux::init() {
-        eprintln!("morph: {e}");
-        return ExitCode::FAILURE;
-    }
     shell::run(paths.home, args, listener);
     ExitCode::SUCCESS
-}
-
-/// Web views are X11 child windows (wry has none on Wayland), so on a
-/// Wayland session with XWayland (`DISPLAY` set) the shell runs on X11:
-/// GPUI picks Wayland whenever `WAYLAND_DISPLAY` is set, and GTK follows
-/// `GDK_BACKEND`. Native Wayland is an open decision (ARCHITECTURE.md).
-#[cfg(target_os = "linux")]
-fn prefer_x11() {
-    if std::env::var_os("DISPLAY").is_some_and(|d| !d.is_empty()) {
-        // SAFETY: called first thing in `main`, before any other thread exists.
-        unsafe {
-            std::env::remove_var("WAYLAND_DISPLAY");
-            std::env::set_var("GDK_BACKEND", "x11");
-        }
-    }
 }
