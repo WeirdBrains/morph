@@ -241,7 +241,8 @@ impl Hosted for Entity<SettingsView> {
     fn dispatch(&self, _action: Action, _window: &mut Window, _cx: &mut App) -> bool {
         false
     }
-    fn tick(&self, _window: &mut Window, _cx: &mut App) -> Vec<String> {
+    fn tick(&self, _window: &mut Window, cx: &mut App) -> Vec<String> {
+        self.update(cx, |view, cx| view.poll(cx));
         Vec::new()
     }
     fn set_shown(&self, _shown: bool, _cx: &mut App) {}

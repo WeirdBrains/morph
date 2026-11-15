@@ -69,10 +69,74 @@ pub fn system(program: &str, args: &[&str]) -> Result<String, String> {
     }
 }
 
+/// A runner a background thread can own.
+pub type SystemRunner = fn(&str, &[&str]) -> Result<String, String>;
+
+/// `xdg-settings` off the UI thread: it is a shell script that can take
+/// seconds (it probes the desktop), and the window must keep answering keys
+/// meanwhile. [`Check::take`] gives the result once it is there.
+pub struct Check {
+    rx: std::sync::mpsc::Receiver<(Status, Option<Result<(), String>>)>,
+}
+
+impl Check {
+    /// Read the current default browser.
+    pub fn status(run: SystemRunner) -> Self {
+        Self::spawn(move || (status(&run), None))
+    }
+
+    /// Make Morph the default, then read the result back.
+    pub fn make_default(run: SystemRunner) -> Self {
+        Self::spawn(move || {
+            let made = make_default(&run);
+            (status(&run), Some(made))
+        })
+    }
+
+    fn spawn(work: impl FnOnce() -> (Status, Option<Result<(), String>>) + Send + 'static) -> Self {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(work());
+        });
+        Self { rx }
+    }
+
+    /// The status (and, for [`Check::make_default`], whether it worked) once
+    /// the command finished; `None` while it runs.
+    pub fn take(&self) -> Option<(Status, Option<Result<(), String>>)> {
+        self.rx.try_recv().ok()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::cell::RefCell;
+
+    fn wait(check: Check) -> (Status, Option<Result<(), String>>) {
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if let Some(done) = check.take() {
+                return done;
+            }
+            assert!(std::time::Instant::now() < end, "the check never finished");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn checks_run_off_the_calling_thread() {
+        fn slow(_: &str, a: &[&str]) -> Result<String, String> {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            Ok(if a[0] == "get" { "morph.desktop".into() } else { String::new() })
+        }
+        let started = std::time::Instant::now();
+        let check = Check::make_default(slow);
+        assert!(check.take().is_none());
+        assert!(started.elapsed() < std::time::Duration::from_millis(100), "the caller waited for xdg-settings");
+        assert_eq!(wait(check), (Status::Default, Some(Ok(()))));
+        assert_eq!(wait(Check::status(slow)), (Status::Default, None));
+    }
 
     #[test]
     fn status_reads_xdg_settings() {
