@@ -34,6 +34,8 @@ pub enum Action {
     ShowProfiles,
     /// Open or close the settings panel.
     ShowSettings,
+    /// Open or close the identity panel.
+    ShowIdentity,
 }
 
 impl Action {
@@ -61,6 +63,7 @@ impl Action {
             Action::ShowHistory => "library.show_history".into(),
             Action::ShowProfiles => "shell.show_profiles".into(),
             Action::ShowSettings => "shell.show_settings".into(),
+            Action::ShowIdentity => "shell.show_identity".into(),
         }
     }
 
@@ -87,6 +90,7 @@ impl Action {
             Action::ShowHistory,
             Action::ShowProfiles,
             Action::ShowSettings,
+            Action::ShowIdentity,
         ];
         if let Some(action) = fixed.into_iter().find(|a| a.name() == name) {
             return Some(action);
@@ -136,6 +140,7 @@ impl Default for Keymap {
             ("ctrl-h", Action::ShowHistory),
             ("ctrl-shift-m", Action::ShowProfiles),
             ("ctrl-,", Action::ShowSettings),
+            ("ctrl-shift-l", Action::ShowIdentity),
         ];
         let mut bindings: Vec<Binding> = fixed.into_iter().map(|(k, a)| Binding { keystroke: k.into(), action: a }).collect();
         bindings.extend((1..=8).map(|n| Binding { keystroke: format!("ctrl-{n}"), action: Action::SelectTab(n - 1) }));
@@ -192,6 +197,7 @@ mod tests {
         assert_eq!(keys.action_for("ctrl-h"), Some(Action::ShowHistory));
         assert_eq!(keys.action_for("ctrl-shift-m"), Some(Action::ShowProfiles));
         assert_eq!(keys.action_for("ctrl-,"), Some(Action::ShowSettings));
+        assert_eq!(keys.action_for("ctrl-shift-l"), Some(Action::ShowIdentity));
         assert_eq!(keys.action_for("ctrl-x"), None);
     }
 

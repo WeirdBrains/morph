@@ -18,6 +18,7 @@ use morph_ui::theme::Theme;
 
 use crate::browser_view::{self, BrowserView};
 use crate::cli::Args;
+use crate::identity_view::IdentityView;
 use crate::library::Tab;
 use crate::library_view::LibraryView;
 use crate::profiles_view::ProfilesView;
@@ -53,7 +54,8 @@ actions!(
         ShowBookmarks,
         ShowHistory,
         ShowProfiles,
-        ShowSettings
+        ShowSettings,
+        ShowIdentity
     ]
 );
 
@@ -88,6 +90,7 @@ fn gpui_action(action: Action) -> Box<dyn gpui::Action> {
         Action::ShowHistory => Box::new(ShowHistory),
         Action::ShowProfiles => Box::new(ShowProfiles),
         Action::ShowSettings => Box::new(ShowSettings),
+        Action::ShowIdentity => Box::new(ShowIdentity),
     }
 }
 
@@ -115,10 +118,12 @@ pub enum ShellRequest {
     ProfileRenamed,
     /// The settings panel saved new settings.
     SettingsChanged,
+    /// The profile got an identity (its library is encrypted and open now).
+    IdentityChanged,
 }
 
 /// Components each profile has its own of; rebuilt on a profile switch.
-const PER_PROFILE: [&str; 2] = [component::BROWSER, component::LIBRARY];
+const PER_PROFILE: [&str; 3] = [component::BROWSER, component::LIBRARY, component::IDENTITY];
 
 /// What the host needs from a component.
 pub trait Hosted {
@@ -202,6 +207,30 @@ impl Hosted for Entity<BrowserView> {
     }
 }
 
+impl Hosted for Entity<IdentityView> {
+    fn kind(&self) -> KindId {
+        KindId::new(component::IDENTITY)
+    }
+    fn view(&self) -> AnyView {
+        self.clone().into()
+    }
+    fn dispatch(&self, _action: Action, _window: &mut Window, _cx: &mut App) -> bool {
+        false
+    }
+    fn tick(&self, window: &mut Window, cx: &mut App) -> Vec<String> {
+        self.update(cx, |view, cx| view.poll(window, cx));
+        Vec::new()
+    }
+    fn set_shown(&self, _shown: bool, _cx: &mut App) {}
+    fn focus_shell(&self, _cx: &App) {}
+    fn title(&self, _cx: &App) -> String {
+        "Identity".into()
+    }
+    fn set_profile_label(&self, name: &str, cx: &mut App) {
+        self.update(cx, |view, _| view.set_profile_name(name));
+    }
+}
+
 impl Hosted for Entity<SettingsView> {
     fn kind(&self) -> KindId {
         KindId::new(component::SETTINGS)
@@ -281,6 +310,7 @@ pub struct Shell {
     library: Option<Entity<LibraryView>>,
     profiles: Option<Entity<ProfilesView>>,
     settings: Option<Entity<SettingsView>>,
+    identity: Option<Entity<IdentityView>>,
     /// Subscriptions to the profile's own components, dropped on a switch.
     profile_subscriptions: Vec<Subscription>,
     /// The main component's page as last passed to the panels.
@@ -331,6 +361,7 @@ impl Shell {
             library: None,
             profiles: Some(profiles),
             settings: Some(settings),
+            identity: None,
             last_page: None,
             last_marked: None,
             buttons: chrome::window_buttons(&|k| std::env::var(k).ok()),
@@ -371,6 +402,11 @@ impl Shell {
         self.components.push(Box::new(library.clone()));
         let locked = library.read(cx).is_locked();
         self.library = Some(library);
+        let name = self.profiles.as_ref().map(|p| p.read(cx).shown_name()).unwrap_or_default();
+        let identity = cx.new(|cx| IdentityView::new(&home, &profile, &name, theme, window, cx));
+        self.profile_subscriptions.push(cx.subscribe_in(&identity, window, |shell, _, request, window, cx| shell.request(request, window, cx)));
+        self.components.push(Box::new(identity.clone()));
+        self.identity = Some(identity);
         self.last_page = None;
         self.last_marked = None;
         self.last_caption = None;
@@ -451,6 +487,15 @@ impl Shell {
             ShellRequest::SwitchProfile(id) => self.switch_profile(id, window, cx),
             ShellRequest::ProfileRenamed => self.update_profile_label(cx),
             ShellRequest::SettingsChanged => self.apply_settings(cx),
+            ShellRequest::IdentityChanged => {
+                // The new identity encrypted the library; open it so history
+                // and bookmarks work now.
+                crate::library::open_at_launch(&self.home, &self.profile);
+                if let Some(library) = &self.library {
+                    library.update(cx, |view, cx| view.reload(cx));
+                }
+                self.last_marked = None;
+            }
         }
         cx.notify();
     }
@@ -505,6 +550,21 @@ impl Shell {
         cx.notify();
     }
 
+    /// Open or close the identity panel.
+    fn show_identity(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(identity) = self.identity.clone() else {
+            return;
+        };
+        if !self.layout.toggle_kind(Slot::Sidebar, KindId::new(component::IDENTITY)) {
+            self.request(&ShellRequest::ClosePanel, window, cx);
+            return;
+        }
+        self.save_layout();
+        identity.update(cx, |view, cx| view.focus(window, cx));
+        self.focus_shell(cx);
+        cx.notify();
+    }
+
     /// Open or close the settings panel.
     fn show_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(settings) = self.settings.clone() else {
@@ -540,6 +600,7 @@ impl Shell {
             Action::ShowHistory => return self.show_library(Tab::History, window, cx),
             Action::ShowProfiles => return self.show_profiles(window, cx),
             Action::ShowSettings => return self.show_settings(window, cx),
+            Action::ShowIdentity => return self.show_identity(window, cx),
             _ => {}
         }
         let main = self.layout.shown(Slot::Main).cloned();
@@ -716,6 +777,7 @@ impl Render for Shell {
             ShowHistory => Action::ShowHistory,
             ShowProfiles => Action::ShowProfiles,
             ShowSettings => Action::ShowSettings,
+            ShowIdentity => Action::ShowIdentity,
         ]);
         let root = root.on_any_mouse_down(cx.listener(|this, _, _, cx| this.focus_shell(cx)));
         if let Some(error) = &self.error {
@@ -868,6 +930,7 @@ mod tests {
             "ctrl-g",
             "ctrl-shift-g",
             "ctrl-,",
+            "ctrl-shift-l",
         ] {
             assert!(keys.iter().any(|k| k == taken), "{taken}");
         }

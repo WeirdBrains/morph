@@ -12,6 +12,10 @@ mod cli;
 #[cfg(target_os = "linux")]
 mod default_browser;
 #[cfg(target_os = "linux")]
+mod identity;
+#[cfg(target_os = "linux")]
+mod identity_view;
+#[cfg(target_os = "linux")]
 mod library;
 #[cfg(target_os = "linux")]
 mod library_view;

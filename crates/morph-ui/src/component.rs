@@ -63,6 +63,9 @@ pub const PROFILES: &str = "morph.profiles";
 /// The profile's preferences: where the tabs go and how wide their list is.
 pub const SETTINGS: &str = "morph.settings";
 
+/// The profile's Weirdnet identity, its backups and device links.
+pub const IDENTITY: &str = "morph.identity";
+
 /// Kinds that ship with Morph. Later phases add chat, notes and projects
 /// here as they are built.
 pub fn builtin() -> Vec<ComponentKind> {
@@ -71,6 +74,7 @@ pub fn builtin() -> Vec<ComponentKind> {
         ComponentKind::new(LIBRARY, "Library", "bookmark", &[Needs::Library]),
         ComponentKind::new(PROFILES, "Profiles", "person", &[]),
         ComponentKind::new(SETTINGS, "Settings", "gear", &[]),
+        ComponentKind::new(IDENTITY, "Identity", "key", &[Needs::Network]),
     ]
 }
 
