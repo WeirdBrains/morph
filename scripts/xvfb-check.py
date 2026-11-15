@@ -249,6 +249,11 @@ class WaylandMorph(Morph):
     def title(self, win):
         return (self.node(win) or {}).get("name") or ""
 
+    def ime(self, text):
+        """Commit `text` as an input method would."""
+        self.send(f"ime {text}")
+        time.sleep(0.5)
+
 
 def start_sway(input_bin, scale):
     """A headless sway (no input devices, software rendering) with windows
@@ -419,6 +424,23 @@ def page_keys(m, r, area, win, popup, top):
     m.click(win, 300, top + 300)
     m.key("ctrl+r", delay=1.5)
     r.check(area, "Ctrl+R reloads", wait_for(lambda: (st() or {}).get("id") not in (None, id1)), str(st()))
+
+
+def wayland_page(m, r, win, top, scale):
+    """Native Wayland only: an input method's text reaches the page (as
+    text, not keys), and the page renders at the output's scale."""
+    st = lambda: state(m, tab=1) or {}  # noqa: E731
+    m.click(win, 60, top + 18)
+    m.key("End")
+    before, n0 = st().get("a", ""), st().get("n")
+    try:
+        m.ime("日本語")
+        ok, detail = wait_for(lambda: st().get("a") == before + "日本語", 3), str(st())
+    except RuntimeError as e:
+        ok, detail = False, str(e)
+    r.check("wayland", "an input method's text reaches the page", ok, detail)
+    r.check("wayland", "as text, not as keys", st().get("n") == n0, f"{n0} vs {st().get('n')}")
+    r.check("wayland", f"the page renders at the output's scale ({scale:g})", st().get("d") == scale, str(st().get("d")))
 
 
 def find_matches(m):
@@ -868,6 +890,8 @@ def main():
         top = 76
 
         page_keys(m, r, "page", win, popup=False, top=top)
+        if args.wayland:
+            wayland_page(m, r, win, top, args.scale)
         find_in_page(m, r, win, top)
         library_panel(m, r, win, top)
 
