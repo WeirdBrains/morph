@@ -136,7 +136,8 @@ jobs:
           if-no-files-found: error
 
   # The GPUI desktop shell: release tarball (scripts/linux-dist.sh) and the
-  # Xvfb key, tab, address-bar and popup checks (scripts/xvfb-check.py).
+  # key, tab, address-bar and popup checks (scripts/xvfb-check.py), on X11
+  # (Xvfb) and on native Wayland (headless sway).
   desktop-linux:
     runs-on: ubuntu-24.04
     steps:
@@ -148,7 +149,7 @@ jobs:
       - name: Build and test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y $DESKTOP_DEPS xvfb xdotool openbox mesa-vulkan-drivers rpm
+          sudo apt-get install -y $DESKTOP_DEPS xvfb xdotool openbox mesa-vulkan-drivers rpm sway
       - name: Release tarball
         run: scripts/linux-dist.sh
       - name: zip, deb and rpm (with and without the desktop entry)
@@ -163,6 +164,12 @@ jobs:
         env:
           LIBGL_ALWAYS_SOFTWARE: "1"
         run: python3 scripts/xvfb-check.py --bin target/release/morph --report dist/xvfb-checks.md
+      - name: Wayland checks (headless sway, the same keys)
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: |
+          cargo build --release --locked -p morph-wl-input
+          python3 scripts/xvfb-check.py --wayland --bin target/release/morph --report dist/wayland-checks.md
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -174,6 +181,7 @@ jobs:
             dist/*.rpm
             dist/SHA256SUMS
             dist/xvfb-checks.md
+            dist/wayland-checks.md
           if-no-files-found: warn
 
   # The Nix flake: both packages (from the release in packaging/nix/release.json)

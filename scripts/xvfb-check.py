@@ -6,6 +6,11 @@ panel (bookmarks, history) opens beside the page and takes the keyboard, and
 that a failed load shows Morph's error page.
 
     scripts/xvfb-check.py [--bin PATH] [--report FILE] [--no-wm]
+    scripts/xvfb-check.py --wayland [--scale 2] [--bin PATH] [--report FILE]
+
+With --wayland the same checks run on native Wayland: a headless sway
+(software rendering, no input devices) with morph-wl-input (built with the
+workspace) as keyboard and pointer, and windows from `swaymsg -t get_tree`.
 
 Needs Xvfb and xdotool; uses openbox as the window manager when installed
 (F11 needs one). Data goes to a temporary MORPH_HOME. The page is
@@ -33,8 +38,8 @@ class Morph:
     def __init__(self, binary, display, home):
         self.display = display
         self.home = Path(home)
-        self.env = dict(os.environ, DISPLAY=display, MORPH_HOME=home, MORPH_LOG_EVENTS="1")
-        self.env.pop("WAYLAND_DISPLAY", None)
+        self.env = self.session_env(display)
+        self.env.update(MORPH_HOME=home, MORPH_LOG_EVENTS="1")
         # A desktop of its own for the default-browser check: morph.desktop
         # and a `morph` on PATH (xdg-settings wants both), fresh config.
         xdg = Path(home) / "xdg"
@@ -58,6 +63,13 @@ class Morph:
         self.log = open(self.log_path, "w")
         self.proc = subprocess.Popen([binary, PAGE.as_uri()], env=self.env, stdout=self.log, stderr=subprocess.STDOUT)
         self.read_at = 0
+
+    @staticmethod
+    def session_env(display):
+        env = dict(os.environ, DISPLAY=display)
+        env.pop("WAYLAND_DISPLAY", None)
+        env.pop("MORPH_BACKEND", None)
+        return env
 
     def lines(self, pattern):
         """Log lines matching `pattern` (a regex)."""
@@ -98,11 +110,20 @@ class Morph:
         vals = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
         return int(vals["X"]), int(vals["Y"]), int(vals["WIDTH"]), int(vals["HEIGHT"])
 
-    def click(self, win, x, y):
+    def move(self, win, x, y):
         self.xdo("mousemove", "--window", win, str(x), str(y))
+
+    def click(self, win, x, y):
+        self.move(win, x, y)
         time.sleep(0.15)
         self.xdo("click", "1")
         time.sleep(0.5)
+
+    def activate(self, win):
+        self.xdo("windowactivate", "--sync", win)
+
+    def title(self, win):
+        return self.xdo("getwindowname", win)
 
     def stop(self):
         self.proc.terminate()
@@ -110,6 +131,157 @@ class Morph:
             self.proc.wait(5)
         except subprocess.TimeoutExpired:
             self.proc.kill()
+
+
+# evdev key codes (US layout) for the xdotool key names the checks use, and
+# the characters typed, as (code, shift).
+EVDEV = {
+    "Escape": 1, "BackSpace": 14, "Tab": 15, "Return": 28, "space": 57, "Num_Lock": 69,
+    "Home": 102, "Up": 103, "Prior": 104, "Left": 105, "Right": 106, "End": 107, "Down": 108, "Next": 109,
+    "Insert": 110, "Delete": 111, "comma": 51, "period": 52, "slash": 53, "minus": 12,
+    "KP_7": 71, "KP_8": 72, "KP_9": 73, "KP_Subtract": 74, "KP_4": 75, "KP_5": 76, "KP_6": 77, "KP_Add": 78,
+    "KP_1": 79, "KP_2": 80, "KP_3": 81, "KP_0": 82, "KP_Decimal": 83, "KP_Enter": 96, "KP_Divide": 98, "KP_Multiply": 55,
+    "F11": 87, "F12": 88, "ctrl": 29, "shift": 42, "alt": 56, "super": 125,
+}
+EVDEV.update({f"F{i}": 58 + i for i in range(1, 11)})
+EVDEV.update({c: code for c, code in zip("1234567890", range(2, 12))})
+for row, first in (("qwertyuiop", 16), ("asdfghjkl", 30), ("zxcvbnm", 44)):
+    EVDEV.update({c: first + i for i, c in enumerate(row)})
+CHARS = {c: (EVDEV[c], False) for c in "abcdefghijklmnopqrstuvwxyz1234567890"}
+CHARS.update({c.upper(): (EVDEV[c], True) for c in "abcdefghijklmnopqrstuvwxyz"})
+CHARS.update({" ": (57, False), "-": (12, False), "=": (13, False), "[": (26, False), "]": (27, False), ";": (39, False),
+              "'": (40, False), "`": (41, False), "\\": (43, False), ",": (51, False), ".": (52, False), "/": (53, False)})
+CHARS.update({c: (CHARS[b][0], True) for c, b in zip("!@#$%^&*()_+{}:\"~|<>?", "1234567890-=[];'`\\,./")})
+
+
+class WaylandMorph(Morph):
+    """The same Morph driven on a headless sway: keys and pointer from
+    morph-wl-input (a virtual keyboard with the real evdev keymap, so keypad
+    keys are keypad keys), windows from sway's tree."""
+
+    input = None  # the shared morph-wl-input process
+    layout = (1600, 1000)
+
+    @staticmethod
+    def session_env(display):
+        env = dict(os.environ, WAYLAND_DISPLAY=display)
+        for var in ("DISPLAY", "MORPH_BACKEND", "GDK_BACKEND"):
+            env.pop(var, None)
+        return env
+
+    @classmethod
+    def send(cls, command):
+        cls.input.stdin.write(command + "\n")
+        cls.input.stdin.flush()
+        answer = cls.input.stdout.readline().strip()
+        if answer != "ok":
+            raise RuntimeError(f"morph-wl-input: {command}: {answer}")
+
+    def press(self, code, down):
+        self.send(f"key {code} {1 if down else 0}")
+
+    def key(self, *keys, delay=0.35):
+        for k in keys:
+            *mods, name = k.split("+")
+            codes = [EVDEV[mod.lower()] for mod in mods] + [EVDEV[name] if name in EVDEV else EVDEV[name.lower()]]
+            for code in codes:
+                self.press(code, True)
+            for code in reversed(codes):
+                self.press(code, False)
+            time.sleep(delay)
+
+    def type(self, text):
+        for ch in text:
+            code, shift = CHARS[ch]
+            if shift:
+                self.press(42, True)
+            self.press(code, True)
+            self.press(code, False)
+            if shift:
+                self.press(42, False)
+            time.sleep(0.06)
+        time.sleep(0.5)
+
+    def tree(self):
+        out = subprocess.run(["swaymsg", "-t", "get_tree"], env=self.env, capture_output=True, text=True).stdout
+        found = []
+
+        def walk(node):
+            if node.get("pid") and node.get("visible", True):
+                found.append(node)
+            for child in node.get("nodes", []) + node.get("floating_nodes", []):
+                walk(child)
+
+        walk(json.loads(out or "{}"))
+        return found
+
+    def node(self, win):
+        return next((n for n in self.tree() if str(n["id"]) == str(win)), None)
+
+    def window(self, name):
+        rx = re.compile(name)
+        ids = [str(n["id"]) for n in self.tree() if rx.search(n.get("name") or "")]
+        return ids[0] if ids else None
+
+    def own_window(self):
+        ids = [str(n["id"]) for n in self.tree() if n["pid"] == self.proc.pid]
+        return ids[-1] if ids else None
+
+    def geometry(self, win):
+        r = (self.node(win) or {}).get("rect", {})
+        return r.get("x", 0), r.get("y", 0), r.get("width", 0), r.get("height", 0)
+
+    def move(self, win, x, y):
+        wx, wy, _, _ = self.geometry(win)
+        self.send(f"move {wx + x} {wy + y} {self.layout[0]} {self.layout[1]}")
+
+    def click(self, win, x, y):
+        self.move(win, x, y)
+        time.sleep(0.15)
+        self.send("button 272 1")
+        self.send("button 272 0")
+        time.sleep(0.5)
+
+    def activate(self, win):
+        subprocess.run(["swaymsg", f"[con_id={win}]", "focus"], env=self.env, capture_output=True)
+        time.sleep(0.3)
+
+    def title(self, win):
+        return (self.node(win) or {}).get("name") or ""
+
+
+def start_sway(input_bin, scale):
+    """A headless sway (no input devices, software rendering) with windows
+    floating at their own size and no borders, plus morph-wl-input as its
+    keyboard and pointer. Returns (sway, socket name)."""
+    runtime = Path(tempfile.mkdtemp(prefix="morph-wayland-"))
+    runtime.chmod(0o700)
+    config = runtime / "sway.conf"
+    config.write_text(
+        f"output HEADLESS-1 resolution 1600x1000 scale {scale}\n"
+        "xwayland disable\n"
+        "default_border none\ndefault_floating_border none\n"
+        "for_window [app_id=\".*\"] floating enable\n"
+        "focus_follows_mouse no\n"
+        f"exec env > {runtime}/env\n"
+    )
+    env = dict(os.environ, XDG_RUNTIME_DIR=str(runtime), WLR_BACKENDS="headless", WLR_LIBINPUT_NO_DEVICES="1", WLR_RENDERER="pixman")
+    for var in ("DISPLAY", "WAYLAND_DISPLAY", "SWAYSOCK"):
+        env.pop(var, None)
+    sway = subprocess.Popen(["sway", "-c", str(config)], env=env, stdout=open(runtime / "sway.log", "w"), stderr=subprocess.STDOUT)
+    wait_for(lambda: (runtime / "env").exists() and "WAYLAND_DISPLAY=" in (runtime / "env").read_text(), 15)
+    session = dict(line.split("=", 1) for line in (runtime / "env").read_text().splitlines() if "=" in line)
+    os.environ.update(XDG_RUNTIME_DIR=str(runtime), SWAYSOCK=session.get("SWAYSOCK", ""))
+    display = session["WAYLAND_DISPLAY"]
+    WaylandMorph.layout = (int(1600 / scale), int(1000 / scale))
+    WaylandMorph.input = subprocess.Popen([input_bin], env=dict(os.environ, WAYLAND_DISPLAY=display), stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    ready = WaylandMorph.input.stdout.readline().strip()
+    if ready != "ready":
+        raise RuntimeError(f"morph-wl-input did not start: {ready!r}")
+    return sway, display
+
+
+Driver = Morph
 
 
 def state(morph, popup=False, tab=None):
@@ -165,10 +337,10 @@ def page_keys(m, r, area, win, popup, top):
     m.type("hello world")
     r.check(area, "typing", (st() or {}).get("a") == "hello world", str(st()))
     if not popup:
-        m.xdo("mousemove", "--window", win, "300", "50")  # over the shell's toolbar
+        m.move(win, 300, 50)  # over the shell's toolbar
         m.type("!")
         r.check(area, "typing with the pointer over the shell", (st() or {}).get("a") == "hello world!", str(st()))
-        m.xdo("mousemove", "--window", win, "300", str(top + 300))
+        m.move(win, 300, top + 300)
         m.key("BackSpace")
     m.key("BackSpace")
     r.check(area, "Backspace", (st() or {}).get("a") == "hello worl", str(st()))
@@ -355,7 +527,7 @@ def profiles_panel(m, r, win, top):
     """Ctrl+Shift+M opens the profiles panel ready for a new name; Enter
     creates the profile and switches the window to it (a fresh blank tab
     whose address bar takes typing); Ctrl+Shift+M again switches back."""
-    m.xdo("windowactivate", "--sync", win)
+    m.activate(win)
     m.click(win, 300, top + 300)
     w0 = (state(m) or {}).get("w", 0)
     m.key("ctrl+shift+m", delay=0.8)
@@ -367,12 +539,12 @@ def profiles_panel(m, r, win, top):
     new = [p["id"] for p in cat.get("profiles", []) if p.get("name") == "Work"]
     r.check("profile", "Enter creates the profile", new, str(cat))
     r.check("profile", "and the window switches to it", new and cat.get("current") == new[0], str(cat))
-    r.check("profile", "the new profile starts with a blank tab", wait_for(lambda: m.xdo("getwindowname", win) == "Morph"), m.xdo("getwindowname", win))
+    r.check("profile", "the new profile starts with a blank tab", wait_for(lambda: m.title(win) == "Morph"), m.title(win))
     before = len(m.events())
     m.type(PAGE.as_uri() + "?work")
     m.key("Return", delay=1.5)
     loaded = wait_for(lambda: any(n == "TitleChanged" and "M{" in (a or "") for _, n, a in m.events()[before:]))
-    r.check("profile", "its address bar takes typing and loads pages", loaded, m.xdo("getwindowname", win))
+    r.check("profile", "its address bar takes typing and loads pages", loaded, m.title(win))
     data = m.home / "profiles" / (new[0] if new else "?") / "webkit" / "data"
     r.check("profile", "its web data lives in its own directory", wait_for(lambda: data.exists()), str(data))
 
@@ -387,7 +559,7 @@ def settings_panel(m, r, win, top):
     """Ctrl+, opens the settings beside the page and takes the keyboard:
     Left moves the tabs into a list left of the page (saved for the profile),
     Escape closes the panel and the page has the keyboard again."""
-    m.xdo("windowactivate", "--sync", win)
+    m.activate(win)
     m.click(win, 300, top + 300)
     s0 = state(m) or {}
     w0, h0 = s0.get("w", 0), s0.get("h", 0)
@@ -421,7 +593,7 @@ def settings_relaunch(m, r, w0, h0):
     r.check("settings", "the saved left tab list applies at start", ok, str(state(m)))
     if not win:
         return
-    m.xdo("windowactivate", "--sync", win)
+    m.activate(win)
     m.click(win, 600, 300)
     m.key("ctrl+comma", delay=0.8)
     m.key("Up", delay=0.8)
@@ -439,7 +611,7 @@ def frameless(m, r):
     if not win or not wait_for(lambda: state(m), 20):
         r.check("frame", "page loads", False)
         return
-    hints = m.xdo("getwindowname", win) and subprocess.run(["xprop", "-id", win, "_MOTIF_WM_HINTS"], env=m.env, capture_output=True, text=True).stdout
+    hints = m.title(win) and subprocess.run(["xprop", "-id", win, "_MOTIF_WM_HINTS"], env=m.env, capture_output=True, text=True).stdout
     r.check("frame", "asks the window manager for no frame", "0x2, 0x0, 0x0" in hints, hints.strip())
     s0 = state(m) or {}
     r.check("frame", "a resize border surrounds the page", s0.get("w") == 1190 and s0.get("h") == 714, str(s0))
@@ -500,7 +672,7 @@ def identity_file(m, profile=None):
 def open_identity(m, r, area):
     """Ctrl+Shift+L opens the identity panel beside the page."""
     win = wait_for(m.own_window, 20)
-    m.xdo("windowactivate", "--sync", win)
+    m.activate(win)
     m.click(win, 300, 76 + 300)
     w0 = (state(m) or {}).get("w", 0)
     m.key("ctrl+shift+l", delay=1.0)
@@ -550,7 +722,7 @@ def identity_relaunch(m, r):
     win = wait_for(m.own_window, 20)
     r.check("identity", "after a relaunch the page loads", wait_for(lambda: state(m), 20))
     w = (state(m) or {}).get("w", 0)
-    m.xdo("windowactivate", "--sync", win)
+    m.activate(win)
     r.check("identity", "the locked library asks for the password beside the page", w and w < 1190, str(w))
     m.type(PASSWORD)
     m.key("Return", delay=1.0)
@@ -563,7 +735,7 @@ def identity_relaunch(m, r):
 def identity_restore(r, binary, display, user_id, backup):
     """A second home restores the backup: 3, the file, its password and a
     new password give it the same identity."""
-    m2 = Morph(binary, display, tempfile.mkdtemp(prefix="morph-xvfb-restore-"))
+    m2 = Driver(binary, display, tempfile.mkdtemp(prefix="morph-xvfb-restore-"))
     try:
         r.check("restore", "a Morph with another home opens its own window", wait_for(lambda: state(m2), 20))
         open_identity(m2, r, "restore")
@@ -580,7 +752,7 @@ def identity_link(m, r, binary, display, user_id):
     first adds it (a, password, link); both show the same code, Enter on
     each confirms, and the new one chooses its password and gets the
     identity."""
-    m3 = Morph(binary, display, tempfile.mkdtemp(prefix="morph-xvfb-link-"))
+    m3 = Driver(binary, display, tempfile.mkdtemp(prefix="morph-xvfb-link-"))
     win, w0 = None, 0
     try:
         r.check("link", "a new device (another home) opens", wait_for(lambda: state(m3), 20))
@@ -595,7 +767,7 @@ def identity_link(m, r, binary, display, user_id):
         fill(m, PASSWORD, offer[0])
         time.sleep(3.0)
         m.key("Return", delay=1.0)
-        m3.xdo("windowactivate", "--sync", new_win)
+        m3.activate(new_win)
         m3.key("Return", delay=3.0)
         fill(m3, PASSWORD)
         got = wait_for(lambda: identity_file(m3, "default").get("user_id"), 20)
@@ -606,7 +778,7 @@ def identity_link(m, r, binary, display, user_id):
     if not win:
         return
     # Escape backs out of the finished link, then closes the panel.
-    m.xdo("windowactivate", "--sync", win)
+    m.activate(win)
     for _ in range(3):
         if (state(m) or {}).get("w") == w0:
             break
@@ -657,7 +829,7 @@ def error_page(m, r, win, top):
     # Back shows the page under the error page again, with the keyboard.
     m.key("y")
     back = wait_for(lambda: (state(m, tab=2) or {}).get("c") == "KeyY")
-    r.check("error", "Alt+Left leaves the error page for the page under it", back, f"{m.xdo('getwindowname', win)} {state(m, tab=2)}")
+    r.check("error", "Alt+Left leaves the error page for the page under it", back, f"{m.title(win)} {state(m, tab=2)}")
 
 
 def main():
@@ -665,17 +837,26 @@ def main():
     ap.add_argument("--bin", default=str(Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target")) / "release" / "morph"))
     ap.add_argument("--report")
     ap.add_argument("--no-wm", action="store_true")
+    ap.add_argument("--wayland", action="store_true", help="run on a headless sway (native Wayland) instead of Xvfb")
+    ap.add_argument("--scale", type=float, default=1.0, help="the Wayland output's scale")
+    ap.add_argument("--input-bin", help="morph-wl-input (default: next to --bin)")
     args = ap.parse_args()
 
-    display = ":" + str(70 + os.getpid() % 200)
-    xvfb = subprocess.Popen(["Xvfb", display, "-screen", "0", "1600x1000x24", "-ac", "-noreset"], stderr=subprocess.DEVNULL)
-    time.sleep(1.5)
-    wm = None
-    if not args.no_wm and shutil.which("openbox"):
-        wm = subprocess.Popen(["openbox"], env=dict(os.environ, DISPLAY=display), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(1.0)
+    global Driver
+    xvfb, wm = None, None
+    if args.wayland:
+        Driver = WaylandMorph
+        xvfb, display = start_sway(args.input_bin or str(Path(args.bin).with_name("morph-wl-input")), args.scale)
+        wm = xvfb  # sway manages windows (full screen) itself
+    else:
+        display = ":" + str(70 + os.getpid() % 200)
+        xvfb = subprocess.Popen(["Xvfb", display, "-screen", "0", "1600x1000x24", "-ac", "-noreset"], stderr=subprocess.DEVNULL)
+        time.sleep(1.5)
+        if not args.no_wm and shutil.which("openbox"):
+            wm = subprocess.Popen(["openbox"], env=dict(os.environ, DISPLAY=display), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(1.0)
     home = tempfile.mkdtemp(prefix="morph-xvfb-")
-    m = Morph(args.bin, display, home)
+    m = Driver(args.bin, display, home)
     r = Results()
     try:
         win = wait_for(lambda: m.window("Morph"), 20)
@@ -700,7 +881,7 @@ def main():
         m.key("Return", delay=1.5)
         r.check("shell", "the new tab's address bar takes typing", wait_for(lambda: state(m, tab=2)), "tab 2 never loaded")
         m.key("ctrl+Tab", delay=0.8)
-        r.check("shell", "Ctrl+Tab switches tabs", "?second" not in m.xdo("getwindowname", win) and m.xdo("getwindowname", win).startswith("M{"), m.xdo("getwindowname", win))
+        r.check("shell", "Ctrl+Tab switches tabs", "?second" not in m.title(win) and m.title(win).startswith("M{"), m.title(win))
         r.check("page", "page never saw Ctrl+T / Ctrl+Tab", (state(m, tab=1) or {}).get("n") == n0, f"{n0} vs {(state(m, tab=1) or {}).get('n')}")
         m.click(win, 300, top + 300)
         m.key("ctrl+l", delay=0.6)
@@ -710,7 +891,7 @@ def main():
         r.check("shell", "Ctrl+L, then a phrase searches", any("duckduckgo.com/?q=what+is+xvfb" in (u or "") for u in urls), str(urls[-3:]))
         m.key("ctrl+w", delay=1.0)
         tab2 = (state(m, tab=2) or {}).get("id", "?")
-        r.check("shell", "Ctrl+W closes the tab (tab 2 shows again)", f'"id":"{tab2}"' in m.xdo("getwindowname", win), m.xdo("getwindowname", win))
+        r.check("shell", "Ctrl+W closes the tab (tab 2 shows again)", f'"id":"{tab2}"' in m.title(win), m.title(win))
         error_page(m, r, win, top)
         if wm:
             w0 = (state(m, tab=2) or {}).get("w", 0)
@@ -727,7 +908,7 @@ def main():
         pwin = wait_for(lambda: m.window(r"^P\{"), 10)
         r.check("popup", "window.open makes a popup window", pwin)
         if pwin:
-            m.xdo("windowactivate", "--sync", pwin)
+            m.activate(pwin)
             page_keys(m, r, "popup", pwin, popup=True, top=0)
             seen = [a for t, n, a in m.events() if n == "PopupTitleChanged"]
             r.check("popup", "popup state reached the shell", seen)
@@ -736,13 +917,13 @@ def main():
         profiles_panel(m, r, win, top)
         w0, h0 = settings_panel(m, r, win, top)
         m.stop()
-        m = Morph(args.bin, display, home)
+        m = Driver(args.bin, display, home)
         settings_relaunch(m, r, w0, h0)
         single_instance(m, r, args.bin)
         bridge_round_trip(m, r, args.bin)
         # GPUI draws the frame itself only where the window manager supports
         # _GTK_FRAME_EXTENTS and a compositor runs; xfwm4 has both.
-        if wm and shutil.which("xfwm4"):
+        if wm and not args.wayland and shutil.which("xfwm4"):
             m.stop()
             wm.terminate()
             wm.wait(5)
@@ -753,19 +934,21 @@ def main():
         # Identity on a home of its own (an identity locks the library at
         # the next launch, which would change the windows checked above).
         m.stop()
-        m = Morph(args.bin, display, tempfile.mkdtemp(prefix="morph-xvfb-identity-"))
+        m = Driver(args.bin, display, tempfile.mkdtemp(prefix="morph-xvfb-identity-"))
         r.check("identity", "a fresh home opens", wait_for(lambda: state(m), 20))
         user_id, backup = identity_panel(m, r)
         if user_id:
             identity_restore(r, args.bin, display, user_id, backup)
             identity_link(m, r, args.bin, display, user_id)
             m.stop()
-            m = Morph(args.bin, display, str(m.home))
+            m = Driver(args.bin, display, str(m.home))
             identity_relaunch(m, r)
     finally:
         m.stop()
-        if wm:
+        if wm and wm is not xvfb:
             wm.terminate()
+        if WaylandMorph.input:
+            WaylandMorph.input.terminate()
         xvfb.terminate()
     return finish(r, args)
 
