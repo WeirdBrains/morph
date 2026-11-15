@@ -80,13 +80,17 @@ changed), so the browser and the panels do not know each other.
   library, profiles, settings including a relaunch with saved settings, and the
   frameless window under xfwm4 with its compositor: no frame, drag, maximize,
   close). In an `archlinux` container: `morph-bin` built (`makepkg`), installed (`pacman -U`), `morph --version` printed `0.2.0-alpha.3` and its window opened under Xvfb; for the source recipe `morph` only `makepkg --printsrcinfo` (the CI `arch-package` job builds it).
-- **Known flake:** under Xvfb, right after a panel closes (Escape), the page
-  sometimes drops the first key (about one in four in a loop of
-  Ctrl+, / Escape / a letter typed by xdotool; X focus is on the page and the
-  key reaches its GTK window, but WebKit does not deliver it; a WebKit re-sent
-  Ctrl press arriving after the release precedes every failure). The Xvfb
-  checks press the key a second time there (`page_takes_key`). Worth watching
-  by hand: Ctrl+H, Escape, then type into the page.
+- **Fixed after the release (phase 4 start): the first key after closing a
+  panel.** WebKit hands a key the page did not use back through GTK, starting
+  at the page's window, and expects to see that copy again (it skips the next
+  key it gets otherwise). While the shell had the keyboard, `HostKeys` sent
+  that copy (a late Ctrl press from Ctrl+, or Ctrl+H) to the shell and
+  stopped it, so the page dropped the next real key. `HostKeys` now remembers
+  which key events the web view took in and lets their copies through
+  (`SeenKeys` in `morph-webview`). `scripts/xvfb-focus-loop.py` checked it:
+  50 of 50 keys after Ctrl+, / Escape, after Ctrl+H / Escape and after
+  Ctrl+F / Escape (it was about 1 in 4 lost before); the Xvfb checks press
+  each key once again.
 - **Not checked:** Michael's Hyprland session (whether XWayland there reports a
   compositor; either way only close is drawn), KDE/GNOME by hand, resizing by
   the border with a real pointer, HiDPI, the library password prompt by hand with a

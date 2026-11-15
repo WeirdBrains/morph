@@ -104,14 +104,9 @@ def state(morph, popup=False, tab=None):
 
 
 def page_takes_key(m, key, code, **kw):
-    """Press `key` until the page reports `code` (at most twice). Right after a
-    panel closes, WebKit sometimes drops the first key under xdotool's
-    synthetic chords (see docs/handoff.md); the second one must arrive."""
-    for _ in range(2):
-        m.key(key)
-        if wait_for(lambda: (state(m, **kw) or {}).get("c") == code, 2):
-            return True
-    return False
+    """Press `key` once; the page must report `code`."""
+    m.key(key)
+    return wait_for(lambda: (state(m, **kw) or {}).get("c") == code, 3)
 
 
 def wait_for(fn, timeout=6.0):

@@ -7,7 +7,7 @@
 //! the shell calls it often (every few milliseconds).
 
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -129,6 +129,39 @@ struct HostKeys {
     /// check it got it. A window that was just shown is not mapped yet, and
     /// X refuses focus to an unmapped window, so the backend tries again.
     pending: Rc<Cell<Option<(u64, u8)>>>,
+    /// Key events a web view has already taken in (time, keycode, press).
+    /// WebKit answers a key the page did not handle by sending the same
+    /// event through GTK again, starting at the page's window; that copy
+    /// must reach the web view, which expects it back (it skips the next key
+    /// it sees otherwise, and the page loses a real key).
+    seen: Rc<RefCell<SeenKeys>>,
+}
+
+/// How many key events [`SeenKeys`] remembers.
+const SEEN_KEYS: usize = 64;
+
+/// Key events (X time, keycode, press) a web view took in, newest last.
+#[derive(Default)]
+struct SeenKeys(VecDeque<(u32, u16, bool)>);
+
+impl SeenKeys {
+    fn saw(&mut self, id: (u32, u16, bool)) {
+        if self.0.len() == SEEN_KEYS {
+            self.0.pop_front();
+        }
+        self.0.push_back(id);
+    }
+
+    /// Whether `id` was taken in before (a resend); forgets it.
+    fn take(&mut self, id: (u32, u16, bool)) -> bool {
+        match self.0.iter().position(|k| *k == id) {
+            Some(i) => {
+                self.0.remove(i);
+                true
+            }
+            None => false,
+        }
+    }
 }
 
 /// Polls (8 ms apart, so about a second) to keep re-checking a page's focus;
@@ -140,10 +173,21 @@ impl HostKeys {
         self.active.set(active);
     }
 
+    /// A web view took in `event`; remember it so its resend is let through.
+    fn saw(&self, event: &gtk::gdk::EventKey, press: bool) {
+        self.seen.borrow_mut().saw(key_id(event, press));
+    }
+
+    /// Whether `event` is WebKit sending back a key a web view already took
+    /// in (and forgets it).
+    fn is_resend(&self, event: &gtk::gdk::EventKey, press: bool) -> bool {
+        self.seen.borrow_mut().take(key_id(event, press))
+    }
+
     /// Forward `event` to the shell if the shell has focus. Returns whether
     /// it was forwarded (and must not reach the page).
     fn forward(&self, event: &gtk::gdk::EventKey, press: bool) -> bool {
-        if !self.active.get() {
+        if self.is_resend(event, press) || !self.active.get() {
             return false;
         }
         let Some(conn) = self.conn.as_ref() else {
@@ -249,7 +293,7 @@ impl WryBackend {
             popups: Rc::default(),
             contexts: HashMap::new(),
             shortcuts: Rc::default(),
-            keys: HostKeys { conn: XConn::open().map(Rc::new), host: window, active: Rc::default(), pending: Rc::default() },
+            keys: HostKeys { conn: XConn::open().map(Rc::new), host: window, active: Rc::default(), pending: Rc::default(), seen: Rc::default() },
         }
     }
 }
@@ -263,6 +307,11 @@ fn wry_rect(bounds: Rect) -> wry::Rect {
 
 fn backend_err(e: impl std::fmt::Display) -> Error {
     Error::Backend(e.to_string())
+}
+
+/// What identifies one key event: its X time, keycode and direction.
+fn key_id(event: &gtk::gdk::EventKey, press: bool) -> (u32, u16, bool) {
+    (event.time(), event.hardware_keycode(), press)
 }
 
 /// GPUI notation for a key press, if it has Ctrl or Alt held or is a
@@ -466,6 +515,17 @@ impl Backend for WryBackend {
             keys.focus_page(page_window(engine));
             Propagation::Proceed
         });
+        // Runs before WebKit's own key handling: note what the web view takes in.
+        let keys = self.keys.clone();
+        engine.connect_key_press_event(move |_, e| {
+            keys.saw(e, true);
+            Propagation::Proceed
+        });
+        let keys = self.keys.clone();
+        engine.connect_key_release_event(move |_, e| {
+            keys.saw(e, false);
+            Propagation::Proceed
+        });
         if let Some(top) = engine.toplevel() {
             let keys = self.keys.clone();
             top.connect_key_press_event(move |_, e| if keys.forward(e, true) { Propagation::Stop } else { Propagation::Proceed });
@@ -579,5 +639,30 @@ impl Drop for WryView {
             // SAFETY: the popup window belongs to this tab, which is closing.
             unsafe { popup.window.destroy() };
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SEEN_KEYS, SeenKeys};
+
+    #[test]
+    fn a_resent_key_is_recognised_once() {
+        let mut seen = SeenKeys::default();
+        seen.saw((100, 37, true));
+        assert!(!seen.take((100, 37, false)), "the release is another event");
+        assert!(!seen.take((101, 37, true)), "a later press is a real key");
+        assert!(seen.take((100, 37, true)), "WebKit sending the press back");
+        assert!(!seen.take((100, 37, true)), "only once");
+    }
+
+    #[test]
+    fn only_recent_keys_are_remembered() {
+        let mut seen = SeenKeys::default();
+        for t in 0..(SEEN_KEYS as u32 + 10) {
+            seen.saw((t, 38, true));
+        }
+        assert!(!seen.take((0, 38, true)));
+        assert!(seen.take((SEEN_KEYS as u32 + 9, 38, true)));
     }
 }
