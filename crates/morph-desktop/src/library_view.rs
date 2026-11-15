@@ -95,6 +95,10 @@ impl LibraryView {
         view
     }
 
+    pub fn is_locked(&self) -> bool {
+        self.library.is_locked()
+    }
+
     pub fn tab(&self) -> Tab {
         self.library.tab
     }

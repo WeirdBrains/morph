@@ -19,6 +19,7 @@ use crate::browser_view::{self, BrowserView};
 use crate::cli::Args;
 use crate::library::Tab;
 use crate::library_view::LibraryView;
+use crate::profiles_view::ProfilesView;
 
 actions!(
     morph,
@@ -48,7 +49,8 @@ actions!(
         Quit,
         Bookmark,
         ShowBookmarks,
-        ShowHistory
+        ShowHistory,
+        ShowProfiles
     ]
 );
 
@@ -81,6 +83,7 @@ fn gpui_action(action: Action) -> Box<dyn gpui::Action> {
         Action::Bookmark => Box::new(Bookmark),
         Action::ShowBookmarks => Box::new(ShowBookmarks),
         Action::ShowHistory => Box::new(ShowHistory),
+        Action::ShowProfiles => Box::new(ShowProfiles),
     }
 }
 
@@ -102,7 +105,14 @@ pub enum ShellRequest {
     FocusShell,
     /// The profile's library was unlocked.
     LibraryUnlocked,
+    /// Show this profile in the window.
+    SwitchProfile(String),
+    /// A profile's name changed.
+    ProfileRenamed,
 }
+
+/// Components each profile has its own of; rebuilt on a profile switch.
+const PER_PROFILE: [&str; 2] = [component::BROWSER, component::LIBRARY];
 
 /// What the host needs from a component.
 pub trait Hosted {
@@ -129,6 +139,8 @@ pub trait Hosted {
     fn set_page_marked(&self, _marked: bool, _cx: &mut App) {}
     /// Give the component the keyboard (a panel above it closed).
     fn focus_content(&self, _window: &mut Window, _cx: &mut App) {}
+    /// The profile's name, for a component that shows it.
+    fn set_profile_label(&self, _name: &str, _cx: &mut App) {}
 }
 
 impl Hosted for Entity<BrowserView> {
@@ -167,6 +179,29 @@ impl Hosted for Entity<BrowserView> {
     }
     fn focus_content(&self, window: &mut Window, cx: &mut App) {
         self.update(cx, |view, cx| view.focus_page(window, cx));
+    }
+    fn set_profile_label(&self, name: &str, cx: &mut App) {
+        self.update(cx, |view, cx| view.set_profile_label(name, cx));
+    }
+}
+
+impl Hosted for Entity<ProfilesView> {
+    fn kind(&self) -> KindId {
+        KindId::new(component::PROFILES)
+    }
+    fn view(&self) -> AnyView {
+        self.clone().into()
+    }
+    fn dispatch(&self, _action: Action, _window: &mut Window, _cx: &mut App) -> bool {
+        false
+    }
+    fn tick(&self, _window: &mut Window, _cx: &mut App) -> Vec<String> {
+        Vec::new()
+    }
+    fn set_shown(&self, _shown: bool, _cx: &mut App) {}
+    fn focus_shell(&self, _cx: &App) {}
+    fn title(&self, _cx: &App) -> String {
+        "Profiles".into()
     }
 }
 
@@ -207,6 +242,9 @@ pub struct Shell {
     /// work while its own chrome (not a page or a field) has the keyboard.
     focus: FocusHandle,
     library: Option<Entity<LibraryView>>,
+    profiles: Option<Entity<ProfilesView>>,
+    /// Subscriptions to the profile's own components, dropped on a switch.
+    profile_subscriptions: Vec<Subscription>,
     /// The main component's page as last passed to the panels.
     last_page: Option<Page>,
     last_marked: Option<bool>,
@@ -229,13 +267,46 @@ impl Shell {
         for kind in component::builtin() {
             catalog.register(kind);
         }
-        let keystrokes = page_shortcuts(&keymap);
-        let mut components: Vec<Box<dyn Hosted>> = Vec::new();
-        let mut subscriptions = Vec::new();
-        let error = match BrowserView::create(&home, &profile, start, window, &keystrokes) {
+        let profiles = cx.new(|cx| ProfilesView::new(&home, &profile, theme, window, cx));
+        let subscriptions = vec![cx.subscribe_in(&profiles, window, |shell, _, request, window, cx| shell.request(request, window, cx))];
+        let mut shell = Self {
+            home,
+            profile,
+            theme,
+            keymap,
+            catalog,
+            layout,
+            components: vec![Box::new(profiles.clone())],
+            error: None,
+            last_title: String::new(),
+            focus: cx.focus_handle(),
+            library: None,
+            profiles: Some(profiles),
+            last_page: None,
+            last_marked: None,
+            _subscriptions: subscriptions,
+            profile_subscriptions: Vec::new(),
+        };
+        shell.build(start, window, cx);
+        shell
+    }
+
+    /// Make the profile's own components (browser, library) and show the
+    /// library's password prompt if it is locked.
+    fn build(&mut self, start: &str, window: &mut Window, cx: &mut Context<Self>) {
+        for c in &self.components {
+            if PER_PROFILE.contains(&c.kind().as_str()) {
+                c.set_shown(false, cx);
+            }
+        }
+        self.components.retain(|c| !PER_PROFILE.contains(&c.kind().as_str()));
+        self.profile_subscriptions.clear();
+        let (home, profile, theme) = (self.home.clone(), self.profile.clone(), self.theme);
+        let keystrokes = page_shortcuts(&self.keymap);
+        self.error = match BrowserView::create(&home, &profile, start, window, &keystrokes) {
             Ok(browser) => {
                 let view = cx.new(|cx| BrowserView::new(browser, theme, window, cx));
-                components.push(Box::new(view));
+                self.components.insert(0, Box::new(view));
                 None
             }
             Err(e) => {
@@ -244,30 +315,46 @@ impl Shell {
             }
         };
         let library = cx.new(|cx| LibraryView::new(&home, &profile, theme, window, cx));
-        subscriptions.push(cx.subscribe_in(&library, window, |shell, _, request, window, cx| shell.request(request, window, cx)));
-        components.push(Box::new(library.clone()));
-        let shell = Self {
-            home,
-            profile,
-            theme,
-            keymap,
-            catalog,
-            layout,
-            components,
-            error,
-            last_title: String::new(),
-            focus: cx.focus_handle(),
-            library: Some(library),
-            last_page: None,
-            last_marked: None,
-            _subscriptions: subscriptions,
-        };
+        self.profile_subscriptions.push(cx.subscribe_in(&library, window, |shell, _, request, window, cx| shell.request(request, window, cx)));
+        self.components.push(Box::new(library.clone()));
+        let locked = library.read(cx).is_locked();
+        self.library = Some(library);
+        self.last_page = None;
+        self.last_marked = None;
         // Components outside a visible slot keep their pages hidden.
-        for c in &shell.components {
-            let shown = Slot::ALL.iter().any(|s| shell.layout.shown(*s) == Some(&c.kind()));
+        for c in &self.components {
+            let shown = Slot::ALL.iter().any(|s| self.layout.shown(*s) == Some(&c.kind()));
             c.set_shown(shown, cx);
         }
-        shell
+        self.update_profile_label(cx);
+        if locked {
+            self.show_library(Tab::Bookmarks, window, cx);
+        }
+    }
+
+    fn update_profile_label(&self, cx: &mut App) {
+        let Some(profiles) = &self.profiles else {
+            return;
+        };
+        let name = profiles.read(cx).shown_name();
+        for c in &self.components {
+            c.set_profile_label(&name, cx);
+        }
+    }
+
+    /// Show profile `id` in this window: its tabs, cookies, library, layout.
+    fn switch_profile(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(profiles) = self.profiles.clone() else {
+            return;
+        };
+        if !profiles.update(cx, |view, cx| view.switch(id, cx)) {
+            return;
+        }
+        self.profile = id.to_string();
+        crate::library::open_at_launch(&self.home, id);
+        self.layout = layout::load(&self.home, id);
+        self.build("", window, cx);
+        cx.notify();
     }
 
     fn main(&self) -> Option<&dyn Hosted> {
@@ -293,6 +380,8 @@ impl Shell {
             }
             ShellRequest::FocusShell => self.focus_shell(cx),
             ShellRequest::LibraryUnlocked => self.last_marked = None,
+            ShellRequest::SwitchProfile(id) => self.switch_profile(id, window, cx),
+            ShellRequest::ProfileRenamed => self.update_profile_label(cx),
         }
         cx.notify();
     }
@@ -332,6 +421,21 @@ impl Shell {
         cx.notify();
     }
 
+    /// Open or close the profiles panel.
+    fn show_profiles(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(profiles) = self.profiles.clone() else {
+            return;
+        };
+        if !self.layout.toggle_kind(Slot::Sidebar, KindId::new(component::PROFILES)) {
+            self.request(&ShellRequest::ClosePanel, window, cx);
+            return;
+        }
+        self.save_layout();
+        profiles.update(cx, |view, cx| view.focus(window, cx));
+        self.focus_shell(cx);
+        cx.notify();
+    }
+
     fn component(&self, kind: &KindId) -> Option<&dyn Hosted> {
         self.components.iter().find(|c| &c.kind() == kind).map(|c| c.as_ref())
     }
@@ -350,6 +454,7 @@ impl Shell {
             }
             Action::ShowBookmarks => return self.show_library(Tab::Bookmarks, window, cx),
             Action::ShowHistory => return self.show_library(Tab::History, window, cx),
+            Action::ShowProfiles => return self.show_profiles(window, cx),
             _ => {}
         }
         let main = self.layout.shown(Slot::Main).cloned();
@@ -475,6 +580,7 @@ impl Render for Shell {
             Bookmark => Action::Bookmark,
             ShowBookmarks => Action::ShowBookmarks,
             ShowHistory => Action::ShowHistory,
+            ShowProfiles => Action::ShowProfiles,
         ]);
         let root = root.on_any_mouse_down(cx.listener(|this, _, _, cx| this.focus_shell(cx)));
         if let Some(error) = &self.error {
