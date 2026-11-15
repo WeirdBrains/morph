@@ -76,6 +76,12 @@ windows) and showed black pages on X11 (WebKit's GBM buffers refused). The start
 now tries real pages in a child process and keeps what paints; off-screen pages use
 shared-memory buffers. Build `v0.2.0-alpha.7`.
 
+2026-11-15, phase 7: the GPUI desktop shell builds and runs on macOS (WKWebView) and
+Windows (WebView2) through the same web view trait; CI builds a universal Morph.app (zip,
+dmg) and a Windows zip and MSI and smoke-tests a real window and page on both. Unsigned.
+The release script (weirdnet-project-helpers 0.3.0) now cuts the pre-releases. Build
+`v0.2.0-alpha.8`.
+
 1. Webview _(moved up: everything else plugs into it)_
     - System web views: WebView2 (Windows), WKWebView (Apple), WebKit (Linux: WPE + webkit2gtk), Android WebView _(changed 2026-11-11)_
         - Linux: build our own WebKit plugin _(changed 2026-11-11)_
