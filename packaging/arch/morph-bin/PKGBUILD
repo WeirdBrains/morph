@@ -5,9 +5,9 @@
 # downloadable (public repo). The upstream tarball is not code-signed; this
 # package is likewise unsigned. To build from a checkout, see ../morph.
 pkgname=morph-bin
-pkgver=0.2.0alpha2
+pkgver=0.2.0alpha3
 # pacman sorts 0.2.0alpha2 before 0.2.0; the release tag is v0.2.0-alpha.2.
-_ver=0.2.0-alpha.2
+_ver=0.2.0-alpha.3
 pkgrel=1
 pkgdesc="Distributed web browser with local AI (GPUI desktop shell), prebuilt"
 arch=('x86_64')
@@ -21,7 +21,7 @@ conflicts=('morph')
 options=('!strip' '!debug')
 source_x86_64=("$url/releases/download/v$_ver/morph-$_ver-x86_64-unknown-linux-gnu.tar.gz")
 # From the release's SHA256SUMS.
-sha256sums_x86_64=('e9a6abaa46fefc7bb599105968ff81ee2788040e40682c88286d1aa036413094')
+sha256sums_x86_64=('ee757d700b7b9564da5c660aedc205e7ee9d4f09f9dce3ad391fa78a4eb0beb9')
 
 package() {
   local bundle="$srcdir/morph-$_ver-$CARCH-unknown-linux-gnu"
