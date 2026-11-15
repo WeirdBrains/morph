@@ -71,6 +71,148 @@ pub enum Event {
     /// A key the shell asked for ([`Backend::set_shortcuts`]) was pressed
     /// while a page had focus, in GPUI keystroke notation (`ctrl-t`).
     Shortcut(String),
+    /// A main-frame load failed. Cancelled loads (a newer navigation took
+    /// over) and downloads are not reported.
+    LoadFailed(LoadError),
+    /// The page's process stopped answering (`true`) or answers again.
+    Unresponsive(bool),
+    /// How many matches the last [`WebView::find`] or
+    /// [`WebView::find_next`] found; 0 for none.
+    FindResult {
+        matches: u32,
+    },
+}
+
+/// Why a page failed to load, for the shell's error page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorKind {
+    /// The site's TLS certificate is not trusted.
+    Certificate,
+    /// The host name does not resolve (often a typo).
+    NotFound,
+    /// The host exists but could not be reached (refused, offline, reset).
+    Unreachable,
+    /// The server took too long.
+    TimedOut,
+    /// Anything else; [`LoadError::message`] has the engine's text.
+    Other,
+}
+
+/// A main-frame load that failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadError {
+    pub url: String,
+    pub kind: ErrorKind,
+    /// The engine's own text, possibly empty.
+    pub message: String,
+}
+
+pub mod errors {
+    //! Mapping engine errors (GLib error domains and codes, as WebKitGTK
+    //! reports them) to [`ErrorKind`](super::ErrorKind). Kept free of GTK so
+    //! it is tested everywhere.
+    use super::ErrorKind;
+
+    /// `WEBKIT_NETWORK_ERROR_CANCELLED`.
+    const WEBKIT_CANCELLED: i32 = 302;
+    /// `WEBKIT_POLICY_ERROR_FRAME_LOAD_INTERRUPTED_BY_POLICY_CHANGE`
+    /// (a response turned into a download).
+    const POLICY_CHANGE: i32 = 102;
+    /// `WEBKIT_PLUGIN_ERROR_WILL_HANDLE_LOAD`.
+    const PLUGIN_WILL_HANDLE: i32 = 204;
+    /// `G_IO_ERROR_CANCELLED`.
+    const IO_CANCELLED: i32 = 19;
+
+    /// Whether a failure deserves an error page. Cancelled loads, downloads
+    /// and plugin hand-offs do not.
+    pub fn shown(domain: &str, code: i32) -> bool {
+        !matches!(
+            (domain, code),
+            ("WebKitNetworkError", WEBKIT_CANCELLED)
+                | ("g-io-error-quark", IO_CANCELLED)
+                | ("WebKitPolicyError", POLICY_CHANGE)
+                | ("WebKitPluginError", PLUGIN_WILL_HANDLE)
+        )
+    }
+
+    /// The kind of failure; `tls` is set for certificate failures.
+    pub fn kind(domain: &str, code: i32, tls: bool) -> ErrorKind {
+        if tls || domain == "g-tls-error-quark" {
+            return ErrorKind::Certificate;
+        }
+        match domain {
+            "g-resolver-error-quark" => ErrorKind::NotFound,
+            // GIOErrorEnum values.
+            "g-io-error-quark" => match code {
+                24 => ErrorKind::TimedOut,
+                28 => ErrorKind::NotFound,
+                39 | 44 | 45 | 46 => ErrorKind::Unreachable,
+                _ => ErrorKind::Other,
+            },
+            _ => ErrorKind::Other,
+        }
+    }
+
+    /// A short reason for a certificate failure from GLib's
+    /// `GTlsCertificateFlags`.
+    pub fn tls_reason(flags: u32) -> &'static str {
+        const UNKNOWN_CA: u32 = 1 << 0;
+        const BAD_IDENTITY: u32 = 1 << 1;
+        const NOT_ACTIVATED: u32 = 1 << 2;
+        const EXPIRED: u32 = 1 << 3;
+        const REVOKED: u32 = 1 << 4;
+        const INSECURE: u32 = 1 << 5;
+        if flags & BAD_IDENTITY != 0 {
+            "The certificate is for a different site."
+        } else if flags & EXPIRED != 0 {
+            "The certificate has expired."
+        } else if flags & NOT_ACTIVATED != 0 {
+            "The certificate is not valid yet."
+        } else if flags & REVOKED != 0 {
+            "The certificate was revoked."
+        } else if flags & UNKNOWN_CA != 0 {
+            "The certificate is not signed by a trusted authority."
+        } else if flags & INSECURE != 0 {
+            "The certificate uses insecure cryptography."
+        } else {
+            "The certificate is not valid."
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn cancelled_loads_and_downloads_show_no_error_page() {
+            assert!(!shown("WebKitNetworkError", 302));
+            assert!(!shown("g-io-error-quark", 19));
+            assert!(!shown("WebKitPolicyError", 102));
+            assert!(!shown("WebKitPluginError", 204));
+            assert!(shown("g-resolver-error-quark", 0));
+            assert!(shown("WebKitNetworkError", 399));
+        }
+
+        #[test]
+        fn engine_errors_map_to_kinds() {
+            assert_eq!(kind("g-resolver-error-quark", 0, false), ErrorKind::NotFound);
+            assert_eq!(kind("g-io-error-quark", 28, false), ErrorKind::NotFound);
+            assert_eq!(kind("g-io-error-quark", 24, false), ErrorKind::TimedOut);
+            assert_eq!(kind("g-io-error-quark", 39, false), ErrorKind::Unreachable);
+            assert_eq!(kind("g-io-error-quark", 1, false), ErrorKind::Other);
+            assert_eq!(kind("g-tls-error-quark", 3, false), ErrorKind::Certificate);
+            assert_eq!(kind("WebKitNetworkError", 399, true), ErrorKind::Certificate);
+            assert_eq!(kind("WebKitNetworkError", 399, false), ErrorKind::Other);
+        }
+
+        #[test]
+        fn certificate_reasons_name_the_worst_problem() {
+            assert!(tls_reason(2).contains("different site"));
+            assert!(tls_reason(8 | 1).contains("expired"));
+            assert!(tls_reason(1).contains("trusted authority"));
+            assert!(tls_reason(0).contains("not valid"));
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -96,6 +238,24 @@ pub trait WebView {
     fn set_visible(&self, visible: bool) -> Result<()>;
     /// Give the page keyboard focus.
     fn focus(&self) -> Result<()>;
+    /// Highlight `query` in the page (case-insensitive, wrapping) and select
+    /// the first match; answered by [`Event::FindResult`].
+    fn find(&self, _query: &str) -> Result<()> {
+        Ok(())
+    }
+    /// Move to the next (or, with `forward` false, previous) match.
+    fn find_next(&self, _forward: bool) -> Result<()> {
+        Ok(())
+    }
+    /// Drop the find highlights.
+    fn find_clear(&self) -> Result<()> {
+        Ok(())
+    }
+    /// End a page that stopped answering; it reports [`Event::Crashed`] and
+    /// a reload brings it back.
+    fn terminate(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// Makes web views and collects their events.

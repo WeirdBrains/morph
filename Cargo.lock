@@ -5395,6 +5395,7 @@ dependencies = [
  "morph-webview",
  "raw-window-handle",
  "tempfile",
+ "unicode-segmentation",
 ]
 
 [[package]]

@@ -3,9 +3,9 @@ use std::rc::Rc;
 
 use morph_ui::actions::{Action, Keymap};
 use morph_webview::fake::{Call, FakeBackend};
-use morph_webview::{Event, Rect, ViewId};
+use morph_webview::{ErrorKind, Event, LoadError, Rect, ViewId};
 
-use super::{Browser, Config};
+use super::{Browser, Config, Cover, FindBar, error_text};
 
 fn browser(start: &str) -> (Browser, FakeBackend) {
     let fake = FakeBackend::new();
@@ -176,11 +176,215 @@ fn a_crashed_page_is_hidden_until_reloaded() {
     let view = fake.created()[0];
     fake.emit(view, Event::Crashed);
     b.poll();
-    assert!(b.toolbar().crashed);
+    assert!(b.toolbar().covered);
+    assert_eq!(b.cover(), Some(&Cover::Crashed));
     assert_eq!(fake.last_visible(view), Some(false));
     b.dispatch(Action::Reload);
-    assert!(!b.toolbar().crashed);
+    assert!(!b.toolbar().covered);
     assert_eq!(fake.last_visible(view), Some(true));
+}
+
+fn not_found(url: &str) -> LoadError {
+    LoadError { url: url.into(), kind: ErrorKind::NotFound, message: "Error resolving".into() }
+}
+
+#[test]
+fn a_failed_load_shows_an_error_page_until_the_next_load() {
+    let (mut b, fake) = browser("nope.test");
+    let view = fake.created()[0];
+    fake.emit(view, Event::LoadStarted);
+    // WebKit puts the previous address back just before reporting the failure.
+    fake.emit(view, Event::UrlChanged("https://before.test/".into()));
+    fake.emit(view, Event::LoadFailed(not_found("https://nope.test/")));
+    let host_focus = fake.focus_host_count();
+    b.poll();
+    assert_eq!(b.active_url(), "https://nope.test/", "the tab keeps the address that failed");
+    assert_eq!(b.address().text(), "https://nope.test/");
+    assert_eq!(b.cover(), Some(&Cover::Failed(not_found("https://nope.test/"))));
+    assert!(fake.focus_host_count() > host_focus, "the hidden page does not keep the keyboard");
+    assert!(!b.toolbar().loading);
+    assert_eq!(fake.last_visible(view), Some(false), "the engine's own error text stays hidden");
+    // Try again reloads and shows the page.
+    b.dispatch(Action::Reload);
+    assert_eq!(b.cover(), None);
+    assert_eq!(fake.last_visible(view), Some(true));
+    assert_eq!(fake.calls_for(view).last(), Some(&Call::Load("https://nope.test/".into())), "the failed address, not the page before it");
+    // Going back from an error page starts a load, which clears it.
+    fake.emit(view, Event::LoadFailed(not_found("https://nope.test/")));
+    b.poll();
+    fake.emit(view, Event::LoadStarted);
+    b.poll();
+    assert_eq!(b.cover(), None);
+    assert_eq!(fake.last_visible(view), Some(true));
+}
+
+#[test]
+fn back_from_an_error_page_shows_the_page_under_it() {
+    let (mut b, fake) = browser("a.test");
+    let view = fake.created()[0];
+    type_into_address(&mut b, "nope.test");
+    fake.emit(view, Event::LoadStarted);
+    fake.emit(view, Event::UrlChanged("https://a.test/".into()));
+    fake.emit(view, Event::LoadFailed(not_found("https://nope.test")));
+    b.poll();
+    // Trying again fails again; Back still means the page before.
+    b.reload();
+    fake.emit(view, Event::LoadStarted);
+    fake.emit(view, Event::UrlChanged("https://a.test/".into()));
+    fake.emit(view, Event::LoadFailed(not_found("https://nope.test")));
+    b.poll();
+    let backs = fake.calls_for(view).iter().filter(|c| **c == Call::Back).count();
+    b.dispatch(Action::Back);
+    assert_eq!(b.cover(), None);
+    assert_eq!(b.active_url(), "https://a.test/");
+    assert_eq!(b.address().text(), "https://a.test/");
+    assert_eq!(fake.last_visible(view), Some(true));
+    assert_eq!(fake.calls_for(view).iter().filter(|c| **c == Call::Back).count(), backs, "the engine's Back would skip a page");
+    b.dispatch(Action::Back);
+    assert_eq!(fake.calls_for(view).last(), Some(&Call::Back));
+}
+
+#[test]
+fn an_error_in_a_background_tab_keeps_it_hidden_when_selected() {
+    let (mut b, fake) = browser("a.test");
+    b.new_tab("nope.test");
+    let second = fake.created()[1];
+    b.dispatch(Action::SelectTab(0));
+    fake.emit(second, Event::LoadFailed(not_found("https://nope.test/")));
+    b.poll();
+    assert_eq!(b.cover(), None, "the active tab is fine");
+    b.dispatch(Action::SelectTab(1));
+    assert!(matches!(b.cover(), Some(Cover::Failed(_))));
+    assert_eq!(fake.last_visible(second), Some(false));
+}
+
+#[test]
+fn error_pages_explain_what_went_wrong() {
+    let (title, detail) = error_text(&not_found("https://exampel.com/x"));
+    assert_eq!(title, "Can't find exampel.com");
+    assert!(detail.contains("misspelled"));
+    let cert =
+        LoadError { url: "https://self-signed.test:8443/".into(), kind: ErrorKind::Certificate, message: "The certificate has expired.".into() };
+    let (title, detail) = error_text(&cert);
+    assert_eq!(title, "This connection isn't private");
+    assert!(detail.starts_with("self-signed.test sent"), "{detail}");
+    assert!(detail.contains("expired. Check the address"), "{detail}");
+    let other = LoadError { url: "about:x".into(), kind: ErrorKind::Other, message: String::new() };
+    assert_eq!(error_text(&other), ("This page couldn't load".into(), "Try again in a moment.".into()));
+    let slow = LoadError { url: "http://user@slow.test:81".into(), kind: ErrorKind::TimedOut, message: String::new() };
+    assert_eq!(error_text(&slow).0, "slow.test took too long to respond");
+}
+
+#[test]
+fn a_hung_page_can_be_waited_for_or_reloaded() {
+    let (mut b, fake) = browser("busy.test");
+    let view = fake.created()[0];
+    fake.emit(view, Event::Unresponsive(true));
+    b.poll();
+    assert_eq!(b.cover(), Some(&Cover::Unresponsive));
+    assert_eq!(fake.last_visible(view), Some(false));
+    // Wait shows the page and does not cover it again while still hung.
+    b.wait();
+    assert_eq!(b.cover(), None);
+    assert_eq!(fake.last_visible(view), Some(true));
+    fake.emit(view, Event::Unresponsive(true));
+    b.poll();
+    assert_eq!(b.cover(), None);
+    // Once it answered, a new hang covers it again.
+    fake.emit(view, Event::Unresponsive(false));
+    fake.emit(view, Event::Unresponsive(true));
+    b.poll();
+    assert_eq!(b.cover(), Some(&Cover::Unresponsive));
+    // Reload ends the hung process and reloads; its crash report is expected.
+    b.dispatch(Action::Reload);
+    let calls = fake.calls_for(view);
+    assert!(calls.ends_with(&[Call::Terminate, Call::Bounds(Rect::default()), Call::Visible(true), Call::Reload]), "{calls:?}");
+    fake.emit(view, Event::Crashed);
+    b.poll();
+    assert_eq!(b.cover(), None, "the deliberate end is not a crash");
+    fake.emit(view, Event::Crashed);
+    b.poll();
+    assert_eq!(b.cover(), Some(&Cover::Crashed), "a later crash is");
+}
+
+#[test]
+fn a_page_that_answers_again_is_uncovered() {
+    let (mut b, fake) = browser("busy.test");
+    let view = fake.created()[0];
+    fake.emit(view, Event::Unresponsive(true));
+    fake.emit(view, Event::Unresponsive(false));
+    b.poll();
+    assert_eq!(b.cover(), None);
+    assert_eq!(fake.last_visible(view), Some(true));
+}
+
+#[test]
+fn find_searches_the_active_page_and_escape_returns_to_it() {
+    let (mut b, fake) = browser("a.test");
+    let view = fake.created()[0];
+    let host_focus = fake.focus_host_count();
+    assert!(b.dispatch(Action::Find));
+    assert_eq!(b.find(), Some(&FindBar::default()));
+    assert!(fake.focus_host_count() > host_focus, "the find bar takes the keyboard from the page");
+    b.set_find_query("morph");
+    assert_eq!(fake.calls_for(view).last(), Some(&Call::Find("morph".into())));
+    fake.emit(view, Event::FindResult { matches: 3 });
+    b.poll();
+    assert_eq!(b.find().unwrap().matches, Some(3));
+    assert!(b.dispatch(Action::FindNext));
+    assert_eq!(fake.calls_for(view).last(), Some(&Call::FindNext(true)));
+    b.find_next(false);
+    assert_eq!(fake.calls_for(view).last(), Some(&Call::FindNext(false)));
+    // The same text again searches nothing new; an empty one clears.
+    b.set_find_query("morph");
+    assert_eq!(fake.calls_for(view).last(), Some(&Call::FindNext(false)));
+    b.set_find_query("");
+    assert_eq!(fake.calls_for(view).last(), Some(&Call::FindClear));
+    assert_eq!(b.find().unwrap().matches, None);
+    b.set_find_query("x");
+    b.close_find();
+    assert_eq!(b.find(), None);
+    let calls = fake.calls_for(view);
+    assert_eq!(&calls[calls.len() - 2..], &[Call::FindClear, Call::Focus]);
+}
+
+#[test]
+fn find_next_opens_a_closed_find_bar_and_keeps_its_text_when_reopened() {
+    let (mut b, fake) = browser("a.test");
+    let view = fake.created()[0];
+    assert!(b.dispatch(Action::FindPrevious));
+    assert!(b.find().is_some());
+    assert!(!fake.calls_for(view).iter().any(|c| matches!(c, Call::FindNext(_))), "nothing to search yet");
+    b.set_find_query("tab");
+    b.dispatch(Action::Find);
+    assert_eq!(b.find().unwrap().query, "tab");
+}
+
+#[test]
+fn find_follows_the_active_tab() {
+    let (mut b, fake) = browser("a.test");
+    b.new_tab("b.test");
+    let (first, second) = (fake.created()[0], fake.created()[1]);
+    b.dispatch(Action::Find);
+    b.set_find_query("word");
+    fake.emit(second, Event::FindResult { matches: 2 });
+    b.poll();
+    b.dispatch(Action::SelectTab(0));
+    assert_eq!(b.find().unwrap().matches, None);
+    assert_eq!(fake.calls_for(first).last(), Some(&Call::Find("word".into())));
+    assert_eq!(fake.calls_for(second).last(), Some(&Call::FindClear));
+    // Results from a background tab are ignored.
+    fake.emit(second, Event::FindResult { matches: 9 });
+    b.poll();
+    assert_eq!(b.find().unwrap().matches, None);
+}
+
+#[test]
+fn opening_find_leaves_the_address_bar() {
+    let (mut b, _) = browser("a.test");
+    b.focus_address();
+    b.dispatch(Action::Find);
+    assert!(!b.address_focused());
 }
 
 #[test]

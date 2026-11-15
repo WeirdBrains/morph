@@ -7,15 +7,17 @@ use std::ops::Range;
 use std::path::Path;
 
 use gpui::{
-    App, Bounds, ClipboardItem, Context, CursorStyle, EntityInputHandler, FocusHandle, Focusable, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, Pixels, Point, ShapedLine, SharedString, UTF16Selection, Window, actions, canvas, div, point, prelude::*, px, rgb,
+    App, Bounds, ClipboardItem, Context, CursorStyle, Entity, EntityInputHandler, FocusHandle, Focusable, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, Pixels, Point, ShapedLine, SharedString, Subscription, UTF16Selection, Window, actions, canvas, div, point,
+    prelude::*, px, rgb,
 };
-use morph_browser::{Browser, Config};
+use morph_browser::{Browser, Config, Cover};
 use morph_ui::actions::Action;
 use morph_ui::theme::Theme;
 use morph_webview::Rect;
 
 use crate::address::AddressElement;
+use crate::text_input::{TextInput, TextInputEvent};
 
 actions!(address_bar, [Backspace, Delete, Left, Right, SelectLeft, SelectRight, SelectAll, Home, End, Paste, Copy, Cut, Submit, Cancel]);
 
@@ -24,6 +26,7 @@ pub const ADDRESS_CONTEXT: &str = "AddressBar";
 
 pub const TAB_STRIP_HEIGHT: f32 = 34.;
 pub const TOOLBAR_HEIGHT: f32 = 42.;
+pub const FIND_BAR_HEIGHT: f32 = 38.;
 
 pub struct BrowserView {
     browser: Browser,
@@ -34,11 +37,35 @@ pub struct BrowserView {
     selecting: bool,
     /// Address-bar focus as last mirrored into GPUI's focus.
     mirrored_focus: bool,
+    find_input: Entity<TextInput>,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl BrowserView {
-    pub fn new(browser: Browser, theme: Theme, cx: &mut Context<Self>) -> Self {
-        Self { browser, theme, address_focus: cx.focus_handle(), last_layout: None, last_bounds: None, selecting: false, mirrored_focus: false }
+    pub fn new(browser: Browser, theme: Theme, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let find_input = cx.new(|cx| TextInput::new("Find in page", theme, cx));
+        let find_events = cx.subscribe_in(&find_input, window, |this, input, event, window, cx| {
+            match event {
+                TextInputEvent::Changed => {
+                    let query = input.read(cx).text().to_string();
+                    this.browser.set_find_query(&query);
+                }
+                TextInputEvent::Submit { back } => this.browser.find_next(!back),
+                TextInputEvent::Cancel => this.close_find(window, cx),
+            }
+            cx.notify();
+        });
+        Self {
+            browser,
+            theme,
+            address_focus: cx.focus_handle(),
+            last_layout: None,
+            last_bounds: None,
+            selecting: false,
+            mirrored_focus: false,
+            find_input,
+            _subscriptions: vec![find_events],
+        }
     }
 
     /// A browser on the real web view backend, children of `window`.
@@ -94,12 +121,32 @@ impl BrowserView {
 
     /// Run a shell action. Returns whether the browser handled it.
     pub fn dispatch(&mut self, action: Action, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let opens_find =
+            matches!(action, Action::Find) || (matches!(action, Action::FindNext | Action::FindPrevious) && self.browser.find().is_none());
         let handled = self.browser.dispatch(action);
         if handled {
             self.sync_focus(window, cx);
+            if opens_find {
+                self.focus_find(window, cx);
+            }
             cx.notify();
         }
         handled
+    }
+
+    /// Put the keyboard in the find bar with its text selected.
+    fn focus_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let query = self.browser.find().map(|f| f.query.clone()).unwrap_or_default();
+        self.find_input.update(cx, |input, cx| input.set_text(&query, cx));
+        window.focus(&self.find_input.focus_handle(cx), cx);
+    }
+
+    fn close_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.find_input.read(cx).is_focused(window) {
+            window.blur(cx);
+        }
+        self.browser.close_find();
+        cx.notify();
     }
 
     /// Pump the web views; returns shortcuts pressed while a page had focus.
@@ -349,9 +396,122 @@ impl BrowserView {
             })
     }
 
+    /// The find bar: a row between the toolbar and the page, so the page
+    /// moves down instead of being covered.
+    fn find_bar(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let t = self.theme;
+        let find = self.browser.find()?;
+        let status: SharedString = match find.matches {
+            _ if find.query.is_empty() => "".into(),
+            None => "…".into(),
+            Some(0) => "No matches".into(),
+            Some(1) => "1 match".into(),
+            Some(n) if n >= 1000 => "1000+ matches".into(),
+            Some(n) => format!("{n} matches").into(),
+        };
+        let found = !find.query.is_empty() && find.matches != Some(0);
+        Some(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(6.))
+                .h(px(FIND_BAR_HEIGHT))
+                .px(px(8.))
+                .bg(rgb(t.surface))
+                .border_t_1()
+                .border_color(rgb(t.surface_variant))
+                .child(div().w(px(320.)).flex().child(self.find_input.clone()))
+                .child(
+                    div()
+                        .min_w(px(96.))
+                        .text_size(px(12.))
+                        .text_color(rgb(if find.matches == Some(0) && !find.query.is_empty() { t.error } else { t.text_secondary }))
+                        .child(status),
+                )
+                .child(self.button("find-previous", "↑", found).on_click(cx.listener(|this, _, _, cx| {
+                    this.browser.find_next(false);
+                    cx.notify();
+                })))
+                .child(self.button("find-next", "↓", found).on_click(cx.listener(|this, _, _, cx| {
+                    this.browser.find_next(true);
+                    cx.notify();
+                })))
+                .child(div().flex_1())
+                .child(self.button("find-close", "×", true).on_click(cx.listener(|this, _, window, cx| {
+                    this.close_find(window, cx);
+                }))),
+        )
+    }
+
+    fn panel_button(&self, id: &'static str, label: &'static str, primary: bool) -> gpui::Stateful<gpui::Div> {
+        let t = self.theme;
+        div()
+            .id(id)
+            .px(px(14.))
+            .py(px(6.))
+            .rounded(px(6.))
+            .bg(rgb(if primary { t.accent } else { t.surface_variant }))
+            .text_color(rgb(if primary { t.background } else { t.text_primary }))
+            .cursor_pointer()
+            .child(label)
+    }
+
+    /// What Morph shows instead of a page that crashed, hung or failed to
+    /// load. The web view is hidden meanwhile.
+    fn cover_panel(&self, cover: &Cover, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let t = self.theme;
+        let reload = |label| {
+            self.panel_button("cover-reload", label, true).on_click(cx.listener(|this, _, w, cx| {
+                this.dispatch(Action::Reload, w, cx);
+            }))
+        };
+        let (title, detail, buttons): (String, String, Vec<gpui::AnyElement>) = match cover {
+            Cover::Crashed => {
+                ("This page stopped working.".into(), "Its process ended. Reload to try again.".into(), vec![reload("Reload").into_any_element()])
+            }
+            Cover::Unresponsive => (
+                "This page isn't responding".into(),
+                "You can wait for it to answer, or reload it.".into(),
+                vec![
+                    self.panel_button("cover-wait", "Wait", false)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.browser.wait();
+                            cx.notify();
+                        }))
+                        .into_any_element(),
+                    reload("Reload").into_any_element(),
+                ],
+            ),
+            Cover::Failed(error) => {
+                let (title, detail) = morph_browser::error_text(error);
+                (title, detail, vec![reload("Try again").into_any_element()])
+            }
+        };
+        let url = match cover {
+            Cover::Failed(error) => error.url.clone(),
+            _ => String::new(),
+        };
+        div()
+            .absolute()
+            .size_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(12.))
+            .p(px(24.))
+            .text_color(rgb(t.text_primary))
+            .child(div().text_size(px(20.)).child(title))
+            .child(div().max_w(px(520.)).text_size(px(14.)).text_color(rgb(t.text_secondary)).child(detail))
+            .when(!url.is_empty(), |d| d.child(div().text_size(px(12.)).text_color(rgb(t.text_secondary)).child(url)))
+            .child(div().flex().flex_row().gap(px(8.)).children(buttons))
+            .into_any_element()
+    }
+
     fn page_area(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = self.theme;
-        let crashed = self.browser.toolbar().crashed;
+        let cover = self.browser.cover().cloned();
         let this = cx.entity();
         div()
             .id("page")
@@ -374,33 +534,7 @@ impl BrowserView {
                 .absolute()
                 .size_full(),
             )
-            .when(crashed, |d| {
-                d.child(
-                    div()
-                        .absolute()
-                        .size_full()
-                        .flex()
-                        .flex_col()
-                        .items_center()
-                        .justify_center()
-                        .gap(px(12.))
-                        .text_color(rgb(t.text_primary))
-                        .child("This page stopped working.")
-                        .child(
-                            div()
-                                .id("crash-reload")
-                                .px(px(14.))
-                                .py(px(6.))
-                                .rounded(px(6.))
-                                .bg(rgb(t.surface_variant))
-                                .cursor_pointer()
-                                .on_click(cx.listener(|this, _, w, cx| {
-                                    this.dispatch(Action::Reload, w, cx);
-                                }))
-                                .child("Reload"),
-                        ),
-                )
-            })
+            .children(cover.map(|cover| self.cover_panel(&cover, cx)))
     }
 }
 
@@ -422,7 +556,7 @@ impl Render for BrowserView {
             window.focus(&self.address_focus, cx);
             self.mirrored_focus = true;
         }
-        div().flex().flex_col().size_full().child(self.tab_strip(cx)).child(self.toolbar(cx)).child(self.page_area(cx))
+        div().flex().flex_col().size_full().child(self.tab_strip(cx)).child(self.toolbar(cx)).children(self.find_bar(cx)).child(self.page_area(cx))
     }
 }
 
