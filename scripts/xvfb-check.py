@@ -788,6 +788,104 @@ def select_menu(r, binary, display, base):
         m2.stop()
 
 
+def page_clipboard(r, binary, display, base, wayland):
+    """Paste, copy and cut in a page, as github.com's paste handler reads
+    them (clipboardData types, items, files): alpha.9 crashed (SIGSEGV in
+    WebKitGTK's clipboard code) on the first paste on native Wayland, where
+    the shell now hands pages its own clipboard."""
+    m2 = Driver(binary, display, tempfile.mkdtemp(prefix="morph-xvfb-paste-"))
+    try:
+        win = wait_for(lambda: m2.own_window(), 20)
+        r.check("paste", "a Morph for the paste page opens", win)
+        if not win:
+            return
+        before = len(m2.events())
+        if not hand_to(r, "paste", binary, base + "paste.html", m2.env):
+            return
+
+        def st():
+            for _, n, a in reversed(m2.events()[before:]):
+                if n == "TitleChanged" and a and '"V{' in a:
+                    return json.loads(json.loads(a)[1:])
+            return None
+
+        def settle(want):
+            return wait_for(lambda: want(st() or {}) and st(), 5) or st() or {}
+
+        alive = lambda: m2.proc.poll() is None
+        r.check("paste", "the paste page loads", wait_for(st, 10), "no state")
+        time.sleep(1)
+        win = m2.window("V\\{") or win
+        m2.activate(win)
+        # The shell's own clipboard, from the address field.
+        m2.key("ctrl+l", delay=0.5)
+        m2.type("hello paste")
+        m2.key("ctrl+a", delay=0.3)
+        m2.key("ctrl+c", delay=0.5)
+        m2.key("Escape", delay=0.8)
+        m2.click(win, 100, 76 + 80)
+        time.sleep(0.8)
+        m2.key("ctrl+v", delay=0.5)
+        got = settle(lambda s: s.get("pastes") == 1)
+        r.check("paste", "Ctrl+V in a textarea: Morph keeps running", alive(), f"exit {m2.proc.poll()}")
+        if not alive():
+            return
+        r.check(
+            "paste",
+            "the page's paste listener reads the clipboard (types, getData, items)",
+            # WebKit's own paste on X11 lists no types (it reads lazily).
+            got.get("pastes") == 1
+            and got.get("text") == "hello paste"
+            and (not wayland or ("text/plain" in got.get("types", []) and got.get("items", 0) >= 1)),
+            str(got),
+        )
+        r.check("paste", "the text lands in the textarea", got.get("t") == "hello paste", str(got))
+        m2.click(win, 100, 76 + 240)
+        time.sleep(0.8)
+        m2.key("shift+Insert", delay=0.5)
+        got = settle(lambda s: s.get("e") == "hello paste")
+        r.check("paste", "Shift+Insert pastes into a contenteditable", alive() and got.get("e") == "hello paste", str(got))
+        # Copy from the page, paste back: the shell's clipboard has it.
+        m2.click(win, 100, 76 + 80)
+        time.sleep(0.5)
+        m2.key("ctrl+a", delay=0.3)
+        m2.type("from the page")
+        m2.key("ctrl+a", delay=0.3)
+        m2.key("ctrl+c", delay=0.8)
+        got = settle(lambda s: s.get("copies") == 1)
+        r.check("paste", "Ctrl+C in the page fires its copy event", alive() and got.get("copies") == 1, str(got))
+        m2.click(win, 100, 76 + 240)
+        time.sleep(0.5)
+        m2.key("ctrl+a", delay=0.3)
+        m2.key("ctrl+v", delay=0.5)
+        got = settle(lambda s: s.get("e") == "from the page")
+        r.check("paste", "what the page copied pastes back", got.get("e") == "from the page", str(got))
+        m2.click(win, 100, 76 + 80)
+        time.sleep(0.5)
+        m2.key("ctrl+a", delay=0.3)
+        m2.key("ctrl+x", delay=0.5)
+        got = settle(lambda s: s.get("t") == "")
+        r.check("paste", "Ctrl+X cuts the selection", alive() and got.get("t") == "", str(got))
+        m2.key("ctrl+v", delay=0.5)
+        got = settle(lambda s: s.get("t") == "from the page")
+        r.check("paste", "and Ctrl+V puts it back", got.get("t") == "from the page", str(got))
+        # Middle clicks (the primary selection on Linux), on text and not.
+        for where, (x, y) in (("on editable text", (100, 76 + 240)), ("elsewhere", (600, 76 + 450)), ("on a link", (60, 76 + 332))):
+            m2.move(win, x, y)
+            time.sleep(0.5)
+            if wayland:
+                m2.send("button 274 1")
+                m2.send("button 274 0")
+            else:
+                m2.xdo("click", "2")
+            time.sleep(1.5)
+            r.check("paste", f"a middle click {where}: Morph keeps running", alive(), f"exit {m2.proc.poll()}")
+            if not alive():
+                return
+    finally:
+        m2.stop()
+
+
 def last_tab_quits(r, binary, display):
     """Closing the last tab quits Morph (exit code 0) after saving."""
     m2 = Driver(binary, display, tempfile.mkdtemp(prefix="morph-xvfb-quit-"))
@@ -1029,10 +1127,21 @@ def qr_texts(path):
 
 
 def screenshot(m, path):
-    if isinstance(m, WaylandMorph):
-        subprocess.run(["grim", str(path)], env=m.env, capture_output=True, timeout=20)
-    else:
-        subprocess.run(["import", "-window", "root", str(path)], env=m.env, capture_output=True, timeout=20)
+    """The whole screen as a PNG at `path` (grim on Wayland; ImageMagick's
+    import, else Pillow, on X11). Nothing is written when neither works."""
+    command = ["grim", str(path)] if isinstance(m, WaylandMorph) else ["import", "-window", "root", str(path)]
+    try:
+        subprocess.run(command, env=m.env, capture_output=True, timeout=20)
+        return
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    if not isinstance(m, WaylandMorph):
+        try:
+            from PIL import ImageGrab
+
+            ImageGrab.grab(xdisplay=m.env["DISPLAY"]).save(path)
+        except Exception:
+            pass
 
 
 def check_qr(r, area, what, m, expected):
@@ -1402,6 +1511,7 @@ def main():
         favicon(m, r, args.bin, base)
         file_picker(r, args.bin, display, base)
         select_menu(r, args.bin, display, base)
+        page_clipboard(r, args.bin, display, base, args.wayland)
         last_tab_quits(r, args.bin, display)
         # GPUI draws the frame itself only where the window manager supports
         # _GTK_FRAME_EXTENTS and a compositor runs; xfwm4 has both.

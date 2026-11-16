@@ -14,10 +14,10 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use gpui::{
-    App, Bounds, ClipboardItem, Context, Corners, CursorStyle, DispatchPhase, Entity, EntityInputHandler, FocusHandle, Focusable, Hitbox,
-    HitboxBehavior, KeyDownEvent, KeyUpEvent, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
-    RenderImage, ScrollEvent, ScrollHandle, ShapedLine, SharedString, Subscription, UTF16Selection, Window, actions, anchored, canvas, deferred, div,
-    point, prelude::*, px, rgb, size,
+    App, Bounds, ClipboardEntry, ClipboardItem, Context, Corners, CursorStyle, DispatchPhase, Entity, EntityInputHandler, FocusHandle, Focusable,
+    Hitbox, HitboxBehavior, KeyDownEvent, KeyUpEvent, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
+    Point, RenderImage, ScrollEvent, ScrollHandle, ShapedLine, SharedString, Subscription, UTF16Selection, Window, actions, anchored, canvas,
+    deferred, div, point, prelude::*, px, rgb, size,
 };
 use morph_browser::{Browser, Config, Cover, MenuState};
 use morph_core::settings::TabPosition;
@@ -640,6 +640,11 @@ impl BrowserView {
         // Pages follow the shell's scale on either backend.
         self.browser.set_scale(f64::from(window.scale_factor()));
         if self.browser.draws_pages()
+            && let Some(text) = self.browser.take_copied()
+        {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
+        if self.browser.draws_pages()
             && let Some(frame) = self.browser.take_frame()
         {
             self.set_page_frame(frame, window);
@@ -670,6 +675,17 @@ impl BrowserView {
         let (x, y) = local(event.position, origin);
         let modifiers = crate::page_input::modifiers(&event.modifiers);
         self.browser.page_input(Input::PointerButton { x, y, button: crate::page_input::button(event.button), pressed: true, modifiers });
+        if event.button == MouseButton::Middle && self.browser.draws_pages() && self.browser.page_cursor() == PageCursor::Text {
+            // The page does not paste the primary selection itself (see
+            // morph_webview::clipboard): a click puts the caret there and
+            // the shell pastes it.
+            let left = morph_webview::MouseButton::Left;
+            self.browser.page_input(Input::PointerButton { x, y, button: left, pressed: true, modifiers });
+            self.browser.page_input(Input::PointerButton { x, y, button: left, pressed: false, modifiers });
+            if let Some(text) = cx.read_from_primary().and_then(|item| item.text()).filter(|t| !t.is_empty()) {
+                self.browser.page_input(Input::Paste(morph_webview::clipboard::Clipboard { text: Some(text), image: None }));
+            }
+        }
         cx.notify();
     }
 
@@ -715,8 +731,39 @@ impl BrowserView {
             return;
         }
         if let Some(input) = crate::page_input::key(&event.keystroke, true, crate::page_input::current_raw_key()) {
-            self.browser.page_input(input);
+            match &input {
+                Input::Key(key) if let Some(clip) = morph_webview::clipboard::clipboard_key(key) => self.page_clipboard(clip, cx),
+                _ => self.browser.page_input(input),
+            }
             cx.stop_propagation();
+        }
+    }
+
+    /// Copy, cut or paste in a page the shell draws, with the shell's
+    /// clipboard (WebKit's crashed off screen: see morph_webview::clipboard).
+    fn page_clipboard(&mut self, key: morph_webview::clipboard::ClipboardKey, cx: &mut Context<Self>) {
+        use morph_webview::clipboard::{Clipboard, ClipboardKey};
+        match key {
+            ClipboardKey::Paste => {
+                let Some(item) = cx.read_from_clipboard() else {
+                    return;
+                };
+                let mut clip = Clipboard::default();
+                for entry in item.entries() {
+                    match entry {
+                        ClipboardEntry::String(s) if clip.text.is_none() => clip.text = Some(s.text().clone()),
+                        ClipboardEntry::Image(image) if clip.image.is_none() => {
+                            clip.image = Some((image.format.mime_type().to_string(), image.bytes.clone()))
+                        }
+                        _ => {}
+                    }
+                }
+                if clip.text.is_some() || clip.image.is_some() {
+                    self.browser.page_input(Input::Paste(clip));
+                }
+            }
+            ClipboardKey::Copy => self.browser.page_input(Input::Copy { cut: false }),
+            ClipboardKey::Cut => self.browser.page_input(Input::Copy { cut: true }),
         }
     }
 
