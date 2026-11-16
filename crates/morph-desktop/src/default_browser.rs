@@ -49,7 +49,11 @@ pub struct Dirs {
 impl Dirs {
     /// The user's: XDG directories and the current desktops.
     pub fn system() -> Option<Self> {
+        #[cfg(target_os = "linux")]
         let (data, config) = crate::legacy_desktop::xdg_dirs()?;
+        // Elsewhere there are no lists: the system settings choose.
+        #[cfg(not(target_os = "linux"))]
+        let (data, config): (PathBuf, PathBuf) = None?;
         let desktops =
             std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().split(':').map(|d| d.trim().to_lowercase()).filter(|d| !d.is_empty()).collect();
         Some(Self { config, data, desktops })
@@ -217,19 +221,19 @@ impl Check {
     }
 
     fn status_in(dirs: Option<Dirs>, run: SystemRunner) -> Self {
-        Self::spawn(move || match (&dirs, cfg!(target_os = "linux")) {
-            (Some(d), true) => (status(d), None),
-            _ => (Status::Unknown(no_answer(run)), None),
+        Self::spawn(move || match &dirs {
+            Some(d) => (status(d), None),
+            None => (Status::Unknown(no_answer(run)), None),
         })
     }
 
     fn make_default_in(dirs: Option<Dirs>, run: SystemRunner) -> Self {
-        Self::spawn(move || match (&dirs, cfg!(target_os = "linux")) {
-            (Some(d), true) => {
+        Self::spawn(move || match &dirs {
+            Some(d) => {
                 let made = make_default(d, &run);
                 (status(d), Some(made))
             }
-            _ => {
+            None => {
                 let why = no_answer(run);
                 (Status::Unknown(why.clone()), Some(Err(why)))
             }
