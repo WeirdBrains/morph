@@ -18,11 +18,17 @@ use std::time::Instant;
 use gtk::gdk;
 use gtk::glib::translate::{ToGlibPtr, ToGlibPtrMut};
 use gtk::prelude::*;
-use webkit2gtk::{FindControllerExt, FindOptions, HitTestResultExt, WebViewExt};
+use webkit2gtk::{FindControllerExt, FindOptions, HitTestResultExt, OptionMenuExt, WebViewExt};
 use wry::{WebContext, WebViewBuilder, WebViewBuilderExtUnix, WebViewExtUnix};
 
-use crate::wry_linux::{FIND_MAX_MATCHES, Popups, Queue, UNDO_REDO_SCRIPT, attach_bridge, backend_err, popup_handler, watch, with_bridge};
-use crate::{Backend, Event, Frame, Input, Key, Modifiers, MouseButton, PageBridge, PageCursor, Rect, Result, Spec, ViewId, WebView, keys};
+use crate::wry_linux::{CONTROL_SCHEME_SCRIPT, FIND_MAX_MATCHES, Popups, Queue, UNDO_REDO_SCRIPT, attach_bridge, backend_err, popup_handler, watch, with_bridge};
+use crate::{
+    Backend, Event, Frame, Input, Key, MenuChoice, MenuItem, Modifiers, MouseButton, OptionMenu, PageBridge, PageCursor, Rect, Result, Spec, ViewId,
+    WebView, keys,
+};
+
+/// A `<select>` list the page opened, with the row it started on.
+type OpenMenu = Rc<RefCell<Option<(webkit2gtk::OptionMenu, Option<u32>)>>>;
 
 /// State the backend and its views share.
 struct Shared {
@@ -154,6 +160,7 @@ impl Backend for OffscreenBackend {
         let builder = WebViewBuilder::new_with_web_context(context)
             .with_url(url)
             .with_initialization_script(UNDO_REDO_SCRIPT)
+            .with_initialization_script(CONTROL_SCHEME_SCRIPT)
             .with_new_window_req_handler(popup_handler(id, self.queue.clone(), self.popups.clone(), self.bridge.clone()));
         let view = match with_bridge(builder, &self.bridge).build_gtk(&vbox) {
             Ok(view) => view,
@@ -191,6 +198,43 @@ impl Backend for OffscreenBackend {
         // WebKit's context menu is a GTK menu, which needs a window on the
         // screen to hang from; an off-screen page has none.
         engine.connect_context_menu(|_, _, _, _| true);
+        // The same goes for a <select>'s list (it opened in the middle of
+        // the screen, far from the element) and for tooltips: the shell
+        // draws both.
+        let zoom = Rc::new(Cell::new(0.0));
+        let menu: OpenMenu = Rc::default();
+        let (queue, open, z) = (self.queue.clone(), menu.clone(), zoom.clone());
+        engine.connect_show_option_menu(move |_, options, _, rect| {
+            let scale = if z.get() > 0.0 { z.get() } else { 1.0 };
+            let (items, selected) = menu_items(options);
+            let anchor = Rect::new(
+                f64::from(rect.x()) / scale,
+                f64::from(rect.y()) / scale,
+                f64::from(rect.width()) / scale,
+                f64::from(rect.height()) / scale,
+            );
+            let (q, o) = (queue.clone(), open.clone());
+            options.connect_close(move |closed| {
+                let mine = o.borrow().as_ref().is_some_and(|(m, _)| m == closed);
+                if mine {
+                    o.borrow_mut().take();
+                    q.borrow_mut().push((id, Event::OptionMenuClosed));
+                }
+            });
+            *open.borrow_mut() = Some((options.clone(), selected));
+            queue.borrow_mut().push((id, Event::OptionMenu(OptionMenu { items, anchor })));
+            true
+        });
+        engine.connect_query_tooltip(|_, _, _, _, _| false);
+        let queue = self.queue.clone();
+        let last_tip: Rc<RefCell<Option<String>>> = Rc::default();
+        engine.connect_notify_local(Some("tooltip-text"), move |engine, _| {
+            let tip = engine.tooltip_text().map(|t| t.to_string()).filter(|t| !t.trim().is_empty());
+            if *last_tip.borrow() != tip {
+                *last_tip.borrow_mut() = tip.clone();
+                queue.borrow_mut().push((id, Event::Tooltip(tip)));
+            }
+        });
         self.shared.windows.borrow_mut().insert(id, window.clone());
         let page = OffscreenView {
             id,
@@ -201,7 +245,8 @@ impl Backend for OffscreenBackend {
             dirty,
             bounds: Cell::new(spec.bounds),
             visible: Cell::new(false),
-            zoom: Cell::new(0.0),
+            zoom,
+            menu,
             buttons: Cell::new(0),
             inside: Cell::new(false),
             cursor,
@@ -256,12 +301,37 @@ struct OffscreenView {
     /// The page zoom that makes up for GTK's (whole-number) scale falling
     /// short of the shell's: the page renders at `scale` device pixels per
     /// logical pixel either way, and pointer positions are multiplied by it.
-    zoom: Cell<f64>,
+    zoom: Rc<Cell<f64>>,
+    /// The open `<select>` list, if any.
+    menu: OpenMenu,
     /// Pointer buttons held, as GDK button masks.
     buttons: Cell<u32>,
     /// The pointer is over the page.
     inside: Cell<bool>,
     cursor: Rc<Cell<PageCursor>>,
+}
+
+/// The rows of a `<select>` list, and the one selected.
+fn menu_items(menu: &webkit2gtk::OptionMenu) -> (Vec<MenuItem>, Option<u32>) {
+    let mut selected = None;
+    let items = (0..menu.n_items())
+        .filter_map(|i| {
+            let mut item = menu.item(i)?;
+            let row = MenuItem {
+                label: item.label().map(|s| s.to_string()).unwrap_or_default(),
+                tooltip: item.tooltip().map(|s| s.to_string()).unwrap_or_default(),
+                enabled: item.is_enabled(),
+                group_label: item.is_group_label(),
+                group_child: item.is_group_child(),
+                selected: item.is_selected(),
+            };
+            if row.selected && selected.is_none() {
+                selected = Some(i);
+            }
+            Some(row)
+        })
+        .collect();
+    (items, selected)
 }
 
 /// GDK's number for a pointer button.
@@ -591,6 +661,34 @@ impl WebView for OffscreenView {
     }
     fn cursor(&self) -> PageCursor {
         self.cursor.get()
+    }
+    fn option_menu(&self, choice: MenuChoice) {
+        let Some((menu, start)) = self.menu.borrow().clone() else {
+            return;
+        };
+        let count = menu.n_items();
+        let index = |n: usize| u32::try_from(n).ok().filter(|&i| i < count);
+        match choice {
+            MenuChoice::Highlight(n) => {
+                if let Some(i) = index(n) {
+                    menu.select_item(i);
+                }
+            }
+            MenuChoice::Activate(n) => {
+                if let Some(i) = index(n) {
+                    menu.activate_item(i);
+                }
+                menu.close();
+            }
+            MenuChoice::Cancel => {
+                // Closing activates the row last highlighted: put back the
+                // one the element had.
+                if let Some(i) = start {
+                    menu.select_item(i);
+                }
+                menu.close();
+            }
+        }
     }
 }
 

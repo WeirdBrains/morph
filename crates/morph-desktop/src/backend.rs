@@ -18,6 +18,44 @@
 
 use crate::render_check;
 use std::ffi::OsStr;
+use std::sync::OnceLock;
+
+/// What start-up chose, for the About page.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Startup {
+    pub backend: Backend,
+    /// How WebKit renders pages: the settings the render check chose, or
+    /// the ones the user set.
+    pub render_path: String,
+    /// The render check's log line, when it changed anything.
+    pub note: Option<String>,
+    /// Whether Morph ranked GStreamer's VA-API decoders first.
+    pub va_ranked: bool,
+}
+
+static STARTUP: OnceLock<Startup> = OnceLock::new();
+
+/// What [`start`] chose; `None` before it ran.
+pub fn startup() -> Option<&'static Startup> {
+    STARTUP.get()
+}
+
+/// The render path for the About page: the variables the user set, else
+/// the render check's choice.
+pub fn render_path(user_set: &[(String, String)], chosen: render_check::Env, checked: bool) -> String {
+    if !user_set.is_empty() {
+        let vars: Vec<String> = user_set.iter().map(|(k, v)| format!("{k}={v}")).collect();
+        return format!("{} (set by you)", vars.join(" "));
+    }
+    let base = render_check::describe(chosen);
+    let what = match chosen {
+        e if e == render_check::SHARED_MEMORY => "shared-memory buffers",
+        e if e == render_check::GL_EXPORT => "DMA-BUF without GBM",
+        e if e == render_check::CLASSIC => "the classic (non-DMA-BUF) renderer",
+        _ => "DMA-BUF (WebKit's default)",
+    };
+    format!("{what}: {base}{}", if checked { "" } else { " (no render check)" })
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Backend {
@@ -65,15 +103,20 @@ pub fn start() -> Result<Backend, String> {
         std::env::remove_var("GDK_SCALE");
         std::env::remove_var("GDK_DPI_SCALE");
     }
+    let va_ranked = va_ranks(std::env::var_os("GST_PLUGIN_FEATURE_RANK").as_deref(), std::env::var_os("MORPH_VAAPI").as_deref()).is_some();
     if let Some(ranks) = va_ranks(std::env::var_os("GST_PLUGIN_FEATURE_RANK").as_deref(), std::env::var_os("MORPH_VAAPI").as_deref()) {
         unsafe { std::env::set_var("GST_PLUGIN_FEATURE_RANK", ranks) };
     }
     let (backend, fallback) =
         choose(std::env::var_os("MORPH_BACKEND").as_deref(), std::env::var_os("WAYLAND_DISPLAY").as_deref(), std::env::var_os("DISPLAY").as_deref())?;
-    let user_chose = render_check::USER_CHOICES.iter().any(|v| std::env::var_os(v).is_some());
+    let user_set: Vec<(String, String)> =
+        render_check::USER_CHOICES.iter().filter_map(|v| std::env::var(v).ok().map(|value| (v.to_string(), value))).collect();
+    let user_chose = !user_set.is_empty();
     let probe = std::env::var("MORPH_DMABUF_PROBE").ok();
     let checks = render_check::checks(probe.as_deref(), user_chose, render_check::has_drm_device());
     let decision = render_check::decide(backend, fallback, checks, render_check::run_child);
+    let mut startup =
+        Startup { backend: decision.backend, render_path: render_path(&user_set, decision.env, checks.pages || checks.gl), note: decision.note.clone(), va_ranked };
     if let Some(note) = &decision.note {
         eprintln!("morph: {note} (MORPH_DMABUF_PROBE=0 skips the page check)");
     }
@@ -91,7 +134,10 @@ pub fn start() -> Result<Backend, String> {
             }
         }
         match morph_webview::wry_linux::init() {
-            Ok(()) => return Ok(Backend::Wayland),
+            Ok(()) => {
+                let _ = STARTUP.set(startup);
+                return Ok(Backend::Wayland);
+            }
             Err(e) if fallback => eprintln!("morph: {e}; using X11 (XWayland) instead"),
             Err(e) => return Err(e.to_string()),
         }
@@ -101,6 +147,8 @@ pub fn start() -> Result<Backend, String> {
         std::env::set_var("GDK_BACKEND", "x11");
     }
     morph_webview::wry_linux::init().map_err(|e| e.to_string())?;
+    startup.backend = Backend::X11;
+    let _ = STARTUP.set(startup);
     Ok(Backend::X11)
 }
 
@@ -127,6 +175,15 @@ mod tests {
         assert!(pick(Some("x11"), Some("wayland-0"), None).unwrap_err().contains("DISPLAY"));
         assert!(pick(Some("wayland"), None, Some(":0")).unwrap_err().contains("WAYLAND_DISPLAY"));
         assert!(pick(Some("gtk"), Some("wayland-0"), Some(":0")).unwrap_err().contains("x11 or wayland"));
+    }
+
+    #[test]
+    fn the_render_path_names_the_choice_or_the_users_variables() {
+        assert_eq!(render_path(&[], render_check::AS_IS, true), "DMA-BUF (WebKit's default): WebKit's defaults");
+        assert!(render_path(&[], render_check::SHARED_MEMORY, true).starts_with("shared-memory buffers: WEBKIT_DMABUF_RENDERER_FORCE_SHM=1"));
+        assert!(render_path(&[], render_check::AS_IS, false).ends_with("(no render check)"));
+        let mine = vec![("WEBKIT_DISABLE_DMABUF_RENDERER".to_string(), "1".to_string())];
+        assert_eq!(render_path(&mine, render_check::SHARED_MEMORY, true), "WEBKIT_DISABLE_DMABUF_RENDERER=1 (set by you)");
     }
 
     #[test]

@@ -1,0 +1,58 @@
+<!doctype html>
+<!-- Form controls for scripts/xvfb-check.py: a <select> whose list the shell
+     draws (its value, focus and the element's place report in a JSON title,
+     "S{...}"), a long one for scrolling, and controls on a dark half that
+     asks for `color-scheme: dark`. -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>loading</title>
+<style>
+  body { margin: 0; font: 14px sans-serif; background: #fff; color: #000; }
+  #fruit { position: absolute; left: 40px; top: 40px; width: 160px; }
+  #long { position: absolute; left: 260px; top: 40px; width: 160px; }
+  #dark { position: absolute; left: 0; top: 200px; right: 0; height: 300px; background: #14171c; color: #e6e8eb; color-scheme: dark; }
+  #dark select, #dark input, #dark button { position: absolute; top: 40px; width: 220px; height: 34px; }
+  #dsel { left: 40px; } #dinput { left: 300px; } #dbutton { left: 560px; }
+</style>
+</head>
+<body>
+<select id="fruit">
+  <option value="apple">Apple</option>
+  <option value="banana" selected>Banana</option>
+  <option value="cherry">Cherry</option>
+  <option value="date" disabled>Date (sold out)</option>
+  <optgroup label="Later">
+    <option value="elder">Elderberry</option>
+    <option value="fig">Fig</option>
+  </optgroup>
+</select>
+<select id="long"></select>
+<div id="dark">
+  <select id="dsel"><option>Updated at</option><option>Name</option></select>
+  <input id="dinput" value="">
+  <button id="dbutton">Go</button>
+</div>
+<script>
+  const long = document.getElementById("long");
+  for (let i = 1; i <= 60; i++) long.add(new Option("Item " + i, "i" + i));
+  const loadId = Math.random().toString(36).slice(2, 8);
+  let changes = 0;
+  function report() {
+    const el = document.activeElement;
+    const r = fruit.getBoundingClientRect();
+    document.title = "S" + JSON.stringify({
+      id: loadId, fruit: fruit.value, long: long.value, changes, f: el && el.id ? el.id : "",
+      x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height),
+      dark: matchMedia("(prefers-color-scheme: dark)").matches,
+    });
+  }
+  for (const s of [fruit, long]) {
+    s.addEventListener("change", () => { changes += 1; report(); });
+    s.addEventListener("input", report);
+  }
+  document.addEventListener("focusin", () => setTimeout(report, 0));
+  report();
+</script>
+</body>
+</html>

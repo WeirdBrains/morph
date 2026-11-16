@@ -8,19 +8,23 @@
 // A GUI app on Windows (no console window of its own); see `attach_console`.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+mod about;
 mod address;
 #[cfg(target_os = "linux")]
 mod backend;
+mod brand;
 mod browser_view;
 mod cli;
 mod default_browser;
 mod identity;
 mod identity_view;
+mod menu_view;
 #[cfg(target_os = "linux")]
 mod legacy_desktop;
 mod library;
 mod library_view;
 mod page_input;
+mod notices;
 mod profiles;
 mod profiles_view;
 #[cfg(target_os = "linux")]
@@ -70,6 +74,9 @@ fn main() -> ExitCode {
     // The old Flutter build's broken desktop entry and browser associations.
     #[cfg(target_os = "linux")]
     legacy_desktop::spawn();
+    // GStreamer and VA-API for the About page, found in the background.
+    #[cfg(target_os = "linux")]
+    about::probe_media(backend::startup().is_some_and(|s| s.va_ranked));
     let paths = match morph_identity::Paths::resolve(None) {
         Ok(paths) => paths,
         Err(e) => {

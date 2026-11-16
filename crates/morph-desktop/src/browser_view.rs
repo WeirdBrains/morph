@@ -10,18 +10,24 @@ use std::ops::Range;
 use std::path::Path;
 use std::sync::Arc;
 
+use std::collections::HashMap;
+use std::rc::Rc;
+
 use gpui::{
     App, Bounds, ClipboardItem, Context, Corners, CursorStyle, DispatchPhase, Entity, EntityInputHandler, FocusHandle, Focusable, Hitbox,
     HitboxBehavior, KeyDownEvent, KeyUpEvent, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
-    RenderImage, ScrollEvent, ShapedLine, SharedString, Subscription, UTF16Selection, Window, actions, canvas, div, point, prelude::*, px, rgb, size,
+    RenderImage, ScrollEvent, ScrollHandle, ShapedLine, SharedString, Subscription, UTF16Selection, Window, actions, anchored, canvas, deferred,
+    div, point, prelude::*, px, rgb, size,
 };
-use morph_browser::{Browser, Config, Cover};
+use morph_browser::{Browser, Config, Cover, MenuState};
+use morph_core::tabs::TabId;
 use morph_ui::actions::Action;
 use morph_ui::chrome::{TabStrip, WindowButtons};
 use morph_ui::theme::Theme;
 use morph_webview::{Input, PageCursor, Rect};
 
 use crate::address::AddressElement;
+use crate::menu_view::{self, Row};
 use crate::text_input::{TextInput, TextInputEvent};
 
 actions!(address_bar, [Backspace, Delete, Left, Right, SelectLeft, SelectRight, SelectAll, Home, End, Paste, Copy, Cut, Submit, Cancel]);
@@ -66,7 +72,82 @@ pub struct BrowserView {
     page_buttons: u32,
     page_pointer: bool,
     page_modifiers: gpui::Modifiers,
+    /// Where the pointer last was over the page (page coordinates), for
+    /// the tooltip.
+    page_pointer_at: (f64, f64),
+    /// The open `<select>` list's scroll, and the row last scrolled to.
+    select_scroll: ScrollHandle,
+    select_scrolled: Option<usize>,
+    /// The main menu (☰) or a tab's context menu, when open.
+    shell_menu: Option<ShellMenu>,
+    shell_menu_focus: FocusHandle,
+    shell_menu_scroll: ScrollHandle,
+    /// The shortcut shown beside each menu entry.
+    shortcut_labels: HashMap<Action, String>,
+    /// A short note at the bottom (`Bookmarked`), until it times out.
+    toast: Option<Toast>,
     _subscriptions: Vec<Subscription>,
+}
+
+/// A short note at the bottom of the window.
+struct Toast {
+    text: SharedString,
+    action: Option<(&'static str, Action)>,
+    until: std::time::Instant,
+}
+
+/// How long a toast shows.
+pub const TOAST_TIME: std::time::Duration = std::time::Duration::from_millis(3500);
+
+/// What a shell menu entry does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MenuCommand {
+    Run(Action),
+    Duplicate(TabId),
+    Reload(TabId),
+    Close(TabId),
+    CloseOthers(TabId),
+}
+
+/// The main menu or a tab's context menu: rows (as a list's state, for the
+/// keys), what each does, and where it opens in the window.
+struct ShellMenu {
+    id: &'static str,
+    state: MenuState,
+    rows: Vec<Row>,
+    commands: Vec<MenuCommand>,
+    at: Point<Pixels>,
+    /// The page was hidden for the menu (child-window pages draw above the
+    /// shell, so nothing can open over them).
+    hid_page: bool,
+}
+
+/// The main menu: the old Flutter dot menu's entries (Find in page,
+/// Bookmarks, History, Identity, Settings) with New tab, Profiles and
+/// About added.
+pub const MAIN_MENU: [(&str, Action, bool); 9] = [
+    ("New tab", Action::NewTab, false),
+    ("Find in page", Action::Find, true),
+    ("Bookmarks", Action::ShowBookmarks, false),
+    ("History", Action::ShowHistory, false),
+    ("Identity", Action::ShowIdentity, true),
+    ("Profiles", Action::ShowProfiles, false),
+    ("Settings", Action::ShowSettings, false),
+    ("About Morph", Action::ShowAbout, true),
+    ("Quit", Action::Quit, true),
+];
+
+pub const MENU_WIDTH: f32 = 240.;
+
+/// The label beside each menu entry, from the (platform's) keymap.
+pub fn shortcut_labels(keymap: &morph_ui::actions::Keymap) -> HashMap<Action, String> {
+    let mac = cfg!(target_os = "macos");
+    MAIN_MENU
+        .iter()
+        .map(|e| e.1)
+        .chain([Action::CloseTab, Action::Bookmark])
+        .filter_map(|a| keymap.keystroke_for(a).map(|k| (a, menu_view::shortcut_label(k, mac))))
+        .collect()
 }
 
 impl BrowserView {
@@ -102,6 +183,14 @@ impl BrowserView {
             page_buttons: 0,
             page_pointer: false,
             page_modifiers: gpui::Modifiers::default(),
+            page_pointer_at: (0.0, 0.0),
+            select_scroll: ScrollHandle::new(),
+            select_scrolled: None,
+            shell_menu: None,
+            shell_menu_focus: cx.focus_handle(),
+            shell_menu_scroll: ScrollHandle::new(),
+            shortcut_labels: HashMap::new(),
+            toast: None,
             _subscriptions: vec![find_events],
         }
     }
@@ -278,6 +367,16 @@ impl BrowserView {
         Some(row.child(control("window-close", "×", t.error).on_click(|_, window, _| window.remove_window())))
     }
 
+    /// Show `text` at the bottom for a few seconds, with `action` offered.
+    pub fn toast(&mut self, text: &str, action: Option<(&'static str, Action)>, cx: &mut Context<Self>) {
+        self.toast = Some(Toast { text: text.to_string().into(), action, until: std::time::Instant::now() + TOAST_TIME });
+        if !self.browser.draws_pages() {
+            // Child-window pages draw over the shell: make room below them.
+            cx.notify();
+        }
+        cx.notify();
+    }
+
     pub fn set_marked(&mut self, marked: bool, cx: &mut Context<Self>) {
         if self.marked != marked {
             self.marked = marked;
@@ -310,6 +409,10 @@ impl BrowserView {
 
     /// Pump the web views; returns shortcuts pressed while a page had focus.
     pub fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Vec<String> {
+        if self.toast.as_ref().is_some_and(|t| std::time::Instant::now() >= t.until) {
+            self.toast = None;
+            cx.notify();
+        }
         let polled = self.browser.poll();
         if polled.changed {
             self.sync_focus(window, cx);
@@ -362,6 +465,7 @@ impl BrowserView {
         if inside || self.page_buttons > 0 {
             self.page_pointer = true;
             let (x, y) = local(event.position, origin);
+            self.page_pointer_at = (x, y);
             self.browser.page_input(Input::PointerMove { x, y, modifiers: crate::page_input::modifiers(&event.modifiers) });
         } else if self.page_pointer {
             self.page_pointer = false;
@@ -379,6 +483,15 @@ impl BrowserView {
     /// Keys the shell's bindings did not take go to the page, as long as
     /// it has the keyboard (a click on the toolbar takes it back).
     fn page_key_down(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.browser.option_menu().is_some() {
+            // A <select>'s list is open: its keys are the list's.
+            if let Some(key) = menu_view::menu_key(&event.keystroke) {
+                self.browser.menu_key(key);
+                cx.notify();
+            }
+            cx.stop_propagation();
+            return;
+        }
         if !self.browser.page_has_keyboard() {
             return;
         }
@@ -389,6 +502,10 @@ impl BrowserView {
     }
 
     fn page_key_up(&mut self, event: &KeyUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.browser.option_menu().is_some() {
+            cx.stop_propagation();
+            return;
+        }
         if !self.browser.page_has_keyboard() {
             return;
         }
@@ -477,9 +594,127 @@ impl BrowserView {
     }
 
     fn submit(&mut self, _: &Submit, window: &mut Window, cx: &mut Context<Self>) {
-        self.browser.submit_address();
+        let internal = self.browser.submit_address();
+        self.sync_focus(window, cx);
+        if let Some(internal) = internal {
+            // morph://bookmarks and the like open the shell's panels.
+            window.dispatch_action(crate::shell::gpui_action(internal.action()), cx);
+        }
+        cx.notify();
+    }
+
+    /// The shortcut shown beside each menu entry (`Ctrl+Shift+O`, `⌘⇧O`).
+    pub fn set_shortcut_labels(&mut self, labels: HashMap<Action, String>) {
+        self.shortcut_labels = labels;
+    }
+
+    fn label_for(&self, action: Action) -> SharedString {
+        self.shortcut_labels.get(&action).cloned().unwrap_or_default().into()
+    }
+
+    /// Open a shell menu at `at` (window coordinates) and give it the keyboard.
+    fn open_shell_menu(&mut self, id: &'static str, entries: Vec<(Row, MenuCommand)>, at: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_shell_menu(window, cx);
+        let items = entries
+            .iter()
+            .map(|(row, _)| morph_webview::MenuItem { label: row.label.to_string(), enabled: row.enabled, ..Default::default() })
+            .collect();
+        let mut state = MenuState::new(morph_webview::OptionMenu { items, anchor: Rect::default() });
+        state.highlighted = None;
+        let hid_page = !self.browser.draws_pages();
+        if hid_page {
+            self.browser.set_shown(false);
+        }
+        let (rows, commands) = entries.into_iter().unzip();
+        self.shell_menu = Some(ShellMenu { id, state, rows, commands, at, hid_page });
+        self.browser.focus_shell();
+        window.focus(&self.shell_menu_focus, cx);
+        cx.notify();
+    }
+
+    fn close_shell_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(menu) = self.shell_menu.take() {
+            if menu.hid_page {
+                self.browser.set_shown(true);
+            }
+            if self.shell_menu_focus.is_focused(window) {
+                window.blur(cx);
+            }
+            cx.notify();
+        }
+    }
+
+    /// The ☰ button: the main menu under it, at the window's right edge.
+    fn open_main_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let entries = MAIN_MENU
+            .iter()
+            .map(|&(label, action, separated)| {
+                let mut row = Row::new(label).detail(self.label_for(action));
+                row.separator = separated;
+                (row, MenuCommand::Run(action))
+            })
+            .collect();
+        let width = window.viewport_size().width;
+        let y = match self.strip {
+            TabStrip::Top => TAB_STRIP_HEIGHT + TOOLBAR_HEIGHT,
+            _ => TOOLBAR_HEIGHT,
+        };
+        let at = point(width - px(MENU_WIDTH + 8.), px(y - 4.));
+        self.open_shell_menu("main-menu", entries, at, window, cx);
+    }
+
+    /// A right click on a tab: what can be done with it.
+    fn open_tab_menu(&mut self, tab: TabId, at: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        let entries = vec![
+            (Row::new("New tab").detail(self.label_for(Action::NewTab)), MenuCommand::Run(Action::NewTab)),
+            (Row::new("Reload").separated(), MenuCommand::Reload(tab)),
+            (Row::new("Duplicate"), MenuCommand::Duplicate(tab)),
+            (Row::new("Close tab").separated().detail(self.label_for(Action::CloseTab)), MenuCommand::Close(tab)),
+            (Row::new("Close other tabs"), MenuCommand::CloseOthers(tab)),
+            (Row::new("Bookmarks").separated().detail(self.label_for(Action::ShowBookmarks)), MenuCommand::Run(Action::ShowBookmarks)),
+            (Row::new("History").detail(self.label_for(Action::ShowHistory)), MenuCommand::Run(Action::ShowHistory)),
+        ];
+        self.open_shell_menu("tab-menu", entries, at, window, cx);
+    }
+
+    /// Run shell menu row `i` and close the menu.
+    fn choose_shell_menu(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(command) = self.shell_menu.as_ref().and_then(|m| m.state.choosable(i).then(|| m.commands.get(i).copied()).flatten()) else {
+            return;
+        };
+        self.close_shell_menu(window, cx);
+        match command {
+            MenuCommand::Run(action) => window.dispatch_action(crate::shell::gpui_action(action), cx),
+            MenuCommand::Duplicate(tab) => self.browser.duplicate_tab(tab),
+            MenuCommand::Reload(tab) => self.browser.reload_tab(tab),
+            MenuCommand::Close(tab) => self.browser.close_tab(tab),
+            MenuCommand::CloseOthers(tab) => self.browser.close_other_tabs(tab),
+        }
         self.sync_focus(window, cx);
         cx.notify();
+    }
+
+    fn shell_menu_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(key) = menu_view::menu_key(&event.keystroke) else {
+            return;
+        };
+        cx.stop_propagation();
+        let Some(menu) = self.shell_menu.as_mut() else {
+            return;
+        };
+        match menu.state.key(key, std::time::Instant::now()) {
+            Some(morph_webview::MenuChoice::Activate(i)) => self.choose_shell_menu(i, window, cx),
+            Some(morph_webview::MenuChoice::Cancel) => {
+                self.close_shell_menu(window, cx);
+                self.browser.focus_page();
+                self.sync_focus(window, cx);
+            }
+            Some(morph_webview::MenuChoice::Highlight(i)) => {
+                self.shell_menu_scroll.scroll_to_item(i);
+                cx.notify();
+            }
+            None => {}
+        }
     }
 
     fn cancel(&mut self, _: &Cancel, window: &mut Window, cx: &mut Context<Self>) {
@@ -550,6 +785,13 @@ impl BrowserView {
             .text_size(px(13.))
             .cursor_pointer()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    this.open_tab_menu(id, event.position, window, cx);
+                }),
+            )
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.browser.select(id);
                 this.sync_focus(window, cx);
@@ -735,6 +977,15 @@ impl BrowserView {
                 let label: SharedString = if state.popups == 1 { "1 popup".into() } else { format!("{} popups", state.popups).into() };
                 d.child(div().px(px(8.)).text_size(px(12.)).text_color(rgb(t.accent_alt)).child(label))
             })
+            .child(self.button("main-menu-button", "☰", true).when(self.shell_menu.as_ref().is_some_and(|m| m.id == "main-menu"), |d| d.bg(rgb(t.surface_variant))).on_click(cx.listener(
+                |this, _, window, cx| {
+                    if this.shell_menu.as_ref().is_some_and(|m| m.id == "main-menu") {
+                        this.close_shell_menu(window, cx);
+                    } else {
+                        this.open_main_menu(window, cx);
+                    }
+                },
+            )))
             .when(!self.strip.is_caption(), |d| d.children(self.window_controls(cx)))
     }
 
@@ -802,6 +1053,9 @@ impl BrowserView {
     /// What Morph shows instead of a page that crashed, hung or failed to
     /// load. The web view is hidden meanwhile.
     fn cover_panel(&self, cover: &Cover, cx: &mut Context<Self>) -> gpui::AnyElement {
+        if *cover == Cover::About {
+            return self.about_panel(cx);
+        }
         let t = self.theme;
         let reload = |label| {
             self.panel_button("cover-reload", label, true).on_click(cx.listener(|this, _, w, cx| {
@@ -829,6 +1083,7 @@ impl BrowserView {
                 let (title, detail) = morph_browser::error_text(error);
                 (title, detail, vec![reload("Try again").into_any_element()])
             }
+            Cover::About => unreachable!("drawn by about_panel"),
         };
         let url = match cover {
             Cover::Failed(error) => error.url.clone(),
@@ -849,6 +1104,248 @@ impl BrowserView {
             .when(!url.is_empty(), |d| d.child(div().text_size(px(12.)).text_color(rgb(t.text_secondary)).child(url)))
             .child(div().flex().flex_row().gap(px(8.)).children(buttons))
             .into_any_element()
+    }
+
+    /// What draws over everything: a shell menu or a `<select>`'s list
+    /// (with a backdrop that closes it on a click elsewhere) and the
+    /// page's tooltip.
+    fn overlays(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+        let t = self.theme;
+        let mut out = Vec::new();
+        let area = self.browser.page_area();
+        if self.shell_menu.is_some() || self.browser.option_menu().is_some() {
+            out.push(
+                deferred(
+                    div()
+                        .id("menu-backdrop")
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .occlude()
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, window, cx| {
+                                this.close_shell_menu(window, cx);
+                                this.browser.menu_cancel();
+                                cx.notify();
+                            }),
+                        )
+                        .on_mouse_down(
+                            MouseButton::Right,
+                            cx.listener(|this, _, window, cx| {
+                                this.close_shell_menu(window, cx);
+                                this.browser.menu_cancel();
+                                cx.notify();
+                            }),
+                        )
+                        .on_scroll(|_, _, cx| cx.stop_propagation()),
+                )
+                .with_priority(1)
+                .into_any_element(),
+            );
+        }
+        if let Some(menu) = &self.shell_menu {
+            let natural = menu_view::natural_height(&menu.rows);
+            let this = cx.entity();
+            let hover: menu_view::RowHandler = Rc::new({
+                let this = this.clone();
+                move |i, _, cx| {
+                    this.update(cx, |view, cx| {
+                        if let Some(m) = view.shell_menu.as_mut()
+                            && m.state.hover(i).is_some()
+                        {
+                            cx.notify();
+                        }
+                    })
+                }
+            });
+            let click: menu_view::RowHandler = Rc::new(move |i, window, cx| this.update(cx, |view, cx| view.choose_shell_menu(i, window, cx)));
+            let list = menu_view::menu(t, menu.id, &menu.rows, menu.state.highlighted, MENU_WIDTH, natural, &self.shell_menu_scroll, hover, click)
+                .track_focus(&self.shell_menu_focus)
+                .key_context("ShellMenu")
+                .on_key_down(cx.listener(Self::shell_menu_key));
+            out.push(deferred(anchored().position(menu.at).snap_to_window_with_margin(px(4.)).child(list)).with_priority(2).into_any_element());
+        }
+        if let Some(menu) = self.browser.option_menu() {
+            let a = menu.menu.anchor;
+            let rows: Vec<Row> = menu
+                .menu
+                .items
+                .iter()
+                .map(|item| Row {
+                    label: item.label.clone().into(),
+                    detail: SharedString::default(),
+                    enabled: item.enabled,
+                    header: item.group_label,
+                    indent: item.group_child,
+                    separator: false,
+                    checked: item.selected,
+                })
+                .collect();
+            let anchor = ((area.x + a.x) as f32, (area.y + a.y) as f32, a.width as f32, a.height as f32);
+            let (x, y, w, h) = menu_view::place(anchor, (area.x as f32, area.y as f32, area.width as f32, area.height as f32), menu_view::natural_height(&rows));
+            if let Some(i) = menu.highlighted
+                && self.select_scrolled != Some(i)
+            {
+                self.select_scroll.scroll_to_item(i);
+                self.select_scrolled = Some(i);
+            }
+            let this = cx.entity();
+            let hover: menu_view::RowHandler = Rc::new({
+                let this = this.clone();
+                move |i, _, cx| this.update(cx, |view, cx| {
+                    view.browser.menu_hover(i);
+                    cx.notify();
+                })
+            });
+            let click: menu_view::RowHandler = Rc::new(move |i, window, cx| {
+                this.update(cx, |view, cx| {
+                    view.browser.menu_click(i);
+                    view.select_scrolled = None;
+                    view.sync_focus(window, cx);
+                    cx.notify();
+                })
+            });
+            let list = menu_view::menu(t, "select-menu", &rows, menu.highlighted, w, h, &self.select_scroll, hover, click);
+            out.push(deferred(anchored().position(point(px(x), px(y))).child(list)).with_priority(2).into_any_element());
+        } else {
+            self.select_scrolled = None;
+        }
+        if self.shell_menu.is_none()
+            && self.browser.option_menu().is_none()
+            && let Some(tip) = self.browser.tooltip()
+        {
+            let (px_, py_) = self.page_pointer_at;
+            let at = point(px((area.x + px_) as f32 + 12.), px((area.y + py_) as f32 + 20.));
+            let tip: SharedString = tip.to_string().into();
+            out.push(
+                deferred(
+                    anchored().position(at).snap_to_window_with_margin(px(4.)).child(
+                        div()
+                            .id("page-tooltip")
+                            .max_w(px(420.))
+                            .px(px(8.))
+                            .py(px(4.))
+                            .rounded(px(4.))
+                            .bg(rgb(t.surface_variant))
+                            .border_1()
+                            .border_color(rgb(t.border))
+                            .text_size(px(12.))
+                            .text_color(rgb(t.text_primary))
+                            .child(tip),
+                    ),
+                )
+                .with_priority(3)
+                .into_any_element(),
+            );
+        }
+        out
+    }
+
+    /// Morph's About page (morph://about), drawn in the page area.
+    fn about_panel(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let t = self.theme;
+        let lines = crate::about::lines();
+        let rows = lines.iter().map(|(label, value)| {
+            let value: SharedString = value.clone().into();
+            div()
+                .flex()
+                .flex_row()
+                .gap(px(16.))
+                .child(div().w(px(130.)).flex_none().text_color(rgb(t.text_secondary)).child(*label))
+                .child(div().flex_1().font_family("monospace").child(value))
+        });
+        let link = |id: &'static str, label: &'static str, url: &'static str| {
+            div()
+                .id(id)
+                .text_color(rgb(t.accent))
+                .cursor_pointer()
+                .hover(|s| s.underline())
+                .child(label)
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.browser.new_tab(url);
+                    this.sync_focus(window, cx);
+                    cx.notify();
+                }))
+        };
+        let notices = cx.listener(|this, _, window, cx| {
+            if let Some(path) = crate::notices::write_page() {
+                this.browser.new_tab(&format!("file://{}", path.display()));
+                this.sync_focus(window, cx);
+                cx.notify();
+            }
+        });
+        div()
+            .id("about-page")
+            .absolute()
+            .size_full()
+            .overflow_y_scroll()
+            .bg(rgb(t.background))
+            .text_color(rgb(t.text_primary))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap(px(18.))
+                    .py(px(40.))
+                    .px(px(24.))
+                    .child(gpui::img(crate::brand::wordmark()).h(px(72.)).w(px(252.)))
+                    .child(div().w(px(560.)).child(crate::brand::glitch_rule(t)))
+                    .child(div().text_size(px(14.)).text_color(rgb(t.text_secondary)).child("A browser that keeps your data yours."))
+                    .child(div().w(px(560.)).flex().flex_col().gap(px(6.)).text_size(px(13.)).children(rows))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap(px(8.))
+                            .child(crate::widgets::button(t, "about-copy", "Copy diagnostics", true).on_click(cx.listener(|_, _, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(crate::about::diagnostics(&crate::about::lines())));
+                            }))),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap(px(18.))
+                            .text_size(px(13.))
+                            .child(link("about-site", "Website", crate::about::WEBSITE))
+                            .child(link("about-repo", "Source code", crate::about::REPOSITORY))
+                            .child(div().id("about-notices").text_color(rgb(t.accent)).cursor_pointer().hover(|s| s.underline()).child("Open-source notices").on_click(notices)),
+                    )
+                    .child(div().text_size(px(11.)).text_color(rgb(t.text_secondary)).child("Morph is free software under the BSD 3-Clause license.")),
+            )
+            .into_any_element()
+    }
+
+    /// The toast, as a bar below the page (child-window pages draw over
+    /// anything placed on them).
+    fn toast_bar(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let t = self.theme;
+        let toast = self.toast.as_ref()?;
+        let mut bar = div()
+            .id("toast")
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_center()
+            .gap(px(12.))
+            .h(px(32.))
+            .bg(rgb(t.surface_variant))
+            .text_size(px(13.))
+            .text_color(rgb(t.text_primary))
+            .child(toast.text.clone());
+        if let Some((label, action)) = toast.action {
+            bar = bar.child(div().id("toast-action").text_color(rgb(t.accent)).cursor_pointer().hover(|s| s.underline()).child(label).on_click(cx.listener(
+                move |this, _, window, cx| {
+                    this.toast = None;
+                    window.dispatch_action(crate::shell::gpui_action(action), cx);
+                    cx.notify();
+                },
+            )));
+        }
+        Some(bar.into_any_element())
     }
 
     fn page_area(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1013,20 +1510,22 @@ impl Render for BrowserView {
         }
         let content = div().flex().flex_col().min_w(px(0.)).min_h(px(0.));
         let content = if matches!(self.strip, TabStrip::Side { .. }) { content.flex_1().h_full() } else { content.size_full() };
-        match self.strip {
+        let overlays = self.overlays(window, cx);
+        let body = match self.strip {
             TabStrip::Top => {
-                content.child(self.tab_strip(cx)).child(self.toolbar(cx)).children(self.find_bar(cx)).child(self.page_area(cx)).into_any_element()
+                content.child(self.tab_strip(cx)).child(self.toolbar(cx)).children(self.find_bar(cx)).child(self.page_area(cx)).children(self.toast_bar(cx)).into_any_element()
             }
             TabStrip::Bottom => {
-                content.child(self.toolbar(cx)).children(self.find_bar(cx)).child(self.page_area(cx)).child(self.tab_strip(cx)).into_any_element()
+                content.child(self.toolbar(cx)).children(self.find_bar(cx)).child(self.page_area(cx)).children(self.toast_bar(cx)).child(self.tab_strip(cx)).into_any_element()
             }
             TabStrip::Side { left, width, collapsed } => {
-                let content = content.child(self.toolbar(cx)).children(self.find_bar(cx)).child(self.page_area(cx));
+                let content = content.child(self.toolbar(cx)).children(self.find_bar(cx)).child(self.page_area(cx)).children(self.toast_bar(cx));
                 let list = self.tab_list(width, collapsed, cx);
                 let row = div().flex().flex_row().size_full();
                 if left { row.child(list).child(content) } else { row.child(content).child(list) }.into_any_element()
             }
-        }
+        };
+        div().relative().size_full().child(body).children(overlays)
     }
 }
 

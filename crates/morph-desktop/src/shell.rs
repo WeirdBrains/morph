@@ -55,12 +55,13 @@ actions!(
         ShowHistory,
         ShowProfiles,
         ShowSettings,
-        ShowIdentity
+        ShowIdentity,
+        ShowAbout
     ]
 );
 
 /// The GPUI action for a Morph action.
-fn gpui_action(action: Action) -> Box<dyn gpui::Action> {
+pub(crate) fn gpui_action(action: Action) -> Box<dyn gpui::Action> {
     match action {
         Action::NewTab => Box::new(NewTab),
         Action::CloseTab => Box::new(CloseTab),
@@ -91,6 +92,7 @@ fn gpui_action(action: Action) -> Box<dyn gpui::Action> {
         Action::ShowProfiles => Box::new(ShowProfiles),
         Action::ShowSettings => Box::new(ShowSettings),
         Action::ShowIdentity => Box::new(ShowIdentity),
+        Action::ShowAbout => Box::new(ShowAbout),
     }
 }
 
@@ -148,6 +150,9 @@ pub trait Hosted {
     }
     /// Whether the shown page is bookmarked (drives the star).
     fn set_page_marked(&self, _marked: bool, _cx: &mut App) {}
+    /// A short note at the bottom of the component (`Bookmarked`), with an
+    /// action to offer beside it.
+    fn toast(&self, _text: &str, _action: Option<(&'static str, Action)>, _cx: &mut App) {}
     /// Give the component the keyboard (a panel above it closed).
     fn focus_content(&self, _window: &mut Window, _cx: &mut App) {}
     /// The profile's name, for a component that shows it.
@@ -192,6 +197,9 @@ impl Hosted for Entity<BrowserView> {
     }
     fn set_page_marked(&self, marked: bool, cx: &mut App) {
         self.update(cx, |view, cx| view.set_marked(marked, cx));
+    }
+    fn toast(&self, text: &str, action: Option<(&'static str, Action)>, cx: &mut App) {
+        self.update(cx, |view, cx| view.toast(text, action, cx));
     }
     fn focus_content(&self, window: &mut Window, cx: &mut App) {
         self.update(cx, |view, cx| view.focus_page(window, cx));
@@ -389,7 +397,12 @@ impl Shell {
         let keystrokes = page_shortcuts(&self.keymap);
         self.error = match BrowserView::create(&home, &profile, start, window, &keystrokes) {
             Ok(browser) => {
-                let view = cx.new(|cx| BrowserView::new(browser, theme, window, cx));
+                let labels = crate::browser_view::shortcut_labels(&self.keymap);
+                let view = cx.new(|cx| {
+                    let mut view = BrowserView::new(browser, theme, window, cx);
+                    view.set_shortcut_labels(labels);
+                    view
+                });
                 self.components.insert(0, Box::new(view));
                 None
             }
@@ -514,6 +527,44 @@ impl Shell {
     }
 
     /// Open the library on `tab`, or close it when it already shows that.
+    /// Ctrl+D or the star: bookmark the page or remove its bookmark, say
+    /// so, and redraw the star at once. A locked library opens to be
+    /// unlocked instead of doing nothing.
+    fn bookmark(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(library) = self.library.clone() else {
+            return;
+        };
+        if self.main().and_then(|m| m.page(cx)).is_none() {
+            return;
+        }
+        if library.read(cx).is_locked() {
+            let kind = KindId::new(component::LIBRARY);
+            if self.layout.shown(Slot::Sidebar) != Some(&kind) || library.read(cx).tab() != Tab::Bookmarks {
+                self.show_library(Tab::Bookmarks, window, cx);
+            }
+            if let Some(main) = self.main() {
+                main.toast("Unlock your library to bookmark this page", None, cx);
+            }
+            return;
+        }
+        // The library follows the page on the next tick; make sure it has
+        // this one before toggling.
+        let page = self.main().and_then(|c| c.page(cx));
+        library.update(cx, |view, cx| view.set_page(page.clone(), cx));
+        self.last_page = page;
+        library.update(cx, |view, cx| view.toggle_bookmark(cx));
+        let marked = library.read(cx).marked();
+        self.last_marked = Some(marked);
+        if let Some(main) = self.main() {
+            main.set_page_marked(marked, cx);
+            main.toast(if marked { "Bookmarked" } else { "Bookmark removed" }, Some(("Bookmarks", Action::ShowBookmarks)), cx);
+        }
+        if std::env::var_os("MORPH_LOG_EVENTS").is_some_and(|v| v == "1") {
+            println!("morph-event bookmark {}", if marked { "added" } else { "removed" });
+        }
+        cx.notify();
+    }
+
     fn show_library(&mut self, tab: Tab, window: &mut Window, cx: &mut Context<Self>) {
         let Some(library) = self.library.clone() else {
             return;
@@ -597,6 +648,7 @@ impl Shell {
                 window.toggle_fullscreen();
                 return;
             }
+            Action::Bookmark => return self.bookmark(window, cx),
             Action::ShowBookmarks => return self.show_library(Tab::Bookmarks, window, cx),
             Action::ShowHistory => return self.show_library(Tab::History, window, cx),
             Action::ShowProfiles => return self.show_profiles(window, cx),
@@ -779,6 +831,7 @@ impl Render for Shell {
             ShowProfiles => Action::ShowProfiles,
             ShowSettings => Action::ShowSettings,
             ShowIdentity => Action::ShowIdentity,
+            ShowAbout => Action::ShowAbout,
         ]);
         let root = root.on_any_mouse_down(cx.listener(|this, _, _, cx| this.focus_shell(cx)));
         if let Some(error) = &self.error {
@@ -837,41 +890,28 @@ fn address_bindings() -> Vec<KeyBinding> {
     .collect()
 }
 
-/// macOS: every Ctrl shortcut also works with Cmd, as Mac users expect.
+/// macOS: Morph's shortcuts use Cmd there (`Keymap::for_platform`).
 pub const MAC: bool = cfg!(target_os = "macos");
-
-/// `keystroke`, and on macOS (`mac`) its Cmd form for a Ctrl shortcut
-/// (not Ctrl+Tab: Cmd+Tab belongs to the system).
-pub fn platform_keystrokes(keystroke: &str, mac: bool) -> Vec<String> {
-    let mut out = vec![keystroke.to_string()];
-    if mac
-        && let Some(rest) = keystroke.strip_prefix("ctrl-")
-        && !rest.ends_with("tab")
-    {
-        out.push(format!("cmd-{rest}"));
-    }
-    out
-}
 
 /// Keys the shell takes even while a page has focus: every bound shortcut
 /// (Ctrl+F opens the find bar). Everything else (Ctrl+C/V/X/A/Z, arrows,
 /// Page Up/Down, Space, Tab, keypad) goes to the page.
 fn page_shortcuts(keymap: &Keymap) -> Vec<String> {
-    keymap.bindings().iter().flat_map(|b| platform_keystrokes(&b.keystroke, MAC)).collect()
+    keymap.bindings().iter().map(|b| b.keystroke.clone()).collect()
 }
 
 /// Open the window and run until it closes.
 pub fn run(home: PathBuf, args: Args, listener: Option<crate::single::Listener>) {
     gpui_platform::application().run(move |cx: &mut App| {
-        let keymap = Keymap::default();
+        // On macOS every shortcut uses Cmd (`Keymap::for_platform`).
+        let keymap = Keymap::default().for_platform(MAC);
         let mut bindings = address_bindings();
         bindings.extend(crate::text_input::bindings());
         for binding in keymap.bindings() {
-            for keystroke in platform_keystrokes(&binding.keystroke, MAC) {
-                match KeyBinding::load(&keystroke, gpui_action(binding.action), None, false, None, cx) {
-                    Ok(b) => bindings.push(b),
-                    Err(e) => eprintln!("morph: ignoring key {keystroke}: {e:?}"),
-                }
+            let keystroke = &binding.keystroke;
+            match KeyBinding::load(keystroke, gpui_action(binding.action), None, false, None, cx) {
+                Ok(b) => bindings.push(b),
+                Err(e) => eprintln!("morph: ignoring key {keystroke}: {e:?}"),
             }
         }
         cx.bind_keys(bindings);
@@ -971,16 +1011,6 @@ mod tests {
         for page in ["ctrl-c", "ctrl-v", "ctrl-x", "ctrl-a", "ctrl-z", "pageup", "space", "tab"] {
             assert!(!keys.iter().any(|k| k == page), "{page}");
         }
-    }
-
-    #[test]
-    fn mac_shortcuts_also_take_cmd() {
-        assert_eq!(platform_keystrokes("ctrl-t", false), ["ctrl-t"]);
-        assert_eq!(platform_keystrokes("ctrl-t", true), ["ctrl-t", "cmd-t"]);
-        assert_eq!(platform_keystrokes("ctrl-shift-g", true), ["ctrl-shift-g", "cmd-shift-g"]);
-        assert_eq!(platform_keystrokes("ctrl-tab", true), ["ctrl-tab"]);
-        assert_eq!(platform_keystrokes("ctrl-shift-tab", true), ["ctrl-shift-tab"]);
-        assert_eq!(platform_keystrokes("f5", true), ["f5"]);
     }
 
     #[test]
