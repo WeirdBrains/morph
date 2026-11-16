@@ -665,6 +665,19 @@ app-prefixed invite links such as `weirdnet-morph://join/`), so Morph and Muninn
   it by name or user id without DNS address updates (section 5b). DCUtR upgrades to a
   direct connection when NAT allows. It runs only while the app is in the foreground. On
   Android, hosting needs a foreground service. iOS can't host in the background.
+- **Weirdnet relay facts** _(recorded 2026-11-16; for after alpha.10)_:
+  - Base protocols: `/weirdnet/net/1`, `/weirdnet/kad/1`, `/weirdnet/id/1`. The
+    relay protocol is `/weirdnet/relay/1`, on port 4747. Morph's own protocols stay
+    `/morph/...`, and the app joins as `weirdnet-morph`.
+  - Relays are configured as full multiaddrs ending in `/p2p/<relay-id>`. A peer
+    behind a relay is dialed at `<relay>/p2p-circuit/p2p/<peer-id>`.
+  - Relay info: `/.well-known/weirdnet-relay.json` (v1), parsed with
+    `weirdnet_relay::info::RelayInfo`; the same info is served over
+    `/weirdnet/relay/info/1`. Feature-detect rendezvous, HTTPS forwarding, wake
+    and updates from its `features`, and respect its `limits`.
+  - Repo: https://github.com/WeirdBrains/weirdnet-relay. Docs:
+    https://net.weirdbrains.com. `weirdnet-net` 0589d10 adds `RelayLimits` (in the
+    next release, 0.2.0).
 - `Node` is a blocking handle on its own thread. An async handle and a `Status` event
   stream (NAT state, reservations, connections) are proposed upstream (W5). `morph-peer`
   only forwards that stream to Dart.
