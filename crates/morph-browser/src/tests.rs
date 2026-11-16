@@ -5,7 +5,7 @@ use morph_ui::actions::{Action, Keymap};
 use morph_webview::fake::{Call, FakeBackend};
 use morph_webview::{ErrorKind, Event, Frame, Input, LoadError, Modifiers, MouseButton, Rect, ViewId};
 
-use super::{ABOUT_URL, Browser, Config, Cover, FindBar, Internal, SETTINGS_URL, error_text};
+use super::{ABOUT_URL, Browser, Config, Cover, FindBar, Internal, SETTINGS_URL, error_text, start_address};
 
 fn browser(start: &str) -> (Browser, FakeBackend) {
     let fake = FakeBackend::new();
@@ -751,4 +751,29 @@ fn a_page_asking_for_files_is_answered_once() {
     assert!(fake.calls_for(view).contains(&Call::ChooseFiles(Some(vec!["/tmp/a.txt".into()]))));
     b.choose_files(None);
     assert_eq!(fake.calls_for(view).iter().filter(|c| matches!(c, Call::ChooseFiles(_))).count(), 1, "answered once");
+}
+
+#[test]
+fn a_start_page_keeps_morph_pages_and_links_and_searches_only_phrases() {
+    let engine = morph_core::search::engine("duckduckgo");
+    assert_eq!(start_address("morph://about", engine), ABOUT_URL);
+    assert_eq!(start_address(" MORPH:settings/ ", engine), SETTINGS_URL);
+    assert_eq!(start_address("morph://history", engine), "morph://history");
+    assert_eq!(start_address("weirdnet-morph://peer/site", engine), "weirdnet-morph://peer/site");
+    assert_eq!(start_address("file:///home/me/start.html", engine), "file:///home/me/start.html");
+    assert_eq!(start_address("about:blank", engine), "about:blank");
+    assert_eq!(start_address("example.com", engine), "https://example.com");
+    assert_eq!(start_address("  ", engine), "");
+    assert!(start_address("rust gpui", engine).starts_with("https://duckduckgo.com/?q=rust+gpui"));
+    assert!(start_address("morph://nope", engine).starts_with("https://duckduckgo.com/?q="), "unknown morph pages are not kept");
+}
+
+#[test]
+fn a_morph_start_page_opens_as_morphs_own_page_not_a_search() {
+    let (b, fake) = browser("morph://about");
+    assert_eq!(b.active_url(), ABOUT_URL);
+    assert_eq!(b.cover(), Some(&Cover::About));
+    assert!(!fake.calls().iter().any(|c| format!("{c:?}").contains("duckduckgo")), "nothing searched");
+    let (b, _) = browser("morph:settings");
+    assert_eq!(b.cover(), Some(&Cover::Settings));
 }
