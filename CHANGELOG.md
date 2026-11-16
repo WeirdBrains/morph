@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Desktop: the frameless window's maximize button is a toggle. It maximizes
+  a normal window and restores a maximized one, and its icon switches
+  between maximize (one square) and restore (two). It reads the window's
+  real state each time, so it stays right after Win+Up, Aero Snap, dragging
+  the title bar or the window manager. A double click on the tab row does
+  the same. On Windows GPUI only maximized, so Morph restores itself there
+  (`ShowWindowAsync(SW_RESTORE)`). When a tiling window manager (Sway,
+  Hyprland, i3 and the like) tiles the window, no maximize button is shown,
+  and a double click does nothing. A tiled window never counts as
+  maximized. The Xvfb check clicks the button twice.
+
 - Windows: Settings > Default browser > Make default opens Windows Settings
   on Default apps, on Morph's entry. It launched
   `ms-settings:defaultapps?registeredAppUser=Morph` through explorer.exe,

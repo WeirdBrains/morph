@@ -540,7 +540,7 @@ impl BrowserView {
                 // What the user set for a title bar double click (zoom or minimize).
                 window.titlebar_double_click();
             } else {
-                window.zoom_window();
+                toggle_maximized(self.caption, window);
             }
         }
     }
@@ -564,9 +564,22 @@ impl BrowserView {
     }
 
     /// Minimize, maximize and close (or close alone on tiling desktops).
-    fn window_controls(&self, cx: &mut Context<Self>) -> Option<gpui::Div> {
+    fn window_controls(&self, window: &Window, cx: &mut Context<Self>) -> Option<gpui::Div> {
         let buttons = self.caption.filter(|b| *b != WindowButtons::Native)?;
         let t = self.theme;
+        let control_box = |id: &'static str, hover: u32| {
+            div()
+                .id(id)
+                .flex()
+                .items_center()
+                .justify_center()
+                .w(px(32.))
+                .h(px(26.))
+                .rounded(px(6.))
+                .hover(move |s| s.bg(rgb(hover)))
+                .cursor_pointer()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        };
         // The hover colour is the control's own: GPUI takes one hover style.
         let control = |id: &'static str, label: &'static str, hover: u32| {
             div()
@@ -585,17 +598,20 @@ impl BrowserView {
         };
         let mut row = div().flex().flex_row().items_center().gap(px(2.)).pl(px(8.));
         if buttons == WindowButtons::All {
-            row = row
-                .child(
-                    control("window-minimize", "—", t.surface_variant)
-                        .window_control_area(gpui::WindowControlArea::Min)
-                        .on_click(|_, window, _| window.minimize_window()),
-                )
-                .child(
-                    control("window-maximize", "□", t.surface_variant)
-                        .window_control_area(gpui::WindowControlArea::Max)
-                        .on_click(|_, window, _| window.zoom_window()),
-                );
+            row = row.child(
+                control("window-minimize", "—", t.surface_variant)
+                    .window_control_area(gpui::WindowControlArea::Min)
+                    .on_click(|_, window, _| window.minimize_window()),
+            );
+        }
+        if let Some(action) = maximize_action(Some(buttons), window.is_maximized(), wm_tiled(window)) {
+            let caption = self.caption;
+            row = row.child(
+                control_box("window-maximize", t.surface_variant)
+                    .window_control_area(gpui::WindowControlArea::Max)
+                    .on_click(move |_, window, _| toggle_maximized(caption, window))
+                    .child(maximize_icon(action, t)),
+            );
         }
         let _ = cx;
         // Windows answers its own hit test with the control areas (snap
@@ -1402,7 +1418,7 @@ impl BrowserView {
                     .when(self.strip == TabStrip::Top, |d| d.window_control_area(gpui::WindowControlArea::Drag)),
             )
             .child(collapse)
-            .when(self.strip == TabStrip::Top, |d| d.children(self.window_controls(cx).map(|c| c.h_full().items_center())))
+            .when(self.strip == TabStrip::Top, |d| d.children(self.window_controls(window, cx).map(|c| c.h_full().items_center())))
     }
 
     /// The tabs as a vertical list beside the toolbar and page.
@@ -1580,7 +1596,7 @@ impl BrowserView {
                         }
                     })),
             )
-            .when(!self.strip.is_caption(), |d| d.children(self.window_controls(cx)))
+            .when(!self.strip.is_caption(), |d| d.children(self.window_controls(window, cx)))
     }
 
     /// The find bar: a row between the toolbar and the page, so the page
@@ -2017,6 +2033,79 @@ impl BrowserView {
 }
 
 /// `position` relative to `origin`, in logical pixels.
+/// What the maximize button (and a double click on the caption) does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MaximizeAction {
+    Maximize,
+    Restore,
+}
+
+/// The maximize button for a window in this state, or none: close-only
+/// captions (tiling desktops), and a window the window manager tiles on
+/// every edge (Sway, Hyprland, i3 and the like size it themselves; a
+/// maximize request is ignored there, so the button is not offered and a
+/// tiled window never shows "restore"). A window snapped to one side on a
+/// floating desktop keeps it.
+pub fn maximize_action(buttons: Option<WindowButtons>, maximized: bool, tiled: bool) -> Option<MaximizeAction> {
+    match buttons {
+        Some(WindowButtons::All) if maximized => Some(MaximizeAction::Restore),
+        Some(WindowButtons::All) if !tiled => Some(MaximizeAction::Maximize),
+        _ => None,
+    }
+}
+
+/// Whether the window manager tiles `window` on every edge without it being
+/// maximized or full screen (GPUI reports maximized windows as tiled too).
+fn wm_tiled(window: &Window) -> bool {
+    match window.window_decorations() {
+        gpui::Decorations::Client { tiling } => {
+            tiling.top && tiling.bottom && tiling.left && tiling.right && !window.is_maximized() && !window.is_fullscreen()
+        }
+        gpui::Decorations::Server => false,
+    }
+}
+
+/// Maximize or restore `window`, by the platform's state at the moment
+/// (Win+Up, Aero Snap, a drag off the top or the window manager may have
+/// changed it), not by a remembered flag. GPUI's zoom toggles on X11,
+/// Wayland and macOS but only maximizes on Windows, so Windows restores
+/// itself. Nothing on a caption without the button.
+fn toggle_maximized(buttons: Option<WindowButtons>, window: &Window) {
+    match maximize_action(buttons, window.is_maximized(), wm_tiled(window)) {
+        Some(MaximizeAction::Maximize) => window.zoom_window(),
+        Some(MaximizeAction::Restore) => restore(window),
+        None => {}
+    }
+}
+
+#[cfg(windows)]
+fn restore(window: &Window) {
+    use raw_window_handle::HasWindowHandle;
+    match HasWindowHandle::window_handle(window).map(|h| h.as_raw()) {
+        Ok(raw_window_handle::RawWindowHandle::Win32(h)) => morph_os::windows::restore_window(h.hwnd.get()),
+        _ => window.zoom_window(),
+    }
+}
+
+#[cfg(not(windows))]
+fn restore(window: &Window) {
+    window.zoom_window();
+}
+
+/// The maximize button's glyph, drawn (fonts differ): one square to
+/// maximize, two overlapping ones to restore.
+fn maximize_icon(action: MaximizeAction, t: Theme) -> gpui::Div {
+    let square = |size: f32| div().size(px(size)).border_1().border_color(rgb(t.text_secondary));
+    match action {
+        MaximizeAction::Restore => div()
+            .relative()
+            .size(px(11.))
+            .child(square(8.).absolute().top(px(0.)).right(px(0.)))
+            .child(square(8.).absolute().bottom(px(0.)).left(px(0.)).bg(rgb(t.background))),
+        MaximizeAction::Maximize => div().child(square(10.)),
+    }
+}
+
 fn local(position: Point<Pixels>, origin: Point<Pixels>) -> (f64, f64) {
     (f64::from(f32::from(position.x - origin.x)), f64::from(f32::from(position.y - origin.y)))
 }
@@ -2519,6 +2608,22 @@ fn step(from: Option<usize>, count: usize, down: bool) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_maximize_button_follows_the_window_state() {
+        use super::{MaximizeAction, WindowButtons, maximize_action};
+        let all = Some(WindowButtons::All);
+        assert_eq!(maximize_action(all, false, false), Some(MaximizeAction::Maximize));
+        assert_eq!(maximize_action(all, true, false), Some(MaximizeAction::Restore));
+        // GPUI calls a maximized window tiled too: still "restore".
+        assert_eq!(maximize_action(all, true, true), Some(MaximizeAction::Restore));
+        // Tiled by a tiling window manager: no button, never "restore".
+        assert_eq!(maximize_action(all, false, true), None);
+        assert_eq!(maximize_action(Some(WindowButtons::CloseOnly), false, false), None);
+        assert_eq!(maximize_action(Some(WindowButtons::CloseOnly), true, false), None);
+        assert_eq!(maximize_action(None, false, false), None);
+        assert_eq!(maximize_action(Some(WindowButtons::Native), false, false), None);
+    }
+
     #[test]
     fn download_sizes_read_well() {
         assert_eq!(super::size_text(512), "512 B");
