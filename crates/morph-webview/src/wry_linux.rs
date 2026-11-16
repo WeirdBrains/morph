@@ -10,6 +10,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use gtk::glib::Propagation;
 use gtk::glib::translate::ToGlibPtr;
@@ -437,8 +438,47 @@ fn keystroke(event: &gtk::gdk::EventKey) -> Option<String> {
 /// The page's open `<input type=file>` request, until the shell answers it.
 pub(crate) type Chooser = Rc<RefCell<Option<webkit2gtk::FileChooserRequest>>>;
 
-/// Where downloads go, shared with each context's download handler.
-pub(crate) type Downloads = Rc<RefCell<Option<PathBuf>>>;
+/// Downloads, shared with each context's download handler: where they
+/// go and the ones under way (for [`Backend::cancel_download`]).
+#[derive(Default)]
+pub(crate) struct DownloadState {
+    /// The downloads folder (`None`: the system's).
+    pub(crate) dir: RefCell<Option<PathBuf>>,
+    next: Cell<u64>,
+    live: RefCell<HashMap<u64, webkit2gtk::Download>>,
+}
+
+pub(crate) type Downloads = Rc<DownloadState>;
+
+impl DownloadState {
+    /// The folder downloads are staged in (and the save dialog opens in).
+    fn folder(&self) -> PathBuf {
+        self.dir
+            .borrow()
+            .clone()
+            .or_else(|| gtk::glib::user_special_dir(gtk::glib::UserDirectory::Downloads))
+            .unwrap_or_else(|| gtk::glib::home_dir().join("Downloads"))
+    }
+
+    pub(crate) fn cancel(&self, id: u64) {
+        use webkit2gtk::DownloadExt;
+        if let Some(download) = self.live.borrow_mut().remove(&id) {
+            download.cancel();
+        }
+    }
+}
+
+/// A download destination as WebKit names it (a URI, or a path) as a path.
+fn destination_path(destination: &str) -> Option<PathBuf> {
+    match gtk::glib::filename_from_uri(destination) {
+        Ok((path, _)) => Some(path),
+        Err(_) if destination.starts_with('/') => Some(PathBuf::from(destination)),
+        Err(_) => None,
+    }
+}
+
+/// How often a download reports its progress at most.
+const PROGRESS_EVERY: Duration = Duration::from_millis(200);
 
 /// Hooks every WebKitGTK backend adds to a page: its icon (from
 /// [`crate::icons::ICON_SCRIPT`], over a message handler of its own so a
@@ -485,22 +525,99 @@ pub(crate) fn answer_chooser(chooser: &Chooser, paths: Option<Vec<PathBuf>>) {
     }
 }
 
-/// Add the download handler to `builder` once per web context (WebKit
-/// keeps one handler list per context, and every view shares it).
-pub(crate) fn with_downloads<'a>(
-    builder: WebViewBuilder<'a>,
+/// Report the downloads of `engine`'s web context as [`Event::Download`]
+/// (once per context: every view shares it). The bytes go to a staging
+/// file in the downloads folder; the shell asks where the file goes and
+/// moves it there. (Through wry, WebKit saved into the Downloads folder
+/// without a word: it had picked the file before wry's handler ran.)
+pub(crate) fn hook_downloads(
+    engine: &webkit2gtk::WebView,
+    id: ViewId,
     hooked: &mut HashSet<Option<PathBuf>>,
     data_dir: &Option<PathBuf>,
     downloads: &Downloads,
-) -> WebViewBuilder<'a> {
+    queue: &Queue,
+) {
+    use webkit2gtk::{DownloadExt, URIRequestExt, URIResponseExt, WebContextExt};
     if !hooked.insert(data_dir.clone()) {
-        return builder;
+        return;
     }
-    let downloads = downloads.clone();
-    builder.with_download_started_handler(move |_url, path| {
-        *path = crate::download_target(downloads.borrow().as_deref(), path);
-        true
-    })
+    let Some(context) = engine.context() else {
+        return;
+    };
+    let (downloads, queue) = (downloads.clone(), queue.clone());
+    context.connect_download_started(move |_, download| {
+        let n = downloads.next.get() + 1;
+        downloads.next.set(n);
+        downloads.live.borrow_mut().insert(n, download.clone());
+        let q = queue.clone();
+        let push = Rc::new(move |change: crate::DownloadChange| q.borrow_mut().push((id, Event::Download(crate::Download { id: n, change }))));
+        let url = download.request().and_then(|r| r.uri()).map(|u| u.to_string()).unwrap_or_default();
+        // Started once WebKit knows the file: from decide-destination,
+        // where the bytes go to a staging file, or (WebKitGTK 2.54 picks
+        // the Downloads folder itself before this handler runs) from
+        // created-destination with WebKit's own file as the staging file.
+        let started = Rc::new(Cell::new(false));
+        let start = {
+            let (p, started) = (push.clone(), started.clone());
+            Rc::new(move |download: &webkit2gtk::Download, staged: PathBuf| {
+                if started.replace(true) {
+                    return;
+                }
+                let suggested = download.response().and_then(|r| r.suggested_filename()).map(|n| n.to_string());
+                let name =
+                    crate::safe_name(&suggested.unwrap_or_else(|| staged.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()));
+                p(crate::DownloadChange::Started { url: url.clone(), name, staged });
+            })
+        };
+        let d = downloads.clone();
+        download.connect_decide_destination(move |download, suggested| {
+            let dir = d.folder();
+            let staged = crate::download_staging(&dir, &crate::safe_name(suggested), n);
+            let _ = std::fs::create_dir_all(&dir);
+            let _ = std::fs::remove_file(&staged);
+            match gtk::glib::filename_to_uri(&staged, None) {
+                Ok(uri) => download.set_destination(&uri),
+                Err(_) => download.cancel(),
+            }
+            true
+        });
+        let s = start.clone();
+        download.connect_created_destination(move |download, destination| {
+            if let Some(path) = destination_path(destination) {
+                s(download, path);
+            }
+        });
+        let last: Rc<Cell<Option<Instant>>> = Rc::default();
+        let total = |download: &webkit2gtk::Download| download.response().map(|r| r.content_length()).filter(|n| *n > 0);
+        let p = push.clone();
+        let s = start.clone();
+        download.connect_received_data(move |download, _| {
+            if let Some(path) = download.destination().and_then(|d| destination_path(&d)) {
+                s(download, path);
+            }
+            if last.get().is_none_or(|at| at.elapsed() >= PROGRESS_EVERY) {
+                last.set(Some(Instant::now()));
+                p(crate::DownloadChange::Progress { received: download.received_data_length(), total: total(download) });
+            }
+        });
+        let failed = Rc::new(Cell::new(false));
+        let (f, p, d) = (failed.clone(), push.clone(), downloads.clone());
+        download.connect_failed(move |_, error| {
+            f.set(true);
+            d.live.borrow_mut().remove(&n);
+            p(crate::DownloadChange::Failed(error.message().to_string()));
+        });
+        let (p, d) = (push.clone(), downloads.clone());
+        download.connect_finished(move |download| {
+            d.live.borrow_mut().remove(&n);
+            if !failed.get() {
+                let received = download.received_data_length();
+                p(crate::DownloadChange::Progress { received, total: total(download).or(Some(received)) });
+                p(crate::DownloadChange::Finished);
+            }
+        });
+    });
 }
 
 /// Report page signals for `id` into `queue` and route shell shortcuts.
@@ -716,9 +833,9 @@ impl Backend for WryBackend {
             .with_initialization_script(crate::icons::ICON_SCRIPT)
             .with_visible(spec.visible)
             .with_new_window_req_handler(popup_handler(id, self.queue.clone(), self.popups.clone(), self.bridge.clone()));
-        let builder = with_downloads(builder, &mut self.hooked, &spec.data_dir, &self.downloads);
         let view = with_bridge(builder, &self.bridge).build_as_child(&self.parent).map_err(backend_err)?;
         let engine = view.webview();
+        hook_downloads(&engine, id, &mut self.hooked, &spec.data_dir, &self.downloads, &self.queue);
         attach_bridge(&engine, &self.bridge);
         watch(&engine, id, &self.queue, &self.shortcuts);
         let chooser: Chooser = Rc::default();
@@ -778,7 +895,11 @@ impl Backend for WryBackend {
     }
 
     fn set_downloads_dir(&mut self, dir: Option<PathBuf>) {
-        *self.downloads.borrow_mut() = dir;
+        *self.downloads.dir.borrow_mut() = dir;
+    }
+
+    fn cancel_download(&mut self, id: u64) {
+        self.downloads.cancel(id);
     }
 
     fn set_scale(&mut self, scale: f64) {
