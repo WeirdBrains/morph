@@ -563,6 +563,38 @@ the id from `$XDG_CONFIG_HOME/mimeapps.list`, and where it was the default
 puts the packaged `morph.desktop` (the id "Make default browser" uses) in its
 place. Rides the next alpha.
 
+## alpha.9: identity
+
+Scope cut by m3talsmith to identity (everything else moved to alpha.10; the
+unfinished alpha.10 work is parked on branch `wip/alpha10`, not built).
+- Recovery words: `c` Copy (the clipboard is cleared after 60 s if it still
+  holds them; `MORPH_TEST_CLIPBOARD_SECS` for the checks), `d` Download (native
+  Save dialog, `morph-recovery-words-<profile>.txt`, mode 0600, note to keep
+  it offline).
+- Paper shards: `s` in the overview, behind the profile password: 3 of 5,
+  weirdnet-keys text form, unsealed (one shard tells nothing). Each has Copy,
+  Download and QR; `a` "Download all shards" writes one file per shard into a
+  chosen folder and never replaces files. Restore takes shards as files
+  ("Choose files…", several) or pasted into the words field.
+- Native dialogs for the panel's file fields (`dialogs.rs`, GPUI's prompts:
+  the portal on Linux); `MORPH_TEST_PICK_OPEN` / `MORPH_TEST_PICK_DIR` answer
+  them in tests. "Paste from clipboard" beside the words and link fields.
+- Device linking: the new device already showed the QR and link; the adding
+  side (the screen m3talsmith saw) now says where the link comes from and has
+  Paste. A unit test decodes the QR codes with rqrr.
+- Tab / Shift+Tab move between the panel's fields (`TextInputEvent::Tab`).
+  Pages already moved focus on Tab; the Xvfb checks now include a password
+  field.
+- macOS: a Cmd shortcut pressed while a page has the keyboard came to the
+  shell as `shift-cmd-l` and matched nothing; strokes are compared in one
+  modifier order and Cmd maps to the Ctrl binding (`page_action`). An
+  Identity button sits in the toolbar. `desktop-smoke.py` opens the panel on
+  macOS and Windows (keystroke via System Events / SendKeys, soft when the
+  runner cannot send keys, and via `MORPH_TEST_ACTIONS`).
+- Linux default browser: Morph writes `mimeapps.list` and every existing
+  `<desktop>-mimeapps.list` itself (xdg-settings failed on Hyprland), then
+  checks each type with `xdg-mime`.
+
 ## Release and TAUR (alpha.8)
 
 - Pre-release `v0.2.0-alpha.8` (tag at `07b44ca`):
