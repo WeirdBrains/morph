@@ -42,6 +42,14 @@ pub struct LibraryView {
 impl EventEmitter<ShellRequest> for LibraryView {}
 
 impl LibraryView {
+    pub fn set_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
+        self.theme = theme;
+        for input in [&self.search, &self.password, &self.edit_input] {
+            input.update(cx, |i, cx| i.set_theme(theme, cx));
+        }
+        cx.notify();
+    }
+
     pub fn new(home: &Path, profile: &str, theme: Theme, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let search = cx.new(|cx| TextInput::new("Search", theme, cx));
         let password = cx.new(|cx| TextInput::new("Profile password", theme, cx).masked());

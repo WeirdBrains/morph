@@ -10,8 +10,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use morph_core::omnibox;
 use morph_core::tabs::{TabId, TabSet};
+use morph_core::{omnibox, search};
 use morph_ui::actions::Action;
 use morph_ui::text::TextField;
 use morph_webview::{Backend, ErrorKind, Event, Frame, Input, LoadError, MenuChoice, PageCursor, Rect, Spec, ViewId, WebView};
@@ -34,6 +34,8 @@ pub struct Config {
     /// Print every page event to stderr (`MORPH_LOG_EVENTS=1`), for the Xvfb
     /// checks in `scripts/xvfb-check.sh`.
     pub log_events: bool,
+    /// The search engine new tabs use ([`morph_core::search`] id).
+    pub search_engine: String,
 }
 
 /// Per-tab page state beyond `morph_core::tabs::Tab`.
@@ -92,7 +94,20 @@ pub enum Cover {
     Failed(LoadError),
     /// Morph's About page (morph://about), drawn by the shell.
     About,
+    /// Morph's preferences (morph://settings), drawn by the shell.
+    Settings,
 }
+
+impl Cover {
+    /// One of Morph's own pages (About, Settings) rather than a problem
+    /// with the page.
+    pub fn is_own(&self) -> bool {
+        matches!(self, Cover::About | Cover::Settings)
+    }
+}
+
+/// The address of Morph's preferences.
+pub const SETTINGS_URL: &str = "morph://settings";
 
 /// The address of Morph's About page.
 pub const ABOUT_URL: &str = "morph://about";
@@ -134,7 +149,7 @@ impl Internal {
             Internal::History => "morph://history",
             Internal::Identity => "morph://identity",
             Internal::Profiles => "morph://profiles",
-            Internal::Settings => "morph://settings",
+            Internal::Settings => SETTINGS_URL,
         }
     }
 
@@ -215,6 +230,21 @@ pub struct TabLabel {
     pub label: String,
     pub active: bool,
     pub loading: bool,
+    /// The site's icon (PNG), once the page reported one.
+    pub icon: Option<std::sync::Arc<Vec<u8>>>,
+    /// Morph's own page (About, Settings), drawn with Morph's mark.
+    pub own: bool,
+}
+
+/// `scheme://host[:port]` of `url`, the key icons are kept under.
+pub fn origin(url: &str) -> Option<String> {
+    let (scheme, rest) = url.split_once("://")?;
+    if !matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https") {
+        return None;
+    }
+    let host = rest.split(['/', '?', '#']).next().filter(|h| !h.is_empty())?;
+    let host = host.rsplit_once('@').map_or(host, |(_, h)| h);
+    Some(format!("{}://{}", scheme.to_ascii_lowercase(), host.to_ascii_lowercase()))
 }
 
 /// The toolbar's state for the active tab.
@@ -250,6 +280,18 @@ pub struct Browser {
     history: Option<HistorySink>,
     log_events: bool,
     find: Option<FindBar>,
+    /// The search engine new tabs use (profile setting).
+    default_engine: &'static search::Engine,
+    /// Tabs that picked another engine with the selector.
+    tab_engines: HashMap<TabId, &'static search::Engine>,
+    /// The last tab was closed: the shell should quit.
+    quit: bool,
+    /// Site icons by origin, for every tab of the site.
+    icons: HashMap<String, std::sync::Arc<Vec<u8>>>,
+    /// A page asked for files and waits for the shell's dialog.
+    file_request: Option<(TabId, bool)>,
+    /// The shell took the file request (its dialog is open).
+    file_asked: bool,
 }
 
 impl Browser {
@@ -267,6 +309,12 @@ impl Browser {
             history: config.history,
             log_events: config.log_events,
             find: None,
+            default_engine: search::engine(&config.search_engine),
+            tab_engines: HashMap::new(),
+            quit: false,
+            icons: HashMap::new(),
+            file_request: None,
+            file_asked: false,
         };
         let first = browser.tabs.active_id();
         let url = config.start_url.trim().to_string();
@@ -281,7 +329,7 @@ impl Browser {
     }
 
     fn attach(&mut self, id: TabId, url: &str) -> morph_webview::Result<()> {
-        let target = if url.is_empty() { String::new() } else { omnibox::target(url).unwrap_or_default() };
+        let target = if url.is_empty() { String::new() } else { omnibox::target_for(url, self.default_engine).unwrap_or_default() };
         let active = self.tabs.active_id() == id;
         let view = self.backend.create(Spec {
             url: target.clone(),
@@ -342,8 +390,11 @@ impl Browser {
                 } else {
                     "New tab".to_string()
                 };
-                let loading = self.pages.get(&tab.id).is_some_and(|p| p.loading);
-                TabLabel { id: tab.id, label, active: tab.id == active, loading }
+                let page = self.pages.get(&tab.id);
+                let loading = page.is_some_and(|p| p.loading);
+                let own = page.is_some_and(|p| p.cover.as_ref().is_some_and(Cover::is_own));
+                let icon = if own { None } else { origin(&tab.url).and_then(|o| self.icons.get(&o).cloned()) };
+                TabLabel { id: tab.id, label, active: tab.id == active, loading, icon, own }
             })
             .collect()
     }
@@ -452,37 +503,113 @@ impl Browser {
     /// the shell to open (morph://about shows here).
     pub fn submit_address(&mut self) -> Option<Internal> {
         if let Some(internal) = Internal::parse(self.address.text()) {
-            if internal == Internal::About {
-                self.show_about(true);
-                return None;
+            match internal {
+                Internal::About => self.show_own(Cover::About, true),
+                Internal::Settings => self.show_own(Cover::Settings, true),
+                _ => {
+                    self.blur_address();
+                    return Some(internal);
+                }
             }
-            self.blur_address();
-            return Some(internal);
+            return None;
         }
-        let target = omnibox::target(self.address.text())?;
+        let target = omnibox::target_for(self.address.text(), self.tab_engine())?;
         self.load(&target);
         None
+    }
+
+    /// The search engine the active tab sends phrases to.
+    pub fn tab_engine(&self) -> &'static search::Engine {
+        self.tab_engines.get(&self.tabs.active_id()).copied().unwrap_or(self.default_engine)
+    }
+
+    /// The engine new tabs use (the profile's setting). Tabs that picked
+    /// one keep theirs.
+    pub fn set_default_engine(&mut self, id: &str) {
+        self.default_engine = search::engine(id);
+    }
+
+    pub fn default_engine(&self) -> &'static search::Engine {
+        self.default_engine
+    }
+
+    /// The active tab sends phrases to `id` from now on (the selector left
+    /// of the address).
+    pub fn set_tab_engine(&mut self, id: &str) {
+        let engine = search::engine(id);
+        self.tab_engines.insert(self.tabs.active_id(), engine);
+    }
+
+    /// A page waits for files: whether it takes several. The shell shows
+    /// the dialog and answers with [`Self::choose_files`].
+    pub fn take_file_request(&mut self) -> Option<bool> {
+        let (_, multiple) = *self.file_request.as_ref()?;
+        (!std::mem::replace(&mut self.file_asked, true)).then_some(multiple)
+    }
+
+    /// Answer the page that asked for files (`None`: cancelled).
+    pub fn choose_files(&mut self, paths: Option<Vec<PathBuf>>) {
+        if let Some((tab, _)) = self.file_request.take()
+            && let Some(page) = self.pages.get(&tab)
+        {
+            page.view.choose_files(paths);
+        }
+    }
+
+    /// Forget the profile's cookies, cache and site storage, and the icons.
+    pub fn clear_site_data(&mut self) {
+        self.icons.clear();
+        let _ = self.active_page().view.clear_data();
+    }
+
+    /// Where downloads go (`None`: the Downloads folder).
+    pub fn set_downloads_dir(&mut self, dir: Option<PathBuf>) {
+        self.backend.set_downloads_dir(dir);
+    }
+
+    /// The last tab was closed since the last call: time to quit.
+    pub fn take_quit(&mut self) -> bool {
+        std::mem::take(&mut self.quit)
     }
 
     /// Show the About page: in the active tab if it is blank or `here`,
     /// else in a new tab.
     pub fn show_about(&mut self, here: bool) {
-        if !here && !self.tabs.active().url.is_empty() && self.active_page().cover != Some(Cover::About) {
+        self.show_own(Cover::About, here);
+    }
+
+    /// Show the preferences page (morph://settings), the same way.
+    pub fn show_settings(&mut self, here: bool) {
+        self.show_own(Cover::Settings, here);
+    }
+
+    /// Show one of Morph's own pages (`cover` is About or Settings). An
+    /// open one is selected instead of opening another.
+    fn show_own(&mut self, cover: Cover, here: bool) {
+        let (url, title) = match cover {
+            Cover::Settings => (SETTINGS_URL, "Settings"),
+            _ => (ABOUT_URL, "About Morph"),
+        };
+        if let Some(open) = self.pages.iter().find(|(_, p)| p.cover.as_ref() == Some(&cover)).map(|(id, _)| *id) {
+            self.select(open);
+            return;
+        }
+        if !here && !self.tabs.active().url.is_empty() && !self.active_page().cover.as_ref().is_some_and(Cover::is_own) {
             self.new_tab("");
         }
         self.close_menus();
         let id = self.tabs.active_id();
-        let shown = Some(self.tabs.active().url.clone()).filter(|u| !u.is_empty() && u != ABOUT_URL);
-        let _ = self.tabs.update(id, ABOUT_URL.to_string(), "About Morph".to_string());
+        let shown = Some(self.tabs.active().url.clone()).filter(|u| !u.is_empty() && Internal::parse(u).is_none());
+        let _ = self.tabs.update(id, url.to_string(), title.to_string());
         self.address_focused = false;
-        self.address.set_text_selected(ABOUT_URL);
+        self.address.set_text_selected(url);
         if let Some(page) = self.pages.get_mut(&id) {
             if shown.is_some() {
                 page.shown_url = shown;
             }
             page.loading = false;
         }
-        self.set_cover(id, Some(Cover::About));
+        self.set_cover(id, Some(cover));
     }
 
     /// Load `url` (already an address) in the active tab and focus the page.
@@ -516,7 +643,14 @@ impl Browser {
         self.after_switch();
     }
 
+    /// Close tab `id`. Closing the last tab asks the shell to quit
+    /// ([`Self::take_quit`]) and leaves the tab as it is.
     pub fn close_tab(&mut self, id: TabId) {
+        if self.tabs.len() == 1 && self.tabs.tab(id).is_some() {
+            self.quit = true;
+            return;
+        }
+        self.tab_engines.remove(&id);
         let Ok(active) = self.tabs.close(id) else {
             return;
         };
@@ -532,8 +666,12 @@ impl Browser {
 
     /// Open a copy of tab `id` (its address) after the active tab.
     pub fn duplicate_tab(&mut self, id: TabId) {
-        if let Some(url) = self.tabs.tab(id).map(|t| t.url.clone()).filter(|u| !u.is_empty() && u != ABOUT_URL) {
+        if let Some(url) = self.tabs.tab(id).map(|t| t.url.clone()).filter(|u| !u.is_empty() && Internal::parse(u).is_none()) {
+            let engine = self.tab_engines.get(&id).copied();
             self.new_tab(&url);
+            if let Some(engine) = engine {
+                self.tab_engines.insert(self.tabs.active_id(), engine);
+            }
         }
     }
 
@@ -594,13 +732,13 @@ impl Browser {
             Action::FindNext => self.find_next(true),
             Action::FindPrevious => self.find_next(false),
             Action::ShowAbout => self.show_about(false),
+            Action::ShowSettings | Action::ShowSearchSettings => self.show_settings(false),
             Action::ToggleFullscreen
             | Action::Quit
             | Action::Bookmark
             | Action::ShowBookmarks
             | Action::ShowHistory
             | Action::ShowProfiles
-            | Action::ShowSettings
             | Action::ShowIdentity => {
                 return false;
             }
@@ -615,7 +753,7 @@ impl Browser {
         let area = self.page_area;
         let id = self.tabs.active_id();
         if let Some(page) = self.pages.get_mut(&id) {
-            if page.cover == Some(Cover::About) {
+            if page.cover.as_ref().is_some_and(Cover::is_own) {
                 return;
             }
             let cover = page.cover.take();
@@ -648,7 +786,7 @@ impl Browser {
     pub fn back(&mut self) {
         let id = self.tabs.active_id();
         let page = self.pages.get_mut(&id).expect("every tab has a page");
-        if matches!(page.cover, Some(Cover::Failed(_) | Cover::About)) {
+        if matches!(page.cover, Some(Cover::Failed(_) | Cover::About | Cover::Settings)) {
             let url = page.shown_url.take().unwrap_or_default();
             self.set_cover(id, None);
             let title = self.tabs.active().title.clone();
@@ -849,7 +987,11 @@ impl Browser {
                 continue;
             };
             if self.log_events {
-                eprintln!("morph-event tab={} {event:?}", tab.0);
+                match &event {
+                    // The icon's bytes would flood the log.
+                    Event::Favicon(png) => eprintln!("morph-event tab={} Favicon({} bytes)", tab.0, png.len()),
+                    _ => eprintln!("morph-event tab={} {event:?}", tab.0),
+                }
             }
             polled.changed = true;
             self.apply(tab, event);
@@ -865,7 +1007,7 @@ impl Browser {
         let mut record = false;
         // Under the About page the tab shows morph://about, whatever the
         // page beneath it does.
-        let about = self.pages.get(&tab).is_some_and(|p| p.cover == Some(Cover::About));
+        let about = self.pages.get(&tab).is_some_and(|p| p.cover.as_ref().is_some_and(Cover::is_own));
         if about && matches!(event, Event::UrlChanged(_) | Event::TitleChanged(_) | Event::LoadFailed(_)) {
             return;
         }
@@ -978,6 +1120,20 @@ impl Browser {
             Event::Tooltip(tip) => {
                 if let Some(page) = self.pages.get_mut(&tab) {
                     page.tooltip = tip;
+                }
+            }
+            Event::Favicon(png) => {
+                if let Some(origin) = origin(&current.url) {
+                    self.icons.insert(origin, std::sync::Arc::new(png));
+                }
+            }
+            Event::FileChooser { multiple } => {
+                self.file_asked = false;
+                if let Some((old, _)) = self.file_request.replace((tab, multiple))
+                    && let Some(page) = self.pages.get(&old)
+                    && old != tab
+                {
+                    page.view.choose_files(None);
                 }
             }
             Event::Shortcut(_) => {}

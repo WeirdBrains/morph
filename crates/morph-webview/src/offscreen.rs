@@ -80,6 +80,8 @@ pub struct OffscreenBackend {
     shortcuts: Rc<RefCell<HashSet<String>>>,
     bridge: Option<PageBridge>,
     shared: Rc<Shared>,
+    downloads: crate::wry_linux::Downloads,
+    hooked: HashSet<Option<PathBuf>>,
 }
 
 impl OffscreenBackend {
@@ -93,6 +95,8 @@ impl OffscreenBackend {
             contexts: HashMap::new(),
             shortcuts: Rc::default(),
             bridge: None,
+            downloads: Rc::default(),
+            hooked: HashSet::new(),
             shared: Rc::new(Shared {
                 keyboard: Cell::new(None),
                 windows: RefCell::default(),
@@ -163,7 +167,9 @@ impl Backend for OffscreenBackend {
             .with_url(url)
             .with_initialization_script(UNDO_REDO_SCRIPT)
             .with_initialization_script(CONTROL_SCHEME_SCRIPT)
+            .with_initialization_script(crate::icons::ICON_SCRIPT)
             .with_new_window_req_handler(popup_handler(id, self.queue.clone(), self.popups.clone(), self.bridge.clone()));
+        let builder = crate::wry_linux::with_downloads(builder, &mut self.hooked, &spec.data_dir, &self.downloads);
         let view = match with_bridge(builder, &self.bridge).build_gtk(&vbox) {
             Ok(view) => view,
             Err(e) => {
@@ -180,6 +186,8 @@ impl Backend for OffscreenBackend {
         engine.disconnect(quiet);
         attach_bridge(&engine, &self.bridge);
         watch(&engine, id, &self.queue, &self.shortcuts);
+        let chooser: crate::wry_linux::Chooser = Rc::default();
+        crate::wry_linux::watch_more(&engine, id, &self.queue, &chooser);
         let dirty = Rc::new(Cell::new(true));
         let d = dirty.clone();
         window.connect_damage_event(move |_, _| {
@@ -252,6 +260,7 @@ impl Backend for OffscreenBackend {
             buttons: Cell::new(0),
             inside: Cell::new(false),
             cursor,
+            chooser,
         };
         page.apply_size();
         page.set_visible(spec.visible)?;
@@ -271,6 +280,10 @@ impl Backend for OffscreenBackend {
 
     fn set_shortcuts(&mut self, keystrokes: &[String]) {
         *self.shortcuts.borrow_mut() = keystrokes.iter().cloned().collect();
+    }
+
+    fn set_downloads_dir(&mut self, dir: Option<PathBuf>) {
+        *self.downloads.borrow_mut() = dir;
     }
 
     fn set_page_bridge(&mut self, bridge: PageBridge) {
@@ -311,6 +324,7 @@ struct OffscreenView {
     /// The pointer is over the page.
     inside: Cell<bool>,
     cursor: Rc<Cell<PageCursor>>,
+    chooser: crate::wry_linux::Chooser,
 }
 
 /// The rows of a `<select>` list, and the one selected.
@@ -558,6 +572,12 @@ impl OffscreenView {
 impl WebView for OffscreenView {
     fn id(&self) -> ViewId {
         self.id
+    }
+    fn choose_files(&self, paths: Option<Vec<PathBuf>>) {
+        crate::wry_linux::answer_chooser(&self.chooser, paths);
+    }
+    fn clear_data(&self) -> Result<()> {
+        self.view.clear_all_browsing_data().map_err(backend_err)
     }
     fn load_url(&self, url: &str) -> Result<()> {
         self.view.load_url(url).map_err(backend_err)

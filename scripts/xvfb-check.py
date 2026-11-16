@@ -584,32 +584,155 @@ def settings_file(m):
 
 
 def settings_panel(m, r, win, top):
-    """Ctrl+, opens the settings beside the page and takes the keyboard:
-    Left moves the tabs into a list left of the page (saved for the profile),
-    Escape closes the panel and the page has the keyboard again."""
+    """Ctrl+, opens the preferences as a page (a tab of its own) with the
+    keyboard: / searches, Enter goes to the first setting, Right changes
+    it. The tab position moves to the left (saved for the profile) and,
+    once the settings tab closes, the page has the keyboard again."""
     m.activate(win)
     m.click(win, 300, top + 300)
     s0 = state(m) or {}
     w0, h0 = s0.get("w", 0), s0.get("h", 0)
     m.key("ctrl+comma", delay=0.8)
-    r.check("settings", "Ctrl+, opens the settings beside the page", wait_for(lambda: (state(m) or {}).get("w", 0) < w0), f"{w0} -> {(state(m) or {}).get('w')}")
+    r.check("settings", "Ctrl+, opens the preferences as a page", wait_for(lambda: m.title(win).startswith("Settings")), m.title(win))
     if shutil.which("xdg-mime"):
         env = {k: v for k, v in m.env.items() if k != "MORPH_HOME"}
         get = lambda: ",".join(subprocess.run(["xdg-mime", "query", "default", t], env=env, capture_output=True, text=True).stdout.strip() for t in ("x-scheme-handler/http", "x-scheme-handler/https"))  # noqa: E731
-        m.key("d", delay=0.3)
+        m.key("slash", delay=0.4)
+        m.type("default browser")
+        m.key("Return", delay=0.4)
+        m.key("Return", delay=0.3)
         settings_check = time.time()
-    m.key("Left", delay=0.8)
-    r.check("settings", "Left moves the tabs to the left (saved)", wait_for(lambda: '"left"' in settings_file(m)), settings_file(m))
-    r.check("settings", "the page grows taller without the tab row", wait_for(lambda: (state(m) or {}).get("h", 0) == h0 + 34), f"{h0} -> {(state(m) or {}).get('h')}")
+    m.key("slash", delay=0.4)
+    m.type("tab position")
+    m.key("Return", delay=0.4)
+    m.key("Right", delay=0.4)
+    m.key("Right", delay=0.8)
+    r.check("settings", "searching, Enter and Right twice move the tabs to the left (saved)", wait_for(lambda: '"left"' in settings_file(m)), settings_file(m))
     if shutil.which("xdg-mime"):
         # Making Morph the default runs off the UI thread: the keys above did not wait.
-        r.check("settings", "the arrow keys did not wait for the default-browser work", time.time() - settings_check < 4.0, f"{time.time() - settings_check:.1f}s")
-        r.check("settings", "d makes Morph the default browser (xdg-mime reads it back)", wait_for(lambda: get() == "morph.desktop,morph.desktop", 15), get())
-    m.key("Escape", delay=0.8)
-    side = wait_for(lambda: (state(m) or {}).get("w") == w0 - 220 and w0 - 220)
-    r.check("settings", "Escape closes it; the tab list takes 220 px", side, f"{w0} -> {(state(m) or {}).get('w')}")
+        r.check("settings", "the keys did not wait for the default-browser work", time.time() - settings_check < 8.0, f"{time.time() - settings_check:.1f}s")
+        r.check("settings", "Enter on Default browser makes Morph the default (xdg-mime reads it back)", wait_for(lambda: get() == "morph.desktop,morph.desktop", 15), get())
+    m.key("ctrl+w", delay=1.0)
+    side = wait_for(lambda: (state(m) or {}).get("w") == w0 - 220 and (state(m) or {}).get("h") == h0 + 34 and w0 - 220)
+    r.check("settings", "closing the settings tab shows the page beside a 220 px tab list", side, f"{w0}x{h0} -> {state(m)}")
     r.check("settings", "after closing, the page has the keyboard", page_takes_key(m, "z", "KeyZ"), str(state(m)))
     return w0, h0
+
+
+def bar_keys(m, win, top, tabs, *keys):
+    """Reach the tab bar's buttons from the keyboard: Ctrl+L, then Tab once
+    for the position button, twice for collapse."""
+    m.click(win, 300, top + 300) if win else None
+    m.key("ctrl+l", delay=0.6)
+    for _ in range(tabs):
+        m.key("Tab", delay=0.3)
+    for k in keys:
+        m.key(k, delay=0.4)
+
+
+def tab_bar(m, r, win, top):
+    """The tab bar's own buttons: the position menu (Top/Bottom/Left/Right)
+    and the collapse button, in all four positions, from the keyboard.
+    Ends with the tabs on top, expanded."""
+    m.activate(win)
+    m.click(win, 300, top + 300)
+    s0 = state(m) or {}
+    w0, h0 = s0.get("w", 0), s0.get("h", 0)
+    sizes = {
+        "left": ((w0 - 220, h0 + 34), (w0 - 48, h0 + 34)),
+        "right": ((w0 - 220, h0 + 34), (w0 - 48, h0 + 34)),
+        "bottom": ((w0, h0), (w0, h0)),
+        "top": ((w0, h0), (w0, h0)),
+    }
+    downs = {"top": 1, "bottom": 2, "left": 3, "right": 4}
+    for position in ("left", "right", "bottom", "top"):
+        # The page area moved: click where the page is in every layout.
+        page_top = top if position == "top" else 42
+        bar_keys(m, win, page_top, 1, "Return", *(["Down"] * downs[position]), "Return")
+        expanded, collapsed = sizes[position]
+        size = lambda: ((state(m) or {}).get("w"), (state(m) or {}).get("h"))  # noqa: E731
+        ok = wait_for(lambda: f'"{position}"' in settings_file(m)) and wait_for(lambda: size() == expanded)
+        r.check("tabs", f"the position button's menu moves the tabs: {position}", ok, f"{size()} vs {expanded} {settings_file(m)}")
+        bar_keys(m, win, page_top, 2, "Return")
+        ok = wait_for(lambda: '"sidebar_collapsed":true' in settings_file(m).replace(" ", "")) and wait_for(lambda: size() == collapsed)
+        r.check("tabs", f"the collapse button collapses the tabs ({position}, saved)", ok, f"{size()} vs {collapsed} {settings_file(m)}")
+        bar_keys(m, win, page_top, 2, "Return")
+        ok = wait_for(lambda: '"sidebar_collapsed":false' in settings_file(m).replace(" ", "")) and wait_for(lambda: size() == expanded)
+        r.check("tabs", f"and expands them again ({position})", ok, f"{size()} vs {expanded}")
+    m.click(win, 300, top + 300)
+    r.check("tabs", "after the buttons, the page has the keyboard", page_takes_key(m, "z", "KeyZ"), str(state(m)))
+
+
+def serve_tests():
+    """Serve tests/xvfb over http on localhost (icons are read from web
+    pages only). Returns the base URL."""
+    import functools
+    import http.server
+    import threading
+
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(ROOT / "tests" / "xvfb"))
+    handler.log_message = lambda *a, **k: None
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return f"http://127.0.0.1:{server.server_address[1]}/"
+
+
+def favicon(m, r, binary, base):
+    """A page's icon (link rel=icon) reaches the shell for its tab."""
+    before = len(m.events())
+    subprocess.run([binary, base + "icon.html"], env=m.env, capture_output=True, timeout=15)
+    got = wait_for(lambda: [a for _, n, a in m.events()[before:] if n == "Favicon"], 10)
+    r.check("icons", "a page's icon reaches its tab", got and "bytes" in got[-1], str(got))
+
+
+def file_picker(r, binary, display, base):
+    """A page's <input type=file> opens the system's file dialog (answered
+    from MORPH_TEST_PICK_OPEN here) and the page gets the file."""
+    pick = Path(tempfile.mkdtemp(prefix="morph-xvfb-upload-")) / "hello.txt"
+    pick.write_text("hello from the file dialog\n")
+    m2 = Driver(binary, display, tempfile.mkdtemp(prefix="morph-xvfb-files-"), extra_env={"MORPH_TEST_PICK_OPEN": str(pick)})
+    try:
+        win = wait_for(lambda: m2.window("Morph"), 20)
+        r.check("files", "a Morph for the upload page opens", win)
+        if not win:
+            return
+        before = len(m2.events())
+        subprocess.run([binary, base + "upload.html"], env=m2.env, capture_output=True, timeout=15)
+
+        def uploaded():
+            for _, n, a in reversed(m2.events()[before:]):
+                if n == "TitleChanged" and a and '"U{' in a:
+                    return json.loads(json.loads(a)[1:])
+            return None
+
+        wait_for(lambda: any(n == "TitleChanged" and a and "upload" in a for _, n, a in m2.events()[before:]), 10)
+        win = m2.window("upload") or win
+        m2.activate(win)
+        m2.click(win, 400, 76 + 200)
+        asked = wait_for(lambda: [n for _, n, _ in m2.events()[before:] if n == "FileChooser"], 6)
+        r.check("files", "a click on a file input asks the shell for files", asked, str([n for _, n, _ in m2.events()[before:]][-6:]))
+        got = wait_for(uploaded, 8) or {}
+        r.check("files", "the page gets the file the dialog chose", got.get("n") == 1 and got.get("name") == "hello.txt" and got.get("text") == "hello from the file dialog", str(got))
+    finally:
+        m2.stop()
+
+
+def last_tab_quits(r, binary, display):
+    """Closing the last tab quits Morph (exit code 0) after saving."""
+    m2 = Driver(binary, display, tempfile.mkdtemp(prefix="morph-xvfb-quit-"))
+    try:
+        win = wait_for(lambda: m2.window("Morph"), 20)
+        r.check("quit", "a Morph with one tab opens", win and wait_for(lambda: state(m2), 20))
+        if not win:
+            return
+        m2.activate(win)
+        m2.click(win, 300, 76 + 300)
+        m2.key("ctrl+w", delay=0.5)
+        code = wait_for(lambda: m2.proc.poll() is not None and str(m2.proc.poll()), 8)
+        r.check("quit", "closing the last tab quits with exit code 0", code == "0", f"exit {m2.proc.poll()}")
+        r.check("quit", "and it said so (layout saved first)", m2.lines(r"^morph-event quit"), "no quit event")
+    finally:
+        m2.stop()
 
 
 def settings_relaunch(m, r, w0, h0):
@@ -624,10 +747,14 @@ def settings_relaunch(m, r, w0, h0):
     m.activate(win)
     m.click(win, 600, 300)
     m.key("ctrl+comma", delay=0.8)
-    m.key("Up", delay=0.8)
-    m.key("Escape", delay=0.8)
+    m.key("slash", delay=0.4)
+    m.type("tab position")
+    m.key("Return", delay=0.4)
+    m.key("Left", delay=0.4)
+    m.key("Left", delay=0.8)
+    m.key("ctrl+w", delay=1.0)
     back = wait_for(lambda: (state(m) or {}).get("w") == w0 and (state(m) or {}).get("h") == h0)
-    r.check("settings", "Up puts the tabs back on top", back and '"top"' in settings_file(m), f"{state(m)} {settings_file(m)}")
+    r.check("settings", "Left twice puts the tabs back on top", back and '"top"' in settings_file(m), f"{state(m)} {settings_file(m)}")
 
 
 def frameless(m, r):
@@ -1076,7 +1203,7 @@ def main():
         m.type("what is xvfb")
         m.key("Return", delay=1.0)
         urls = [a for t, name, a in m.events() if name == "UrlChanged" and t == 1]
-        r.check("shell", "Ctrl+L, then a phrase searches", any("duckduckgo.com/?q=what+is+xvfb" in (u or "") for u in urls), str(urls[-3:]))
+        r.check("shell", "Ctrl+L, then a phrase searches (Google by default)", any("google.com/search?q=what+is+xvfb" in (u or "") for u in urls), str(urls[-3:]))
         m.key("ctrl+w", delay=1.0)
         tab2 = (state(m, tab=2) or {}).get("id", "?")
         r.check("shell", "Ctrl+W closes the tab (tab 2 shows again)", f'"id":"{tab2}"' in m.title(win), m.title(win))
@@ -1103,6 +1230,7 @@ def main():
             m.key("ctrl+w", delay=1.0)
             r.check("popup", "Ctrl+W closes the popup", not m.window(r"^P\{"), "still open")
         profiles_panel(m, r, win, top)
+        tab_bar(m, r, win, top)
         w0, h0 = settings_panel(m, r, win, top)
         m.stop()
         m = Driver(args.bin, display, home)
@@ -1113,6 +1241,10 @@ def main():
         media(m, r, args.bin)
         gdk_scale_ignored(m, r, args.bin, display)
         render_check(r, args.bin, display)
+        base = serve_tests()
+        favicon(m, r, args.bin, base)
+        file_picker(r, args.bin, display, base)
+        last_tab_quits(r, args.bin, display)
         # GPUI draws the frame itself only where the window manager supports
         # _GTK_FRAME_EXTENTS and a compositor runs; xfwm4 has both.
         if wm and not args.wayland and shutil.which("xfwm4"):

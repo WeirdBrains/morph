@@ -5,7 +5,7 @@ use morph_ui::actions::{Action, Keymap};
 use morph_webview::fake::{Call, FakeBackend};
 use morph_webview::{ErrorKind, Event, Frame, Input, LoadError, Modifiers, MouseButton, Rect, ViewId};
 
-use super::{ABOUT_URL, Browser, Config, Cover, FindBar, Internal, error_text};
+use super::{ABOUT_URL, Browser, Config, Cover, FindBar, Internal, SETTINGS_URL, error_text};
 
 fn browser(start: &str) -> (Browser, FakeBackend) {
     let fake = FakeBackend::new();
@@ -49,7 +49,7 @@ fn typing_a_phrase_searches_and_an_address_opens() {
     let (mut b, fake) = browser("");
     let view = fake.created()[0];
     type_into_address(&mut b, "what do i need to install to get youtube working");
-    assert_eq!(b.active_url(), "https://duckduckgo.com/?q=what+do+i+need+to+install+to+get+youtube+working");
+    assert_eq!(b.active_url(), "https://www.google.com/search?q=what+do+i+need+to+install+to+get+youtube+working");
     type_into_address(&mut b, "instagram.com");
     let calls = fake.calls_for(view);
     assert!(calls.contains(&Call::Load("https://instagram.com".into())));
@@ -117,13 +117,56 @@ fn only_the_active_tab_is_visible_and_closing_selects_the_next() {
 }
 
 #[test]
-fn closing_the_last_tab_leaves_a_blank_one() {
+fn closing_the_last_tab_asks_to_quit() {
     let (mut b, fake) = browser("a.test");
+    b.new_tab("b.test");
     b.dispatch(Action::CloseTab);
+    assert!(!b.take_quit(), "other tabs are left");
     assert_eq!(b.tabs().len(), 1);
-    assert_eq!(b.tabs()[0].label, "New tab");
+    let only = b.tabs()[0].id;
+    b.close_tab(only);
+    assert!(b.take_quit());
+    assert!(!b.take_quit(), "asked once");
+    assert_eq!(b.tabs().len(), 1, "the tab stays until the shell quits");
     assert_eq!(fake.created().len(), 2);
-    assert!(b.address_focused());
+}
+
+#[test]
+fn tabs_search_with_their_own_engine_and_new_tabs_use_the_default() {
+    let (mut b, _) = browser("example.com");
+    assert_eq!(b.tab_engine().id, "google");
+    b.set_tab_engine("duckduckgo");
+    type_into_address(&mut b, "rust lang");
+    assert_eq!(b.active_url(), "https://duckduckgo.com/?q=rust+lang");
+    b.new_tab("");
+    assert_eq!(b.tab_engine().id, "google", "a new tab uses the default");
+    type_into_address(&mut b, "rust lang");
+    assert_eq!(b.active_url(), "https://www.google.com/search?q=rust+lang");
+    b.dispatch(Action::PrevTab);
+    assert_eq!(b.tab_engine().id, "duckduckgo", "the override stays with its tab");
+    b.set_default_engine("duckduckgo");
+    b.dispatch(Action::NewTab);
+    assert_eq!(b.tab_engine().id, "duckduckgo");
+}
+
+#[test]
+fn settings_open_as_a_page_and_an_open_one_is_reused() {
+    let (mut b, fake) = browser("example.com");
+    let view = fake.created()[0];
+    b.dispatch(Action::ShowSettings);
+    assert_eq!(b.tabs().len(), 2);
+    assert_eq!(b.active_url(), SETTINGS_URL);
+    assert_eq!(b.active_title(), "Settings");
+    assert_eq!(b.cover(), Some(&Cover::Settings));
+    b.dispatch(Action::PrevTab);
+    assert_eq!(b.cover(), None);
+    assert_eq!(fake.last_visible(view), Some(true));
+    b.dispatch(Action::ShowSettings);
+    assert_eq!(b.tabs().len(), 2, "the open settings tab is selected");
+    assert_eq!(b.cover(), Some(&Cover::Settings));
+    b.focus_address();
+    b.address_mut().replace(None, "morph://settings");
+    assert_eq!(b.submit_address(), None, "morph://settings shows here, not in a panel");
 }
 
 #[test]
@@ -670,4 +713,41 @@ fn the_tab_menu_duplicates_reloads_and_closes_the_others() {
     b.close_other_tabs(ids[1]);
     assert_eq!(b.tabs().len(), 1);
     assert_eq!(b.active_url(), "https://example.org");
+}
+
+#[test]
+fn icons_are_kept_per_site_and_shared_by_its_tabs() {
+    let (mut b, fake) = browser("https://a.test/x");
+    let view = fake.created()[0];
+    fake.emit(view, Event::UrlChanged("https://a.test/x".into()));
+    fake.emit(view, Event::Favicon(vec![1, 2, 3]));
+    b.poll();
+    assert_eq!(b.tabs()[0].icon.as_deref(), Some(&vec![1, 2, 3]));
+    b.new_tab("https://a.test/other");
+    let second = fake.created()[1];
+    fake.emit(second, Event::UrlChanged("https://a.test/other".into()));
+    b.poll();
+    assert_eq!(b.tabs()[1].icon.as_deref(), Some(&vec![1, 2, 3]), "same site, same icon");
+    fake.emit(second, Event::UrlChanged("https://b.test/".into()));
+    b.poll();
+    assert_eq!(b.tabs()[1].icon, None, "another site has none yet");
+    b.clear_site_data();
+    assert_eq!(b.tabs()[0].icon, None);
+    assert_eq!(super::origin("https://User@A.test:8080/p?q#h").as_deref(), Some("https://a.test:8080"));
+    assert_eq!(super::origin("file:///tmp/x"), None);
+}
+
+#[test]
+fn a_page_asking_for_files_is_answered_once() {
+    let (mut b, fake) = browser("https://a.test/");
+    let view = fake.created()[0];
+    assert_eq!(b.take_file_request(), None);
+    fake.emit(view, Event::FileChooser { multiple: true });
+    b.poll();
+    assert_eq!(b.take_file_request(), Some(true));
+    assert_eq!(b.take_file_request(), None, "the dialog is already open");
+    b.choose_files(Some(vec!["/tmp/a.txt".into()]));
+    assert!(fake.calls_for(view).contains(&Call::ChooseFiles(Some(vec!["/tmp/a.txt".into()]))));
+    b.choose_files(None);
+    assert_eq!(fake.calls_for(view).iter().filter(|c| matches!(c, Call::ChooseFiles(_))).count(), 1, "answered once");
 }

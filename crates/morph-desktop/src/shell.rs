@@ -56,7 +56,8 @@ actions!(
         ShowProfiles,
         ShowSettings,
         ShowIdentity,
-        ShowAbout
+        ShowAbout,
+        ShowSearchSettings
     ]
 );
 
@@ -93,6 +94,7 @@ pub(crate) fn gpui_action(action: Action) -> Box<dyn gpui::Action> {
         Action::ShowSettings => Box::new(ShowSettings),
         Action::ShowIdentity => Box::new(ShowIdentity),
         Action::ShowAbout => Box::new(ShowAbout),
+        Action::ShowSearchSettings => Box::new(ShowSearchSettings),
     }
 }
 
@@ -122,6 +124,16 @@ pub enum ShellRequest {
     SettingsChanged,
     /// The profile got an identity (its library is encrypted and open now).
     IdentityChanged,
+    /// Run a shell action (a button on a page or in a menu).
+    Run(Action),
+    /// Change the shown profile's layout settings (the tab bar's buttons).
+    Change(morph_ui::chrome::SettingsChange),
+    /// Forget the shown profile's history.
+    ClearHistory,
+    /// Forget the shown profile's cookies, cache, site storage and history.
+    ClearBrowsingData,
+    /// The last tab closed: save and quit.
+    Quit,
 }
 
 /// Components each profile has its own of; rebuilt on a profile switch.
@@ -162,6 +174,11 @@ pub trait Hosted {
     /// The window is frameless (`Some`, with the buttons to draw) and this
     /// component, in the main slot, should act as its caption.
     fn set_caption(&self, _caption: Option<WindowButtons>, _cx: &mut App) {}
+    /// The preferences page, for the main component to draw.
+    /// The profiles to list (id, name, shown).
+    fn set_profiles(&self, _profiles: Vec<(String, String, bool)>, _cx: &mut App) {}
+    /// Forget the profile's site data (cookies, cache, storage).
+    fn clear_site_data(&self, _cx: &mut App) {}
 }
 
 impl Hosted for Entity<BrowserView> {
@@ -210,12 +227,22 @@ impl Hosted for Entity<BrowserView> {
     fn apply_settings(&self, settings: &morph_core::settings::Settings, cx: &mut App) {
         self.update(cx, |view, cx| view.apply_settings(settings, cx));
     }
+    fn set_profiles(&self, profiles: Vec<(String, String, bool)>, cx: &mut App) {
+        self.update(cx, |v, cx| v.set_profiles(profiles, cx));
+    }
+    fn clear_site_data(&self, cx: &mut App) {
+        self.update(cx, |v, _| v.clear_site_data());
+    }
     fn set_caption(&self, caption: Option<WindowButtons>, cx: &mut App) {
         self.update(cx, |view, cx| view.set_caption(caption, cx));
     }
 }
 
 impl Hosted for Entity<IdentityView> {
+    fn apply_settings(&self, settings: &morph_core::settings::Settings, cx: &mut App) {
+        let theme = Theme::for_choice(settings.theme);
+        self.update(cx, |view, cx| view.set_theme(theme, cx));
+    }
     fn kind(&self) -> KindId {
         KindId::new(component::IDENTITY)
     }
@@ -240,6 +267,10 @@ impl Hosted for Entity<IdentityView> {
 }
 
 impl Hosted for Entity<SettingsView> {
+    fn apply_settings(&self, settings: &morph_core::settings::Settings, cx: &mut App) {
+        let theme = Theme::for_choice(settings.theme);
+        self.update(cx, |view, cx| view.set_theme(theme, cx));
+    }
     fn kind(&self) -> KindId {
         KindId::new(component::SETTINGS)
     }
@@ -261,6 +292,10 @@ impl Hosted for Entity<SettingsView> {
 }
 
 impl Hosted for Entity<ProfilesView> {
+    fn apply_settings(&self, settings: &morph_core::settings::Settings, cx: &mut App) {
+        let theme = Theme::for_choice(settings.theme);
+        self.update(cx, |view, cx| view.set_theme(theme, cx));
+    }
     fn kind(&self) -> KindId {
         KindId::new(component::PROFILES)
     }
@@ -281,6 +316,10 @@ impl Hosted for Entity<ProfilesView> {
 }
 
 impl Hosted for Entity<LibraryView> {
+    fn apply_settings(&self, settings: &morph_core::settings::Settings, cx: &mut App) {
+        let theme = Theme::for_choice(settings.theme);
+        self.update(cx, |view, cx| view.set_theme(theme, cx));
+    }
     fn kind(&self) -> KindId {
         KindId::new(component::LIBRARY)
     }
@@ -356,11 +395,25 @@ impl Shell {
             catalog.register(kind);
         }
         let profiles = cx.new(|cx| ProfilesView::new(&home, &profile, theme, window, cx));
-        let settings = cx.new(|cx| SettingsView::new(&home, theme, cx));
+        let settings = cx.new(|cx| SettingsView::new(&home, theme, window, cx));
         let subscriptions = vec![
             cx.subscribe_in(&profiles, window, |shell, _, request, window, cx| shell.request(request, window, cx)),
             cx.subscribe_in(&settings, window, |shell, _, request, window, cx| shell.request(request, window, cx)),
+            // Back in front: the default browser may have changed meanwhile.
+            cx.observe_window_activation(window, |shell, window, cx| {
+                if window.is_window_active()
+                    && let Some(settings) = &shell.settings
+                {
+                    settings.update(cx, |view, _| view.recheck());
+                }
+            }),
         ];
+        // Settings are a page now, not a panel: an old layout's settings
+        // sidebar is dropped.
+        let mut layout = layout;
+        if layout.shown(Slot::Sidebar).is_some_and(|k| k.as_str() == component::SETTINGS) {
+            layout.toggle(Slot::Sidebar);
+        }
         let mut shell = Self {
             home,
             profile,
@@ -415,6 +468,11 @@ impl Shell {
                     view.set_shortcut_labels(labels);
                     view
                 });
+                self.profile_subscriptions.push(cx.subscribe_in(&view, window, |shell, _, request, window, cx| shell.request(request, window, cx)));
+                if let Some(settings) = &self.settings {
+                    let any: AnyView = settings.clone().into();
+                    view.update(cx, |v, cx| v.set_settings_view(any, cx));
+                }
                 self.components.insert(0, Box::new(view));
                 None
             }
@@ -443,22 +501,40 @@ impl Shell {
         }
         self.update_profile_label(cx);
         if let Some(settings) = &self.settings {
-            settings.update(cx, |view, _| view.reload());
+            settings.update(cx, |view, cx| view.reload(cx));
         }
         self.apply_settings(cx);
+        self.update_profile_list(cx);
         if locked {
             self.show_library(Tab::Bookmarks, window, cx);
         }
     }
 
     /// Pass the shown profile's settings to every component.
-    fn apply_settings(&self, cx: &mut App) {
+    fn apply_settings(&mut self, cx: &mut App) {
         let Some(settings) = &self.settings else {
             return;
         };
         let current = settings.read(cx).settings().clone();
+        self.theme = Theme::for_choice(current.theme);
         for c in &self.components {
             c.apply_settings(&current, cx);
+        }
+    }
+
+    /// Tell the components which profiles there are (the address menu
+    /// lists them).
+    fn update_profile_list(&self, cx: &mut App) {
+        let list: Vec<(String, String, bool)> = morph_core::profiles::list(&self.home)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|p| {
+                let shown = p.id == self.profile;
+                (p.id, p.name, shown)
+            })
+            .collect();
+        for c in &self.components {
+            c.set_profiles(list.clone(), cx);
         }
     }
 
@@ -511,7 +587,10 @@ impl Shell {
             ShellRequest::FocusShell => self.focus_shell(cx),
             ShellRequest::LibraryUnlocked => self.last_marked = None,
             ShellRequest::SwitchProfile(id) => self.switch_profile(id, window, cx),
-            ShellRequest::ProfileRenamed => self.update_profile_label(cx),
+            ShellRequest::ProfileRenamed => {
+                self.update_profile_label(cx);
+                self.update_profile_list(cx);
+            }
             ShellRequest::SettingsChanged => self.apply_settings(cx),
             ShellRequest::IdentityChanged => {
                 // The new identity encrypted the library; open it so history
@@ -522,8 +601,42 @@ impl Shell {
                 }
                 self.last_marked = None;
             }
+            ShellRequest::Run(action) => self.run(*action, window, cx),
+            ShellRequest::Change(change) => {
+                if let Some(settings) = self.settings.clone() {
+                    settings.update(cx, |view, cx| view.change(*change, cx));
+                }
+            }
+            ShellRequest::ClearHistory => self.clear_history(cx),
+            ShellRequest::ClearBrowsingData => {
+                self.clear_history(cx);
+                for c in &self.components {
+                    c.clear_site_data(cx);
+                }
+            }
+            ShellRequest::Quit => self.quit(cx),
         }
         cx.notify();
+    }
+
+    fn clear_history(&self, cx: &mut App) {
+        if let Err(e) = morph_core::library::clear_history(&self.home, &self.profile) {
+            eprintln!("morph: could not clear the history: {e}");
+        }
+        if let Some(library) = &self.library {
+            library.update(cx, |view, cx| view.reload(cx));
+        }
+    }
+
+    /// Save what the window shows and quit (the last tab closed, Ctrl+Q,
+    /// the menu). Settings are saved as they change; the layout is saved
+    /// here once more so a quit never loses it.
+    fn quit(&self, cx: &mut App) {
+        self.save_layout();
+        if std::env::var_os("MORPH_LOG_EVENTS").is_some_and(|v| v == "1") {
+            println!("morph-event quit");
+        }
+        cx.quit();
     }
 
     fn focus_shell(&self, cx: &App) {
@@ -629,17 +742,16 @@ impl Shell {
         cx.notify();
     }
 
-    /// Open or close the settings panel.
-    fn show_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Show the preferences page (in a tab of the main component), at
+    /// `section` if given.
+    fn show_settings(&mut self, section: Option<crate::settings_view::Section>, window: &mut Window, cx: &mut Context<Self>) {
         let Some(settings) = self.settings.clone() else {
             return;
         };
-        if !self.layout.toggle_kind(Slot::Sidebar, KindId::new(component::SETTINGS)) {
-            self.request(&ShellRequest::ClosePanel, window, cx);
-            return;
+        if let Some(main) = self.main() {
+            main.dispatch(Action::ShowSettings, window, cx);
         }
-        self.save_layout();
-        settings.update(cx, |view, cx| view.focus(window, cx));
+        settings.update(cx, |view, cx| view.focus(section, window, cx));
         self.focus_shell(cx);
         cx.notify();
     }
@@ -653,7 +765,7 @@ impl Shell {
     fn run(&mut self, action: Action, window: &mut Window, cx: &mut Context<Self>) {
         match action {
             Action::Quit => {
-                cx.quit();
+                self.quit(cx);
                 return;
             }
             Action::ToggleFullscreen => {
@@ -664,7 +776,8 @@ impl Shell {
             Action::ShowBookmarks => return self.show_library(Tab::Bookmarks, window, cx),
             Action::ShowHistory => return self.show_library(Tab::History, window, cx),
             Action::ShowProfiles => return self.show_profiles(window, cx),
-            Action::ShowSettings => return self.show_settings(window, cx),
+            Action::ShowSettings => return self.show_settings(None, window, cx),
+            Action::ShowSearchSettings => return self.show_settings(Some(crate::settings_view::Section::Search), window, cx),
             Action::ShowIdentity => return self.show_identity(window, cx),
             _ => {}
         }
@@ -854,6 +967,7 @@ impl Render for Shell {
             ShowSettings => Action::ShowSettings,
             ShowIdentity => Action::ShowIdentity,
             ShowAbout => Action::ShowAbout,
+            ShowSearchSettings => Action::ShowSearchSettings,
         ]);
         let root = root.on_any_mouse_down(cx.listener(|this, _, _, cx| this.focus_shell(cx)));
         if let Some(error) = &self.error {
@@ -895,6 +1009,12 @@ fn address_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-x", Cut, c),
         KeyBinding::new("enter", Submit, c),
         KeyBinding::new("escape", Cancel, c),
+        KeyBinding::new("down", MenuDown, c),
+        KeyBinding::new("up", MenuUp, c),
+        KeyBinding::new("tab", FocusNextStop, c),
+        KeyBinding::new("tab", FocusNextStop, Some(BAR_BUTTON_CONTEXT)),
+        KeyBinding::new("shift-tab", FocusPreviousStop, Some(BAR_BUTTON_CONTEXT)),
+        KeyBinding::new("escape", Cancel, Some(BAR_BUTTON_CONTEXT)),
     ]
     .into_iter()
     .chain(

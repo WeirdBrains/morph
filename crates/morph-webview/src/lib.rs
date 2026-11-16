@@ -16,6 +16,7 @@ use std::rc::Rc;
 #[cfg(target_os = "linux")]
 pub mod appearance;
 pub mod fake;
+pub mod icons;
 pub mod keys;
 pub mod native_page;
 #[cfg(target_os = "linux")]
@@ -137,6 +138,13 @@ pub enum Event {
     /// The page's tooltip under the pointer (`title` attributes), or none,
     /// for the shell to draw (pages the shell draws).
     Tooltip(Option<String>),
+    /// The page's icon, as PNG bytes (32×32), from [`icons::ICON_SCRIPT`].
+    Favicon(Vec<u8>),
+    /// The page asked for files (`<input type=file>`); the shell shows a
+    /// dialog and answers with [`WebView::choose_files`].
+    FileChooser {
+        multiple: bool,
+    },
 }
 
 /// A `<select>`'s list, for the shell to draw beside the element.
@@ -361,6 +369,14 @@ pub trait WebView {
     }
     /// Answer the page's open [`Event::OptionMenu`]; nothing when none is.
     fn option_menu(&self, _choice: MenuChoice) {}
+    /// Answer the page's [`Event::FileChooser`]: the chosen files, or
+    /// `None` when the user cancelled.
+    fn choose_files(&self, _paths: Option<Vec<std::path::PathBuf>>) {}
+    /// Forget the profile's cookies, cache and site storage (every view of
+    /// the same data directory shares them).
+    fn clear_data(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// A page drawn off screen: premultiplied BGRA (Cairo's ARGB32 on a
@@ -504,11 +520,47 @@ pub trait Backend {
     /// The host window's scale (device pixels per logical pixel), for
     /// backends that render pages themselves.
     fn set_scale(&mut self, _scale: f64) {}
+    /// Where downloads are saved from now on; `None` is the system's
+    /// Downloads folder.
+    fn set_downloads_dir(&mut self, _dir: Option<std::path::PathBuf>) {}
+}
+
+/// Where a download goes: `dir` (when set) with the file name the engine
+/// suggested in `suggested`, numbered like `name (1).ext` when taken.
+pub fn download_target(dir: Option<&std::path::Path>, suggested: &std::path::Path) -> std::path::PathBuf {
+    let Some(dir) = dir else {
+        return suggested.to_path_buf();
+    };
+    let name = suggested.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "download".into());
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
+        _ => (name.clone(), String::new()),
+    };
+    let mut target = dir.join(&name);
+    let mut n = 1;
+    while target.exists() {
+        target = dir.join(format!("{stem} ({n}){ext}"));
+        n += 1;
+    }
+    target
 }
 
 #[cfg(test)]
 mod bridge_tests {
     use super::*;
+
+    #[test]
+    fn downloads_go_to_the_chosen_folder_without_replacing_files() {
+        let tmp = std::env::temp_dir().join(format!("morph-dl-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let suggested = std::path::Path::new("/home/x/Downloads/report.pdf");
+        assert_eq!(download_target(None, suggested), suggested);
+        assert_eq!(download_target(Some(&tmp), suggested), tmp.join("report.pdf"));
+        std::fs::write(tmp.join("report.pdf"), b"x").unwrap();
+        assert_eq!(download_target(Some(&tmp), suggested), tmp.join("report (1).pdf"));
+        assert_eq!(download_target(Some(&tmp), std::path::Path::new("/a/README")), tmp.join("README"));
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
 
     #[test]
     fn a_reply_is_delivered_as_an_object() {

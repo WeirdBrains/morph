@@ -137,6 +137,11 @@ impl TextInput {
         cx.notify();
     }
 
+    pub fn set_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
+        self.theme = theme;
+        cx.notify();
+    }
+
     pub fn is_focused(&self, window: &Window) -> bool {
         self.focus.is_focused(window)
     }
