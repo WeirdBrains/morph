@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0-alpha.12] - 2026-11-16
+
 - Desktop: the frameless window's maximize button is a toggle. It maximizes
   a normal window and restores a maximized one, and its icon switches
   between maximize (one square) and restore (two). It reads the window's
@@ -37,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and Wayland checks screenshot it. The phone app's tests cover every case
   with no page (a fresh start, a new tab, closing the last page, closing all
   tabs).
+
 - iOS: the keystore uses the data protection keychain (the iOS build failed:
   the keyring crate needs its `protected` store there). macOS keeps the
   login keychain. Rust and its C dependencies build for iOS 15.0 (the
@@ -48,11 +51,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   installs over the last one. Before, every CI run signed with a new debug
   key and updates failed. Phones with an older Morph APK uninstall it once.
   Without the secrets (forks, local builds) the debug key signs as before.
+
 - The phone apps carry the release version: `app/pubspec.yaml` is
   `0.2.0-alpha.11+10400`, so Android shows versionName 0.2.0-alpha.11 and
   versionCode 10400 (iOS CFBundleShortVersionString and CFBundleVersion come
   from the same line). Each release bumps the name and adds one to the build
   number, and refuses a build number that does not exceed the last tag's.
+
 - iOS builds in CI: a separate `iOS` workflow on a self-hosted Mac builds the
   app unsigned for devices and for the simulator and uploads both
   (`morph-ios-unsigned`). It never blocks CI.
