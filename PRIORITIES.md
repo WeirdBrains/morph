@@ -230,10 +230,21 @@ Build `v0.2.0-alpha.9`.
     - F-Droid uses stock Flutter, with updates off until the user opts in
     - Sideloading is always a fallback on Android and iOS
 
+# Roadmap after 0.2.0 _(decided 2026-11-15)_
+
+- **v0.3: peer-to-peer, plus the password saver**
+    - weirdnet-net peers and relays, Grindvakt DDNS
+    - `weirdnet-morph://` resolves real peer content, plus the scheme registry
+    - Password saver
+- **v0.4: local AI and projects**
+    - Local AI, projects, and hosting projects: private or public, access control, optional
+      HTTPS through weirdnet-tls
+- **v0.5: extensions** (see Extensions below)
+
 # Priorities 2
 
-- Password saver _(new 2026-11-15: after 0.2.0; until then the URL menu lists
-  Passwords as coming soon)_
+- Password saver _(new 2026-11-15: v0.3; until then the URL menu lists Passwords as
+  coming soon)_
 - Extensions _(new; redesigned 2026-11-11; decided 2026-11-15: **v0.5 is dedicated to
   extensions**; until then menus list Extensions as coming soon)_
     - Chrome and Firefox extensions run unchanged _(decided 2026-11-15)_
