@@ -82,6 +82,11 @@ dmg) and a Windows zip and MSI and smoke-tests a real window and page on both. U
 The release script (weirdnet-project-helpers 0.3.0) now cuts the pre-releases. Build
 `v0.2.0-alpha.8`.
 
+2026-11-15, identity: recovery words copy and download, 3-of-5 paper shards (copy,
+download, QR, download all, restore), native file dialogs, Tab between fields; page Cmd
+shortcuts reach the shell on macOS; Linux default browser writes mimeapps.list itself.
+Build `v0.2.0-alpha.9`.
+
 1. Webview _(moved up: everything else plugs into it)_
     - System web views: WebView2 (Windows), WKWebView (Apple), WebKit (Linux: WPE + webkit2gtk), Android WebView _(changed 2026-11-11)_
         - Linux: build our own WebKit plugin _(changed 2026-11-11)_
@@ -225,9 +230,49 @@ The release script (weirdnet-project-helpers 0.3.0) now cuts the pre-releases. B
     - F-Droid uses stock Flutter, with updates off until the user opts in
     - Sideloading is always a fallback on Android and iOS
 
+# Roadmap after 0.2.0 _(decided 2026-11-15)_
+
+- **v0.3: peer-to-peer, plus the password saver**
+    - weirdnet-net peers and relays, Grindvakt DDNS
+    - `weirdnet-morph://` resolves real peer content, plus the scheme registry
+    - Password saver
+- **v0.4: local AI and projects**
+    - Local AI, projects, and hosting projects: private or public, access control, optional
+      HTTPS through weirdnet-tls
+- **v0.5: extensions** (see Extensions below)
+
 # Priorities 2
 
-- Extensions _(new; redesigned 2026-11-11)_
+- Password saver _(new 2026-11-15: v0.3; until then the URL menu lists Passwords as
+  coming soon)_
+- Extensions _(new; redesigned 2026-11-11; decided 2026-11-15: **v0.5 is dedicated to
+  extensions**; until then menus list Extensions as coming soon)_
+    - Chrome and Firefox extensions run unchanged _(decided 2026-11-15)_
+        - The WebExtensions API is implemented in Rust
+        - A thin JS shim exposes `chrome.*` / `browser.*` and forwards every call to Rust
+        - Loader for manifest v2 and v3, `.crx` and `.xpi`, with a signature check and the
+          manifest permissions mapped to Morph's access model
+        - Hosting for background pages (hidden page or service worker), popups and options
+          pages
+        - Content scripts are injected through the page bridge, in isolated worlds
+        - A Rust DOM API (selectors, read/mutate, observers) over the page bridge, shared
+          with native Rust extensions
+        - API coverage grows in order: storage, tabs, runtime messaging, content scripts,
+          contextMenus
+        - The hard part: webRequest / declarativeNetRequest, which needs network
+          interception per web view backend
+        - Later: an optional AI-assisted import tool that ports an extension to Rust for
+          review
+        - Acceptance target: password managers work unchanged: 1Password, Bitwarden
+          and LastPass _(decided 2026-11-15)_.
+          They need:
+            - Content scripts in all frames, iframes and dynamic pages included
+            - Autofill with trusted input events
+            - Popup and options pages, and in-page overlays
+            - Runtime messaging, storage, alarms and idle
+            - A nativeMessaging host per OS (desktop app unlock and biometrics)
+            - contextMenus, commands, tabs and webNavigation
+            - WebAuthn / passkey interception (the hardest)
     - Not only WASM: platform-native binaries too _(changed 2026-11-11)_
         - Downloaded and installed only with your permission, signed by the author's key
         - Each extension runs in its own sandboxed process

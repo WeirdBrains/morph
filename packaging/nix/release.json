@@ -1,7 +1,7 @@
 {
-  "version": "0.2.0-alpha.8",
+  "version": "0.2.0-alpha.9",
   "x86_64-linux": {
-    "url": "https://github.com/WeirdBrains/morph/releases/download/v0.2.0-alpha.8/morph-0.2.0-alpha.8-x86_64-unknown-linux-gnu.tar.gz",
-    "sha256": "7a5a71579c28180e17cc31fed7675804b1c1e70f2bf98387ffa9e8031315be7f"
+    "url": "https://github.com/WeirdBrains/morph/releases/download/v0.2.0-alpha.9/morph-0.2.0-alpha.9-x86_64-unknown-linux-gnu.tar.gz",
+    "sha256": "3f11a198e361243a7597f968b96c4533be29bb1f5ef64b77929b174a6df84c94"
   }
 }

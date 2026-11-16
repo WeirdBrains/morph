@@ -595,6 +595,22 @@ unfinished alpha.10 work is parked on branch `wip/alpha10`, not built).
   `<desktop>-mimeapps.list` itself (xdg-settings failed on Hyprland), then
   checks each type with `xdg-mime`.
 
+## Release and TAUR (alpha.9)
+
+- Pre-release `v0.2.0-alpha.9` (tag at `ad3f958`):
+  https://github.com/WeirdBrains/morph/releases/tag/v0.2.0-alpha.9, created
+  with `python3 scripts/weirdnet_release.py github 0.2.0-alpha.9` and checked
+  with `... assets 0.2.0-alpha.9` (11 assets). Linux tarball, zip and debs
+  built on the box, rpms in a fedora container (`MORPH_SKIP_DEB=1`); macOS and
+  Windows assets from CI run 43787921654 (`ad3f958`, all jobs green, including
+  the macOS and Windows Identity-panel smoke checks).
+- `morph-bin` 0.2.0alpha9-1: tarball sha256
+  `3f11a198e361243a7597f968b96c4533be29bb1f5ef64b77929b174a6df84c94` (matches
+  the uploaded asset); both `.SRCINFO` from `makepkg --printsrcinfo`; built,
+  installed and started (`morph --version`, `morph.desktop`) in
+  `archlinux:latest`. Archive: `/workspace/dist/morph-bin-0.2.0alpha9.tar.gz`.
+  Not uploaded (no taurctl).
+
 ## Release and TAUR (alpha.8)
 
 - Pre-release `v0.2.0-alpha.8` (tag at `07b44ca`):
