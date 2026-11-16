@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Windows: Settings > Default browser > Make default opens Windows Settings
+  on Default apps, on Morph's entry. It launched
+  `ms-settings:defaultapps?registeredAppUser=Morph` through explorer.exe,
+  which garbled the query and opened a File Explorer search of Documents
+  ("No items match your search"). The URI now goes to ShellExecuteW (verb
+  `open`), with plain `ms-settings:defaultapps` if that fails. A test checks
+  that `registeredAppUser` is the name Morph (and the MSI) registers under
+  `RegisteredApplications`.
+
 - Desktop: a tab with nothing in it (a new tab, the blank tab left after
   closing the last page, Back from About on a blank tab) shows Morph's start
   screen, as the phone app does: the lockup, "A distributed web browser with

@@ -12,7 +12,9 @@
 pub const PROG_ID: &str = "MorphHTML";
 /// Morph's name under `StartMenuInternet` and in `RegisteredApplications`.
 pub const APP_NAME: &str = "Morph";
-/// Settings > Default apps, on Morph's page.
+/// Settings > Default apps, on Morph's page. `registeredAppUser` must be
+/// the value name under `RegisteredApplications` ([`APP_NAME`]), or Settings
+/// ignores it.
 pub const SETTINGS_URI: &str = "ms-settings:defaultapps?registeredAppUser=Morph";
 /// Settings > Default apps (older Windows ignore the app parameter).
 pub const SETTINGS_FALLBACK_URI: &str = "ms-settings:defaultapps";
@@ -71,6 +73,17 @@ pub fn is_default(http: Option<&str>, https: Option<&str>) -> bool {
     http.is_some_and(|p| p.eq_ignore_ascii_case(PROG_ID)) && https.is_some_and(|p| p.eq_ignore_ascii_case(PROG_ID))
 }
 
+/// `s` as NUL-terminated UTF-16, for the wide Windows calls.
+pub fn wide(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+/// Whether ShellExecuteW's result means it launched (above 32; 32 and
+/// below are error codes).
+pub fn launched(code: isize) -> bool {
+    code > 32
+}
+
 /// The user's choice for `scheme`'s key path.
 pub fn user_choice_key(scheme: &str) -> String {
     USER_CHOICE.replace("{scheme}", scheme)
@@ -108,10 +121,32 @@ mod imp {
         RegKey::predef(HKEY_CURRENT_USER).open_subkey_with_flags(user_choice_key(scheme), KEY_READ).ok()?.get_value("ProgId").ok()
     }
 
-    /// Open Settings > Default apps on Morph's page (or the list).
+    /// Launch `uri` with the shell (ShellExecuteW, verb `open`), the way
+    /// Start > Run does. Not through explorer.exe: it treats the argument as
+    /// a path and garbles the query, so Settings never opened and Explorer
+    /// searched Documents for it instead.
+    fn launch(uri: &str) -> Result<(), String> {
+        let verb = wide("open");
+        let file = wide(uri);
+        // SAFETY: both strings are NUL-terminated UTF-16 that outlive the
+        // call; no window, parameters or directory.
+        let code = unsafe {
+            windows_sys::Win32::UI::Shell::ShellExecuteW(
+                std::ptr::null_mut(),
+                verb.as_ptr(),
+                file.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL,
+            )
+        } as isize;
+        if launched(code) { Ok(()) } else { Err(format!("ShellExecuteW({uri}) failed with {code}")) }
+    }
+
+    /// Open Settings > Default apps on Morph's page (or the list, when that
+    /// launch fails).
     pub fn open_settings() -> Result<(), String> {
-        let open = |uri: &str| std::process::Command::new("explorer.exe").arg(uri).spawn().map(|_| ());
-        open(SETTINGS_URI).or_else(|_| open(SETTINGS_FALLBACK_URI)).map_err(|e| format!("could not open Windows Settings: {e}"))
+        launch(SETTINGS_URI).or_else(|_| launch(SETTINGS_FALLBACK_URI)).map_err(|e| format!("could not open Windows Settings: {e}"))
     }
 }
 
@@ -145,5 +180,25 @@ mod tests {
         assert!(!is_default(None, Some("MorphHTML")));
         assert_eq!(user_choice_key("https"), r"Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice");
         assert!(SETTINGS_URI.starts_with(SETTINGS_FALLBACK_URI) && SETTINGS_URI.ends_with("registeredAppUser=Morph"));
+    }
+
+    #[test]
+    fn settings_opens_on_the_name_morph_registers() {
+        // Settings matches registeredAppUser against the value names under
+        // RegisteredApplications, from here (HKCU) and from the MSI (HKLM).
+        let (_, param) = SETTINGS_URI.split_once("?registeredAppUser=").unwrap();
+        let registered: Vec<_> = registration(r"C:\m.exe").into_iter().filter(|v| v.key == r"Software\RegisteredApplications").collect();
+        assert_eq!(registered.len(), 1);
+        assert_eq!(registered[0].name, param);
+        assert_eq!(param, APP_NAME);
+        let wxs = include_str!("../../../packaging/windows/morph.wxs");
+        assert!(wxs.contains(&format!(r#"Key="Software\RegisteredApplications" Name="{param}""#)), "the MSI registers another name");
+    }
+
+    #[test]
+    fn shell_launch_results_and_wide_strings() {
+        assert!(launched(42));
+        assert!(!launched(32) && !launched(2) && !launched(0));
+        assert_eq!(wide("ms"), vec![b'm' as u16, b's' as u16, 0]);
     }
 }
