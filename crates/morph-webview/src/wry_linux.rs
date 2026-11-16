@@ -388,6 +388,19 @@ fn key_id(event: &gtk::gdk::EventKey, press: bool) -> (u32, u16, bool) {
     (event.time(), event.hardware_keycode(), press)
 }
 
+/// Whether `event` is Ctrl, Alt or Super alone. Pages do not get these:
+/// WebKit answers such a press a moment later (sending it back through
+/// GTK when the page did not handle it), and when the next key was a
+/// shell shortcut (Ctrl, then L for the address bar) that answer
+/// sometimes never came; the page then swallowed its next real key, as if
+/// it were the answer. Pages still see the modifiers held with other keys
+/// and clicks (`ctrlKey` and so on).
+fn shortcut_modifier(event: &gtk::gdk::EventKey) -> bool {
+    use gtk::gdk::keys::constants as k;
+    let key = event.keyval();
+    [k::Control_L, k::Control_R, k::Alt_L, k::Alt_R, k::Meta_L, k::Meta_R, k::Super_L, k::Super_R, k::Hyper_L, k::Hyper_R].contains(&key)
+}
+
 /// GPUI notation for a key press, if it has Ctrl or Alt held or is a
 /// function key (the only keys a shell shortcut can be).
 fn keystroke(event: &gtk::gdk::EventKey) -> Option<String> {
@@ -721,11 +734,17 @@ impl Backend for WryBackend {
         // Runs before WebKit's own key handling: note what the web view takes in.
         let keys = self.keys.clone();
         engine.connect_key_press_event(move |_, e| {
+            if shortcut_modifier(e) {
+                return Propagation::Stop;
+            }
             keys.saw(e, true);
             Propagation::Proceed
         });
         let keys = self.keys.clone();
         engine.connect_key_release_event(move |_, e| {
+            if shortcut_modifier(e) {
+                return Propagation::Stop;
+            }
             keys.saw(e, false);
             Propagation::Proceed
         });
