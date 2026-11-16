@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0-alpha.13] - 2026-11-16
+
 - Relays: Settings has a Relays section (desktop and phone) listing the
   relays device linking uses (the built-in WeirdBrains public relay, or
   `MORPH_LINK_RELAYS`), each with its peer id, addresses and live state:
