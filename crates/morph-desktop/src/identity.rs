@@ -7,8 +7,9 @@
 use std::path::{Path, PathBuf};
 
 use morph_identity::profile_identity::{self, ProfileIdentity, SecretString, Source, Zeroizing};
-use morph_services::device_link::{InviteView, LinkState, Links, is_invite};
+use morph_services::device_link::{InviteView, LinkState, Links, Offer, is_invite};
 use morph_services::relays::{RelayReport, RelayStatus};
+use std::sync::mpsc;
 
 /// How often a link screen reads the relay state again.
 const RELAY_POLL: std::time::Duration = std::time::Duration::from_secs(1);
@@ -125,6 +126,26 @@ pub enum Outcome {
     IdentityChanged,
 }
 
+/// A link node starting on its own thread: building it, listening, and
+/// waiting a few seconds for a relay circuit (DNS for the relay, a dial)
+/// would freeze the window and the pages in it.
+enum Starting {
+    Invite(mpsc::Receiver<Result<InviteView, String>>),
+    Offer(mpsc::Receiver<Result<Offer, String>>),
+}
+
+/// Run `work` on a thread; its answer comes back on the receiver.
+fn in_background<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> mpsc::Receiver<T> {
+    let (tx, rx) = mpsc::channel();
+    let spawned = std::thread::Builder::new().name("morph-link-start".into()).spawn(move || {
+        let _ = tx.send(work());
+    });
+    if let Err(e) = spawned {
+        eprintln!("morph: cannot start a link thread: {e}");
+    }
+    rx
+}
+
 pub struct Identity {
     home: PathBuf,
     profile: String,
@@ -143,6 +164,8 @@ pub struct Identity {
     /// The relay status line on the link screens, and when it was read.
     relay_line: Option<(String, RelayStatus)>,
     relays_read: Option<std::time::Instant>,
+    /// A link node still starting (see [`Starting`]).
+    starting: Option<Starting>,
 }
 
 impl Identity {
@@ -161,6 +184,7 @@ impl Identity {
             dirty: false,
             relay_line: None,
             relays_read: None,
+            starting: None,
         };
         this.reload();
         this
@@ -223,14 +247,78 @@ impl Identity {
 
     /// Add a device: listen for a new device that scans this device's QR.
     fn start_invite(&mut self) {
-        match self.links.invite_start() {
-            Ok(invite) => {
-                if std::env::var_os("MORPH_LOG_EVENTS").is_some_and(|v| v == "1") {
-                    println!("morph-event link invite={}", invite.link);
+        let links = self.links;
+        self.starting = Some(Starting::Invite(in_background(move || links.invite_start().map_err(|e| e.to_string()))));
+    }
+
+    /// Whether a link node is still starting (the code is not ready yet).
+    pub fn is_starting(&self) -> bool {
+        self.starting.is_some()
+    }
+
+    /// Pick up a link node that finished starting. Returns whether the
+    /// panel changed. A node that is no longer wanted (the user left the
+    /// step) never arrives: [`Self::end_sessions`] drops the receiver and
+    /// the finished node is cancelled here instead.
+    fn poll_starting(&mut self) -> bool {
+        let log = std::env::var_os("MORPH_LOG_EVENTS").is_some_and(|v| v == "1");
+        match self.starting.take() {
+            None => false,
+            Some(Starting::Invite(rx)) => match rx.try_recv() {
+                Err(mpsc::TryRecvError::Empty) => {
+                    self.starting = Some(Starting::Invite(rx));
+                    false
                 }
-                self.invite = Some(invite);
-            }
-            Err(e) => self.notice = Some(format!("Could not show a code here ({e}); paste the new device's link instead.")),
+                Ok(Ok(invite)) if self.step == Step::AddDevice => {
+                    if log {
+                        println!("morph-event link invite={}", invite.link);
+                    }
+                    self.invite = Some(invite);
+                    true
+                }
+                Ok(Ok(invite)) => {
+                    self.links.invite_cancel(invite.session);
+                    false
+                }
+                Ok(Err(e)) => {
+                    self.notice = Some(format!("Could not show a code here ({e}); paste the new device's link instead."));
+                    true
+                }
+                Err(mpsc::TryRecvError::Disconnected) => true,
+            },
+            Some(Starting::Offer(rx)) => match rx.try_recv() {
+                Err(mpsc::TryRecvError::Empty) => {
+                    self.starting = Some(Starting::Offer(rx));
+                    false
+                }
+                Ok(Ok(offer)) if matches!(self.step, Step::Offer { session: 0, .. }) => {
+                    if log {
+                        println!("morph-event link offer={}", offer.link);
+                    }
+                    self.step = Step::Offer { session: offer.session, link: offer.link };
+                    true
+                }
+                Ok(Ok(offer)) => {
+                    self.links.new_device_cancel(offer.session);
+                    false
+                }
+                Ok(Err(e)) => {
+                    self.error = Some(format!("Could not start linking: {e}"));
+                    self.step = Step::Choose;
+                    true
+                }
+                Err(mpsc::TryRecvError::Disconnected) => true,
+            },
+        }
+    }
+
+    /// Tests: wait for a starting link node.
+    #[cfg(test)]
+    pub fn wait_started(&mut self) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while self.starting.is_some() && std::time::Instant::now() < deadline {
+            self.poll_starting();
+            std::thread::sleep(std::time::Duration::from_millis(10));
         }
     }
 
@@ -289,17 +377,12 @@ impl Identity {
     }
 
     /// Become a new device: listen and show the link.
+    /// The step is `Offer` with session 0 and no link until the node is up.
     pub fn start_offer(&mut self) {
         self.start(Step::Choose);
-        match self.links.new_device_start(&device_name()) {
-            Ok(offer) => {
-                if std::env::var_os("MORPH_LOG_EVENTS").is_some_and(|v| v == "1") {
-                    println!("morph-event link offer={}", offer.link);
-                }
-                self.step = Step::Offer { session: offer.session, link: offer.link };
-            }
-            Err(e) => self.error = Some(format!("Could not start linking: {e}")),
-        }
+        let (links, name) = (self.links, device_name());
+        self.starting = Some(Starting::Offer(in_background(move || links.new_device_start(&name).map_err(|e| e.to_string()))));
+        self.step = Step::Offer { session: 0, link: String::new() };
     }
 
     /// Back to the first step, ending any link session.
@@ -308,6 +391,22 @@ impl Identity {
     }
 
     fn end_sessions(&mut self) {
+        // A node still starting: let it finish on its thread and drop it there.
+        if let Some(starting) = self.starting.take() {
+            let links = self.links;
+            std::thread::spawn(move || match starting {
+                Starting::Invite(rx) => {
+                    if let Ok(Ok(i)) = rx.recv() {
+                        links.invite_cancel(i.session);
+                    }
+                }
+                Starting::Offer(rx) => {
+                    if let Ok(Ok(o)) = rx.recv() {
+                        links.new_device_cancel(o.session);
+                    }
+                }
+            });
+        }
         self.end_invite();
         match self.step {
             Step::Offer { session, .. } | Step::Paired { session, .. } | Step::Received { session } => self.links.new_device_cancel(session),
@@ -318,11 +417,21 @@ impl Identity {
 
     /// Follow the new device's link session. Returns whether the step changed.
     pub fn poll(&mut self) -> bool {
+        let before = std::mem::discriminant(&self.step);
+        if self.poll_starting() {
+            // A failed start goes back a step; a code arriving only redraws
+            // (the fields keep what was typed).
+            if std::mem::discriminant(&self.step) != before {
+                return true;
+            }
+            self.dirty = true;
+        }
         if self.step == Step::AddDevice {
             self.poll_invite();
             return false;
         }
         let session = match self.step {
+            Step::Offer { session: 0, .. } => return false,
             Step::Offer { session, .. } | Step::Paired { session, .. } => session,
             _ => return false,
         };
@@ -434,6 +543,7 @@ impl Identity {
                     .map_err(|e| format!("Could not restore the backup: {e}"))?;
                 self.done(identity, "Identity restored from the backup.")
             }
+            Step::Offer { session: 0, .. } => Err("Still getting this device's code ready; a moment.".into()),
             Step::Offer { session, .. } => {
                 let invite = v(0).trim();
                 if invite.is_empty() {
@@ -850,6 +960,7 @@ mod tests {
 
         let mut new = Identity::new(&new_home, "p1", "Work", shared);
         new.start_offer();
+        new.wait_started();
         let Step::Offer { link, .. } = new.step.clone() else { panic!("{:?} {:?}", new.step, new.error) };
         old.start(Step::AddDevice);
         old.submit(&s(&["old password", &link]));
@@ -895,6 +1006,8 @@ mod tests {
         old.submit(&s(&["old password", "old password"]));
         old.submit(&[]);
         old.start(Step::AddDevice);
+        assert!(old.is_starting(), "the node starts off the caller's thread");
+        old.wait_started();
         let invite = old.invite_link().expect("Add a device shows a code").to_string();
         assert!(invite.starts_with("weirdnet-morph://invite/"));
         old.submit(&s(&["old password", ""]));
@@ -902,6 +1015,7 @@ mod tests {
 
         let mut new = Identity::new(&new_home, "p1", "Work", shared);
         new.start_offer();
+        new.wait_started();
         let Step::Offer { link, .. } = new.step.clone() else { panic!("{:?} {:?}", new.step, new.error) };
         new.submit(&s(&[&link]));
         assert!(new.error.as_deref().unwrap().contains("new device's link"), "{:?}", new.error);

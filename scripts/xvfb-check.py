@@ -724,7 +724,13 @@ def serve_tests():
         redirects to /dl/object, an attachment with a suggested name."""
 
         def do_GET(self):
-            if self.path.startswith("/dl/asset"):
+            if self.path.startswith("/ping"):
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain")
+                self.send_header("Content-Length", "4")
+                self.end_headers()
+                self.wfile.write(b"pong")
+            elif self.path.startswith("/dl/asset"):
                 self.send_response(302)
                 self.send_header("Location", "/dl/object?token=x")
                 self.end_headers()
@@ -749,6 +755,138 @@ def serve_tests():
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return f"http://127.0.0.1:{server.server_address[1]}/"
+
+
+def frame_stats(m, since=0):
+    """The `morph-frames` lines (MORPH_FRAME_STATS=1) after line `since`,
+    as dicts."""
+    out = []
+    for line in m.lines(r"^morph-frames ")[since:]:
+        out.append(dict(kv.split("=", 1) for kv in line.split()[1:] if "=" in kv))
+    return out
+
+
+def busy_page(r, binary, display, base):
+    """A page like Gmail at rest (busy.html: a request and a timer every
+    100 ms, an endless animation) keeps its scripts on time, with the page
+    alone and with the identity panel's link QR open beside it (Compose
+    in Gmail stalled for 20 s on my-desktop, NVIDIA GPU at scale 2: the web
+    process spent its time reading GPU frames back into memory). Frames are
+    copied at most 60 times a second, and none while a page is still."""
+    g = "busy page"
+    home = tempfile.mkdtemp(prefix="morph-xvfb-busy-")
+    m = Driver(binary, display, home, {"MORPH_FRAME_STATS": "1"})
+    try:
+        r.check(g, "the still page loads", wait_for(lambda: state(m), 20))
+        time.sleep(2.5)
+        n = len(frame_stats(m))
+        time.sleep(4.5)
+        still = frame_stats(m, n)
+        # Only the off-screen (Wayland) backend copies frames; X11 pages are
+        # windows of their own.
+        offscreen = bool(frame_stats(m))
+        if offscreen:
+            r.check(g, "a still page copies no frames", still and max(float(s["copied_fps"]) for s in still) < 2, str(still))
+        before = len(m.events())
+        subprocess.run([binary, base + "busy.html"], env=m.env, capture_output=True, timeout=15)
+        got = wait_for(lambda: (state(m) or {}).get("nf", 0) > 20, 20)
+        r.check(g, "busy.html runs", got, str(state(m)))
+        time.sleep(3)
+        n = len(frame_stats(m))
+        time.sleep(5)
+        s = state(m) or {}
+        busy = frame_stats(m, n)
+        detail = f"page {s}; frames {busy}"
+        print(f"busy page alone: {detail}")
+        r.check(g, "the page counts itself visible", s.get("v") == "visible", detail)
+        r.check(g, "its 100 ms timer is not throttled (90% within 250 ms)", 0 < s.get("t", -1) < 250, detail)
+        r.check(g, "its requests stay quick (90% within 250 ms)", 0 <= s.get("f", -1) < 250, detail)
+        if offscreen:
+            r.check(g, "frames are copied at most 60 times a second", busy and max(float(b["copied_fps"]) for b in busy) <= 62, detail)
+        # The identity panel with a new device's link QR (4), beside it.
+        win = wait_for(m.own_window, 10)
+        m.activate(win)
+        m.click(win, 300, 76 + 300)
+        m.key("ctrl+shift+l", delay=1.5)
+        m.key("4", delay=0.5)
+        offer = wait_for(lambda: m.lines(r"morph-event link offer="), 15)
+        r.check(g, "the link QR shows", offer, "no offer logged")
+        n0 = s.get("nt", 0)
+        time.sleep(5)
+        s = state(m) or {}
+        detail = f"page {s}; frames {frame_stats(m)[-2:]}"
+        print(f"busy page with the link panel: {detail}")
+        r.check(g, "with the link panel open the timer keeps time", 0 < s.get("t", -1) < 250 and s.get("nt", 0) - n0 > 30, detail)
+        r.check(g, "with the link panel open requests stay quick", 0 <= s.get("f", -1) < 250, detail)
+        encoded = m.lines(r"morph-event identity qr encoded")
+        r.check(g, "the QR is encoded once, not every frame", 1 <= len(encoded) <= 2, f"{len(encoded)} encodes")
+    finally:
+        m.stop()
+
+
+def hover_page(r, binary, display, base):
+    """A big page with a dark <select> whose classes change as the pointer
+    moves (hover.html, like Gmail): Morph's select-theming script leaves it
+    alone at rest (it rewrote the select 240 times a second, every frame,
+    forever) and while the pointer sweeps, and the page's timer keeps time."""
+    g = "hover page"
+    m = Driver(binary, display, tempfile.mkdtemp(prefix="morph-xvfb-hover-"), {"MORPH_FRAME_STATS": "1"})
+    try:
+        r.check(g, "the page loads", wait_for(lambda: state(m), 20))
+        subprocess.run([binary, base + "hover.html"], env=m.env, capture_output=True, timeout=15)
+        r.check(g, "hover.html runs", wait_for(lambda: "w" in (state(m) or {}), 20), str(state(m)))
+        time.sleep(3)
+        s = state(m) or {}
+        r.check(g, "at rest nothing rewrites the select", s.get("w", -1) == 0, str(s))
+        win = wait_for(m.own_window, 10)
+        n = len(m.lines(r"^morph-render "))
+        end = time.time() + 5
+        i = 0
+        while time.time() < end:
+            m.move(win, 200 + (i * 7) % 700, 200 + (i * 13) % 500)
+            i += 1
+        s = state(m) or {}
+        renders = m.lines(r"^morph-render ")[n:]
+        detail = f"page {s}; {i} moves sent; {renders[-2:]}"
+        print(f"hover sweep: {detail}")
+        r.check(g, "the page saw the pointer move", s.get("mv", 0) > 20, detail)
+        r.check(g, "while the pointer sweeps the select is rewritten at most a few times", 0 <= s.get("w", -1) <= 4, detail)
+        r.check(g, "while the pointer sweeps the page's 100 ms timer keeps time", 0 < s.get("t", -1) < 250, detail)
+    finally:
+        m.stop()
+
+
+def long_address(r, binary, display, base):
+    """A long address is clipped where the bar ends, before the profile
+    chip and the buttons beside it (it ran under the chip: 'activity:75
+    m3talsmith 948225/'), and scrolls to the caret while it is edited."""
+    g = "address bar"
+    url = base + "keys.html?" + "&".join(f"activity{i}={i * 7919}" for i in range(60))
+    m = Driver(binary, display, tempfile.mkdtemp(prefix="morph-xvfb-url-"), {"MORPH_LOG_LAYOUT": "1"})
+    try:
+        r.check(g, "a long address loads", wait_for(lambda: state(m), 20))
+        subprocess.run([binary, url], env=m.env, capture_output=True, timeout=15)
+        time.sleep(2.5)
+
+        def last():
+            rows = m.lines(r"^morph-event address text_w=")
+            return dict(kv.split("=", 1) for kv in rows[-1].split()[2:]) if rows else {}
+
+        a = wait_for(lambda: (lambda d: d if float(d.get("text_w", 0)) > float(d.get("bar_w", 1)) else None)(last()), 10) or last()
+        detail = str(a)
+        r.check(g, "the address is longer than the bar (the check means something)", a and float(a["text_w"]) > float(a["bar_w"]), detail)
+        r.check(g, "the bar ends before the profile chip", a and 0 < float(a["right"]) <= float(a["chip_left"]), detail)
+        r.check(g, "unfocused, the address shows from its start", a and float(a.get("scroll", 1)) == 0, detail)
+        m.key("ctrl+l", delay=0.6)
+        m.key("End", delay=0.8)
+        b = last()
+        r.check(g, "editing at its end scrolls the text to the caret", b and float(b.get("scroll", 0)) > 0, str(b))
+        m.key("Home", delay=0.8)
+        c = last()
+        r.check(g, "Home scrolls back to its start", c and float(c.get("scroll", 1)) == 0, str(c))
+        m.key("Escape", delay=0.4)
+    finally:
+        m.stop()
 
 
 def favicon(m, r, binary, base):
@@ -1734,6 +1872,9 @@ def main():
         render_check(r, args.bin, display)
         base = serve_tests()
         favicon(m, r, args.bin, base)
+        busy_page(r, args.bin, display, base)
+        long_address(r, args.bin, display, base)
+        hover_page(r, args.bin, display, base)
         file_picker(r, args.bin, display, base)
         download(r, args.bin, display, base)
         select_menu(r, args.bin, display, base)

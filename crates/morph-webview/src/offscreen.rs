@@ -13,13 +13,13 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use gtk::gdk;
 use gtk::glib::translate::{ToGlibPtr, ToGlibPtrMut};
 use gtk::prelude::*;
 use javascriptcore::ValueExt;
-use webkit2gtk::{FindControllerExt, FindOptions, HitTestResultExt, OptionMenuExt, WebViewExt};
+use webkit2gtk::{FindControllerExt, FindOptions, HitTestResultExt, OptionMenuExt, SettingsExt, WebViewExt};
 use wry::{WebContext, WebViewBuilder, WebViewBuilderExtUnix, WebViewExtUnix};
 
 use crate::wry_linux::{
@@ -32,6 +32,60 @@ use crate::{
 
 /// A `<select>` list the page opened, with the row it started on.
 type OpenMenu = Rc<RefCell<Option<(webkit2gtk::OptionMenu, Option<u32>)>>>;
+
+/// Most frames copied out of a page per second: a page that animates
+/// (a spinner, a video) damages its window far more often than a screen
+/// shows, and every copy is the whole page at the device scale.
+const MAX_FPS: u32 = 60;
+
+/// Whether pages draw on the CPU: with shared-memory buffers (the only kind
+/// an off-screen window takes on Wayland, see `render_check` in the shell)
+/// a GPU-drawn page is read back from the GPU into memory for every frame,
+/// on WebKit's compositor thread, before this backend copies it again. On an
+/// NVIDIA GPU (nvidia 615.78, scale 2) that readback kept the web process at
+/// 57% CPU and starved the page's own scripts. Drawn on the CPU, WebKit
+/// paints only what changed straight into the buffer. `MORPH_PAGE_GPU=1`
+/// keeps the GPU.
+pub fn pages_on_cpu() -> bool {
+    let set = |k: &str| std::env::var_os(k).is_some_and(|v| v == "1");
+    set("WEBKIT_DMABUF_RENDERER_FORCE_SHM") && !set("MORPH_PAGE_GPU")
+}
+
+/// Frame copy counts for `MORPH_FRAME_STATS=1`, printed every few seconds.
+#[derive(Default)]
+struct FrameStats {
+    since: Option<Instant>,
+    damage: u32,
+    copied: u32,
+    copy_time: Duration,
+    size: (u32, u32),
+}
+
+impl FrameStats {
+    fn on() -> bool {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ON.get_or_init(|| std::env::var_os("MORPH_FRAME_STATS").is_some_and(|v| v == "1"))
+    }
+
+    /// Print and start over every 2 s.
+    fn report(&mut self) {
+        let since = *self.since.get_or_insert_with(Instant::now);
+        let secs = since.elapsed().as_secs_f64();
+        if secs < 2.0 {
+            return;
+        }
+        let avg = if self.copied > 0 { self.copy_time.as_secs_f64() * 1000.0 / f64::from(self.copied) } else { 0.0 };
+        println!(
+            "morph-frames copied_fps={:.1} damage_fps={:.1} copy_ms={avg:.2} size={}x{} cpu_pages={}",
+            f64::from(self.copied) / secs,
+            f64::from(self.damage) / secs,
+            self.size.0,
+            self.size.1,
+            pages_on_cpu()
+        );
+        *self = FrameStats { since: Some(Instant::now()), ..FrameStats::default() };
+    }
+}
 
 /// State the backend and its views share.
 struct Shared {
@@ -48,6 +102,7 @@ struct Shared {
     /// and a new Wayland window starts at the largest monitor scale, so
     /// pages render at HiDPI rather than at the scale-1 root window's.
     embedder: gtk::Window,
+    stats: RefCell<FrameStats>,
 }
 
 impl Shared {
@@ -108,6 +163,7 @@ impl OffscreenBackend {
                     window.realize();
                     window
                 },
+                stats: RefCell::default(),
             }),
         }
     }
@@ -180,6 +236,11 @@ impl Backend for OffscreenBackend {
             }
         };
         let engine = view.webview();
+        if pages_on_cpu()
+            && let Some(settings) = WebViewExt::settings(&engine)
+        {
+            settings.set_hardware_acceleration_policy(webkit2gtk::HardwareAccelerationPolicy::Never);
+        }
         let quiet = engine.connect_hierarchy_changed(|engine, _| engine.stop_signal_emission_by_name("hierarchy-changed"));
         embedder.remove(&vbox);
         window.add(&vbox);
@@ -190,9 +251,12 @@ impl Backend for OffscreenBackend {
         let chooser: crate::wry_linux::Chooser = Rc::default();
         crate::wry_linux::watch_more(&engine, id, &self.queue, &chooser);
         let dirty = Rc::new(Cell::new(true));
-        let d = dirty.clone();
+        let (d, shared) = (dirty.clone(), self.shared.clone());
         window.connect_damage_event(move |_, _| {
             d.set(true);
+            if FrameStats::on() {
+                shared.stats.borrow_mut().damage += 1;
+            }
             false
         });
         let cursor = Rc::new(Cell::new(PageCursor::Default));
@@ -259,6 +323,7 @@ impl Backend for OffscreenBackend {
             dirty,
             bounds: Cell::new(spec.bounds),
             visible: Cell::new(false),
+            copied_at: Cell::new(None),
             zoom,
             menu,
             buttons: Cell::new(0),
@@ -277,6 +342,9 @@ impl Backend for OffscreenBackend {
     fn poll(&mut self) -> Vec<(ViewId, Event)> {
         while gtk::events_pending() {
             gtk::main_iteration_do(false);
+        }
+        if FrameStats::on() {
+            self.shared.stats.borrow_mut().report();
         }
         std::mem::take(&mut self.queue.borrow_mut())
     }
@@ -324,6 +392,8 @@ struct OffscreenView {
     dirty: Rc<Cell<bool>>,
     bounds: Cell<Rect>,
     visible: Cell<bool>,
+    /// When the last frame was copied (see [`MAX_FPS`]).
+    copied_at: Cell<Option<Instant>>,
     /// The page zoom that makes up for GTK's (whole-number) scale falling
     /// short of the shell's: the page renders at `scale` device pixels per
     /// logical pixel either way, and pointer positions are multiplied by it.
@@ -699,10 +769,26 @@ impl WebView for OffscreenView {
         if (self.wanted_zoom() - self.zoom.get()).abs() > f64::EPSILON {
             self.apply_size();
         }
-        if !self.dirty.replace(false) {
+        if !self.dirty.get() {
             return None;
         }
-        self.capture()
+        // Damage keeps: the next tick after the interval copies it.
+        let now = Instant::now();
+        if self.copied_at.get().is_some_and(|at| now.duration_since(at) < Duration::from_secs(1) / MAX_FPS) {
+            return None;
+        }
+        self.dirty.set(false);
+        self.copied_at.set(Some(now));
+        let frame = self.capture();
+        if FrameStats::on() {
+            let mut stats = self.shared.stats.borrow_mut();
+            stats.copied += 1;
+            stats.copy_time += now.elapsed();
+            if let Some(f) = &frame {
+                stats.size = (f.width, f.height);
+            }
+        }
+        frame
     }
     fn input(&self, input: Input) {
         let zoom = self.zoom.get();

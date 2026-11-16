@@ -838,6 +838,8 @@ impl Shell {
     }
 
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        crate::perf::count(&crate::perf::TICKS);
+        crate::perf::report();
         if window.focused(cx).is_none() {
             window.focus(&self.focus, cx);
         }
@@ -978,6 +980,7 @@ fn resize_handles() -> Vec<gpui::AnyElement> {
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::perf::count(&crate::perf::SHELL_RENDERS);
         let t = self.theme;
         let root = div()
             .track_focus(&self.focus)

@@ -83,6 +83,13 @@ pub(crate) const UNDO_REDO_SCRIPT: &str = r#"(() => {
 /// and that asks for no scheme of its own is given `color-scheme: dark`
 /// (and checked again when the page changes or the system scheme flips).
 pub(crate) const CONTROL_SCHEME_SCRIPT: &str = r#"(() => {
+  // A <select> on a dark background gets `color-scheme: dark`, so
+  // WebKitGTK draws its face dark too. It runs when selects come or go, when
+  // a select's own class or style changes, or when <html> or <body> change
+  // class (a page's theme switch); never for the page's other changes (a
+  // hover class on every pointer move in Gmail made it read the styles of
+  // the whole page on every frame), and never for its own writes, which
+  // looped once per frame forever on a page with a dark select.
   const MARK = "data-morph-scheme";
   const luminance = (color) => {
     const m = /rgba?\(([^)]+)\)/.exec(color);
@@ -91,31 +98,43 @@ pub(crate) const CONTROL_SCHEME_SCRIPT: &str = r#"(() => {
     return a < 0.5 ? null : (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
   };
   const fix = (el) => {
-    if (el.hasAttribute(MARK)) {
-      el.style.removeProperty("color-scheme");
+    const had = el.getAttribute(MARK) === "dark";
+    if (had) el.style.removeProperty("color-scheme");
+    const style = getComputedStyle(el);
+    const own = style.colorScheme && style.colorScheme !== "normal";
+    const bg = luminance(style.backgroundColor);
+    const dark = !own && bg !== null && bg < 0.4;
+    if (dark) {
+      el.style.setProperty("color-scheme", "dark");
+      if (!had) el.setAttribute(MARK, "dark");
+    } else if (had) {
       el.removeAttribute(MARK);
     }
-    const style = getComputedStyle(el);
-    if (style.colorScheme && style.colorScheme !== "normal") return;
-    const bg = luminance(style.backgroundColor);
-    if (bg !== null && bg < 0.4) {
-      el.style.setProperty("color-scheme", "dark");
-      el.setAttribute(MARK, "dark");
-    }
   };
-  let queued = false;
+  let queued = false, observer = null;
   const run = () => {
     queued = false;
-    document.querySelectorAll("select").forEach(fix);
+    const selects = document.querySelectorAll("select");
+    selects.forEach(fix);
+    // What this run wrote is not a change to answer.
+    if (observer) observer.takeRecords();
   };
   const later = () => {
     if (!queued) { queued = true; requestAnimationFrame(run); }
   };
+  const hasSelect = (nodes) => [...nodes].some((n) => n.nodeType === 1 && (n.tagName === "SELECT" || (n.querySelector && n.querySelector("select"))));
+  const matters = (r) => {
+    if (r.type === "childList") return hasSelect(r.addedNodes) || hasSelect(r.removedNodes);
+    if (r.attributeName === MARK) return false;
+    const t = r.target;
+    return t.tagName === "SELECT" || ((t === document.documentElement || t === document.body) && r.attributeName === "class");
+  };
   document.addEventListener("DOMContentLoaded", () => {
     run();
-    new MutationObserver((records) => {
-      if (records.some((r) => r.type === "childList" || (r.target.tagName === "SELECT" && r.attributeName !== MARK) || r.attributeName === "class")) later();
-    }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "style"] });
+    observer = new MutationObserver((records) => {
+      if (records.some(matters)) later();
+    });
+    observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "style"] });
   });
   addEventListener("load", later);
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", later);

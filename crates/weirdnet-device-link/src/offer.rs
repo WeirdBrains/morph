@@ -2,22 +2,27 @@
 //! signed by the new device's node key. Nothing in it is secret.
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use multiaddr::Protocol;
 use serde::{Deserialize, Serialize};
 use weirdnet_net::{Keypair, Multiaddr, PeerId, PublicKey};
 
+use crate::compact::{Bytes, map_version, pack_addrs, unpack_addrs};
 use crate::{Error, Result, VERSION};
 
 /// Signature domain for offers.
-const OFFER_DOMAIN: &[u8] = b"weirdnet-device-link/v1/offer\n";
-/// Most addresses an offer carries, so the QR code stays easy to scan.
+const OFFER_DOMAIN: &[u8] = b"weirdnet-device-link/v2/offer\n";
+/// Most addresses a code may carry (a reader refuses more).
 pub const MAX_ADDRS: usize = 6;
+/// Most direct addresses a code carries, so the QR code stays easy to scan.
+pub const MAX_DIRECT: usize = 3;
 /// Longest device hint, in bytes.
 pub const MAX_HINT: usize = 64;
 /// Longest link text accepted, so a pasted blob cannot be huge.
 const MAX_LINK: usize = 4096;
 
-/// What the new device offers.
+/// What the new device offers. On the wire it is an [`OfferWire`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(into = "OfferWire", try_from = "OfferWire")]
 pub struct Offer {
     pub v: u8,
     /// The new device's node public key (libp2p protobuf).
@@ -37,14 +42,27 @@ pub struct Offer {
     pub hint: String,
 }
 
+/// An offer on the wire (v2): a CBOR array, addresses packed
+/// ([`crate::compact`]).
 #[derive(Serialize, Deserialize)]
-struct Signed {
-    /// The CBOR bytes of the [`Offer`], exactly as signed.
-    #[serde(with = "crate::bytes")]
-    offer: Vec<u8>,
-    #[serde(with = "crate::bytes")]
-    sig: Vec<u8>,
+struct OfferWire(u8, Bytes, Bytes, Bytes, Vec<Bytes>, i64, String);
+
+impl From<Offer> for OfferWire {
+    fn from(o: Offer) -> Self {
+        OfferWire(o.v, Bytes(o.node), Bytes(o.eph), Bytes(o.nonce), pack_addrs(&o.addrs), o.expires_ms, o.hint)
+    }
 }
+
+impl TryFrom<OfferWire> for Offer {
+    type Error = &'static str;
+    fn try_from(OfferWire(v, node, eph, nonce, addrs, expires_ms, hint): OfferWire) -> std::result::Result<Self, &'static str> {
+        Ok(Offer { v, node: node.0, eph: eph.0, nonce: nonce.0, addrs: unpack_addrs(&addrs), expires_ms, hint })
+    }
+}
+
+/// The signed offer: `[offer CBOR bytes exactly as signed, signature]`.
+#[derive(Serialize, Deserialize)]
+struct Signed(Bytes, Bytes);
 
 /// An offer whose signature checked out, with the exact bytes the transcript binds.
 #[derive(Debug, Clone)]
@@ -86,7 +104,7 @@ pub fn encode_link(scheme: &str, offer: &Offer, node_key: &Keypair) -> Result<(S
     }
     let bytes = cbor(offer)?;
     let sig = node_key.sign(&signed_bytes(&bytes)).map_err(|_| Error::Invalid("could not sign the offer"))?;
-    let blob = cbor(&Signed { offer: bytes.clone(), sig })?;
+    let blob = cbor(&Signed(Bytes(bytes.clone()), Bytes(sig)))?;
     let verified = VerifiedOffer { offer: offer.clone(), bytes, node: node_key.public() };
     Ok((format!("{scheme}link/{}", URL_SAFE_NO_PAD.encode(blob)), verified))
 }
@@ -102,17 +120,36 @@ pub fn decode_link(scheme: &str, text: &str) -> Result<VerifiedOffer> {
     let prefix = format!("{scheme}link/");
     let body = text.strip_prefix(&prefix).ok_or(Error::Invalid("not a device link"))?;
     let blob = URL_SAFE_NO_PAD.decode(body).map_err(|_| Error::Invalid("the link is damaged"))?;
-    let signed: Signed = cbor4ii::serde::from_slice(&blob).map_err(|_| Error::Invalid("the link is damaged"))?;
-    let offer: Offer = cbor4ii::serde::from_slice(&signed.offer).map_err(|_| Error::Invalid("the link is damaged"))?;
+    let Ok(Signed(Bytes(signed), Bytes(sig))) = cbor4ii::serde::from_slice::<Signed>(&blob) else {
+        return Err(older_or_damaged(&blob));
+    };
+    let offer: Offer = cbor4ii::serde::from_slice(&signed).map_err(|_| older_or_damaged(&signed))?;
     if offer.v != VERSION {
-        return Err(Error::Invalid("this link is from a newer version"));
+        return Err(version_error(offer.v));
     }
     check_shape(&offer)?;
     let node = PublicKey::try_decode_protobuf(&offer.node).map_err(|_| Error::Invalid("the link is damaged"))?;
-    if !node.verify(&signed_bytes(&signed.offer), &signed.sig) {
+    if !node.verify(&signed_bytes(&signed), &sig) {
         return Err(Error::Invalid("the link's signature does not match"));
     }
-    Ok(VerifiedOffer { offer, bytes: signed.offer, node })
+    Ok(VerifiedOffer { offer, bytes: signed, node })
+}
+
+/// A code from another protocol version.
+pub(crate) fn version_error(v: u8) -> Error {
+    if v < VERSION {
+        Error::Invalid("this code is from an older Morph; update both devices")
+    } else {
+        Error::Invalid("this code is from a newer Morph; update this device")
+    }
+}
+
+/// Why a code did not decode: an older (v1 map) one, or damage.
+pub(crate) fn older_or_damaged(blob: &[u8]) -> Error {
+    match map_version(blob) {
+        Some(v) if v != VERSION => version_error(v),
+        _ => Error::Invalid("the link is damaged"),
+    }
 }
 
 fn signed_bytes(offer: &[u8]) -> Vec<u8> {
@@ -133,16 +170,52 @@ pub(crate) fn cbor<T: Serialize>(value: &T) -> Result<Vec<u8>> {
     cbor4ii::serde::to_vec(Vec::new(), value).map_err(|_| Error::Invalid("could not encode"))
 }
 
-/// Most relay circuits an offer carries; the rest of [`MAX_ADDRS`] is direct
-/// addresses.
+/// Most relay circuits a code carries (one per relay).
 pub const MAX_CIRCUITS: usize = 2;
 
-/// The addresses worth putting in an offer: no wildcard or link-local ones, the
-/// node's own trailing `/p2p/` dropped, loopback only when nothing else is
-/// there (tests and single-machine checks), at most [`MAX_ADDRS`]. Direct
-/// addresses come first, IPv4 before IPv6; relay circuits
-/// (`…/p2p/RELAY/p2p-circuit`) keep their relay id and always get up to
-/// [`MAX_CIRCUITS`] places, so a device on another network can still dial in.
+/// How useful a direct address is to the other device (lower is better): a
+/// private LAN address (the usual case: both on one Wi-Fi), then CGNAT/VPN
+/// (Tailscale's 100.64/10) and IPv6 ULA, then public IPv4 and DNS names,
+/// global IPv6, and loopback last.
+fn direct_rank(a: &str) -> u8 {
+    let Ok(m) = a.parse::<Multiaddr>() else { return 9 };
+    for p in m.iter() {
+        match p {
+            Protocol::Ip4(ip) if ip.is_loopback() => return 8,
+            Protocol::Ip4(ip) if ip.is_private() => return 0,
+            Protocol::Ip4(ip) if ip.octets()[0] == 100 && (ip.octets()[1] & 0xc0) == 64 => return 1,
+            Protocol::Ip4(_) => return 2,
+            Protocol::Ip6(ip) if ip.is_loopback() => return 8,
+            Protocol::Ip6(ip) if (ip.segments()[0] & 0xfe00) == 0xfc00 => return 1,
+            Protocol::Ip6(_) => return 3,
+            Protocol::Dns(_) | Protocol::Dns4(_) | Protocol::Dns6(_) => return 2,
+            _ => {}
+        }
+    }
+    9
+}
+
+/// The host part of an address (`/ip4/192.168.50.2`), to spread the few
+/// places over hosts before transports.
+fn host_of(a: &str) -> &str {
+    let mut cut = 0;
+    for (n, (i, _)) in a.match_indices('/').enumerate() {
+        if n == 2 {
+            cut = i;
+            break;
+        }
+    }
+    if cut == 0 { a } else { &a[..cut] }
+}
+
+/// The addresses worth putting in a code a phone scans: no wildcard,
+/// link-local, Docker bridge or loopback ones (loopback only when nothing
+/// else is there: tests and single-machine checks), the node's own trailing
+/// `/p2p/` dropped. At most [`MAX_DIRECT`] direct addresses, best first
+/// ([`direct_rank`]), one per host before a second transport, TCP before
+/// QUIC; then up to [`MAX_CIRCUITS`] relay circuits
+/// (`…/p2p/RELAY/p2p-circuit`), one per relay, TCP first, so a device on
+/// another network can still dial in.
 pub fn offer_addrs(reachable: &[String]) -> Vec<String> {
     let mut direct: Vec<String> = Vec::new();
     let mut circuits: Vec<String> = Vec::new();
@@ -152,7 +225,8 @@ pub fn offer_addrs(reachable: &[String]) -> Vec<String> {
             Some((head, id)) if !id.contains('/') => head,
             _ => a,
         };
-        if base.is_empty() || base.parse::<Multiaddr>().is_err() {
+        let Ok(m) = base.parse::<Multiaddr>() else { continue };
+        if base.is_empty() || !weirdnet_net::addr::shareable(&m) || weirdnet_net::addr::link_local(base) || base.starts_with("/ip4/169.254.") {
             continue;
         }
         let circuit = base.contains("/p2p-circuit");
@@ -162,16 +236,32 @@ pub fn offer_addrs(reachable: &[String]) -> Vec<String> {
             list.push(base);
         }
     }
-    let loopback = |a: &String| a.starts_with("/ip4/127.") || a.starts_with("/ip6/::1/");
-    let mut out: Vec<String> = direct.iter().filter(|a| !loopback(a)).cloned().collect();
-    if out.is_empty() {
-        out = direct;
+    let quic = |a: &String| a.contains("/quic");
+    direct.sort_by_key(|a| (direct_rank(a), quic(a)));
+    if direct.iter().any(|a| direct_rank(a) < 8) {
+        direct.retain(|a| direct_rank(a) < 8);
     }
-    out.sort_by_key(|a| !a.starts_with("/ip4/"));
-    circuits.sort_by_key(|a| a.contains("/quic"));
-    circuits.truncate(MAX_CIRCUITS);
-    out.truncate(MAX_ADDRS - circuits.len());
-    out.extend(circuits);
+    let mut out: Vec<String> = Vec::new();
+    for a in &direct {
+        if out.len() < MAX_DIRECT && !out.iter().any(|o| host_of(o) == host_of(a)) {
+            out.push(a.clone());
+        }
+    }
+    for a in &direct {
+        if out.len() < MAX_DIRECT && !out.contains(a) {
+            out.push(a.clone());
+        }
+    }
+    circuits.sort_by_key(quic);
+    let relay_of = |c: &String| c.rsplit_once("/p2p-circuit").and_then(|(h, _)| h.rsplit_once("/p2p/")).map(|(_, id)| id.to_string());
+    let mut relays: Vec<Option<String>> = Vec::new();
+    for c in circuits {
+        let r = relay_of(&c);
+        if relays.len() < MAX_CIRCUITS && !relays.contains(&r) {
+            relays.push(r);
+            out.push(c);
+        }
+    }
     out
 }
 
@@ -244,8 +334,9 @@ mod tests {
         .map(|a| format!("{a}/p2p/{peer}"))
         .collect();
         let out = offer_addrs(&addrs);
-        assert_eq!(out.len(), MAX_ADDRS);
+        assert_eq!(out.len(), MAX_DIRECT);
         assert_eq!(out[0], "/ip4/192.168.1.5/tcp/1");
+        assert!(!out.iter().any(|a| a.contains("quic")), "other hosts before a second transport: {out:?}");
         assert!(out.iter().all(|a| !a.contains("127.0.0.1") && !a.contains("/p2p/")));
         assert_eq!(offer_addrs(&[format!("/ip4/127.0.0.1/tcp/9/p2p/{peer}")]), vec!["/ip4/127.0.0.1/tcp/9"]);
     }
@@ -260,7 +351,7 @@ mod tests {
         addrs.push(circuit.clone());
         addrs.push(format!("{circuit}/p2p/{peer}"));
         let out = offer_addrs(&addrs);
-        assert_eq!(out.len(), MAX_ADDRS);
+        assert_eq!(out.len(), MAX_DIRECT + 1);
         assert_eq!(out.last().unwrap(), &circuit, "{out:?}");
         assert_eq!(out.iter().filter(|a| a.contains("p2p-circuit")).count(), 1);
         assert!(has_circuit(&out));

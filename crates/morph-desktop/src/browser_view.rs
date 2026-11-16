@@ -97,6 +97,8 @@ pub struct BrowserView {
     /// seen (to report modifier keys).
     page_focus: FocusHandle,
     page_image: Option<Arc<RenderImage>>,
+    /// The address text's scroll (see `address::AddressElement`).
+    pub(crate) address_scroll: std::cell::Cell<Pixels>,
     page_buttons: u32,
     page_pointer: bool,
     page_modifiers: gpui::Modifiers,
@@ -141,7 +143,7 @@ pub struct BrowserView {
     /// The shell wants the page shown (it hides it under its own panels).
     shell_shown: bool,
     /// Where the bar's buttons were last drawn (their menus open there).
-    button_bounds: std::cell::RefCell<HashMap<&'static str, Bounds<Pixels>>>,
+    pub(crate) button_bounds: std::cell::RefCell<HashMap<&'static str, Bounds<Pixels>>>,
     /// Tab icons as images, by their PNG bytes.
     icon_images: std::cell::RefCell<HashMap<Arc<Vec<u8>>, Arc<gpui::Image>>>,
     _subscriptions: Vec<Subscription>,
@@ -345,6 +347,7 @@ impl BrowserView {
             caption_pressed: false,
             page_focus: cx.focus_handle(),
             page_image: None,
+            address_scroll: std::cell::Cell::new(px(0.)),
             page_buttons: 0,
             page_pointer: false,
             page_modifiers: gpui::Modifiers::default(),
@@ -670,6 +673,7 @@ impl BrowserView {
         self.run_test_menu(window, cx);
         let polled = self.browser.poll();
         if polled.changed {
+            crate::perf::count(&crate::perf::NOTIFY_EVENTS);
             self.sync_focus(window, cx);
             cx.notify();
         }
@@ -698,6 +702,7 @@ impl BrowserView {
             && let Some(frame) = self.browser.take_frame()
         {
             self.set_page_frame(frame, window);
+            crate::perf::count(&crate::perf::NOTIFY_FRAMES);
             cx.notify();
         }
         polled.shortcuts
@@ -836,6 +841,7 @@ impl BrowserView {
     }
 
     fn page_mouse_move(&mut self, event: &MouseMoveEvent, origin: Point<Pixels>, inside: bool) {
+        crate::perf::count(&crate::perf::PAGE_MOVES);
         if inside || self.page_buttons > 0 {
             self.page_pointer = true;
             let (x, y) = local(event.position, origin);
@@ -1197,6 +1203,7 @@ impl BrowserView {
         div()
             .id(id)
             .flex()
+            .flex_none()
             .items_center()
             .justify_center()
             .w(px(30.))
@@ -1505,6 +1512,8 @@ impl BrowserView {
                     .id("address")
                     .relative()
                     .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
                     .flex()
                     .items_center()
                     .h(px(30.))
@@ -1566,6 +1575,8 @@ impl BrowserView {
                 d.child(
                     div()
                         .id("profile")
+                        .flex_none()
+                        .whitespace_nowrap()
                         .px(px(10.))
                         .h(px(28.))
                         .flex()
@@ -1575,6 +1586,18 @@ impl BrowserView {
                         .text_size(px(12.))
                         .cursor_pointer()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .relative()
+                        .child({
+                            let entity = cx.entity();
+                            canvas(
+                                move |bounds, _, cx| {
+                                    entity.read(cx).button_bounds.borrow_mut().insert("profile", bounds);
+                                },
+                                |_, _, _, _| {},
+                            )
+                            .absolute()
+                            .size_full()
+                        })
                         .child(label)
                         .on_click(cx.listener(|_, _, _, cx| {
                             cx.emit(ShellRequest::Run(Action::ShowProfiles));
@@ -1583,7 +1606,7 @@ impl BrowserView {
             })
             .when(state.popups > 0, |d| {
                 let label: SharedString = if state.popups == 1 { "1 popup".into() } else { format!("{} popups", state.popups).into() };
-                d.child(div().px(px(8.)).text_size(px(12.)).text_color(rgb(t.accent_alt)).child(label))
+                d.child(div().flex_none().whitespace_nowrap().px(px(8.)).text_size(px(12.)).text_color(rgb(t.accent_alt)).child(label))
             })
             .child(
                 self.button("main-menu-button", "☰", true)
@@ -2016,7 +2039,12 @@ impl BrowserView {
                             f64::from(f32::from(bounds.size.width)),
                             f64::from(f32::from(bounds.size.height)),
                         );
-                        this.update(cx, |view, _| view.browser.set_page_area(area));
+                        this.update(cx, |view, _| {
+                            if view.browser.page_area() != area {
+                                crate::perf::count(&crate::perf::PAGE_BOUNDS);
+                            }
+                            view.browser.set_page_area(area)
+                        });
                         drawn.then(|| window.insert_hitbox(bounds, HitboxBehavior::Normal))
                     },
                     move |bounds, hitbox, window, cx| {
@@ -2212,6 +2240,7 @@ impl Focusable for BrowserView {
 
 impl Render for BrowserView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::perf::count(&crate::perf::BROWSER_RENDERS);
         // Keep the model in step when GPUI moved focus away (a click on the
         // shell's own chrome outside the address bar).
         if self.browser.address_focused() && self.mirrored_focus && !self.address_focus.is_focused(window) {
@@ -2354,6 +2383,12 @@ impl EntityInputHandler for BrowserView {
         }
         Some(field.offset_to_utf16(line.closest_index_for_x(local.x)))
     }
+}
+
+/// `MORPH_LOG_LAYOUT=1`: log the address bar's text layout (the checks).
+pub fn log_layout() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("MORPH_LOG_LAYOUT").is_some_and(|v| v == "1"))
 }
 
 /// Byte offset of UTF-16 offset `utf16` within `text`, clamped to its end.

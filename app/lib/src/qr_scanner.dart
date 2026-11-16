@@ -51,6 +51,27 @@ class MorphQrScannerPage extends StatefulWidget {
 class _MorphQrScannerPageState extends State<MorphQrScannerPage> {
   bool _done = false;
 
+  /// QR codes only; full HD rather than Android's default 640x480, which
+  /// left too few pixels per module for a code on a laptop screen; zoom in
+  /// by itself (Android) when the code is small, as well as by pinching;
+  /// focus where the screen is tapped (continuous autofocus otherwise).
+  MobileScannerController? _controller;
+  double _zoom = 0;
+  double _zoomAtPinch = 0;
+
+  MobileScannerController get _scanner =>
+      _controller ??= MobileScannerController(
+        formats: const [BarcodeFormat.qrCode],
+        cameraResolution: const Size(1920, 1080),
+        autoZoom: true,
+      );
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
   void _onCode(String text) {
     if (_done || text.trim().isEmpty || !mounted) {
       return;
@@ -64,11 +85,9 @@ class _MorphQrScannerPageState extends State<MorphQrScannerPage> {
     if (camera != null) {
       return camera(_onCode);
     }
-    return MobileScanner(
+    final scanner = MobileScanner(
       key: const Key('qr-camera'),
-      controller: MobileScannerController(
-        formats: const [BarcodeFormat.qrCode],
-      ),
+      controller: _scanner,
       onDetect: (capture) {
         for (final barcode in capture.barcodes) {
           final text = barcode.rawValue;
@@ -91,6 +110,34 @@ class _MorphQrScannerPageState extends State<MorphQrScannerPage> {
             style: const TextStyle(color: Colors.white),
           ),
         ),
+      ),
+    );
+    return LayoutBuilder(
+      builder: (context, box) => GestureDetector(
+        key: const Key('qr-camera-gestures'),
+        behavior: HitTestBehavior.opaque,
+        onScaleStart: (_) => _zoomAtPinch = _zoom,
+        onScaleUpdate: (d) {
+          if (d.pointerCount < 2) {
+            return;
+          }
+          _zoom = (_zoomAtPinch + (d.scale - 1) / 3).clamp(0.0, 1.0);
+          _scanner.setZoomScale(_zoom).ignore();
+        },
+        onTapUp: (d) {
+          if (box.maxWidth <= 0 || box.maxHeight <= 0) {
+            return;
+          }
+          _scanner
+              .setFocusPoint(
+                Offset(
+                  d.localPosition.dx / box.maxWidth,
+                  d.localPosition.dy / box.maxHeight,
+                ),
+              )
+              .ignore();
+        },
+        child: scanner,
       ),
     );
   }

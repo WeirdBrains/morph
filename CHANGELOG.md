@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Pages no longer lag on Linux (Gmail's background requests, Compose
+  taking 20 s, more lag the more the pointer moved). The script that gives
+  dark `<select>`s a dark face watched every class and style change in the
+  page and, for each, read the computed style of every select on the next
+  frame; a dark select's own rewrite (four attribute writes) set it off
+  again, so it ran every frame forever: 240 rewrites a second at rest on
+  the new hover check page, none now. It now runs only when selects come or
+  go, a select itself changes, or `<html>`/`<body>` change class, and
+  ignores its own writes. The favicon script likewise only looks again when
+  the page's icon links change, after they settle, and never posts the same
+  picture twice.
+- Off-screen pages (native Wayland): with shared-memory buffers, pages are
+  drawn on the CPU instead of on the GPU and read back every frame on
+  WebKit's compositor thread (the hot thread on an NVIDIA GPU at scale 2);
+  `MORPH_PAGE_GPU=1` keeps the GPU, and the About page says which. Frames
+  are copied at most 60 times a second. `MORPH_FRAME_STATS=1` logs frames
+  copied per second, time per copy and frame size (`morph-frames`), and the
+  shell's ticks, renders, pointer moves and page bound changes per second
+  (`morph-render`).
+- Device linking: invite and offer codes are v2, about a quarter the size:
+  CBOR arrays, the peer id and addresses as binary multiaddrs, the built-in
+  relay as one byte that the reader rebuilds from its own list, at most 3
+  direct addresses (LAN first, one per host before a second transport, no
+  loopback, link-local or Docker bridge) and 2 relay circuits. A realistic
+  invite went from a QR version 18 to 110 bytes of CBOR (version 9 at
+  medium error correction). A v1 code says to update the other device.
+  The desktop draws codes with whole-pixel modules (5 px or more), a
+  4-module quiet zone and medium error correction, encoded once per code
+  (it was encoded on every frame); the link node starts on a thread of its
+  own (building it and waiting up to 5 s for a relay circuit froze the
+  window when the panel opened and whenever a code expired), and stopping
+  one no longer waits on the UI thread. The phone's scanner asks for
+  1920×1080 (Android defaulted to 640×480), zooms by itself and by
+  pinching, and focuses where tapped; its own code is encoded once.
+- The address bar clips a long address at its edge instead of running it
+  under the profile chip, and scrolls to the caret while editing.
+
 ## [0.2.0-alpha.13] - 2026-11-16
 
 - Relays: Settings has a Relays section (desktop and phone) listing the

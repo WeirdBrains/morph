@@ -26,6 +26,7 @@ mod library_view;
 mod menu_view;
 mod notices;
 mod page_input;
+mod perf;
 mod profiles;
 mod profiles_view;
 #[cfg(target_os = "linux")]
