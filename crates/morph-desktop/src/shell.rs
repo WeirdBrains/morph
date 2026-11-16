@@ -1268,6 +1268,16 @@ mod tests {
     }
 
     #[test]
+    fn every_platform_key_parses_for_gpui() {
+        for keymap in [Keymap::default().for_platform(true), Keymap::default().for_platform(false)] {
+            for b in keymap.bindings() {
+                assert!(gpui::Keystroke::parse(Box::leak(b.keystroke.clone().into_boxed_str())).is_ok(), "{}", b.keystroke);
+                assert_eq!(page_action(&keymap, &canonical(&b.keystroke)), Some(b.action), "{}", b.keystroke);
+            }
+        }
+    }
+
+    #[test]
     fn every_bound_action_has_a_gpui_action() {
         for binding in Keymap::default().bindings() {
             let action = gpui_action(binding.action);
