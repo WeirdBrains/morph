@@ -134,6 +134,10 @@ pub struct BrowserView {
     engine_focus: FocusHandle,
     /// A page's file dialog is open.
     file_dialog: Option<gpui::Task<()>>,
+    /// Save dialogs open for downloads.
+    download_dialogs: Vec<gpui::Task<()>>,
+    /// When the last download ended, for hiding the downloads bar.
+    downloads_done: Option<std::time::Instant>,
     /// The shell wants the page shown (it hides it under its own panels).
     shell_shown: bool,
     /// Where the bar's buttons were last drawn (their menus open there).
@@ -234,6 +238,21 @@ struct Toast {
     text: SharedString,
     action: Option<(&'static str, Action)>,
     until: std::time::Instant,
+}
+
+/// How long the downloads bar stays after the last download ended.
+const DOWNLOADS_SHOWN: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// A byte count for people: `512 B`, `4.5 MB`.
+fn size_text(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1000.0 && unit < UNITS.len() - 1 {
+        value /= 1000.0;
+        unit += 1;
+    }
+    if unit == 0 { format!("{bytes} B") } else { format!("{value:.1} {}", UNITS[unit]) }
 }
 
 /// How long a toast shows.
@@ -355,6 +374,8 @@ impl BrowserView {
             collapse_focus: cx.focus_handle().tab_stop(true).tab_index(2),
             engine_focus: cx.focus_handle().tab_stop(true).tab_index(3),
             file_dialog: None,
+            download_dialogs: Vec::new(),
+            downloads_done: None,
             shell_shown: true,
             icon_images: std::cell::RefCell::new(HashMap::new()),
             button_bounds: std::cell::RefCell::new(HashMap::new()),
@@ -649,6 +670,7 @@ impl BrowserView {
                 });
             }));
         }
+        self.tick_downloads(cx);
         // Pages follow the shell's scale on either backend.
         self.browser.set_scale(f64::from(window.scale_factor()));
         if self.browser.draws_pages()
@@ -663,6 +685,92 @@ impl BrowserView {
             cx.notify();
         }
         polled.shortcuts
+    }
+
+    /// Ask where each new download goes, and hide the downloads bar a
+    /// while after the last one ended.
+    fn tick_downloads(&mut self, cx: &mut Context<Self>) {
+        while let Some((id, name, dir)) = self.browser.take_download_ask() {
+            let answer = crate::dialogs::ask(cx, crate::dialogs::Ask::Download { dir, name });
+            self.download_dialogs.push(cx.spawn(async move |this, cx| {
+                let path = answer.await.ok().and_then(|p| p.into_iter().next());
+                let _ = this.update(cx, |view, cx| {
+                    view.browser.save_download(id, path);
+                    cx.notify();
+                });
+            }));
+        }
+        let downloads = self.browser.downloads();
+        if downloads.is_empty() {
+            // Every dialog answered (their tasks are done).
+            self.download_dialogs.clear();
+        }
+        if downloads.is_empty() || downloads.iter().any(|d| d.running()) {
+            self.downloads_done = None;
+        } else if let Some(done) = self.downloads_done {
+            if done.elapsed() >= DOWNLOADS_SHOWN {
+                self.downloads_done = None;
+                self.browser.clear_downloads();
+                cx.notify();
+            }
+        } else {
+            self.downloads_done = Some(std::time::Instant::now());
+        }
+    }
+
+    /// The newest download, as a bar below the page: its progress, then
+    /// where it was saved or why it failed.
+    fn download_bar(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        use morph_browser::downloads::DownloadState;
+        let t = self.theme;
+        let d = self.browser.downloads().iter().rev().find(|d| d.state != DownloadState::Cancelled)?;
+        let others = self.browser.downloads().iter().filter(|o| o.running() && o.id != d.id).count();
+        let text = match &d.state {
+            DownloadState::Running => {
+                let amount = match d.total {
+                    Some(total) => format!("{} of {}", size_text(d.received), size_text(total)),
+                    None => size_text(d.received),
+                };
+                let pct = d.fraction().map(|f| format!("{:.0}% · ", f * 100.0)).unwrap_or_default();
+                format!("Downloading {} — {pct}{amount}", d.name)
+            }
+            DownloadState::Saved(path) => format!(
+                "Saved {} to {}",
+                path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default(),
+                path.parent().map(|p| p.display().to_string()).unwrap_or_default()
+            ),
+            DownloadState::Failed(why) => format!("Download of {} failed: {why}", d.name),
+            DownloadState::Cancelled => return None,
+        };
+        let text = if others > 0 { format!("{text} (+{others} more)") } else { text };
+        let fraction = d.fraction().filter(|_| d.running());
+        let mut bar = div()
+            .id("downloads")
+            .relative()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(12.))
+            .px(px(12.))
+            .h(px(32.))
+            .bg(rgb(t.surface_variant))
+            .text_size(px(13.))
+            .text_color(rgb(t.text_primary))
+            .child(div().flex_1().overflow_hidden().whitespace_nowrap().text_ellipsis().child(text));
+        if let Some(f) = fraction {
+            bar = bar.child(div().absolute().left_0().bottom_0().h(px(2.)).w(gpui::relative(f)).bg(rgb(t.accent)));
+        }
+        if !d.running() {
+            bar = bar.child(
+                div().id("downloads-close").px(px(6.)).cursor_pointer().text_color(rgb(t.accent)).hover(|s| s.underline()).child("Dismiss").on_click(
+                    cx.listener(|this, _, _, cx| {
+                        this.browser.clear_downloads();
+                        cx.notify();
+                    }),
+                ),
+            );
+        }
+        Some(bar.into_any_element())
     }
 
     /// Show a new frame of the page (and free the old one's texture).
@@ -2039,17 +2147,23 @@ impl Render for BrowserView {
                 .children(self.find_bar(cx))
                 .child(self.page_area(cx))
                 .children(self.toast_bar(cx))
+                .children(self.download_bar(cx))
                 .into_any_element(),
             TabStrip::Bottom => content
                 .child(self.toolbar(window, cx))
                 .children(self.find_bar(cx))
                 .child(self.page_area(cx))
                 .children(self.toast_bar(cx))
+                .children(self.download_bar(cx))
                 .child(self.tab_strip(window, cx))
                 .into_any_element(),
             TabStrip::Side { left, width, collapsed } => {
-                let content =
-                    content.child(self.toolbar(window, cx)).children(self.find_bar(cx)).child(self.page_area(cx)).children(self.toast_bar(cx));
+                let content = content
+                    .child(self.toolbar(window, cx))
+                    .children(self.find_bar(cx))
+                    .child(self.page_area(cx))
+                    .children(self.toast_bar(cx))
+                    .children(self.download_bar(cx));
                 let list = self.tab_list(width, collapsed, window, cx);
                 let row = div().flex().flex_row().size_full();
                 if left { row.child(list).child(content) } else { row.child(content).child(list) }.into_any_element()
@@ -2401,6 +2515,12 @@ fn step(from: Option<usize>, count: usize, down: bool) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn download_sizes_read_well() {
+        assert_eq!(super::size_text(512), "512 B");
+        assert_eq!(super::size_text(4_500_000), "4.5 MB");
+        assert_eq!(super::size_text(1_200_000_000), "1.2 GB");
+    }
     #[test]
     fn utf16_offsets_map_to_byte_offsets() {
         assert_eq!(super::utf16_to_byte("é🙂", 0), 0);
