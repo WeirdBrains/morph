@@ -1308,7 +1308,8 @@ def start_screen(m, r, win, top):
             continue
         img = Image.open(path).convert("RGB")
         wx, wy, ww, wh = m.geometry(win)
-        f = img.width / ww if isinstance(m, WaylandMorph) and ww else 1.0
+        # Wayland: sway gives logical pixels, grim shoots the output in physical ones.
+        f = 1600 / WaylandMorph.layout[0] if isinstance(m, WaylandMorph) else 1.0
         box = (int(wx * f), int((wy + top) * f), int((wx + ww) * f), int((wy + wh) * f))
         page = img.crop(box)
         px = page.load()
