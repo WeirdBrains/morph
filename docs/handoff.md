@@ -662,6 +662,26 @@ unfinished alpha.10 work is parked on branch `wip/alpha10`, not built).
   `<desktop>-mimeapps.list` itself (xdg-settings failed on Hyprland), then
   checks each type with `xdg-mime`.
 
+## Release and TAUR (alpha.12)
+
+- Pre-release `v0.2.0-alpha.12` (tag at `1003d22`):
+  https://github.com/WeirdBrains/morph/releases/tag/v0.2.0-alpha.12, created
+  with `python3 scripts/weirdnet_release.py github 0.2.0-alpha.12` and checked
+  with `... assets 0.2.0-alpha.12` (12 assets). Every asset comes from CI run
+  43951455162 (`1003d22`, every job green on the first attempt), including
+  the Linux tarball, zip, debs and rpms (artifact `morph-linux-x86_64`).
+- `app/pubspec.yaml` went to `0.2.0-alpha.12+10401` (the cut added one to
+  the build number). The APK reports versionName 0.2.0-alpha.12, versionCode
+  10401, `org.weirdbrains.morph`. It is signed by the fixed test key
+  (`CN=Morph test (not for release), O=WeirdBrains`, certificate SHA-256
+  `c2af967c4775c926f6db7f051be293821f7b8c4c5b3596c3745ae72fbc8bba51`).
+- `morph-bin` 0.2.0alpha12-1: tarball sha256
+  `e09a689eecc07c1f9d2dc1b9f75d749927f232bca436d47437fd1cca89946837` (matches
+  the release's SHA256SUMS). Both `.SRCINFO` match `makepkg --printsrcinfo`.
+  It was built from the release download, installed and run
+  (`morph 0.2.0-alpha.12`) in `archlinux:latest`. Archive:
+  `/workspace/dist/morph-bin-0.2.0alpha12.tar.gz`. Not uploaded (no taurctl).
+
 ## Release and TAUR (alpha.11)
 
 - Pre-release `v0.2.0-alpha.11` (tag at `dd55483`):
