@@ -15,9 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   opened from another app (Android intent, iOS URL scheme) opens linking
   on a profile without an identity, and an invite scanned under Add a device
   goes there too; a profile that already has an identity explains instead.
-  iOS scans QR codes now (AVFoundation, no new dependencies; camera
-  permission text in Info.plist). Bridge: `link_new_device_answer`,
-  `link_is_invite`.
+  Bridge: `link_new_device_answer`, `link_is_invite`.
+- One QR scanner on Android and iOS: a Flutter screen over mobile_scanner
+  (full-screen camera, the first code closes it, Cancel or Back returns
+  nothing, "Place the code in front of the camera"). It replaces the
+  Android CameraX + ZXing activity and the iOS AVFoundation scanner. On
+  Android mobile_scanner uses the bundled ML Kit barcode model (no Play
+  Services download; a larger APK). iOS scans now too (camera permission
+  text in Info.plist).
 
 - Device linking works across networks: desktop and mobile now ship the
   official Weirdnet relay (relay.net.weirdbrains.com, TCP and QUIC on 4747)

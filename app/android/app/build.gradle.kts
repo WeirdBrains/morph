@@ -18,8 +18,8 @@ val commitCount: Int? = try {
 }
 
 // Package only the ABIs Flutter built (`flutter build apk --target-platform`
-// passes them as -Ptarget-platform). CameraX ships native libraries for every
-// ABI; an arm64 APK that also carries x86_64 or armeabi-v7a folders makes
+// passes them as -Ptarget-platform). Plugins (mobile_scanner's CameraX and
+// ML Kit) ship native libraries for every ABI; an arm64 APK that also carries x86_64 or armeabi-v7a folders makes
 // those devices pick that ABI and then fail to find libflutter.so.
 val flutterAbis: List<String> = (findProperty("target-platform") as String?)
     ?.split(",")
@@ -89,12 +89,4 @@ dependencies {
     // Profile API for per-profile WebView storage (see WebViewProfiles.kt).
     // Same version flutter_inappwebview_android already ships.
     implementation("androidx.webkit:webkit:1.12.0")
-    // QR login scanner (QrScanActivity): CameraX for the camera, ZXing core
-    // for decoding. Both FOSS, so builds stay F-Droid friendly.
-    implementation("androidx.activity:activity:1.10.1")
-    implementation("androidx.camera:camera-camera2:1.4.2")
-    implementation("androidx.camera:camera-lifecycle:1.4.2")
-    implementation("androidx.camera:camera-view:1.4.2")
-    implementation("com.google.zxing:core:3.5.3")
-    testImplementation("junit:junit:4.13.2")
 }

@@ -22,6 +22,9 @@ dependencies:
   path_provider_android: '>=2.2.5 <2.3.0'
   file_selector: ^1.1.0
   qr: ^4.0.1
+  # Camera QR scanner for device linking (bundled ML Kit on Android,
+  # Vision on iOS).
+  mobile_scanner: ^7.2.0
   material_ui: ^1.11.0
 
 dev_dependencies:
