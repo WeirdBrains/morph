@@ -151,7 +151,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y $DESKTOP_DEPS xvfb xdotool openbox mesa-vulkan-drivers rpm sway \
-            gstreamer1.0-plugins-good gstreamer1.0-libav
+            gstreamer1.0-plugins-good gstreamer1.0-libav imagemagick grim
           # Decodes the QR codes on screen (device linking checks).
           python3 -m pip install --user --break-system-packages zxing-cpp pillow
       - name: Release tarball

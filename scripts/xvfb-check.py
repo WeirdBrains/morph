@@ -1127,10 +1127,21 @@ def qr_texts(path):
 
 
 def screenshot(m, path):
-    if isinstance(m, WaylandMorph):
-        subprocess.run(["grim", str(path)], env=m.env, capture_output=True, timeout=20)
-    else:
-        subprocess.run(["import", "-window", "root", str(path)], env=m.env, capture_output=True, timeout=20)
+    """The whole screen as a PNG at `path` (grim on Wayland; ImageMagick's
+    import, else Pillow, on X11). Nothing is written when neither works."""
+    command = ["grim", str(path)] if isinstance(m, WaylandMorph) else ["import", "-window", "root", str(path)]
+    try:
+        subprocess.run(command, env=m.env, capture_output=True, timeout=20)
+        return
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    if not isinstance(m, WaylandMorph):
+        try:
+            from PIL import ImageGrab
+
+            ImageGrab.grab(xdisplay=m.env["DISPLAY"]).save(path)
+        except Exception:
+            pass
 
 
 def check_qr(r, area, what, m, expected):
