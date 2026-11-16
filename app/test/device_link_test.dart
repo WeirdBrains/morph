@@ -253,4 +253,180 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('onboarding-link')), findsOneWidget);
   });
+
+  testWidgets('new device: scanning the other device\'s invite answers it', (
+    tester,
+  ) async {
+    final api = FakeMorphApi();
+    await _host(
+      tester,
+      MorphLinkFromDevice(
+        api: api,
+        profileId: 'work',
+        deviceName: 'Morph on phone',
+        pollEvery: _poll,
+        onDone: (_) {},
+        scan: () async => ' weirdnet-morph://invite/desk ',
+      ),
+    );
+    expect(find.byKey(const Key('link-qr')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('link-invite-scan')));
+    await tester.pump();
+    await tester.pump();
+    expect(api.linkCalls, [
+      'start Morph on phone',
+      'answer 7 weirdnet-morph://invite/desk',
+    ]);
+    expect(find.byKey(const Key('link-invite-sent')), findsOneWidget);
+    // The desktop pairs with the offer it got: same code check as a scan.
+    api.linkStatus = const MorphLinkStatus(
+      MorphLinkState.paired,
+      sas: '042917',
+    );
+    await _poll2(tester);
+    expect(find.text('042 917'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('new device: a pasted code is checked before it is sent', (
+    tester,
+  ) async {
+    final api = FakeMorphApi();
+    await _host(
+      tester,
+      MorphLinkFromDevice(
+        api: api,
+        profileId: 'work',
+        deviceName: 'Morph on phone',
+        pollEvery: _poll,
+        onDone: (_) {},
+      ),
+    );
+    expect(find.byKey(const Key('link-invite-scan')), findsNothing);
+    await tester.enterText(
+      find.byKey(const Key('link-invite-field')),
+      'weirdnet-morph://link/someone-else',
+    );
+    await tester.tap(find.byKey(const Key('link-invite-send')));
+    await tester.pump();
+    expect(find.textContaining('That is a new device\'s code'), findsOneWidget);
+    expect(api.linkCalls, ['start Morph on phone']);
+
+    api.linkAnswerError = StateError('the other device could not be reached');
+    await tester.enterText(
+      find.byKey(const Key('link-invite-field')),
+      'weirdnet-morph://invite/desk',
+    );
+    await tester.tap(find.byKey(const Key('link-invite-send')));
+    await tester.pump();
+    await tester.pump();
+    expect(
+      find.textContaining('Could not reach the other device'),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('link-invite-sent')), findsNothing);
+
+    api.linkAnswerError = null;
+    await tester.tap(find.byKey(const Key('link-invite-send')));
+    await tester.pump();
+    await tester.pump();
+    expect(api.linkCalls.last, 'answer 7 weirdnet-morph://invite/desk');
+    expect(find.byKey(const Key('link-invite-sent')), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('new device: an invite it was opened with is answered', (
+    tester,
+  ) async {
+    final api = FakeMorphApi();
+    await _host(
+      tester,
+      MorphLinkFromDevice(
+        api: api,
+        profileId: 'work',
+        deviceName: 'Morph on phone',
+        pollEvery: _poll,
+        onDone: (_) {},
+        invite: 'weirdnet-morph://invite/opened',
+      ),
+    );
+    await tester.pump();
+    expect(api.linkCalls, [
+      'start Morph on phone',
+      'answer 7 weirdnet-morph://invite/opened',
+    ]);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('existing device: a scanned invite goes to the new-device side', (
+    tester,
+  ) async {
+    final api = FakeMorphApi();
+    final routed = <String>[];
+    await _host(
+      tester,
+      MorphAddDevice(
+        api: api,
+        profileId: 'work',
+        profileName: 'Work',
+        scan: () async => 'weirdnet-morph://invite/desk',
+        onInvite: routed.add,
+      ),
+    );
+    // No password needed: nothing is unlocked or sent from here.
+    await tester.tap(find.byKey(const Key('add-device-scan')));
+    await tester.pump();
+    await tester.pump();
+    expect(routed, ['weirdnet-morph://invite/desk']);
+    expect(api.linkCalls, isEmpty);
+  });
+
+  testWidgets('existing device: without a route an invite is explained', (
+    tester,
+  ) async {
+    final api = FakeMorphApi();
+    await _host(
+      tester,
+      MorphAddDevice(api: api, profileId: 'work', profileName: 'Work'),
+    );
+    await tester.enterText(
+      find.byKey(const Key('add-device-link')),
+      'weirdnet-morph://invite/desk',
+    );
+    await tester.tap(find.byKey(const Key('add-device-pair')));
+    await tester.pump();
+    expect(
+      find.textContaining('from a device adding a new device'),
+      findsOneWidget,
+    );
+    expect(api.linkCalls, isEmpty);
+  });
+
+  testWidgets('onboarding opens on linking while an invite waits', (
+    tester,
+  ) async {
+    final invite = ValueNotifier<String?>(null);
+    addTearDown(invite.dispose);
+    tester.view.physicalSize = const Size(480, 1400);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: MorphTheme.dark,
+        home: MorphIdentityOnboarding(
+          profileName: 'Work',
+          onCreate: (_) async => throw UnimplementedError(),
+          onImport: (_, _) async => throw UnimplementedError(),
+          onDone: (_) {},
+          onSkip: () {},
+          linkInvite: invite,
+          linkFromDevice: (_) => const Text('link step', key: Key('step')),
+        ),
+      ),
+    );
+    expect(find.byKey(const Key('onboarding-link')), findsOneWidget);
+    invite.value = 'weirdnet-morph://invite/desk';
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('step')), findsOneWidget);
+  });
 }

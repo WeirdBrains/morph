@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
@@ -1162,6 +1164,76 @@ void main() {
       // No QR scanner available: paste only.
       expect(find.byKey(const Key('add-device-scan')), findsNothing);
       expect(find.byKey(const Key('add-device-link')), findsOneWidget);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+      view.reset();
+    }
+  });
+
+  testWidgets('an invite link opens linking, or explains with an identity', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    final view = tester.view;
+    view.physicalSize = const Size(412, 915);
+    view.devicePixelRatio = 1.0;
+    final api = FakeMorphApi()..onboarded = false;
+    try {
+      await tester.pumpWidget(
+        MorphApp(
+          api: api,
+          home: '/tmp/morph-does-not-exist',
+          subscribeToTicks: false,
+          loadPageBridgeAsset: false,
+        ),
+      );
+      await _pumpUntilIdentity(tester);
+      await tester.pumpAndSettle();
+      // Onboarding is already up (no identity): the invite switches it to
+      // linking and answers the desktop with this device's offer.
+      expect(find.byKey(const Key('identity-onboarding')), findsOneWidget);
+      final state = tester.state<MorphShellState>(find.byType(MorphShell));
+      await state.openIncomingLink('weirdnet-morph://invite/desk');
+      await tester.pump();
+      await tester.pump();
+      await tester.pump();
+      expect(find.byKey(const Key('link-from-device')), findsOneWidget);
+      expect(api.linkCalls, contains('answer 7 weirdnet-morph://invite/desk'));
+      expect(find.byKey(const Key('link-invite-sent')), findsOneWidget);
+      api.linkStatus = const MorphLinkStatus(
+        MorphLinkState.paired,
+        sas: '042917',
+      );
+      await tester.pump(const Duration(milliseconds: 600));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('link-match')));
+      await tester.pump();
+      api.linkStatus = const MorphLinkStatus(
+        MorphLinkState.received,
+        sas: '042917',
+      );
+      await tester.pump(const Duration(milliseconds: 600));
+      await tester.pump();
+      await tester.enterText(
+        find.byKey(const Key('link-password')),
+        'long enough',
+      );
+      await tester.enterText(
+        find.byKey(const Key('link-password-confirm')),
+        'long enough',
+      );
+      await tester.tap(find.byKey(const Key('link-finish')));
+      await tester.pumpAndSettle();
+      expect(api.identitiesByProfile['default']!.linked, isTrue);
+
+      // Now the profile has an identity: another invite is explained.
+      // (Not awaited: it returns when the dialog closes.)
+      unawaited(state.openIncomingLink('weirdnet-morph://invite/again'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('link-invite-has-identity')), findsOneWidget);
+      await tester.tap(find.text('OK'));
+      await tester.pumpAndSettle();
+      expect(state.tabs.tabs, hasLength(1), reason: 'no tab for the invite');
     } finally {
       debugDefaultTargetPlatformOverride = null;
       view.reset();

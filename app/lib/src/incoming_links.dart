@@ -2,10 +2,14 @@ import 'dart:async';
 
 import 'package:flutter/services.dart';
 
+import 'api.dart' show morphIsLinkInvite;
+
 /// Web links handed to Morph by the system: command-line arguments on Linux
 /// and Windows (the desktop entry's `%u`, the registry's `"%1"`), and the
-/// platform channel on Android (ACTION_VIEW intents) and macOS (Apple
-/// Events). The shell opens each one in a new tab of the active profile.
+/// platform channel on Android (ACTION_VIEW intents), iOS (scene URL
+/// contexts) and macOS (Apple Events). The shell opens each web link in a new
+/// tab of the active profile; a `weirdnet-morph://invite/…` link opens device
+/// linking instead.
 ///
 /// On Android, text shared to Morph (ACTION_SEND / SEND_MULTIPLE) or picked
 /// from "Search in Morph" (ACTION_PROCESS_TEXT) arrives too: its first web
@@ -30,6 +34,11 @@ class MorphIncomingLinks {
         (uri.scheme == 'http' || uri.scheme == 'https') &&
         uri.host.isNotEmpty;
   }
+
+  /// A link the shell opens: a web link, or another device's
+  /// `weirdnet-morph://invite/…` code (device linking).
+  static bool isOpenable(String value) =>
+      isWebLink(value) || morphIsLinkInvite(value);
 
   /// Where shared text should go: the first web link in it (a lone
   /// `host.tld/path` counts), else a search for the text.
@@ -73,8 +82,8 @@ class MorphIncomingLinks {
     ];
     try {
       final launch = await _channel.invokeMethod<String>('initialLink');
-      if (launch != null && isWebLink(launch)) {
-        links.add(launch);
+      if (launch != null && isOpenable(launch)) {
+        links.add(launch.trim());
       }
     } on MissingPluginException {
       // Linux and Windows pass links as arguments only.
@@ -101,8 +110,8 @@ class MorphIncomingLinks {
       _listening = true;
       _channel.setMethodCallHandler((call) async {
         final url = call.arguments;
-        if (call.method == 'open' && url is String && isWebLink(url)) {
-          _later.add(url);
+        if (call.method == 'open' && url is String && isOpenable(url)) {
+          _later.add(url.trim());
         } else if (call.method == 'share' &&
             url is String &&
             url.trim().isNotEmpty) {

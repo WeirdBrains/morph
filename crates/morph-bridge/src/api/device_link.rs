@@ -71,6 +71,21 @@ pub fn link_new_device_cancel(session: u64) {
     links().new_device_cancel(session);
 }
 
+/// New device: answer the existing device's invite (`weirdnet-morph://invite/…`,
+/// scanned or pasted) with this session's offer. The existing device then
+/// pairs as if it had scanned this device's code; poll
+/// [`link_new_device_status`] as usual.
+pub fn link_new_device_answer(session: u64, invite: String) -> Result<(), String> {
+    links().new_device_answer(session, &invite).map_err(|e| e.to_string())
+}
+
+/// Whether `text` is an existing device's invite rather than a new device's
+/// link.
+#[flutter_rust_bridge::frb(sync)]
+pub fn link_is_invite(text: String) -> bool {
+    morph_services::device_link::is_invite(&text)
+}
+
 /// Existing device: check `profile_id`'s password, read `link` and pair with
 /// the new device.
 pub fn link_add_device_start(
@@ -146,6 +161,21 @@ mod tests {
         assert!(link_new_device_status(offer.session).is_err(), "session ended");
         let words = super::super::identity::profile_recovery_words(Some(new_home), new_work, "new password".into()).unwrap();
         assert_eq!(words, made.words);
+    }
+
+    /// A phone (new device) answers a desktop's invite: the desktop gets
+    /// the phone's offer link back and pairs with it.
+    #[test]
+    fn a_new_device_answers_an_invite() {
+        let invite = links().invite_start().unwrap();
+        assert!(link_is_invite(invite.link.clone()));
+        let offer = link_new_device_start("Morph test".into()).unwrap();
+        assert!(!link_is_invite(offer.link.clone()));
+        assert!(link_new_device_answer(offer.session, "weirdnet-morph://link/nope".into()).is_err());
+        link_new_device_answer(offer.session, invite.link.clone()).unwrap();
+        assert_eq!(links().invite_take(invite.session).unwrap().as_deref(), Some(offer.link.as_str()));
+        links().invite_cancel(invite.session);
+        link_new_device_cancel(offer.session);
     }
 
     #[test]
