@@ -16,6 +16,8 @@ mod cli;
 mod default_browser;
 mod identity;
 mod identity_view;
+#[cfg(target_os = "linux")]
+mod legacy_desktop;
 mod library;
 mod library_view;
 mod page_input;
@@ -65,6 +67,9 @@ fn main() -> ExitCode {
         eprintln!("morph: {e}");
         return ExitCode::FAILURE;
     }
+    // The old Flutter build's broken desktop entry and browser associations.
+    #[cfg(target_os = "linux")]
+    legacy_desktop::spawn();
     let paths = match morph_identity::Paths::resolve(None) {
         Ok(paths) => paths,
         Err(e) => {

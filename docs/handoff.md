@@ -551,6 +551,18 @@ yay --aururl https://pkg.taur.weirdbrains.com -S morph-bin
 installed `morph` uses the normal profile directory. On Hyprland it runs
 natively on Wayland since alpha.6 (`MORPH_BACKEND=x11` for XWayland).
 
+## After alpha.8: the old Flutter desktop entry
+
+The Flutter desktop build left `~/.local/share/applications/org.weirdbrains.morph.desktop`
+(`X-Morph-Generated=true`, `Icon=org.weirdbrains.morph`, `Exec` at a removed
+temp build) and `mimeapps.list` lines giving it `text/html` and
+`x-scheme-handler/http(s)`; launchers showed a broken Morph without an icon.
+`crates/morph-desktop/src/legacy_desktop.rs` runs at start-up on Linux, off
+the UI thread: it removes that entry only when it carries the marker, drops
+the id from `$XDG_CONFIG_HOME/mimeapps.list`, and where it was the default
+puts the packaged `morph.desktop` (the id "Make default browser" uses) in its
+place. Rides the next alpha.
+
 ## Release and TAUR (alpha.8)
 
 - Pre-release `v0.2.0-alpha.8` (tag at `07b44ca`):
