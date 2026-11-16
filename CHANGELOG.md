@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0-alpha.10] - 2026-11-16
+
 - Downloads ask where to save: a click on a download (a GitHub release
   asset, any attachment, through redirects) opens the save dialog with the
   suggested name (the desktop portal on Wayland, the system panel on macOS
@@ -15,10 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   word, which on Wayland looked like nothing happened. Cancelling the dialog
   stops the download. The Xvfb and Wayland checks download through a
   redirect to an attachment.
+
 - Linux X11: after a shell shortcut from a page (Ctrl+L, then a click back
   into the page) the page no longer loses its next key. Pages no longer get
   bare Ctrl, Alt or Super presses (the held modifiers still reach them with
   other keys and clicks).
+
 - The ☰ menu's entries work (they did nothing: the action was sent after
   the menu had closed and dropped the keyboard focus, so it never reached
   the shell). The address dropdown, toast and morph:// actions go to the
@@ -26,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in the ☰ menu (and Ctrl+Shift+L / ⌘⇧L). Xvfb and Wayland checks click
   every entry and check what it did; the smoke tests on macOS, Windows and
   Linux choose every entry too.
+
 - Linux, native Wayland: pasting into a page no longer crashes Morph
   (SIGSEGV in WebKitGTK's clipboard code, e.g. any paste on github.com, and
   middle clicks). Pages the shell draws never use WebKit's clipboard: Morph
@@ -34,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   page copies or cuts on the system clipboard. A middle click on editable
   text pastes the primary selection, on a link opens it in a new tab.
   The Xvfb and Wayland checks paste, copy and cut on a test page.
+
 - `v0.2.0-alpha.10`, desktop chrome: preferences are a full page in a tab
   (Ctrl+, / Cmd+,) with search, sections and every setting; a search engine
   selector left of the address (Google by default, DuckDuckGo; each tab keeps
@@ -47,12 +53,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   once with a "Bookmarked" toast. morph://about and the hamburger menu.
   Linux: `<select>` lists drawn by the shell on Wayland and placed under the
   control on X11; dark sites get dark controls.
+
 - macOS and Windows: no system title bar. The top row (tabs, or the toolbar
   when tabs are elsewhere) is the caption, with the traffic lights inset on
   macOS and Morph's own minimize, maximize and close on Windows. Morph can be
   made the default browser on both (NSWorkspace on macOS; the Default Apps
   settings page on Windows, with Morph registered under StartMenuInternet).
   The MSI has the usual install screens (licence, folder).
+
 - Device linking works from either side: Add a device on the device that
   has the identity now shows its own QR code, link and Copy link (an invite);
   the new device pastes or scans it on its Link from another device screen,
@@ -60,10 +68,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as before, and nothing moves until it is confirmed on both. Pasting the new
   device's link under Add a device still works. The Xvfb, Wayland and
   macOS/Windows smoke checks decode the QR codes from screenshots.
+
 - Back from the About or Settings page gives the tab its page's title again.
+
 - `weirdnet-morph://` is registered on every OS (desktop file, Info.plist,
   the MSI and the per-user registry) and links go to the running Morph
   (single instance on Linux and Windows, Apple Events on macOS).
+
 - Shortcuts: macOS uses Cmd throughout, plus Cmd+Y history (Cmd+H hides the
   app), Cmd+[ and Cmd+] back and forward, Cmd+Option+arrows to switch tabs
   and Ctrl+Cmd+F full screen. Windows and Linux add Ctrl+PgUp/PgDn,
