@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0-alpha.11] - 2026-11-16
+
 - Mobile answers a desktop's device-link code: the new-device screen (Link
   from another device) has "Scan the other device's code" and a paste field
   for the `weirdnet-morph://invite/…` code that Add a device shows on the
@@ -16,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on a profile without an identity, and an invite scanned under Add a device
   goes there too; a profile that already has an identity explains instead.
   Bridge: `link_new_device_answer`, `link_is_invite`.
+
 - One QR scanner on Android and iOS: a Flutter screen over mobile_scanner
   (full-screen camera, the first code closes it, Cancel or Back returns
   nothing, "Place the code in front of the camera"). It replaces the
@@ -32,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   desktop. On one network the direct addresses still win. Circuit addresses
   in a code keep their relay id (they were cut to the relay's own address).
   `MORPH_LINK_RELAYS` replaces the list (empty: none).
+
 - Settings, Open at start: `morph://about`, `morph:settings` and the other
   Morph pages, and `weirdnet-morph://` links, are kept as typed instead of
   turning into a web search, and the start page is now used when Morph
