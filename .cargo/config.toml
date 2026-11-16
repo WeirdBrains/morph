@@ -1,0 +1,7 @@
+# The iOS deployment target for Rust and the C code its crates build
+# (sqlcipher, openssl, aws-lc, ring). Unset, rustc links for iOS 10 while
+# cc compiles for the SDK's version, and the link fails on
+# ___chkstk_darwin. 15.0 is the Runner's IPHONEOS_DEPLOYMENT_TARGET.
+# Only iOS builds read it.
+[env]
+IPHONEOS_DEPLOYMENT_TARGET = "15.0"

@@ -19,7 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tabs).
 - iOS: the keystore uses the data protection keychain (the iOS build failed:
   the keyring crate needs its `protected` store there). macOS keeps the
-  login keychain.
+  login keychain. Rust and its C dependencies build for iOS 15.0 (the
+  Runner's deployment target, `.cargo/config.toml`); before, the bridge
+  failed to link (`___chkstk_darwin`).
 
 - Android: CI and release APKs are signed with one fixed test key (the
   `ANDROID_TEST_*` repository secrets; not a Play release key), so a new APK
