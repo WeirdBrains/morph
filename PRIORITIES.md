@@ -172,6 +172,8 @@ Build `v0.2.0-alpha.9`.
         - Relays for peers DNS can't reach _(changed)_
             - WeirdBrains runs public relays. In Priorities 1 they also forward public HTTPS for
               users without their own relay, with no bandwidth limits yet _(changed 2026-11-11)_
+            - Every relay serves a page that broadcasts its name and connection details
+              _(added 2026-11-16)_
             - Relays also host the name lookup (rendezvous) for devices holding a slot there
               _(new 2026-11-11)_
             - Running your own relay is optional, and needs a domain tied to your browser (Grindvakt)
