@@ -39,6 +39,7 @@ pub fn engine() -> String {
 }
 
 /// `GStreamer 1.24.12` from `gst-inspect-1.0 --version`.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn gst_version(output: &str) -> Option<String> {
     output.lines().find_map(|l| l.trim().strip_prefix("GStreamer ").map(|v| format!("GStreamer {}", v.trim())))
 }
@@ -46,6 +47,7 @@ pub fn gst_version(output: &str) -> Option<String> {
 /// VA-API decode in a line: the decoders GStreamer registered (its `va`
 /// plugin registers only those the driver runs), the legacy `vaapi`
 /// plugin, a render node, and whether Morph ranks them first.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn va_status(decoders: &[&str], legacy: bool, render_node: bool, ranked: bool) -> String {
     if !render_node {
         return "off (no GPU render node)".into();
@@ -63,9 +65,11 @@ pub fn va_status(decoders: &[&str], legacy: bool, render_node: bool, ranked: boo
 
 /// GStreamer and VA-API, found once on a background thread (they run
 /// `gst-inspect-1.0`).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 static MEDIA: OnceLock<Vec<Line>> = OnceLock::new();
 
 /// Start looking for GStreamer and VA-API (Linux), off the UI thread.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn probe_media(va_ranked: bool) {
     #[cfg(target_os = "linux")]
     std::thread::Builder::new()
@@ -102,6 +106,7 @@ pub fn lines() -> Vec<Line> {
     let wayland = startup.map(|s| s.backend == crate::backend::Backend::Wayland);
     #[cfg(not(target_os = "linux"))]
     let wayland = None;
+    #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
     let mut out: Vec<Line> = vec![
         ("Version", version().to_string()),
         ("Commit", commit().to_string()),
