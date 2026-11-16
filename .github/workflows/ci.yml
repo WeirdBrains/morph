@@ -137,7 +137,12 @@ jobs:
       - name: APK signer
         run: |
           apksigner="$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)"
-          "$apksigner" verify --print-certs build/app/outputs/flutter-apk/app-debug.apk | grep -E "Signer #1 certificate (DN|SHA-256)"
+          certs="$("$apksigner" verify --print-certs build/app/outputs/flutter-apk/app-debug.apk)"
+          printf '%s\n' "$certs" | grep -E "certificate (DN|SHA-256 digest)"
+          # The fixed test key's certificate (public), when it signed.
+          if [ -n "${MORPH_ANDROID_KEYSTORE:-}" ]; then
+            printf '%s\n' "$certs" | grep -q "c2af967c4775c926f6db7f051be293821f7b8c4c5b3596c3745ae72fbc8bba51"
+          fi
       # c_char is u8 on aarch64 Android, so casts that are fine on x86_64
       # Linux can fail clippy there.
       - name: Clippy for aarch64 Android
