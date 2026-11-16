@@ -3,6 +3,7 @@ import 'package:material_ui/material_ui.dart';
 import 'api.dart';
 import 'default_browser.dart';
 import 'incoming_links.dart';
+import 'qr_scanner.dart';
 import 'shell.dart';
 import 'theme/morph_theme.dart';
 import 'surface_watch.dart';
@@ -44,6 +45,7 @@ class _MorphAppState extends State<MorphApp> {
       theme: MorphTheme.light,
       darkTheme: MorphTheme.dark,
       themeMode: ThemeMode.dark,
+      navigatorKey: morphNavigatorKey,
       navigatorObservers: [morphSurfaceWatch],
       home: MorphShell(
         api: widget.api,

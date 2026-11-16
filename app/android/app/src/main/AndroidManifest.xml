@@ -2,7 +2,8 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <!-- Weirdnet nodes (QR device link) ask ConnectivityManager for DNS servers. -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
-    <!-- QR login: the camera is asked for only when the scanner opens. -->
+    <!-- QR login (mobile_scanner): the camera is asked for only when the
+         scanner opens. -->
     <uses-permission android:name="android.permission.CAMERA"/>
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
     <application
@@ -70,11 +71,6 @@
             </intent-filter>
         </activity>
         <!-- "Search in Morph" in the text selection menu. -->
-        <activity
-            android:name=".QrScanActivity"
-            android:exported="false"
-            android:screenOrientation="portrait"
-            android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" />
         <activity-alias
             android:name=".SearchInMorph"
             android:targetActivity=".MainActivity"

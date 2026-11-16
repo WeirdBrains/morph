@@ -2705,9 +2705,15 @@ Mobile can answer a desktop's invite (`weirdnet-morph://invite/…`): the
 new-device screen scans or takes a pasted invite and calls
 `link_new_device_answer`; invites also arrive as links (Android VIEW intent
 filter for `weirdnet-morph`, iOS `CFBundleURLTypes` plus a scene delegate in
-`AppDelegate.swift` on `org.weirdbrains.morph/links`). iOS scans with
-AVFoundation's built-in QR detection (`MorphQrScanner` in
-`AppDelegate.swift`, `org.weirdbrains.morph/scan`); Android keeps CameraX and
-ZXing (no Play Services), so no scanner package such as mobile_scanner is
-added.
+`AppDelegate.swift` on `org.weirdbrains.morph/links`).
+
+QR scanning (changed the same day, Michael's call): both phones use
+mobile_scanner ^7.2 behind `MorphQrScanner.scan()`, which pushes
+`MorphQrScannerPage` on the app navigator (`morphNavigatorKey`); the first
+code's `rawValue` closes it, Cancel or Back returns null. This follows the
+scanner in mnstrapp/mnstrv2. It replaces the Android `QrScanActivity`
+(CameraX + ZXing, F-Droid friendly) and the AVFoundation scanner; the
+`org.weirdbrains.morph/scan` channel is gone. On Android mobile_scanner uses
+the bundled ML Kit barcode model (`com.google.mlkit:barcode-scanning`, not
+the Play Services download), which is proprietary and adds a few MB per ABI.
 
