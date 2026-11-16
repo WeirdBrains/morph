@@ -16,15 +16,16 @@ mod brand;
 mod browser_view;
 mod cli;
 mod default_browser;
+mod dialogs;
 mod identity;
 mod identity_view;
-mod menu_view;
 #[cfg(target_os = "linux")]
 mod legacy_desktop;
 mod library;
 mod library_view;
-mod page_input;
+mod menu_view;
 mod notices;
+mod page_input;
 mod profiles;
 mod profiles_view;
 #[cfg(target_os = "linux")]

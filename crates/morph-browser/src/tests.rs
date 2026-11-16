@@ -527,7 +527,10 @@ fn window_backends_leave_the_keyboard_to_the_window_system() {
 
 fn select_menu() -> morph_webview::OptionMenu {
     let item = |label: &str, selected| morph_webview::MenuItem { label: label.into(), enabled: true, selected, ..Default::default() };
-    morph_webview::OptionMenu { items: vec![item("Apple", false), item("Banana", true), item("Cherry", false)], anchor: Rect::new(40.0, 40.0, 160.0, 30.0) }
+    morph_webview::OptionMenu {
+        items: vec![item("Apple", false), item("Banana", true), item("Cherry", false)],
+        anchor: Rect::new(40.0, 40.0, 160.0, 30.0),
+    }
 }
 
 fn menu_calls(fake: &FakeBackend, view: ViewId) -> Vec<morph_webview::MenuChoice> {

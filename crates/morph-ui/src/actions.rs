@@ -201,7 +201,11 @@ mod tests {
     fn on_macos_every_shortcut_uses_cmd_but_tab_switching() {
         let mac = Keymap::default().for_platform(true);
         for b in mac.bindings() {
-            assert!(!b.keystroke.starts_with("ctrl-") || MAC_CTRL_EXCEPTIONS.contains(&b.keystroke.as_str()), "{} still uses Ctrl on macOS", b.keystroke);
+            assert!(
+                !b.keystroke.starts_with("ctrl-") || MAC_CTRL_EXCEPTIONS.contains(&b.keystroke.as_str()),
+                "{} still uses Ctrl on macOS",
+                b.keystroke
+            );
         }
         assert_eq!(mac.action_for("cmd-t"), Some(Action::NewTab));
         assert_eq!(mac.action_for("cmd-shift-l"), Some(Action::ShowIdentity));

@@ -7,6 +7,11 @@ shell's page events (MORPH_LOG_EVENTS=1) must show all three.
 
     python3 scripts/desktop-smoke.py path/to/morph [--version 0.2.0-alpha.8] [--screenshot out.png]
 
+Then the Identity panel: the shortcut pressed as a user would (Cmd+Shift+L
+through System Events on macOS, Ctrl+Shift+L through SendKeys on Windows)
+must open it, and so must a second launch that asks for it through
+MORPH_TEST_ACTIONS (the same path a menu or button takes).
+
 Exits 0 when every check passed. Uses a throwaway MORPH_HOME.
 """
 import argparse
@@ -66,6 +71,44 @@ def screenshot(path):
         print(f"screenshot failed: {e}")
 
 
+def press_identity_shortcut():
+    """Press the Identity shortcut in the frontmost app, as a user would."""
+    if sys.platform == "darwin":
+        script = 'tell application "System Events" to keystroke "l" using {command down, shift down}'
+        return subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=30)
+    if sys.platform == "win32":
+        ps = "$w = New-Object -ComObject WScript.Shell; $null = $w.AppActivate('Morph'); Start-Sleep -Milliseconds 500; $w.SendKeys('^+l')"
+        return subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True, timeout=60)
+    return None
+
+
+def activate(proc):
+    """Bring Morph to the front (macOS: by its process id)."""
+    if sys.platform == "darwin":
+        script = f'tell application "System Events" to set frontmost of (first process whose unix id is {proc.pid}) to true'
+        subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=30)
+
+
+def wait_line(lines, log, rx, timeout):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            line = lines.get(timeout=0.5)
+        except queue.Empty:
+            continue
+        log.append(line.rstrip())
+        if rx.search(line):
+            return True
+    return False
+
+
+def launch(binary, url, env):
+    proc = subprocess.Popen([binary, url], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, text=True, encoding="utf-8", errors="replace")
+    lines = queue.Queue()
+    threading.Thread(target=lambda: [lines.put(line) for line in proc.stdout], daemon=True).start()
+    return proc, lines
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("binary")
@@ -89,9 +132,7 @@ def main():
     url = f"http://127.0.0.1:{server.server_address[1]}/smoke"
     home = tempfile.mkdtemp(prefix="morph-smoke-")
     env = dict(os.environ, MORPH_HOME=home, MORPH_LOG_EVENTS="1")
-    proc = subprocess.Popen([a.binary, url], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, text=True, encoding="utf-8", errors="replace")
-    lines = queue.Queue()
-    threading.Thread(target=lambda: [lines.put(line) for line in proc.stdout], daemon=True).start()
+    proc, lines = launch(a.binary, url, env)
 
     want = {
         "the page loads": re.compile(r"LoadFinished"),
@@ -115,8 +156,34 @@ def main():
     if a.screenshot and alive:
         time.sleep(2)
         screenshot(a.screenshot)
+    panel = re.compile(r"morph-event panel morph\.identity")
+    if alive and sys.platform in ("darwin", "win32"):
+        activate(proc)
+        time.sleep(1)
+        pressed = press_identity_shortcut()
+        opened = wait_line(lines, log, panel, 15)
+        detail = (pressed.stderr or "").strip() if pressed else ""
+        # A runner without accessibility rights cannot send keys; that is
+        # the runner, not Morph, so it only warns.
+        if not opened and pressed is not None and pressed.returncode != 0:
+            print(f"WARN  could not press the shortcut ({detail}); skipped")
+        else:
+            check("the Identity shortcut opens the Identity panel", opened, detail)
+        if opened and a.screenshot:
+            time.sleep(1.5)
+            screenshot(a.screenshot.replace(".png", "-identity.png"))
     proc.kill()
     proc.wait(timeout=30)
+    # The panel itself opens (no keystroke: the action, as a button sends it).
+    env2 = dict(env, MORPH_TEST_ACTIONS="shell.show_identity", MORPH_HOME=tempfile.mkdtemp(prefix="morph-smoke-id-"))
+    proc2, lines2 = launch(a.binary, url, env2)
+    check("the Identity panel opens", wait_line(lines2, log, panel, a.timeout), "no panel event")
+    time.sleep(2)
+    check("the window stays up with the Identity panel open", proc2.poll() is None, f"exit code {proc2.returncode}")
+    if a.screenshot and proc2.poll() is None:
+        screenshot(a.screenshot.replace(".png", "-identity-panel.png"))
+    proc2.kill()
+    proc2.wait(timeout=30)
     server.shutdown()
     print("--- morph output ---")
     print("\n".join(log[-80:]))

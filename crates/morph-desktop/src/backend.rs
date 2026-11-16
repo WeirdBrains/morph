@@ -115,8 +115,12 @@ pub fn start() -> Result<Backend, String> {
     let probe = std::env::var("MORPH_DMABUF_PROBE").ok();
     let checks = render_check::checks(probe.as_deref(), user_chose, render_check::has_drm_device());
     let decision = render_check::decide(backend, fallback, checks, render_check::run_child);
-    let mut startup =
-        Startup { backend: decision.backend, render_path: render_path(&user_set, decision.env, checks.pages || checks.gl), note: decision.note.clone(), va_ranked };
+    let mut startup = Startup {
+        backend: decision.backend,
+        render_path: render_path(&user_set, decision.env, checks.pages || checks.gl),
+        note: decision.note.clone(),
+        va_ranked,
+    };
     if let Some(note) = &decision.note {
         eprintln!("morph: {note} (MORPH_DMABUF_PROBE=0 skips the page check)");
     }
