@@ -34,6 +34,12 @@ Morph shards stay interchangeable. Any change goes into weirdnet-keys first.
    k shard files ("Restore from shards"), next to words, backup file and
    another device. This needs only weirdnet-keys and the file plumbing that
    identity backups added, so it can ship before any of the network parts.
+   **Built in alpha.9 (2026-11-15), plain-text form:** "Split into shards"
+   (Identity panel, `s`, behind the profile password) makes 3-of-5 shards
+   in weirdnet-keys' text form, unsealed (one shard alone tells nothing),
+   each with Copy, Download and a QR code, and "Download all shards" (one
+   file each). Restore accepts any 3 as files or pasted text. Sealing each
+   shard under a shard password (`dark::seal`) is still to do.
 2. **Dark shards (held by peers).** The same sealed shards, sent to trusted
    peers' nodes, which store a blob they cannot open. Restore asks them.
 

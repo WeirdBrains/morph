@@ -43,3 +43,5 @@ windows-sys = { version = "0.61", features = ["Win32_System_Console"] }
 # Tests never touch the real OS keystore.
 morph-keystore = { workspace = true, features = ["mock"] }
 tempfile.workspace = true
+# Reads the identity QR codes back.
+rqrr = "0.9"

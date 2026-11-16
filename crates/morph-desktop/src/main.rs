@@ -14,6 +14,7 @@ mod backend;
 mod browser_view;
 mod cli;
 mod default_browser;
+mod dialogs;
 mod identity;
 mod identity_view;
 #[cfg(target_os = "linux")]

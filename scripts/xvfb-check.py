@@ -41,7 +41,7 @@ class Morph:
         self.env = self.session_env(display)
         self.env.update(MORPH_HOME=home, MORPH_LOG_EVENTS="1", **(extra_env or {}))
         # A desktop of its own for the default-browser check: morph.desktop
-        # and a `morph` on PATH (xdg-settings wants both), fresh config.
+        # and a `morph` on PATH (xdg-mime wants both), fresh config.
         xdg = Path(home) / "xdg"
         (xdg / "data" / "applications").mkdir(parents=True, exist_ok=True)
         (xdg / "config").mkdir(parents=True, exist_ok=True)
@@ -49,13 +49,13 @@ class Morph:
         shutil.copy(ROOT / "packaging" / "linux" / "morph.desktop", xdg / "data" / "applications" / "morph.desktop")
         if not (xdg / "bin" / "morph").exists():
             (xdg / "bin" / "morph").symlink_to(Path(binary).resolve())
-        # xdg-settings can take seconds on a real desktop; for Morph it takes
+        # xdg-mime can take seconds on a real desktop; for Morph it takes
         # two here, so a window that waited for it would miss keys (the
         # checks' own calls, without MORPH_HOME, are not slowed).
-        real = shutil.which("xdg-settings", path=os.environ.get("PATH"))
-        if real and not (xdg / "bin" / "xdg-settings").exists():
-            (xdg / "bin" / "xdg-settings").write_text(f'#!/bin/sh\n[ -n "$MORPH_HOME" ] && sleep 2\nexec {real} "$@"\n')
-            (xdg / "bin" / "xdg-settings").chmod(0o755)
+        real = shutil.which("xdg-mime", path=os.environ.get("PATH"))
+        if real and not (xdg / "bin" / "xdg-mime").exists():
+            (xdg / "bin" / "xdg-mime").write_text(f'#!/bin/sh\n[ -n "$MORPH_HOME" ] && sleep 2\nexec {real} "$@"\n')
+            (xdg / "bin" / "xdg-mime").chmod(0o755)
         self.env.update(XDG_DATA_HOME=str(xdg / "data"), XDG_CONFIG_HOME=str(xdg / "config"), PATH=f"{xdg / 'bin'}:{os.environ.get('PATH', '')}")
         for var in ("BROWSER", "XDG_CURRENT_DESKTOP", "DESKTOP_SESSION"):
             self.env.pop(var, None)
@@ -365,6 +365,12 @@ def page_keys(m, r, area, win, popup, top):
     r.check(area, "Ctrl+C / Ctrl+V", (st() or {}).get("b") == "ello worl", str(st()))
     m.key("shift+Tab")
     r.check(area, "Shift+Tab moves focus back", (st() or {}).get("f") == "a", str(st()))
+    m.key("Tab", "Tab", "Tab")
+    r.check(area, "Tab reaches a password field", (st() or {}).get("f") == "pw", str(st()))
+    m.type("secret1")
+    r.check(area, "typing lands in the password field", (st() or {}).get("pw") == "secret1" and (st() or {}).get("b") == "ello worl", str(st()))
+    m.key("shift+Tab", "shift+Tab", "shift+Tab")
+    r.check(area, "Shift+Tab leaves the password field", (st() or {}).get("f") == "a", str(st()))
     m.key("ctrl+a", "ctrl+x")
     r.check(area, "Ctrl+X", (st() or {}).get("a") == "", str(st()))
     m.key("ctrl+z")
@@ -587,18 +593,18 @@ def settings_panel(m, r, win, top):
     w0, h0 = s0.get("w", 0), s0.get("h", 0)
     m.key("ctrl+comma", delay=0.8)
     r.check("settings", "Ctrl+, opens the settings beside the page", wait_for(lambda: (state(m) or {}).get("w", 0) < w0), f"{w0} -> {(state(m) or {}).get('w')}")
-    if shutil.which("xdg-settings"):
+    if shutil.which("xdg-mime"):
         env = {k: v for k, v in m.env.items() if k != "MORPH_HOME"}
-        get = lambda: subprocess.run(["xdg-settings", "get", "default-web-browser"], env=env, capture_output=True, text=True).stdout.strip()  # noqa: E731
+        get = lambda: ",".join(subprocess.run(["xdg-mime", "query", "default", t], env=env, capture_output=True, text=True).stdout.strip() for t in ("x-scheme-handler/http", "x-scheme-handler/https"))  # noqa: E731
         m.key("d", delay=0.3)
         settings_check = time.time()
     m.key("Left", delay=0.8)
     r.check("settings", "Left moves the tabs to the left (saved)", wait_for(lambda: '"left"' in settings_file(m)), settings_file(m))
     r.check("settings", "the page grows taller without the tab row", wait_for(lambda: (state(m) or {}).get("h", 0) == h0 + 34), f"{h0} -> {(state(m) or {}).get('h')}")
-    if shutil.which("xdg-settings"):
-        # The slow xdg-settings is still running: the keys above did not wait.
-        r.check("settings", "the arrow keys did not wait for xdg-settings", time.time() - settings_check < 4.0, f"{time.time() - settings_check:.1f}s")
-        r.check("settings", "d makes Morph the default browser (xdg-settings)", wait_for(lambda: get() == "morph.desktop", 15), get())
+    if shutil.which("xdg-mime"):
+        # Making Morph the default runs off the UI thread: the keys above did not wait.
+        r.check("settings", "the arrow keys did not wait for the default-browser work", time.time() - settings_check < 4.0, f"{time.time() - settings_check:.1f}s")
+        r.check("settings", "d makes Morph the default browser (xdg-mime reads it back)", wait_for(lambda: get() == "morph.desktop,morph.desktop", 15), get())
     m.key("Escape", delay=0.8)
     side = wait_for(lambda: (state(m) or {}).get("w") == w0 - 220 and w0 - 220)
     r.check("settings", "Escape closes it; the tab list takes 220 px", side, f"{w0} -> {(state(m) or {}).get('w')}")
@@ -717,13 +723,38 @@ BACKUP_PASSWORD = "xvfb-backup-pass"
 
 def identity_panel(m, r):
     """Onboarding and backups on the running Morph: 1 creates an identity
-    (password twice), Enter past the recovery words, b saves a backup,
-    Escape closes the panel and the page has the keyboard again."""
+    (password, Tab, Shift+Tab, Tab, password again), c copies the recovery
+    words (the clipboard clears itself), d saves them, Enter goes on, s
+    makes shards and a saves them all, b saves a backup, Escape closes the
+    panel and the page has the keyboard again. File dialogs answer from
+    MORPH_TEST_PICK_DIR."""
     win, w0 = open_identity(m, r, "identity")
     m.key("1", delay=0.8)
-    fill(m, PASSWORD, PASSWORD)
+    m.type(PASSWORD)
+    m.key("Tab", "shift+Tab", "Tab", delay=0.3)
+    m.type(PASSWORD)
+    m.key("Return", delay=0.8)
     made = wait_for(lambda: identity_file(m).get("user_id"))
-    r.check("identity", "1, a password twice: the profile has an identity", made, str(identity_file(m)))
+    r.check("identity", "1, a password, Tab, Shift+Tab, Tab, the password again: the profile has an identity", made, str(identity_file(m)))
+    pick = Path(m.env["MORPH_TEST_PICK_DIR"])
+    m.key("c", delay=0.8)
+    r.check("identity", "c copies the recovery words", wait_for(lambda: m.lines(r"morph-event identity copied words")))
+    r.check("identity", "the clipboard clears itself", wait_for(lambda: m.lines(r"morph-event identity clipboard cleared"), 10))
+    m.key("d", delay=1.0)
+    words_file = pick / "morph-recovery-words-default.txt"
+    r.check("identity", "d saves the words where the Save dialog says", wait_for(lambda: words_file.exists()), str(list(pick.iterdir())))
+    words = words_file.read_text().splitlines() if words_file.exists() else []
+    r.check("identity", "the file holds the 24 words on a line", any(len(line.split()) == 24 for line in words), str(len(words)))
+    r.check("identity", "only its owner can read it", words_file.exists() and (words_file.stat().st_mode & 0o777) == 0o600)
+    m.key("Return", delay=0.8)
+    m.key("s", delay=0.8)
+    fill(m, PASSWORD)
+    m.key("a", delay=1.0)
+    shards = lambda: sorted(pick.glob("morph-shard-default-*-of-5.txt"))  # noqa: E731
+    r.check("identity", "s makes shards; a saves all five, one file each", wait_for(lambda: len(shards()) == 5), str(shards()))
+    r.check("identity", "each says which shard it is and how many it needs", all("Any 3 of the 5" in p.read_text() for p in shards()) and shards() != [])
+    log = "\n".join(m.lines(r"."))
+    r.check("identity", "no secret reaches the log", not any(w in log for w in words[3:4]) and not any(p.read_text().split()[-1] in log for p in shards()))
     m.key("Return", delay=0.8)
     backup = m.home / "identity-backup.txt"
     m.key("b", delay=0.8)
@@ -734,7 +765,24 @@ def identity_panel(m, r):
     m.key("Escape", delay=0.8)
     r.check("identity", "Escape closes the panel", wait_for(lambda: (state(m) or {}).get("w") == w0), f"{w0} vs {(state(m) or {}).get('w')}")
     r.check("identity", "after closing, the page has the keyboard", page_takes_key(m, "z", "KeyZ"), str(state(m)))
-    return made, backup
+    return made, backup, shards()
+
+
+def identity_shards_restore(r, binary, display, user_id, shards):
+    """Another home restores from three of the five shard files: 3, the
+    files (Choose files… answers from MORPH_TEST_PICK_OPEN), no backup
+    password, a new password."""
+    picked = ";".join(str(p) for p in shards[1:4])
+    m4 = Driver(binary, display, tempfile.mkdtemp(prefix="morph-xvfb-shards-"), {"MORPH_TEST_PICK_OPEN": picked})
+    try:
+        r.check("shards", "a Morph with another home opens", wait_for(lambda: state(m4), 20))
+        open_identity(m4, r, "shards")
+        m4.key("3", delay=0.8)
+        fill(m4, picked.replace(";", "; "), "", PASSWORD)
+        got = wait_for(lambda: identity_file(m4, "default").get("user_id"))
+        r.check("shards", "three shard files restore the same identity", got and got == user_id, f"{got} vs {user_id}")
+    finally:
+        m4.stop()
 
 
 def identity_relaunch(m, r):
@@ -1078,11 +1126,14 @@ def main():
         # Identity on a home of its own (an identity locks the library at
         # the next launch, which would change the windows checked above).
         m.stop()
-        m = Driver(args.bin, display, tempfile.mkdtemp(prefix="morph-xvfb-identity-"))
+        pick = tempfile.mkdtemp(prefix="morph-xvfb-pick-")
+        m = Driver(args.bin, display, tempfile.mkdtemp(prefix="morph-xvfb-identity-"), {"MORPH_TEST_PICK_DIR": pick, "MORPH_TEST_CLIPBOARD_SECS": "2"})
         r.check("identity", "a fresh home opens", wait_for(lambda: state(m), 20))
-        user_id, backup = identity_panel(m, r)
+        user_id, backup, shards = identity_panel(m, r)
         if user_id:
             identity_restore(r, args.bin, display, user_id, backup)
+            if len(shards) == 5:
+                identity_shards_restore(r, args.bin, display, user_id, shards)
             identity_link(m, r, args.bin, display, user_id)
             m.stop()
             m = Driver(args.bin, display, str(m.home))
