@@ -25,8 +25,13 @@ zeroize.workspace = true
 [target.'cfg(target_os = "android")'.dependencies]
 android-native-keyring-store = "1"
 
-[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+# macOS: the login keychain. iOS has only the data protection keychain
+# (the crate refuses to build there without `protected`).
+[target.'cfg(target_os = "macos")'.dependencies]
 apple-native-keyring-store = { version = "1", features = ["keychain"] }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+apple-native-keyring-store = { version = "1", features = ["protected"] }
 
 # Credential Manager (DPAPI-protected, per user).
 [target.'cfg(windows)'.dependencies]
