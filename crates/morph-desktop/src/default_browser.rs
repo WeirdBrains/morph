@@ -59,6 +59,7 @@ pub struct Dirs {
 
 impl Dirs {
     /// The user's: XDG directories and the current desktops.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn system() -> Option<Self> {
         #[cfg(target_os = "linux")]
         let (data, config) = crate::legacy_desktop::xdg_dirs()?;
@@ -197,10 +198,12 @@ pub fn make_default(dirs: &Dirs, run: Runner) -> Result<(), String> {
 }
 
 /// Morph's own scheme (`weirdnet-morph://`), which no other app handles.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub const SCHEME_TYPE: &str = "x-scheme-handler/weirdnet-morph";
 
 /// `text` with Morph handling [`SCHEME_TYPE`] when nothing does yet;
 /// `None` when the list already names a handler (the user's choice stays).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn with_scheme(text: &str) -> Option<String> {
     if default_in(text, SCHEME_TYPE).is_some() {
         return None;
@@ -223,6 +226,7 @@ pub fn with_scheme(text: &str) -> Option<String> {
 
 /// Register `weirdnet-morph://` for Morph in the user's `mimeapps.list`
 /// when no list names a handler for it (at start, off the UI thread).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn ensure_scheme(dirs: &Dirs) -> Result<bool, String> {
     let lists = dirs.lists();
     if lists.iter().filter_map(|p| std::fs::read_to_string(p).ok()).any(|t| default_in(&t, SCHEME_TYPE).is_some()) {
