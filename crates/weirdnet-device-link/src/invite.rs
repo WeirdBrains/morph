@@ -149,6 +149,11 @@ impl InviteHost {
     pub fn take_offer(&self) -> Option<String> {
         self.inbox.offer.lock().unwrap_or_else(|p| p.into_inner()).take()
     }
+
+    /// The node's network status (connections, relay reservations).
+    pub fn net_status(&self) -> weirdnet_net::node::Status {
+        self.node.status()
+    }
 }
 
 impl Drop for InviteHost {

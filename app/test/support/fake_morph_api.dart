@@ -705,4 +705,35 @@ class FakeMorphApi implements MorphApi {
   @override
   Future<void> linkAddDeviceCancel(int session) async =>
       linkCalls.add('pair-cancel $session');
+
+  /// What [relayReport] returns; tests change it to move the state.
+  MorphRelayReport relays = const MorphRelayReport(
+    nodes: 0,
+    checking: false,
+    summary:
+        'Not connected to a relay. Morph connects only while linking a '
+        'device or checking.',
+    relays: [
+      MorphRelay(
+        peer: '12D3KooWHp56KezbVCubjuznJGqyn9xTe8PWePfuwv4YQUGxaRBB',
+        addrs: [
+          '/dns4/relay.net.weirdbrains.com/tcp/4747/p2p/12D3KooWHp56KezbVCubjuznJGqyn9xTe8PWePfuwv4YQUGxaRBB',
+        ],
+        title: 'relay.net.weirdbrains.com',
+        host: 'relay.net.weirdbrains.com',
+        state: MorphRelayState.noNode,
+        label: 'Not connected',
+      ),
+    ],
+  );
+  int relayChecks = 0;
+
+  @override
+  MorphRelayReport relayReport() => relays;
+
+  @override
+  Future<void> relayCheckStart() async => relayChecks++;
+
+  @override
+  Future<void> relayCheckStop() async {}
 }

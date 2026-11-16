@@ -7,10 +7,11 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::time::Instant;
 
 pub use morph_identity::device_link::LinkState;
 pub use morph_identity::device_link::is_invite;
-use morph_identity::device_link::{AddDevice, Invite, NewDevice, net_config};
+use morph_identity::device_link::{AddDevice, Invite, NetStatus, NewDevice, RelayProbe, net_config};
 use morph_identity::profile_identity::{self, ProfileIdentity, SecretString};
 
 use crate::home::{now_ms, profile_dir};
@@ -40,6 +41,8 @@ pub struct Links {
     hosts: Mutex<HashMap<u64, NewDevice>>,
     pairings: Mutex<HashMap<u64, AddDevice>>,
     invites: Mutex<HashMap<u64, Invite>>,
+    /// A running relay check and when it stops ([`crate::relays`]).
+    probe: Mutex<Option<(RelayProbe, Instant)>>,
 }
 
 /// An existing device's invite: show `link` as a QR code and as text.
@@ -59,6 +62,18 @@ impl Links {
     pub fn global() -> &'static Links {
         static LINKS: OnceLock<Links> = OnceLock::new();
         LINKS.get_or_init(Links::default)
+    }
+
+    pub(crate) fn probe_slot(&self) -> MutexGuard<'_, Option<(RelayProbe, Instant)>> {
+        guard(&self.probe)
+    }
+
+    /// The network status of every running link node, both sides.
+    pub(crate) fn net_statuses(&self) -> Vec<NetStatus> {
+        let mut v: Vec<NetStatus> = guard(&self.hosts).values().map(NewDevice::net_status).collect();
+        v.extend(guard(&self.pairings).values().map(AddDevice::net_status));
+        v.extend(guard(&self.invites).values().map(Invite::net_status));
+        v
     }
 
     fn next_id(&self) -> u64 {

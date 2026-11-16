@@ -10,6 +10,7 @@ import '../api.dart';
 import '../theme/morph_theme.dart';
 import 'identity_onboarding.dart' show morphMinPasswordLength;
 import 'password_field.dart';
+import 'relay_status.dart';
 
 /// What this device calls itself on the other device's screen.
 String morphDeviceName() {
@@ -492,6 +493,7 @@ class _MorphLinkFromDeviceState extends State<MorphLinkFromDevice> {
           textAlign: TextAlign.center,
           style: muted,
         ),
+        MorphRelayStatusLine(source: widget.api),
         ..._inviteSection(muted),
       ]);
     } else if (!_confirmed) {
@@ -844,6 +846,9 @@ class _MorphAddDeviceState extends State<MorphAddDevice> {
           style: TextStyle(color: colors.error),
         ),
       ]);
+    }
+    if (!_sent) {
+      children.add(MorphRelayStatusLine(source: widget.api));
     }
     return Column(
       key: const Key('add-device'),

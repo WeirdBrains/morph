@@ -13,6 +13,7 @@ pub mod home;
 pub mod identity;
 pub mod library;
 pub mod profiles;
+pub mod relays;
 
 pub use morph_identity::profile_identity::{SecretString, Zeroizing};
 

@@ -609,6 +609,24 @@ def internal_pages(m, r, win, top):
     r.check("about", "Alt+Left goes back to the page", wait_for(lambda: not m.title(win).startswith("About")), f"{m.title(win)} (was {before})")
 
 
+def relays_section(m, r):
+    """Settings → Relays reads the real state: nothing runs at first (it
+    says so, never "connected"), and Enter on it starts a check whose node
+    reports a real state (connected and reserved need the relay reachable,
+    so any state passes; the log says which)."""
+    rx = r"morph-event relays nodes=0 checking=false state=no-node count=1"
+    r.check("settings", "the Relays section lists the built-in relay as not connected while nothing runs", wait_for(lambda: m.lines(rx)), str(m.lines(r"morph-event relays")[-3:]))
+    m.key("slash", delay=0.4)
+    m.type("relays")
+    m.key("Return", delay=0.6)
+    m.key("Return", delay=1.0)
+    started = wait_for(lambda: m.lines(r"morph-event relays nodes=1 checking=true state=(not-connected|connected|reserved)"), 15)
+    r.check("settings", "Enter on Relays starts a check: a real node reports the relay's state", started, str(m.lines(r"morph-event relays")[-3:]))
+    time.sleep(3.0)
+    last = (m.lines(r"morph-event relays nodes=") or ["none"])[-1]
+    print(f"INFO  relays  after the check started: {last}", flush=True)
+
+
 def settings_panel(m, r, win, top):
     """Ctrl+, opens the preferences as a page (a tab of its own) with the
     keyboard: / searches, Enter goes to the first setting, Right changes
@@ -634,6 +652,7 @@ def settings_panel(m, r, win, top):
     m.key("Right", delay=0.4)
     m.key("Right", delay=0.8)
     r.check("settings", "searching, Enter and Right twice move the tabs to the left (saved)", wait_for(lambda: '"left"' in settings_file(m)), settings_file(m))
+    relays_section(m, r)
     if shutil.which("xdg-mime"):
         # Making Morph the default runs off the UI thread: the keys above did not wait.
         r.check("settings", "the keys did not wait for the default-browser work", time.time() - settings_check < 8.0, f"{time.time() - settings_check:.1f}s")
@@ -1421,6 +1440,10 @@ def identity_link(m, r, binary, display, user_id):
         m3.key("4", delay=1.5)
         offer = wait_for(lambda: [line.split("offer=", 1)[1].strip() for line in m3.lines(r"morph-event link offer=")])
         r.check("link", "4 shows a link (and its QR code)", offer, "no offer logged")
+        relay = wait_for(lambda: m3.lines(r"morph-event link relays state=(not-connected|connected|reserved)"), 10)
+        r.check("link", "the link screen shows the relay status line, from the running node", relay, str(m3.lines(r"morph-event link relays")))
+        if relay:
+            print(f"INFO  link    relay line: {m3.lines(r'morph-event link relays')[-1]}", flush=True)
         if not offer:
             return
         check_qr(r, "link", "the offer's QR code paints and reads back as its link", m3, offer[0])

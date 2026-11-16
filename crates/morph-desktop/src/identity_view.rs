@@ -10,6 +10,7 @@ use gpui::{
     prelude::*, px, rgb, size,
 };
 use morph_services::device_link::Links;
+use morph_services::relays::RelayStatus;
 use morph_ui::theme::Theme;
 
 use crate::dialogs::{self, Ask};
@@ -97,6 +98,7 @@ impl IdentityView {
 
     /// Follow a link session; called by the host's tick.
     pub fn poll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.model.poll_relays();
         if self.model.poll() {
             self.enter_step(window, cx);
         } else if self.model.take_dirty() {
@@ -342,6 +344,18 @@ impl IdentityView {
         div().text_size(px(12.)).text_color(rgb(self.theme.text_secondary)).child(s.into())
     }
 
+    /// Which relay the link uses and whether it is connected, on the link screens.
+    fn relay_line(&self) -> Option<gpui::Div> {
+        let t = self.theme;
+        let (text, state) = self.model.relay_line()?;
+        let color = match state {
+            RelayStatus::Reserved => t.accent,
+            RelayStatus::Connected => t.text_primary,
+            _ => t.text_secondary,
+        };
+        Some(div().text_size(px(11.)).text_color(rgb(color)).child(text.clone()))
+    }
+
     fn step_body(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let t = self.theme;
         let col = || div().flex().flex_col().gap(px(8.));
@@ -393,7 +407,11 @@ impl IdentityView {
                 } else {
                     "Or, when the new device shows a code of its own, paste its link below. Your password unlocks the identity to send."
                 };
-                body.child(self.text(intro)).child(inputs).child(row(main("identity-submit", "Pair").into_any_element(), back.into_any_element())).into_any_element()
+                body.child(self.text(intro))
+                    .child(inputs)
+                    .child(row(main("identity-submit", "Pair").into_any_element(), back.into_any_element()))
+                    .children(self.relay_line())
+                    .into_any_element()
             }
             Step::Create | Step::Import | Step::Restore | Step::Received { .. } | Step::Reveal | Step::Shards | Step::Export => {
                 let (intro, label): (&str, &'static str) = match self.model.step {
@@ -478,6 +496,7 @@ impl IdentityView {
                     .child(inputs)
                     .child(row(main("identity-submit", "Send").into_any_element(), back.into_any_element()))
                     .child(self.text("Waiting for the other device…"))
+                    .children(self.relay_line())
                     .into_any_element()
             }
             Step::Paired { sas, .. } | Step::Adding { sas, .. } => {
@@ -491,6 +510,7 @@ impl IdentityView {
                     .child(self.text("Check that both screens show the same code:"))
                     .child(div().text_size(px(28.)).text_color(rgb(t.accent)).child(sas.clone()))
                     .child(row(main("identity-match", label).into_any_element(), button(t, "identity-differ", "They differ", false).on_click(cx.listener(|this, _, w, cx| this.escape(w, cx))).into_any_element()))
+                    .children(self.relay_line())
                     .into_any_element()
             }
             Step::Overview => {

@@ -7,4 +7,5 @@ pub mod library;
 pub mod omnibox;
 pub mod page;
 pub mod profiles;
+pub mod relays;
 pub mod settings;

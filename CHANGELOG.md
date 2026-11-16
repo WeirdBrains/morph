@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Relays: Settings has a Relays section (desktop and phone) listing the
+  relays device linking uses (the built-in WeirdBrains public relay, or
+  `MORPH_LINK_RELAYS`), each with its peer id, addresses and live state:
+  not connected, connecting, connected, or connected with a slot reserved.
+  The state is read from the running nodes' own status (weirdnet-net
+  0.1.0's connected peers, accepted reservations and `/p2p-circuit`
+  listeners), never assumed. Morph runs no network node outside device
+  linking, so with nothing running the section says it is not connected;
+  Check now starts a node like a link's for 30 seconds to show the real
+  state. The link screens (showing a code, Add a device, comparing codes)
+  show a one-line relay status from the link's own node. A relay's name
+  comes from its `/.well-known/weirdnet-relay.json`, fetched in the
+  background with a 4 s timeout and cached (only when its `peer_id`
+  matches); the host shows until then. Ping round trips are not shown yet:
+  weirdnet-net 0.1.0 does not report them. Unit tests cover the state
+  mapping, a widget test the phone's section and status line, and the Xvfb
+  settings check opens the section and starts a check.
+
 ## [0.2.0-alpha.12] - 2026-11-16
 
 - Desktop: the frameless window's maximize button is a toggle. It maximizes
