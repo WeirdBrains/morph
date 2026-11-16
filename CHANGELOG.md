@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Downloads ask where to save: a click on a download (a GitHub release
+  asset, any attachment, through redirects) opens the save dialog with the
+  suggested name (the desktop portal on Wayland, the system panel on macOS
+  and Windows), and a bar under the page shows the progress and then where
+  the file went. Before, Linux saved into the Downloads folder without a
+  word, which on Wayland looked like nothing happened. Cancelling the dialog
+  stops the download. The Xvfb and Wayland checks download through a
+  redirect to an attachment.
+- Linux X11: after a shell shortcut from a page (Ctrl+L, then a click back
+  into the page) the page no longer loses its next key. Pages no longer get
+  bare Ctrl, Alt or Super presses (the held modifiers still reach them with
+  other keys and clicks).
 - The ☰ menu's entries work (they did nothing: the action was sent after
   the menu had closed and dropped the keyboard focus, so it never reached
   the shell). The address dropdown, toast and morph:// actions go to the
