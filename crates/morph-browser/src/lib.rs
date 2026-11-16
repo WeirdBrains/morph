@@ -55,6 +55,8 @@ struct Page {
     /// The address the page still shows under an error page (the engine
     /// puts it back when a load fails), for Back.
     shown_url: Option<String>,
+    /// The page's title under Morph's own pages (About, Settings), for Back.
+    shown_title: Option<String>,
     finished: bool,
     popups: usize,
     /// The page's open `<select>` list (pages the shell draws).
@@ -74,6 +76,7 @@ impl Page {
             waited: false,
             terminating: false,
             shown_url: None,
+            shown_title: None,
             finished: false,
             popups: 0,
             menu: None,
@@ -600,12 +603,14 @@ impl Browser {
         self.close_menus();
         let id = self.tabs.active_id();
         let shown = Some(self.tabs.active().url.clone()).filter(|u| !u.is_empty() && Internal::parse(u).is_none());
+        let shown_title = shown.as_ref().map(|_| self.tabs.active().title.clone());
         let _ = self.tabs.update(id, url.to_string(), title.to_string());
         self.address_focused = false;
         self.address.set_text_selected(url);
         if let Some(page) = self.pages.get_mut(&id) {
             if shown.is_some() {
                 page.shown_url = shown;
+                page.shown_title = shown_title;
             }
             page.loading = false;
         }
@@ -788,8 +793,14 @@ impl Browser {
         let page = self.pages.get_mut(&id).expect("every tab has a page");
         if matches!(page.cover, Some(Cover::Failed(_) | Cover::About | Cover::Settings)) {
             let url = page.shown_url.take().unwrap_or_default();
+            let own = page.cover.as_ref().is_some_and(Cover::is_own);
+            let shown_title = page.shown_title.take();
             self.set_cover(id, None);
-            let title = self.tabs.active().title.clone();
+            let title = match shown_title {
+                Some(title) if own => title,
+                _ if own => String::new(),
+                _ => self.tabs.active().title.clone(),
+            };
             let _ = self.tabs.update(id, url.clone(), title);
             if !self.address_focused {
                 self.address.set_text_selected(&url);
@@ -1009,6 +1020,10 @@ impl Browser {
         // page beneath it does.
         let about = self.pages.get(&tab).is_some_and(|p| p.cover.as_ref().is_some_and(Cover::is_own));
         if about && matches!(event, Event::UrlChanged(_) | Event::TitleChanged(_) | Event::LoadFailed(_)) {
+            // Kept for Back: the tab shows the page's title again.
+            if let (Event::TitleChanged(title), Some(page)) = (&event, self.pages.get_mut(&tab)) {
+                page.shown_title = Some(title.clone());
+            }
             return;
         }
         match event {
