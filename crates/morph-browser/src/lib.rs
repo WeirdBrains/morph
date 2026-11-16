@@ -10,6 +10,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+pub mod downloads;
+
 use morph_core::tabs::{TabId, TabSet};
 use morph_core::{omnibox, search};
 use morph_ui::actions::Action;
@@ -295,6 +297,7 @@ pub struct Browser {
     file_request: Option<(TabId, bool)>,
     /// The shell took the file request (its dialog is open).
     file_asked: bool,
+    downloads: downloads::Downloads,
 }
 
 impl Browser {
@@ -318,6 +321,7 @@ impl Browser {
             icons: HashMap::new(),
             file_request: None,
             file_asked: false,
+            downloads: downloads::Downloads::default(),
         };
         let first = browser.tabs.active_id();
         let url = config.start_url.trim().to_string();
@@ -550,6 +554,42 @@ impl Browser {
         (!std::mem::replace(&mut self.file_asked, true)).then_some(multiple)
     }
 
+    /// The downloads, newest last.
+    pub fn downloads(&self) -> &[downloads::DownloadItem] {
+        self.downloads.items()
+    }
+
+    /// A download waits for its save dialog: its id, suggested name and
+    /// the folder to open in. The shell answers with [`Self::save_download`].
+    pub fn take_download_ask(&mut self) -> Option<(u64, String, PathBuf)> {
+        self.downloads.take_ask()
+    }
+
+    /// Where download `id` goes (`None`: the user cancelled; it stops).
+    pub fn save_download(&mut self, id: u64, path: Option<PathBuf>) {
+        let (stop, outcome) = self.downloads.answer(id, path);
+        if stop {
+            self.backend.cancel_download(id);
+        }
+        self.log_download(&outcome);
+    }
+
+    /// Forget the downloads that ended (the bar's close button).
+    pub fn clear_downloads(&mut self) {
+        self.downloads.clear_done();
+    }
+
+    fn log_download(&self, outcome: &downloads::Outcome) {
+        if !self.log_events {
+            return;
+        }
+        match outcome {
+            downloads::Outcome::Saved(path) => eprintln!("morph-event download saved {}", path.display()),
+            downloads::Outcome::Failed(why) => eprintln!("morph-event download failed {why}"),
+            downloads::Outcome::Nothing => {}
+        }
+    }
+
     /// Answer the page that asked for files (`None`: cancelled).
     pub fn choose_files(&mut self, paths: Option<Vec<PathBuf>>) {
         if let Some((tab, _)) = self.file_request.take()
@@ -567,6 +607,7 @@ impl Browser {
 
     /// Where downloads go (`None`: the Downloads folder).
     pub fn set_downloads_dir(&mut self, dir: Option<PathBuf>) {
+        self.downloads.set_folder(dir.clone());
         self.backend.set_downloads_dir(dir);
     }
 
@@ -999,6 +1040,16 @@ impl Browser {
                 polled.shortcuts.push(key);
                 continue;
             }
+            // Downloads belong to the window, not to the page that started them.
+            if let Event::Download(download) = event {
+                if self.log_events {
+                    eprintln!("morph-event tab=0 {:?}", Event::Download(download.clone()));
+                }
+                let outcome = self.downloads.apply(download);
+                self.log_download(&outcome);
+                polled.changed = true;
+                continue;
+            }
             let Some(&tab) = self.by_view.get(&view) else {
                 continue;
             };
@@ -1156,7 +1207,7 @@ impl Browser {
                     page.view.choose_files(None);
                 }
             }
-            Event::Shortcut(_) => {}
+            Event::Shortcut(_) | Event::Download(_) => {}
         }
         if record {
             let tab = self.tabs.tab(tab).cloned();

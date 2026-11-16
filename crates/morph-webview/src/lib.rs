@@ -146,6 +146,32 @@ pub enum Event {
     FileChooser {
         multiple: bool,
     },
+    /// A download started, moved on or ended. The backend reports it
+    /// for whichever view it likes (downloads belong to the profile's
+    /// web data, not to a page).
+    Download(Download),
+}
+
+/// What happened to download `id` (unique within the backend).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Download {
+    pub id: u64,
+    pub change: DownloadChange,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DownloadChange {
+    /// It started: `name` is the file name the server suggested
+    /// (Content-Disposition, or the URL's last part). The bytes go to
+    /// `staged` (see [`download_staging`]) until the shell knows where the
+    /// user wants the file and moves it there.
+    Started { url: String, name: String, staged: PathBuf },
+    /// `received` bytes so far, of `total` when the server said.
+    Progress { received: u64, total: Option<u64> },
+    /// All bytes are in `staged`.
+    Finished,
+    /// It stopped short: the network failed or it was cancelled.
+    Failed(String),
 }
 
 /// A `<select>`'s list, for the shell to draw beside the element.
@@ -537,6 +563,24 @@ pub trait Backend {
     /// Where downloads are saved from now on; `None` is the system's
     /// Downloads folder.
     fn set_downloads_dir(&mut self, _dir: Option<std::path::PathBuf>) {}
+    /// Stop download `id` (the user cancelled the save dialog). Its
+    /// staged bytes are the shell's to delete.
+    fn cancel_download(&mut self, _id: u64) {}
+}
+
+/// Where a download's bytes go until the user picks the file's place: a
+/// hidden `.<name>.<id>.morph-part` in `dir` (the downloads folder), so
+/// moving it to the chosen place is mostly a rename.
+pub fn download_staging(dir: &std::path::Path, name: &str, id: u64) -> std::path::PathBuf {
+    dir.join(format!(".{}.{id}.morph-part", safe_name(name)))
+}
+
+/// `name` as a plain file name: no folders, nothing hidden, never empty.
+pub fn safe_name(name: &str) -> String {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or("");
+    let clean: String = base.chars().map(|c| if c.is_control() || matches!(c, ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c }).collect();
+    let clean = clean.trim().trim_start_matches('.').to_string();
+    if clean.is_empty() { "download".to_string() } else { clean }
 }
 
 /// Where a download goes: `dir` (when set) with the file name the engine
@@ -562,6 +606,17 @@ pub fn download_target(dir: Option<&std::path::Path>, suggested: &std::path::Pat
 #[cfg(test)]
 mod bridge_tests {
     use super::*;
+
+    #[test]
+    fn download_names_stay_plain_file_names() {
+        assert_eq!(safe_name("report.pdf"), "report.pdf");
+        assert_eq!(safe_name("../../etc/passwd"), "passwd");
+        assert_eq!(safe_name("C:\\x\\a:b.txt"), "a_b.txt");
+        assert_eq!(safe_name(".bashrc"), "bashrc");
+        assert_eq!(safe_name(""), "download");
+        let staged = download_staging(std::path::Path::new("/d"), "morph.tar.gz", 7);
+        assert_eq!(staged, std::path::PathBuf::from("/d/.morph.tar.gz.7.morph-part"));
+    }
 
     #[test]
     fn downloads_go_to_the_chosen_folder_without_replacing_files() {

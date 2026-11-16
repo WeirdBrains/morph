@@ -56,8 +56,55 @@ pub struct NativeBackend {
     shortcuts: Vec<String>,
     bridge: Option<PageBridge>,
     views: Vec<(ViewId, std::rc::Weak<Shared>)>,
-    /// Where downloads go (`None`: the system's Downloads folder).
-    downloads: Rc<RefCell<Option<PathBuf>>>,
+    downloads: Rc<Downloads>,
+}
+
+/// Downloads: where they go and the ones under way, by URL (wry names a
+/// download by its URL only).
+#[derive(Default)]
+struct Downloads {
+    /// The downloads folder (`None`: the system's).
+    dir: RefCell<Option<PathBuf>>,
+    next: std::cell::Cell<u64>,
+    live: RefCell<Vec<(u64, String)>>,
+    cancelled: RefCell<std::collections::HashSet<u64>>,
+}
+
+/// Report a view's downloads as [`Event::Download`]: the bytes go to a
+/// staging file in the downloads folder, and the shell moves the file to
+/// where the user wants it. WKWebView and WebView2 tell only the start
+/// and the end, so there is no progress in between.
+fn with_downloads<'a>(builder: WebViewBuilder<'a>, id: ViewId, downloads: &Rc<Downloads>, queue: &Queue) -> WebViewBuilder<'a> {
+    let (d, q) = (downloads.clone(), queue.clone());
+    let builder = builder.with_download_started_handler(move |url, path| {
+        let n = d.next.get() + 1;
+        d.next.set(n);
+        let name = crate::safe_name(&path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
+        let dir = d.dir.borrow().clone().or_else(|| path.parent().map(PathBuf::from)).unwrap_or_else(|| PathBuf::from("."));
+        let staged = crate::download_staging(&dir, &name, n);
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::remove_file(&staged);
+        *path = staged.clone();
+        d.live.borrow_mut().push((n, url.clone()));
+        q.borrow_mut().push((id, Event::Download(crate::Download { id: n, change: crate::DownloadChange::Started { url, name, staged } })));
+        true
+    });
+    let (d, q) = (downloads.clone(), queue.clone());
+    builder.with_download_completed_handler(move |url, _path, ok| {
+        let mut live = d.live.borrow_mut();
+        let Some(i) = live.iter().position(|(_, u)| *u == url) else {
+            return;
+        };
+        let (n, _) = live.remove(i);
+        let change = if d.cancelled.borrow_mut().remove(&n) {
+            crate::DownloadChange::Failed("cancelled".into())
+        } else if ok {
+            crate::DownloadChange::Finished
+        } else {
+            crate::DownloadChange::Failed("the download failed".into())
+        };
+        q.borrow_mut().push((id, Event::Download(crate::Download { id: n, change })));
+    })
 }
 
 /// What a view and its handlers share.
@@ -108,11 +155,7 @@ impl Backend for NativeBackend {
             .with_visible(spec.visible)
             .with_initialization_script_for_main_only(PAGE_SCRIPT, true)
             .with_initialization_script_for_main_only(crate::icons::ICON_SCRIPT, true);
-        let downloads = self.downloads.clone();
-        builder = builder.with_download_started_handler(move |_url, path| {
-            *path = crate::download_target(downloads.borrow().as_deref(), path);
-            true
-        });
+        builder = with_downloads(builder, id, &self.downloads, &self.queue);
         if let Some(bridge) = &self.bridge {
             builder = builder.with_initialization_script(&*bridge.script);
         }
@@ -223,7 +266,13 @@ impl Backend for NativeBackend {
     }
 
     fn set_downloads_dir(&mut self, dir: Option<std::path::PathBuf>) {
-        *self.downloads.borrow_mut() = dir;
+        *self.downloads.dir.borrow_mut() = dir;
+    }
+
+    /// wry cannot stop a download: it runs on, and its end reports the
+    /// cancel (the shell deletes the staged bytes then).
+    fn cancel_download(&mut self, id: u64) {
+        self.downloads.cancelled.borrow_mut().insert(id);
     }
 }
 

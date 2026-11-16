@@ -699,8 +699,33 @@ def serve_tests():
     import http.server
     import threading
 
-    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(ROOT / "tests" / "xvfb"))
-    handler.log_message = lambda *a, **k: None
+    class Handler(http.server.SimpleHTTPRequestHandler):
+        """Files, plus a download like a GitHub release asset: /dl/asset
+        redirects to /dl/object, an attachment with a suggested name."""
+
+        def do_GET(self):
+            if self.path.startswith("/dl/asset"):
+                self.send_response(302)
+                self.send_header("Location", "/dl/object?token=x")
+                self.end_headers()
+            elif self.path.startswith("/dl/object"):
+                self.send_response(200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Disposition", f'attachment; filename="{DOWNLOAD_NAME}"')
+                self.send_header("Content-Length", str(len(DOWNLOAD_BYTES)))
+                self.end_headers()
+                # In pieces, so the shell sees progress.
+                for i in range(0, len(DOWNLOAD_BYTES), 64 * 1024):
+                    self.wfile.write(DOWNLOAD_BYTES[i:i + 64 * 1024])
+                    self.wfile.flush()
+                    time.sleep(0.05)
+            else:
+                super().do_GET()
+
+        def log_message(self, *a, **k):
+            pass
+
+    handler = functools.partial(Handler, directory=str(ROOT / "tests" / "xvfb"))
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return f"http://127.0.0.1:{server.server_address[1]}/"
@@ -756,6 +781,49 @@ def file_picker(r, binary, display, base):
         r.check("files", "a click on a file input asks the shell for files", asked, str([n for _, n, _ in m2.events()[before:]][-6:]))
         got = wait_for(uploaded, 8) or {}
         r.check("files", "the page gets the file the dialog chose", got.get("n") == 1 and got.get("name") == "hello.txt" and got.get("text") == "hello from the file dialog", str(got))
+    finally:
+        m2.stop()
+
+
+DOWNLOAD_NAME = "morph-test-asset.tar.gz"
+DOWNLOAD_BYTES = bytes((i * 7) % 251 for i in range(1_200_000))
+
+
+def download(r, binary, display, base):
+    """A click on a link that redirects to an attachment (a GitHub release
+    asset) asks where to save it with the suggested name (answered from
+    MORPH_TEST_PICK_DIR), and the file lands there whole, with progress on
+    the way and no staging file left behind."""
+    home = Path(tempfile.mkdtemp(prefix="morph-xvfb-download-"))
+    pick = home / "picked"
+    staging = home / "Downloads"
+    pick.mkdir()
+    staging.mkdir()
+    # The downloads folder the bytes are staged in (glib reads it here).
+    (home / "xdg" / "config").mkdir(parents=True, exist_ok=True)
+    (home / "xdg" / "config" / "user-dirs.dirs").write_text(f'XDG_DOWNLOAD_DIR="{staging}"\n')
+    m2 = Driver(binary, display, str(home), extra_env={"MORPH_TEST_PICK_DIR": str(pick)})
+    try:
+        win = wait_for(lambda: m2.own_window(), 20)
+        r.check("download", "a Morph for the download page opens", win)
+        if not win:
+            return
+        before = len(m2.events())
+        if not hand_to(r, "download", binary, base + "download.html", m2.env):
+            return
+        wait_for(lambda: any(n == "TitleChanged" and a and "download" in a for _, n, a in m2.events()[before:]), 10)
+        win = m2.window("download") or win
+        m2.activate(win)
+        m2.click(win, 400, 76 + 200)
+        target = pick / DOWNLOAD_NAME
+        saved = wait_for(lambda: m2.lines("morph-event download saved"), 30)
+        events = [a or "" for _, n, a in m2.events()[before:] if n == "Download"]
+        started = [a for a in events if "Started" in a]
+        r.check("download", "a redirect to an attachment starts a download with the suggested name", started and DOWNLOAD_NAME in started[0], str(events[:3]) or str(m2.lines("morph-event")[-6:]))
+        r.check("download", "the save dialog's answer gets the whole file", saved and target.exists() and target.read_bytes() == DOWNLOAD_BYTES, f"{saved} {sorted(p.name for p in pick.iterdir())} {target.stat().st_size if target.exists() else 0} bytes")
+        r.check("download", "no staging file is left behind", not list(staging.iterdir()), str(list(staging.iterdir())))
+        if sys.platform.startswith("linux"):
+            r.check("download", "progress reaches the shell", any("Progress" in a for a in events), str(events[-3:]))
     finally:
         m2.stop()
 
@@ -1581,6 +1649,7 @@ def main():
         base = serve_tests()
         favicon(m, r, args.bin, base)
         file_picker(r, args.bin, display, base)
+        download(r, args.bin, display, base)
         select_menu(r, args.bin, display, base)
         page_clipboard(r, args.bin, display, base, args.wayland)
         main_menu(r, args.bin, display)
