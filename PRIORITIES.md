@@ -252,8 +252,8 @@ Build `v0.2.0-alpha.9`.
           interception per web view backend
         - Later: an optional AI-assisted import tool that ports an extension to Rust for
           review
-        - Acceptance target: password managers work unchanged: 1Password, Bitwarden,
-          Keeper (m3talsmith said "Bitkeeper"; to confirm) and LastPass _(decided 2026-11-15)_.
+        - Acceptance target: password managers work unchanged: 1Password, Bitwarden
+          and LastPass _(decided 2026-11-15)_.
           They need:
             - Content scripts in all frames, iframes and dynamic pages included
             - Autofill with trusted input events

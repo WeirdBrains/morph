@@ -1393,7 +1393,7 @@ extensions, Morph runs Chrome and Firefox extensions unchanged:
 - **Later:** an optional AI-assisted import tool that ports an extension to Rust, with the
   result kept for human review.
 - **Acceptance target: password managers work unchanged** _(decided 2026-11-15)_:
-  1Password, Bitwarden, Keeper (m3talsmith said "Bitkeeper"; to confirm) and LastPass. v0.5
+  1Password, Bitwarden and LastPass. v0.5
   ships when they do. They require:
   - content scripts in all frames, iframes and dynamically built pages included;
   - autofill with trusted input events (`isTrusted` true), not synthetic script events;
