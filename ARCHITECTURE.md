@@ -1392,6 +1392,19 @@ extensions, Morph runs Chrome and Firefox extensions unchanged:
   interception per web view backend (WebKitGTK, WKWebView, WebView2, Android WebView).
 - **Later:** an optional AI-assisted import tool that ports an extension to Rust, with the
   result kept for human review.
+- **Acceptance target: password managers work unchanged** _(decided 2026-11-15)_:
+  1Password, Bitwarden, Keeper (m3talsmith said "Bitkeeper"; to confirm) and LastPass. v0.5
+  ships when they do. They require:
+  - content scripts in all frames, iframes and dynamically built pages included;
+  - autofill with trusted input events (`isTrusted` true), not synthetic script events;
+  - popup and options pages, and in-page overlays drawn by content scripts;
+  - runtime messaging, `storage`, `alarms` and `idle`;
+  - a `nativeMessaging` host per OS (host manifests in the per-OS locations, stdio framing),
+    so the desktop app can unlock the vault and use biometrics;
+  - `contextMenus`, `commands`, `tabs` and `webNavigation`;
+  - **WebAuthn / passkey interception, the hardest part**: the extension must be able to
+    answer `navigator.credentials.create/get` before the platform authenticator does, on
+    every web view backend.
 
 **Shape.**
 ```
