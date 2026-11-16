@@ -681,6 +681,7 @@ fn panel_addresses_go_to_the_shell_and_about_shows_in_the_tab() {
     b.back();
     assert_eq!(b.cover(), None);
     assert_eq!(b.active_url(), "https://example.com");
+    assert_eq!(b.active_title(), "Example", "Back gives the tab the page's title again");
     assert_eq!(fake.last_visible(view), Some(true));
 }
 

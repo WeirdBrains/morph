@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use morph_identity::profile_identity::{self, ProfileIdentity, SecretString, Source, Zeroizing};
-use morph_services::device_link::{LinkState, Links};
+use morph_services::device_link::{InviteView, LinkState, Links, is_invite};
 
 /// Shortest profile or backup password accepted.
 pub const MIN_PASSWORD: usize = 8;
@@ -50,7 +50,9 @@ pub enum Step {
     Shards,
     /// The shards, shown until the user leaves the step.
     ShardList(Vec<String>),
-    /// Send this profile's identity to a new device: password and its link.
+    /// Send this profile's identity to a new device: this device's QR (the
+    /// invite) for the new device to scan, or the new device's link pasted
+    /// here; then the password.
     AddDevice,
     /// Paired with the new device; compare `sas` and send.
     Adding {
@@ -115,6 +117,12 @@ pub struct Identity {
     pub error: Option<String>,
     pub notice: Option<String>,
     links: &'static Links,
+    /// Add a device: the QR this device shows, while the step lasts.
+    invite: Option<InviteView>,
+    /// The link a new device answered the invite with.
+    answered: Option<String>,
+    /// Something changed without a new step (the invite was answered).
+    dirty: bool,
 }
 
 impl Identity {
@@ -128,6 +136,9 @@ impl Identity {
             error: None,
             notice: None,
             links,
+            invite: None,
+            answered: None,
+            dirty: false,
         };
         this.reload();
         this
@@ -153,7 +164,8 @@ impl Identity {
         const RECEIVED: &[Field] = &[NEW];
         const REVEAL: &[Field] = &[PASSWORD];
         const EXPORT: &[Field] = &[PASSWORD, field("A password for the backup", true), with("Save the backup as", Helper::Save)];
-        const ADD: &[Field] = &[PASSWORD, with("The link the new device shows", Helper::Paste)];
+        const ADD: &[Field] = &[PASSWORD, with("Or paste the link the new device shows", Helper::Paste)];
+        const OFFER: &[Field] = &[with("Or paste the link your other device shows", Helper::Paste)];
         match self.step {
             Step::Create => CREATE,
             Step::Import => IMPORT,
@@ -162,6 +174,7 @@ impl Identity {
             Step::Reveal | Step::Shards => REVEAL,
             Step::Export => EXPORT,
             Step::AddDevice => ADD,
+            Step::Offer { .. } => OFFER,
             _ => &[],
         }
     }
@@ -181,6 +194,44 @@ impl Identity {
         self.notice = None;
         self.end_sessions();
         self.step = step;
+        if self.step == Step::AddDevice {
+            self.start_invite();
+        }
+    }
+
+    /// Add a device: listen for a new device that scans this device's QR.
+    fn start_invite(&mut self) {
+        match self.links.invite_start() {
+            Ok(invite) => {
+                if std::env::var_os("MORPH_LOG_EVENTS").is_some_and(|v| v == "1") {
+                    println!("morph-event link invite={}", invite.link);
+                }
+                self.invite = Some(invite);
+            }
+            Err(e) => self.notice = Some(format!("Could not show a code here ({e}); paste the new device's link instead.")),
+        }
+    }
+
+    /// The QR text Add a device shows, while it listens.
+    pub fn invite_link(&self) -> Option<&str> {
+        self.invite.as_ref().map(|i| i.link.as_str())
+    }
+
+    /// Whether a new device answered this device's QR.
+    pub fn answered(&self) -> bool {
+        self.answered.is_some()
+    }
+
+    /// Whether something on the step changed since the last call.
+    pub fn take_dirty(&mut self) -> bool {
+        std::mem::take(&mut self.dirty)
+    }
+
+    fn end_invite(&mut self) {
+        if let Some(invite) = self.invite.take() {
+            self.links.invite_cancel(invite.session);
+        }
+        self.answered = None;
     }
 
     /// Become a new device: listen and show the link.
@@ -203,6 +254,7 @@ impl Identity {
     }
 
     fn end_sessions(&mut self) {
+        self.end_invite();
         match self.step {
             Step::Offer { session, .. } | Step::Paired { session, .. } | Step::Received { session } => self.links.new_device_cancel(session),
             Step::Adding { session, .. } => self.links.add_device_cancel(session),
@@ -212,6 +264,10 @@ impl Identity {
 
     /// Follow the new device's link session. Returns whether the step changed.
     pub fn poll(&mut self) -> bool {
+        if self.step == Step::AddDevice {
+            self.poll_invite();
+            return false;
+        }
         let session = match self.step {
             Step::Offer { session, .. } | Step::Paired { session, .. } => session,
             _ => return false,
@@ -234,6 +290,31 @@ impl Identity {
         };
         self.step = next;
         true
+    }
+
+    /// Add a device: pick up the new device's answer; an expired code is
+    /// replaced with a fresh one.
+    fn poll_invite(&mut self) {
+        let Some(session) = self.invite.as_ref().map(|i| i.session) else { return };
+        if self.answered.is_some() {
+            return;
+        }
+        match self.links.invite_take(session) {
+            Ok(Some(link)) => {
+                self.answered = Some(link);
+                if std::env::var_os("MORPH_LOG_EVENTS").is_some_and(|v| v == "1") {
+                    println!("morph-event link answered");
+                }
+                self.notice = Some("The new device answered. Type this profile's password and press Pair to compare codes.".into());
+                self.dirty = true;
+            }
+            Ok(None) => {}
+            Err(_) => {
+                self.invite = None;
+                self.start_invite();
+                self.dirty = true;
+            }
+        }
     }
 
     /// The user pressed Enter or the step's main button with `values` in
@@ -299,7 +380,18 @@ impl Identity {
                     .map_err(|e| format!("Could not restore the backup: {e}"))?;
                 self.done(identity, "Identity restored from the backup.")
             }
-            Step::Offer { .. } => Ok(Outcome::Stay),
+            Step::Offer { session, .. } => {
+                let invite = v(0).trim();
+                if invite.is_empty() {
+                    return Err("Scan this code on your other device, or paste the link it shows here.".into());
+                }
+                if !is_invite(invite) {
+                    return Err("That is a new device's link: paste it under Add a device on the device that has the identity.".into());
+                }
+                self.links.new_device_answer(session, invite).map_err(|e| format!("Could not reach the other device: {e}"))?;
+                self.notice = Some("Sent. Waiting for the other device to pair…".into());
+                Ok(Outcome::Stay)
+            }
             Step::Paired { session, .. } => {
                 self.links.new_device_confirm(session).map_err(|e| e.to_string())?;
                 self.notice = Some("Codes confirmed; waiting for the other device to send.".into());
@@ -345,14 +437,20 @@ impl Identity {
                 Ok(Outcome::Stay)
             }
             Step::AddDevice => {
-                let link = v(1).trim();
+                let pasted = v(1).trim().to_string();
+                let link = if pasted.is_empty() { self.answered.clone().unwrap_or_default() } else { pasted };
+                let link = link.as_str();
                 if link.is_empty() {
-                    return Err("Paste the link the new device shows.".into());
+                    return Err("Scan this code on the new device, or paste the link it shows.".into());
+                }
+                if is_invite(link) {
+                    return Err("That is another existing device's code: open it on the new device instead.".into());
                 }
                 let pairing = self
                     .links
                     .add_device_start(&home, &profile, &self.profile_name, &password(v(0)), link)
                     .map_err(|e| format!("Could not pair: {e}"))?;
+                self.end_invite();
                 self.step = Step::Adding { session: pairing.session, sas: pairing.sas, device: pairing.device };
                 Ok(Outcome::Stay)
             }
@@ -713,6 +811,57 @@ mod tests {
         assert_eq!(new.submit(&s(&["new password"])), Outcome::IdentityChanged, "{:?}", new.error);
         assert_eq!(new.identity.as_ref().unwrap().user_id, old.identity.as_ref().unwrap().user_id);
         assert_eq!(new.identity.as_ref().unwrap().source, Source::Linked);
+    }
+
+    /// The other direction: the existing device's Add a device shows a QR,
+    /// the new device pastes (scans) it, and the same code check follows.
+    #[test]
+    fn a_new_device_can_answer_the_existing_devices_code() {
+        let (_a, old_home) = home();
+        let (_b, new_home) = home();
+        let shared = links();
+        let mut old = Identity::new(&old_home, "p1", "Work", shared);
+        old.start(Step::Create);
+        old.submit(&s(&["old password", "old password"]));
+        old.submit(&[]);
+        old.start(Step::AddDevice);
+        let invite = old.invite_link().expect("Add a device shows a code").to_string();
+        assert!(invite.starts_with("weirdnet-morph://invite/"));
+        old.submit(&s(&["old password", ""]));
+        assert!(old.error.as_deref().unwrap().contains("Scan this code"), "{:?}", old.error);
+
+        let mut new = Identity::new(&new_home, "p1", "Work", shared);
+        new.start_offer();
+        let Step::Offer { link, .. } = new.step.clone() else { panic!("{:?} {:?}", new.step, new.error) };
+        new.submit(&s(&[&link]));
+        assert!(new.error.as_deref().unwrap().contains("new device's link"), "{:?}", new.error);
+        new.submit(&s(&[&invite]));
+        assert_eq!(new.error, None);
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while !old.answered() && std::time::Instant::now() < deadline {
+            old.poll();
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(old.take_dirty() && old.answered());
+        assert_eq!(old.step, Step::AddDevice, "the password field keeps its text");
+        old.submit(&s(&["old password", ""]));
+        let Step::Adding { sas, .. } = old.step.clone() else { panic!("{:?} {:?}", old.step, old.error) };
+        assert_eq!(old.invite_link(), None, "the code is gone once paired");
+        while !matches!(new.step, Step::Paired { .. }) && std::time::Instant::now() < deadline {
+            new.poll();
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let Step::Paired { sas: new_sas, .. } = new.step.clone() else { panic!("{:?}", new.step) };
+        assert_eq!(new_sas, sas);
+        new.submit(&[]);
+        old.submit(&[]);
+        while !matches!(new.step, Step::Received { .. }) && std::time::Instant::now() < deadline {
+            new.poll();
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert_eq!(new.submit(&s(&["new password"])), Outcome::IdentityChanged, "{:?}", new.error);
+        assert_eq!(new.identity.as_ref().unwrap().user_id, old.identity.as_ref().unwrap().user_id);
     }
 
     #[test]
