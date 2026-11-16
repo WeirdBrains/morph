@@ -391,8 +391,7 @@ impl SettingsView {
         self.browser_check = None;
         self.browser = Some(status);
         self.browser_note = made.map(|made| match made {
-            Ok(()) => default_browser::MADE_DEFAULT.to_string(),
-            Err(e) => e,
+            Ok(note) | Err(note) => note,
         });
         cx.notify();
     }
@@ -593,10 +592,9 @@ impl SettingsView {
                     Some(Status::Unknown(e)) => e.clone(),
                     None => "Checking…".to_string(),
                 };
-                let help = match &self.browser_note {
-                    Some(note) => format!("{status} {note}"),
-                    None => status,
-                };
+                // The newest word wins: what the last attempt said, else the
+                // status (never both: they often say the same thing).
+                let help = self.browser_note.clone().unwrap_or(status);
                 let control = if self.browser == Some(Status::Default) {
                     div().text_size(px(12.)).text_color(rgb(t.accent)).child("Default").into_any_element()
                 } else {

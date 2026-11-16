@@ -21,6 +21,7 @@ gpui_platform.workspace = true
 image.workspace = true
 morph-browser.workspace = true
 morph-identity.workspace = true
+morph-os.workspace = true
 morph-services.workspace = true
 morph-ui.workspace = true
 morph-webview.workspace = true

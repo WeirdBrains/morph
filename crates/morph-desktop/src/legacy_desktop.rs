@@ -131,6 +131,13 @@ pub fn spawn() {
             Ok(_) => {}
             Err(e) => eprintln!("morph: could not remove the old {OLD_ID}: {e}"),
         }
+        // Then (same thread: one writer of mimeapps.list at a time) claim
+        // weirdnet-morph:// when nothing handles it.
+        if let Some(dirs) = crate::default_browser::Dirs::system()
+            && let Err(e) = crate::default_browser::ensure_scheme(&dirs)
+        {
+            eprintln!("morph: could not register weirdnet-morph links: {e}");
+        }
     });
 }
 

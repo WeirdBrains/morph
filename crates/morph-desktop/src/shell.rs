@@ -375,6 +375,8 @@ pub struct Shell {
     test_actions: Vec<Action>,
     /// Later launches' URLs (single instance).
     listener: Option<crate::single::Listener>,
+    /// weirdnet-morph:// links to route once the window runs.
+    pending_links: Vec<String>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -441,8 +443,16 @@ impl Shell {
                 .filter_map(|name| Action::from_name(name.trim()))
                 .collect(),
             listener: None,
+            pending_links: Vec::new(),
             _subscriptions: subscriptions,
             profile_subscriptions: Vec::new(),
+        };
+        // A weirdnet-morph:// link is routed, never loaded as a page.
+        let start = if morph_core::scheme::is_link(start) {
+            shell.pending_links.push(start.to_string());
+            ""
+        } else {
+            start
         };
         shell.build(start, window, cx);
         shell
@@ -795,16 +805,47 @@ impl Shell {
         cx.notify();
     }
 
+    /// A URL from outside (another launch, the OS): a new tab, or for a
+    /// weirdnet-morph:// link, its route.
+    fn open_external(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) {
+        use morph_core::scheme;
+        if !scheme::is_link(url) {
+            if let Some(main) = self.main() {
+                main.open_url(url, true, window, cx);
+            }
+            return;
+        }
+        let note = match scheme::parse(url).map(scheme::route) {
+            Some(scheme::Route::Unknown(link)) => {
+                // Only the log-safe form: a link's query may carry tokens.
+                eprintln!("morph: no handler for {} yet", link.describe());
+                if std::env::var_os("MORPH_LOG_EVENTS").is_some_and(|v| v == "1") {
+                    println!("morph-event link unknown {}", link.describe());
+                }
+                "weirdnet-morph links open peer content from v0.3 on"
+            }
+            None => {
+                eprintln!("morph: ignoring a malformed {} link", scheme::SCHEME);
+                "That weirdnet-morph link is not valid"
+            }
+        };
+        if let Some(main) = self.main() {
+            main.toast(note, None, cx);
+        }
+    }
+
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if window.focused(cx).is_none() {
             window.focus(&self.focus, cx);
         }
-        let handed = self.listener.as_ref().map(|l| l.take()).unwrap_or_default();
+        let mut handed = self.listener.as_ref().map(|l| l.take()).unwrap_or_default();
+        // Links the OS handed over directly (Apple Events on macOS) and a
+        // weirdnet-morph:// link Morph was started with.
+        handed.extend(take_opened_urls().into_iter().map(crate::single::Request::Open));
+        handed.extend(self.pending_links.drain(..).map(crate::single::Request::Open));
         for request in handed {
-            if let crate::single::Request::Open(url) = &request
-                && let Some(main) = self.main()
-            {
-                main.open_url(url, true, window, cx);
+            if let crate::single::Request::Open(url) = &request {
+                self.open_external(url, window, cx);
             }
             window.activate_window();
         }
@@ -1066,8 +1107,23 @@ fn page_action(keymap: &Keymap, key: &str) -> Option<Action> {
 }
 
 /// Open the window and run until it closes.
+/// URLs the OS asked the running app to open (macOS Apple Events: links
+/// and weirdnet-morph:// clicked elsewhere), until the shell's tick takes
+/// them.
+static OPENED_URLS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn take_opened_urls() -> Vec<String> {
+    OPENED_URLS.lock().map(|mut urls| std::mem::take(&mut *urls)).unwrap_or_default()
+}
+
 pub fn run(home: PathBuf, args: Args, listener: Option<crate::single::Listener>) {
-    gpui_platform::application().run(move |cx: &mut App| {
+    let app = gpui_platform::application();
+    app.on_open_urls(|urls| {
+        if let Ok(mut opened) = OPENED_URLS.lock() {
+            opened.extend(urls);
+        }
+    });
+    app.run(move |cx: &mut App| {
         // On macOS every shortcut uses Cmd (`Keymap::for_platform`).
         let keymap = Keymap::default().for_platform(MAC);
         let mut bindings = address_bindings();

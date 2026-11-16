@@ -36,7 +36,10 @@ if (Get-Command wix -ErrorAction SilentlyContinue) {
   # MSI versions are numbers: 0.2.0-alpha.8 installs as 0.2.0.8.
   $msiVersion = $version -replace '^(\d+\.\d+\.\d+)-(alpha|beta|rc)\.(\d+)$', '$1.$3'
   $msi = "dist\$name.msi"
-  wix build packaging\windows\morph.wxs -arch x64 -d "Version=$msiVersion" -d "Source=$dir" -o $msi
+  # The installer's screens come from WiX's UI extension.
+  wix extension add -g WixToolset.UI.wixext/5.0.2
+  if ($LASTEXITCODE -ne 0) { throw "wix extension add failed" }
+  wix build packaging\windows\morph.wxs -arch x64 -ext WixToolset.UI.wixext -d "Version=$msiVersion" -d "Source=$dir" -o $msi
   if ($LASTEXITCODE -ne 0) { throw "wix build failed" }
   $outputs += $msi
 } else {
