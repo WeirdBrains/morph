@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Linux, native Wayland: pasting into a page no longer crashes Morph
+  (SIGSEGV in WebKitGTK's clipboard code, e.g. any paste on github.com, and
+  middle clicks). Pages the shell draws never use WebKit's clipboard: Morph
+  hands them its own clipboard as a real `paste` event (text, or an image as
+  a file, so clipboardData's types, items and files work) and puts what a
+  page copies or cuts on the system clipboard. A middle click on editable
+  text pastes the primary selection, on a link opens it in a new tab.
+  The Xvfb and Wayland checks paste, copy and cut on a test page.
 - `v0.2.0-alpha.10`, desktop chrome: preferences are a full page in a tab
   (Ctrl+, / Cmd+,) with search, sections and every setting; a search engine
   selector left of the address (Google by default, DuckDuckGo; each tab keeps
@@ -26,6 +34,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   made the default browser on both (NSWorkspace on macOS; the Default Apps
   settings page on Windows, with Morph registered under StartMenuInternet).
   The MSI has the usual install screens (licence, folder).
+- Device linking works from either side: Add a device on the device that
+  has the identity now shows its own QR code, link and Copy link (an invite);
+  the new device pastes or scans it on its Link from another device screen,
+  which also keeps its own QR. Both screens then show the same six-digit code
+  as before, and nothing moves until it is confirmed on both. Pasting the new
+  device's link under Add a device still works. The Xvfb, Wayland and
+  macOS/Windows smoke checks decode the QR codes from screenshots.
+- Back from the About or Settings page gives the tab its page's title again.
 - `weirdnet-morph://` is registered on every OS (desktop file, Info.plist,
   the MSI and the per-user registry) and links go to the running Morph
   (single instance on Linux and Windows, Apple Events on macOS).

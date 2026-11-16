@@ -18,6 +18,7 @@ use std::time::Instant;
 use gtk::gdk;
 use gtk::glib::translate::{ToGlibPtr, ToGlibPtrMut};
 use gtk::prelude::*;
+use javascriptcore::ValueExt;
 use webkit2gtk::{FindControllerExt, FindOptions, HitTestResultExt, OptionMenuExt, WebViewExt};
 use wry::{WebContext, WebViewBuilder, WebViewBuilderExtUnix, WebViewExtUnix};
 
@@ -196,7 +197,10 @@ impl Backend for OffscreenBackend {
         });
         let cursor = Rc::new(Cell::new(PageCursor::Default));
         let c = cursor.clone();
+        let editable = Rc::new(Cell::new(false));
+        let e = editable.clone();
         engine.connect_mouse_target_changed(move |_, hit, _| {
+            e.set(hit.context_is_editable());
             c.set(if hit.context_is_link() {
                 PageCursor::Pointer
             } else if hit.context_is_editable() || hit.context_is_selection() {
@@ -261,6 +265,9 @@ impl Backend for OffscreenBackend {
             inside: Cell::new(false),
             cursor,
             chooser,
+            copied: Rc::default(),
+            editable,
+            held_middle: Cell::new(None),
         };
         page.apply_size();
         page.set_visible(spec.visible)?;
@@ -325,6 +332,13 @@ struct OffscreenView {
     inside: Cell<bool>,
     cursor: Rc<Cell<PageCursor>>,
     chooser: crate::wry_linux::Chooser,
+    /// What the last copy copied, for [`WebView::take_copied`].
+    copied: Rc<RefCell<Option<String>>>,
+    /// The pointer is over editable text.
+    editable: Rc<Cell<bool>>,
+    /// A middle button is down: `true` when it went to the page as a
+    /// Ctrl+click (on a link), else it was kept from the page.
+    held_middle: Cell<Option<bool>>,
 }
 
 /// The rows of a `<select>` list, and the one selected.
@@ -459,6 +473,26 @@ impl OffscreenView {
     }
 
     fn button(&self, x: f64, y: f64, button: MouseButton, pressed: bool, modifiers: Modifiers) {
+        // WebKit's middle click went through its clipboard code (the
+        // primary selection), which crashed off screen (see
+        // crate::clipboard), wherever it landed. So the page never gets one:
+        // on a link it is a Ctrl+click (a new tab, as before), on editable
+        // text the shell pastes the primary selection itself.
+        let (button, modifiers) = if button == MouseButton::Middle {
+            let link = if pressed {
+                let link = self.cursor.get() == PageCursor::Pointer && !self.editable.get();
+                self.held_middle.set(Some(link));
+                link
+            } else {
+                self.held_middle.take().unwrap_or(false)
+            };
+            if !link {
+                return;
+            }
+            (MouseButton::Left, Modifiers { control: true, ..modifiers })
+        } else {
+            (button, modifiers)
+        };
         let number = button_number(button);
         // X11 reports the buttons held before the event.
         let state = keys::state(modifiers) | self.buttons.get();
@@ -509,6 +543,11 @@ impl OffscreenView {
     }
 
     fn key(&self, key: Key) {
+        // WebKit must never act on these itself (see crate::clipboard): the
+        // shell turns them into Input::Paste and Input::Copy.
+        if crate::clipboard::clipboard_key(&key).is_some() {
+            return;
+        }
         let mut keycode = key.keycode;
         if keycode == 0
             && let Some(keymap) = gdk::Display::default().and_then(|d| gdk::Keymap::for_display(&d))
@@ -679,7 +718,23 @@ impl WebView for OffscreenView {
             Input::Scroll { x, y, dx, dy, precise, modifiers } => self.scroll(x * zoom, y * zoom, dx, dy, precise, modifiers),
             Input::Key(key) => self.key(key),
             Input::Text(text) => self.engine().execute_editing_command_with_argument("InsertText", &text),
+            Input::Paste(clip) => {
+                let script = crate::clipboard::paste_script(&clip);
+                self.engine().run_javascript(&script, None::<&webkit2gtk::gio::Cancellable>, |_| {});
+            }
+            Input::Copy { cut } => {
+                let copied = self.copied.clone();
+                self.engine().run_javascript(&crate::clipboard::copy_script(cut), None::<&webkit2gtk::gio::Cancellable>, move |result| {
+                    let text = result.ok().and_then(|r| r.js_value()).map(|v| v.to_str().to_string()).filter(|t| !t.is_empty());
+                    if text.is_some() {
+                        *copied.borrow_mut() = text;
+                    }
+                });
+            }
         }
+    }
+    fn take_copied(&self) -> Option<String> {
+        self.copied.borrow_mut().take()
     }
     fn cursor(&self) -> PageCursor {
         self.cursor.get()
