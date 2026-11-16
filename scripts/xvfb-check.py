@@ -585,6 +585,20 @@ def settings_file(m):
     return path.read_text(errors="replace") if path.exists() else ""
 
 
+def internal_pages(m, r, win, top):
+    """morph://about typed in the address opens the About page in the tab;
+    Back returns to the page."""
+    m.activate(win)
+    m.click(win, 300, top + 300)
+    before = m.title(win)
+    m.key("ctrl+l", delay=0.5)
+    m.type("morph://about")
+    m.key("Return", delay=1.0)
+    r.check("about", "morph://about opens the About page", wait_for(lambda: m.title(win).startswith("About Morph")), m.title(win))
+    m.key("alt+Left", delay=1.0)
+    r.check("about", "Alt+Left goes back to the page", wait_for(lambda: not m.title(win).startswith("About")), f"{m.title(win)} (was {before})")
+
+
 def settings_panel(m, r, win, top):
     """Ctrl+, opens the preferences as a page (a tab of its own) with the
     keyboard: / searches, Enter goes to the first setting, Right changes
@@ -1290,6 +1304,7 @@ def main():
             r.check("popup", "Ctrl+W closes the popup", not m.window(r"^P\{"), "still open")
         profiles_panel(m, r, win, top)
         tab_bar(m, r, win, top)
+        internal_pages(m, r, win, top)
         w0, h0 = settings_panel(m, r, win, top)
         m.stop()
         m = Driver(args.bin, display, home)
