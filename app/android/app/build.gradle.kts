@@ -66,11 +66,34 @@ android {
         }
     }
 
+    // A fixed test key (not a Play release key) when MORPH_ANDROID_KEYSTORE
+    // names a keystore: CI decodes it from the ANDROID_TEST_* secrets so
+    // every build installs over the last one. Without it (forks, local
+    // builds) the default debug key signs, as before.
+    val testKeystore = System.getenv("MORPH_ANDROID_KEYSTORE")
+        ?.takeIf { it.isNotBlank() }
+        ?.let { file(it) }
+        ?.takeIf { it.isFile }
+    signingConfigs {
+        if (testKeystore != null) {
+            create("morphTest") {
+                storeFile = testKeystore
+                storeType = "pkcs12"
+                storePassword = System.getenv("MORPH_ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("MORPH_ANDROID_KEY_ALIAS")
+                keyPassword = System.getenv("MORPH_ANDROID_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
+        val signing = signingConfigs.findByName("morphTest") ?: signingConfigs.getByName("debug")
+        debug {
+            signingConfig = signing
+        }
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            // No Play release key yet: the test key (or the debug key).
+            signingConfig = signing
         }
     }
 }

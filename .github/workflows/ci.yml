@@ -111,7 +111,33 @@ jobs:
             crates/morph-bridge -> ../../app/.dart_tool/hooks_runner
             . -> target
       - run: flutter pub get
+      # Sign with the fixed test key when the ANDROID_TEST_* secrets exist
+      # (so each APK updates the last one); otherwise the debug key.
+      - name: Test signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_TEST_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_TEST_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_TEST_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_TEST_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "No ANDROID_TEST_* secrets: the debug key signs"
+            exit 0
+          fi
+          ks="$RUNNER_TEMP/morph-test.p12"
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$ks"
+          {
+            echo "MORPH_ANDROID_KEYSTORE=$ks"
+            echo "MORPH_ANDROID_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
+            echo "MORPH_ANDROID_KEY_ALIAS=$KEY_ALIAS"
+            echo "MORPH_ANDROID_KEY_PASSWORD=$KEY_PASSWORD"
+          } >> "$GITHUB_ENV"
+          echo "The fixed test key signs"
       - run: flutter build apk --debug
+      - name: APK signer
+        run: |
+          apksigner="$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)"
+          "$apksigner" verify --print-certs build/app/outputs/flutter-apk/app-debug.apk | grep -E "Signer #1 certificate (DN|SHA-256)"
       # c_char is u8 on aarch64 Android, so casts that are fine on x86_64
       # Linux can fail clippy there.
       - name: Clippy for aarch64 Android

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Android: CI and release APKs are signed with one fixed test key (the
+  `ANDROID_TEST_*` repository secrets; not a Play release key), so a new APK
+  installs over the last one. Before, every CI run signed with a new debug
+  key and updates failed. Phones with an older Morph APK uninstall it once.
+  Without the secrets (forks, local builds) the debug key signs as before.
+- The phone apps carry the release version: `app/pubspec.yaml` is
+  `0.2.0-alpha.11+10400`, so Android shows versionName 0.2.0-alpha.11 and
+  versionCode 10400 (iOS CFBundleShortVersionString and CFBundleVersion come
+  from the same line). Each release bumps the name and adds one to the build
+  number, and refuses a build number that does not exceed the last tag's.
+- iOS builds in CI: a separate `iOS` workflow on a self-hosted Mac builds the
+  app unsigned for devices and for the simulator and uploads both
+  (`morph-ios-unsigned`). It never blocks CI.
+
 ## [0.2.0-alpha.11] - 2026-11-16
 
 - Mobile answers a desktop's device-link code: the new-device screen (Link
