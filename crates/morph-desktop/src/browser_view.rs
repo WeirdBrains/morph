@@ -334,9 +334,12 @@ impl BrowserView {
             profiles: Vec::new(),
             tabs_collapsed: false,
             address_menu: None,
-            position_focus: cx.focus_handle().tab_stop(true),
-            collapse_focus: cx.focus_handle().tab_stop(true),
-            engine_focus: cx.focus_handle().tab_stop(true),
+            // Tab from the address bar: position, collapse, search engine,
+            // in every layout (an explicit order: paint order changes with
+            // the tab position).
+            position_focus: cx.focus_handle().tab_stop(true).tab_index(1),
+            collapse_focus: cx.focus_handle().tab_stop(true).tab_index(2),
+            engine_focus: cx.focus_handle().tab_stop(true).tab_index(3),
             file_dialog: None,
             shell_shown: true,
             icon_images: std::cell::RefCell::new(HashMap::new()),
@@ -800,6 +803,8 @@ impl BrowserView {
             }
             return;
         }
+        // Show the page again before it takes the keyboard.
+        self.close_address_menu(cx);
         let internal = self.browser.submit_address();
         self.sync_focus(window, cx);
         if let Some(internal) = internal {
@@ -933,6 +938,7 @@ impl BrowserView {
     }
 
     fn cancel(&mut self, _: &Cancel, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_address_menu(cx);
         self.browser.blur_address();
         self.browser.focus_page();
         self.sync_focus(window, cx);
@@ -1091,16 +1097,12 @@ impl BrowserView {
             }))
             .when(focused, |d| d.border_1().border_color(rgb(t.accent)))
             .tooltip(tip(tooltip, t))
+            // A click, or Enter or Space while focused (GPUI clicks focused
+            // elements from the keyboard).
             .on_click(cx.listener(move |this, _, window, cx| {
                 let bounds = at(this);
+                log_bar(id);
                 run(this, bounds, window, cx);
-            }))
-            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
-                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                    cx.stop_propagation();
-                    let bounds = at(this);
-                    run(this, bounds, window, cx);
-                }
             }))
             .child(
                 canvas(
@@ -2064,11 +2066,6 @@ impl BrowserView {
         if let Some(menu) = self.address_menu.take() {
             if menu.hid_page && self.shell_menu.as_ref().is_none_or(|m| !m.hid_page) {
                 self.browser.set_shown(self.shell_shown);
-                // The page took the keyboard while hidden (Enter loads and
-                // focuses it): give it again now that it shows.
-                if !self.browser.address_focused() && self.browser.page_has_keyboard() {
-                    self.browser.focus_page();
-                }
             }
             cx.notify();
         }
@@ -2258,6 +2255,13 @@ impl BrowserView {
                 .with_priority(2)
                 .into_any_element(),
         ]
+    }
+}
+
+/// Say which tab-bar button ran, for the xvfb checks.
+fn log_bar(id: &str) {
+    if std::env::var_os("MORPH_LOG_EVENTS").is_some_and(|v| v == "1") {
+        println!("morph-event bar {id}");
     }
 }
 

@@ -645,6 +645,9 @@ def tab_bar(m, r, win, top):
         "top": ((w0, h0), (w0, h0)),
     }
     downs = {"top": 1, "bottom": 2, "left": 3, "right": 4}
+    # The first Ctrl+L after a click in the page can race the page's
+    # keyboard handoff under Xvfb: one round trip first.
+    bar_keys(m, win, top, 0, "Escape")
     for position in ("left", "right", "bottom", "top"):
         # The page area moved: click where the page is in every layout.
         page_top = top if position == "top" else 42
@@ -721,7 +724,9 @@ def last_tab_quits(r, binary, display):
     """Closing the last tab quits Morph (exit code 0) after saving."""
     m2 = Driver(binary, display, tempfile.mkdtemp(prefix="morph-xvfb-quit-"))
     try:
-        win = wait_for(lambda: m2.window("Morph"), 20)
+        # Its own window: the first Morph still runs on this display.
+        wait_for(lambda: state(m2), 20)
+        win = wait_for(lambda: m2.own_window(), 20)
         r.check("quit", "a Morph with one tab opens", win and wait_for(lambda: state(m2), 20))
         if not win:
             return
