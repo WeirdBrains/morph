@@ -116,6 +116,16 @@ impl Backend for NativeBackend {
             let q = self.queue.clone();
             builder = builder.with_on_web_content_process_terminate_handler(move || q.borrow_mut().push((id, Event::Crashed)));
         }
+        #[cfg(target_os = "windows")]
+        {
+            // WebView2 runs Edge's own accelerators first (Ctrl+D adds a
+            // favorite, Ctrl+Shift+O opens favorites, Ctrl+H history,
+            // Ctrl+F its find bar), so Morph's shortcuts never reached the
+            // page script that reports them. Without them, every key
+            // reaches the page, and the page script hands Morph its own.
+            use wry::WebViewBuilderExtWindows;
+            builder = builder.with_browser_accelerator_keys(false);
+        }
         let q = self.queue.clone();
         builder = builder.with_document_title_changed_handler(move |title| q.borrow_mut().push((id, Event::TitleChanged(title))));
         let (q, p) = (self.queue.clone(), pending.clone());

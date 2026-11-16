@@ -17,6 +17,8 @@ pub mod fake;
 pub mod keys;
 pub mod native_page;
 #[cfg(target_os = "linux")]
+pub mod appearance;
+#[cfg(target_os = "linux")]
 pub mod offscreen;
 #[cfg(target_os = "linux")]
 pub mod render_probe;
@@ -24,6 +26,35 @@ pub mod render_probe;
 pub mod wry_linux;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 pub mod wry_native;
+
+/// The web engine and its version, for the About page.
+pub fn engine_version() -> String {
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: these return constants of the loaded library.
+        let (major, minor, micro) =
+            unsafe { (webkit2gtk::ffi::webkit_get_major_version(), webkit2gtk::ffi::webkit_get_minor_version(), webkit2gtk::ffi::webkit_get_micro_version()) };
+        format!("WebKitGTK {major}.{minor}.{micro}")
+    }
+    #[cfg(target_os = "macos")]
+    {
+        match wry::webview_version() {
+            Ok(v) => format!("WKWebView (WebKit {v})"),
+            Err(_) => "WKWebView (the system's WebKit)".into(),
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        match wry::webview_version() {
+            Ok(v) => format!("Microsoft Edge WebView2 {v}"),
+            Err(_) => "Microsoft Edge WebView2 (runtime not found)".into(),
+        }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        "none".to_string()
+    }
+}
 
 /// Matches counted and highlighted at most, as other browsers cap them.
 pub const FIND_MAX_MATCHES: u32 = 1000;
@@ -97,6 +128,47 @@ pub enum Event {
     FindResult {
         matches: u32,
     },
+    /// A `<select>`'s list opened (pages the shell draws): the shell shows
+    /// it and answers with [`WebView::option_menu`].
+    OptionMenu(OptionMenu),
+    /// The open list closed (chosen, cancelled, or the page took it away).
+    OptionMenuClosed,
+    /// The page's tooltip under the pointer (`title` attributes), or none,
+    /// for the shell to draw (pages the shell draws).
+    Tooltip(Option<String>),
+}
+
+/// A `<select>`'s list, for the shell to draw beside the element.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct OptionMenu {
+    pub items: Vec<MenuItem>,
+    /// The element, in logical pixels from the page's top-left corner.
+    pub anchor: Rect,
+}
+
+/// One row of an [`OptionMenu`]. Indexes count every row, group labels too.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct MenuItem {
+    pub label: String,
+    pub tooltip: String,
+    pub enabled: bool,
+    /// An `<optgroup>` label: shown, never chosen.
+    pub group_label: bool,
+    /// An option inside an `<optgroup>` (drawn indented).
+    pub group_child: bool,
+    /// The element's current value.
+    pub selected: bool,
+}
+
+/// The shell's answer to an open [`OptionMenu`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MenuChoice {
+    /// Show row `n` in the element while the list stays open.
+    Highlight(usize),
+    /// Choose row `n` (the page gets `input` and `change`) and close.
+    Activate(usize),
+    /// Close without choosing (the element keeps its value).
+    Cancel,
 }
 
 /// Why a page failed to load, for the shell's error page.
@@ -286,6 +358,8 @@ pub trait WebView {
     fn cursor(&self) -> PageCursor {
         PageCursor::Default
     }
+    /// Answer the page's open [`Event::OptionMenu`]; nothing when none is.
+    fn option_menu(&self, _choice: MenuChoice) {}
 }
 
 /// A page drawn off screen: premultiplied BGRA (Cairo's ARGB32 on a

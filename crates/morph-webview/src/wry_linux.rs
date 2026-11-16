@@ -24,7 +24,9 @@ use crate::{Backend, Error, Event, LoadError, PageBridge, Rect, Result, Spec, Vi
 
 /// Start GTK on this thread. Call once, before [`WryBackend::new`].
 pub fn init() -> Result<()> {
-    gtk::init().map_err(|e| Error::Backend(format!("GTK did not start: {e}")))
+    gtk::init().map_err(|e| Error::Backend(format!("GTK did not start: {e}")))?;
+    crate::appearance::start();
+    Ok(())
 }
 
 /// The X11 window id behind a window handle, if it is an X11 window.
@@ -70,6 +72,52 @@ pub(crate) const UNDO_REDO_SCRIPT: &str = r#"(() => {
     if (!command) return;
     setTimeout(() => { if (!e.defaultPrevented) document.execCommand(command); }, 0);
   });
+})();"#;
+
+/// WebKitGTK draws a `<select>` with its own face, light or dark by the
+/// element's `color-scheme`, and ignores the page's background for it, so
+/// a dark site that styles its selects (`background: #1c2027; color: #eee`)
+/// without saying `color-scheme: dark` got light text on a white face where
+/// Chrome shows the page's dark one. A select whose page background is dark
+/// and that asks for no scheme of its own is given `color-scheme: dark`
+/// (and checked again when the page changes or the system scheme flips).
+pub(crate) const CONTROL_SCHEME_SCRIPT: &str = r#"(() => {
+  const MARK = "data-morph-scheme";
+  const luminance = (color) => {
+    const m = /rgba?\(([^)]+)\)/.exec(color);
+    if (!m) return null;
+    const [r, g, b, a = 1] = m[1].split(/[\s,\/]+/).filter(Boolean).map(Number);
+    return a < 0.5 ? null : (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  };
+  const fix = (el) => {
+    if (el.hasAttribute(MARK)) {
+      el.style.removeProperty("color-scheme");
+      el.removeAttribute(MARK);
+    }
+    const style = getComputedStyle(el);
+    if (style.colorScheme && style.colorScheme !== "normal") return;
+    const bg = luminance(style.backgroundColor);
+    if (bg !== null && bg < 0.4) {
+      el.style.setProperty("color-scheme", "dark");
+      el.setAttribute(MARK, "dark");
+    }
+  };
+  let queued = false;
+  const run = () => {
+    queued = false;
+    document.querySelectorAll("select").forEach(fix);
+  };
+  const later = () => {
+    if (!queued) { queued = true; requestAnimationFrame(run); }
+  };
+  document.addEventListener("DOMContentLoaded", () => {
+    run();
+    new MutationObserver((records) => {
+      if (records.some((r) => r.type === "childList" || (r.target.tagName === "SELECT" && r.attributeName !== MARK) || r.attributeName === "class")) later();
+    }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "style"] });
+  });
+  addEventListener("load", later);
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", later);
 })();"#;
 
 pub(crate) struct Popup {
@@ -505,6 +553,7 @@ pub(crate) fn popup_handler(
         let builder = WebViewBuilder::new()
             .with_related_view(features.opener.webview.clone())
             .with_initialization_script(UNDO_REDO_SCRIPT)
+            .with_initialization_script(CONTROL_SCHEME_SCRIPT)
             .with_new_window_req_handler(popup_handler(tab, queue.clone(), popups.clone(), bridge.clone()));
         let built = with_bridge(builder, &bridge).build_gtk(&vbox);
         let view = match built {
@@ -577,6 +626,7 @@ impl Backend for WryBackend {
             .with_url(url)
             .with_bounds(wry_rect(spec.bounds))
             .with_initialization_script(UNDO_REDO_SCRIPT)
+            .with_initialization_script(CONTROL_SCHEME_SCRIPT)
             .with_visible(spec.visible)
             .with_new_window_req_handler(popup_handler(id, self.queue.clone(), self.popups.clone(), self.bridge.clone()));
         let view = with_bridge(builder, &self.bridge).build_as_child(&self.parent).map_err(backend_err)?;

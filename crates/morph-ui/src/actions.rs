@@ -36,6 +36,8 @@ pub enum Action {
     ShowSettings,
     /// Open or close the identity panel.
     ShowIdentity,
+    /// Show the About page (morph://about).
+    ShowAbout,
 }
 
 impl Action {
@@ -64,6 +66,7 @@ impl Action {
             Action::ShowProfiles => "shell.show_profiles".into(),
             Action::ShowSettings => "shell.show_settings".into(),
             Action::ShowIdentity => "shell.show_identity".into(),
+            Action::ShowAbout => "shell.show_about".into(),
         }
     }
 
@@ -91,6 +94,7 @@ impl Action {
             Action::ShowProfiles,
             Action::ShowSettings,
             Action::ShowIdentity,
+            Action::ShowAbout,
         ];
         if let Some(action) = fixed.into_iter().find(|a| a.name() == name) {
             return Some(action);
@@ -149,7 +153,25 @@ impl Default for Keymap {
     }
 }
 
+/// Keystrokes that keep Ctrl on macOS: switching tabs is Ctrl+Tab there too.
+pub const MAC_CTRL_EXCEPTIONS: [&str; 2] = ["ctrl-tab", "ctrl-shift-tab"];
+
+/// `keystroke` on the platform: on macOS Morph's Ctrl shortcuts use Cmd
+/// (`ctrl-shift-o` is `cmd-shift-o`), except [`MAC_CTRL_EXCEPTIONS`].
+pub fn platform_keystroke(keystroke: &str, mac: bool) -> String {
+    match keystroke.strip_prefix("ctrl-") {
+        Some(rest) if mac && !MAC_CTRL_EXCEPTIONS.contains(&keystroke) => format!("cmd-{rest}"),
+        _ => keystroke.to_string(),
+    }
+}
+
 impl Keymap {
+    /// The keymap as bound on the platform ([`platform_keystroke`]): the one
+    /// place the macOS Cmd rule lives.
+    pub fn for_platform(&self, mac: bool) -> Keymap {
+        Keymap { bindings: self.bindings.iter().map(|b| Binding { keystroke: platform_keystroke(&b.keystroke, mac), action: b.action }).collect() }
+    }
+
     pub fn bindings(&self) -> &[Binding] {
         &self.bindings
     }
@@ -174,6 +196,21 @@ impl Keymap {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn on_macos_every_shortcut_uses_cmd_but_tab_switching() {
+        let mac = Keymap::default().for_platform(true);
+        for b in mac.bindings() {
+            assert!(!b.keystroke.starts_with("ctrl-") || MAC_CTRL_EXCEPTIONS.contains(&b.keystroke.as_str()), "{} still uses Ctrl on macOS", b.keystroke);
+        }
+        assert_eq!(mac.action_for("cmd-t"), Some(Action::NewTab));
+        assert_eq!(mac.action_for("cmd-shift-l"), Some(Action::ShowIdentity));
+        assert_eq!(mac.action_for("cmd-,"), Some(Action::ShowSettings));
+        assert_eq!(mac.action_for("cmd-9"), Some(Action::SelectLastTab));
+        assert_eq!(mac.action_for("ctrl-tab"), Some(Action::NextTab));
+        assert_eq!(mac.action_for("ctrl-t"), None);
+        assert_eq!(Keymap::default().for_platform(false), Keymap::default());
+    }
 
     #[test]
     fn default_keys_match_the_flutter_shell() {

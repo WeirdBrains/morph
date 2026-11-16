@@ -5,7 +5,7 @@ use morph_ui::actions::{Action, Keymap};
 use morph_webview::fake::{Call, FakeBackend};
 use morph_webview::{ErrorKind, Event, Frame, Input, LoadError, Modifiers, MouseButton, Rect, ViewId};
 
-use super::{Browser, Config, Cover, FindBar, error_text};
+use super::{ABOUT_URL, Browser, Config, Cover, FindBar, Internal, error_text};
 
 fn browser(start: &str) -> (Browser, FakeBackend) {
     let fake = FakeBackend::new();
@@ -16,7 +16,7 @@ fn browser(start: &str) -> (Browser, FakeBackend) {
 fn type_into_address(browser: &mut Browser, text: &str) {
     browser.focus_address();
     browser.address_mut().replace(None, text);
-    browser.submit_address();
+    let _ = browser.submit_address();
 }
 
 #[test]
@@ -523,4 +523,148 @@ fn window_backends_leave_the_keyboard_to_the_window_system() {
     b.focus_page();
     assert!(!b.page_has_keyboard());
     assert_eq!(b.take_frame(), None);
+}
+
+fn select_menu() -> morph_webview::OptionMenu {
+    let item = |label: &str, selected| morph_webview::MenuItem { label: label.into(), enabled: true, selected, ..Default::default() };
+    morph_webview::OptionMenu { items: vec![item("Apple", false), item("Banana", true), item("Cherry", false)], anchor: Rect::new(40.0, 40.0, 160.0, 30.0) }
+}
+
+fn menu_calls(fake: &FakeBackend, view: ViewId) -> Vec<morph_webview::MenuChoice> {
+    fake.calls_for(view).into_iter().filter_map(|c| if let Call::OptionMenu(m) = c { Some(m) } else { None }).collect()
+}
+
+#[test]
+fn a_select_list_opens_for_the_shell_and_keys_choose_from_it() {
+    use super::MenuKey;
+    use morph_webview::MenuChoice;
+    let (mut b, fake) = browser("example.com");
+    let view = fake.created()[0];
+    assert!(!b.menu_key(MenuKey::Down), "no list, the key is the page's");
+    fake.emit(view, Event::OptionMenu(select_menu()));
+    b.poll();
+    let menu = b.option_menu().expect("open");
+    assert_eq!(menu.highlighted, Some(1));
+    assert_eq!(menu.menu.anchor, Rect::new(40.0, 40.0, 160.0, 30.0));
+    assert!(b.menu_key(MenuKey::Down));
+    assert!(b.menu_key(MenuKey::Enter));
+    assert_eq!(menu_calls(&fake, view), vec![MenuChoice::Highlight(2), MenuChoice::Activate(2)]);
+    assert!(b.option_menu().is_none(), "choosing closes it");
+}
+
+#[test]
+fn a_click_chooses_and_a_click_outside_or_a_new_page_cancels() {
+    use morph_webview::MenuChoice;
+    let (mut b, fake) = browser("example.com");
+    let view = fake.created()[0];
+    fake.emit(view, Event::OptionMenu(select_menu()));
+    b.poll();
+    b.menu_hover(0);
+    b.menu_click(0);
+    fake.emit(view, Event::OptionMenu(select_menu()));
+    b.poll();
+    b.menu_cancel();
+    fake.emit(view, Event::OptionMenu(select_menu()));
+    b.poll();
+    b.load("https://example.org");
+    assert_eq!(menu_calls(&fake, view), vec![MenuChoice::Highlight(0), MenuChoice::Activate(0), MenuChoice::Cancel, MenuChoice::Cancel]);
+    assert!(b.option_menu().is_none());
+}
+
+#[test]
+fn the_page_closing_its_list_or_a_tab_switch_drops_it() {
+    use morph_webview::MenuChoice;
+    let (mut b, fake) = browser("example.com");
+    let view = fake.created()[0];
+    fake.emit(view, Event::OptionMenu(select_menu()));
+    b.poll();
+    fake.emit(view, Event::OptionMenuClosed);
+    b.poll();
+    assert!(b.option_menu().is_none());
+    fake.emit(view, Event::OptionMenu(select_menu()));
+    b.poll();
+    b.dispatch(Action::NewTab);
+    assert!(b.option_menu().is_none());
+    assert_eq!(menu_calls(&fake, view), vec![MenuChoice::Cancel]);
+}
+
+#[test]
+fn tooltips_follow_the_page() {
+    let (mut b, fake) = browser("example.com");
+    let view = fake.created()[0];
+    fake.emit(view, Event::Tooltip(Some("Sort order".into())));
+    b.poll();
+    assert_eq!(b.tooltip(), Some("Sort order"));
+    fake.emit(view, Event::Tooltip(None));
+    b.poll();
+    assert_eq!(b.tooltip(), None);
+}
+
+#[test]
+fn morph_addresses_name_morphs_pages() {
+    assert_eq!(Internal::parse("morph://about"), Some(Internal::About));
+    assert_eq!(Internal::parse(" MORPH://Settings/ "), Some(Internal::Settings));
+    assert_eq!(Internal::parse("morph:history"), Some(Internal::History));
+    assert_eq!(Internal::parse("morph://nope"), None);
+    assert_eq!(Internal::parse("morphology"), None);
+    for i in [Internal::About, Internal::Bookmarks, Internal::History, Internal::Identity, Internal::Profiles, Internal::Settings] {
+        assert_eq!(Internal::parse(i.url()), Some(i));
+    }
+    assert_eq!(Internal::Bookmarks.action(), Action::ShowBookmarks);
+}
+
+#[test]
+fn panel_addresses_go_to_the_shell_and_about_shows_in_the_tab() {
+    let (mut b, fake) = browser("example.com");
+    let view = fake.created()[0];
+    b.focus_address();
+    b.address_mut().replace(None, "morph://bookmarks");
+    assert_eq!(b.submit_address(), Some(Internal::Bookmarks));
+    assert!(!b.address_focused());
+    assert_eq!(b.active_url(), "https://example.com", "the tab stays where it was");
+    b.focus_address();
+    b.address_mut().replace(None, "morph://about");
+    assert_eq!(b.submit_address(), None);
+    assert_eq!(b.active_url(), ABOUT_URL);
+    assert_eq!(b.active_title(), "About Morph");
+    assert_eq!(b.cover(), Some(&Cover::About));
+    assert_eq!(fake.last_visible(view), Some(false), "the page hides under it");
+    fake.emit(view, Event::TitleChanged("Example".into()));
+    b.poll();
+    assert_eq!(b.active_title(), "About Morph", "the page beneath does not rename the tab");
+    b.back();
+    assert_eq!(b.cover(), None);
+    assert_eq!(b.active_url(), "https://example.com");
+    assert_eq!(fake.last_visible(view), Some(true));
+}
+
+#[test]
+fn the_about_action_opens_a_tab_unless_the_tab_is_blank() {
+    let (mut b, _) = browser("");
+    b.dispatch(Action::ShowAbout);
+    assert_eq!(b.tabs().len(), 1);
+    assert_eq!(b.active_url(), ABOUT_URL);
+    let (mut b, _) = browser("example.com");
+    b.dispatch(Action::ShowAbout);
+    assert_eq!(b.tabs().len(), 2);
+    assert_eq!(b.active_url(), ABOUT_URL);
+    b.load("https://example.org");
+    assert_eq!(b.cover(), None, "loading an address leaves the About page");
+}
+
+#[test]
+fn the_tab_menu_duplicates_reloads_and_closes_the_others() {
+    let (mut b, fake) = browser("example.com");
+    b.new_tab("example.org");
+    b.new_tab("example.net");
+    let ids: Vec<_> = b.tabs().iter().map(|t| t.id).collect();
+    b.duplicate_tab(ids[0]);
+    assert_eq!(b.tabs().len(), 4);
+    assert_eq!(b.active_url(), "https://example.com");
+    b.reload_tab(ids[1]);
+    assert_eq!(b.active_url(), "https://example.org");
+    assert!(fake.calls_for(fake.created()[1]).contains(&Call::Reload));
+    b.close_other_tabs(ids[1]);
+    assert_eq!(b.tabs().len(), 1);
+    assert_eq!(b.active_url(), "https://example.org");
 }
