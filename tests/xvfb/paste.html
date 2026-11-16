@@ -1,0 +1,36 @@
+<!doctype html>
+<!-- Paste like github.com does, for scripts/xvfb-check.py: a paste listener
+     that reads clipboardData's types, text/html, items and files, on a
+     textarea and a contenteditable. The state is in a JSON title "V{...}". -->
+<html>
+<head><meta charset="utf-8"><title>loading</title>
+<style>body{margin:0;font:14px sans-serif} #t{position:absolute;left:40px;top:40px;width:400px;height:120px} #e{position:absolute;left:40px;top:200px;width:400px;height:80px;border:1px solid #888}</style>
+</head>
+<body>
+<textarea id="t"></textarea>
+<div id="e" contenteditable="true"></div>
+<a id="l" href="paste.html#linked" style="position:absolute;left:40px;top:320px;font-size:24px">a link</a>
+<script>
+  const s = { pastes: 0, types: [], html: "", items: 0, files: 0, text: "", t: "", e: "", copies: 0 };
+  function report() {
+    s.t = document.getElementById("t").value;
+    s.e = document.getElementById("e").innerText;
+    document.title = "V" + JSON.stringify(s);
+  }
+  document.addEventListener("paste", (ev) => {
+    const d = ev.clipboardData;
+    s.pastes += 1;
+    s.types = d ? Array.from(d.types) : [];
+    s.html = d ? d.getData("text/html") : "";
+    s.text = d ? d.getData("text/plain") : "";
+    s.items = d && d.items ? d.items.length : 0;
+    s.files = d && d.files ? d.files.length : 0;
+    if (d && d.items) for (const it of d.items) { if (it.kind === "file") it.getAsFile(); }
+    setTimeout(report, 0);
+  });
+  document.addEventListener("copy", () => { s.copies += 1; setTimeout(report, 0); });
+  document.addEventListener("input", report);
+  report();
+</script>
+</body>
+</html>
