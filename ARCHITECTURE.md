@@ -1372,6 +1372,40 @@ Michael's direction for Priorities 2:
 Confirmed: **WASM is the fallback where downloaded native code is forbidden** (iOS, and
 Android).
 
+**Release and WebExtensions compatibility _(decided 2026-11-15)_.** v0.5 is dedicated to
+extensions (this replaces the earlier "v0.4 or v0.5" target). Besides native and WASM
+extensions, Morph runs Chrome and Firefox extensions unchanged:
+- **API in Rust.** The WebExtensions API is implemented in Rust. A thin JS shim in the
+  extension's pages and content scripts exposes `chrome.*` and `browser.*` and forwards
+  every call to Rust; the shim holds no logic of its own.
+- **Loader.** Manifest v2 and v3, `.crx` and `.xpi` packages. The signature is checked and
+  the manifest permissions are mapped to Morph's access model, shown in the same install
+  prompt as other extensions.
+- **Hosting.** Background pages (a hidden page, or a service worker for v3), popups and
+  options pages, each in its own web view.
+- **Content scripts** are injected through the page bridge in isolated worlds, so page
+  scripts can't see them.
+- **Rust DOM API.** Selectors, read and mutate, and observers over the page bridge. The
+  same API serves native Rust extensions.
+- **Coverage grows in order:** storage, tabs, runtime messaging, content scripts,
+  contextMenus. **webRequest / declarativeNetRequest is the hard part**: it needs network
+  interception per web view backend (WebKitGTK, WKWebView, WebView2, Android WebView).
+- **Later:** an optional AI-assisted import tool that ports an extension to Rust, with the
+  result kept for human review.
+- **Acceptance target: password managers work unchanged** _(decided 2026-11-15)_:
+  1Password, Bitwarden and LastPass. v0.5
+  ships when they do. They require:
+  - content scripts in all frames, iframes and dynamically built pages included;
+  - autofill with trusted input events (`isTrusted` true), not synthetic script events;
+  - popup and options pages, and in-page overlays drawn by content scripts;
+  - runtime messaging, `storage`, `alarms` and `idle`;
+  - a `nativeMessaging` host per OS (host manifests in the per-OS locations, stdio framing),
+    so the desktop app can unlock the vault and use biometrics;
+  - `contextMenus`, `commands`, `tabs` and `webNavigation`;
+  - **WebAuthn / passkey interception, the hardest part**: the extension must be able to
+    answer `navigator.credentials.create/get` before the platform authenticator does, on
+    every web view backend.
+
 **Shape.**
 ```
 Morph (morph-ext host, broker) ──tonic gRPC over UDS / named pipe──► native extension process (sandboxed)
