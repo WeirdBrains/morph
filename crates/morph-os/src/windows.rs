@@ -143,6 +143,15 @@ mod imp {
         if launched(code) { Ok(()) } else { Err(format!("ShellExecuteW({uri}) failed with {code}")) }
     }
 
+    /// Restore the top-level window `hwnd` from maximized (GPUI's zoom on
+    /// Windows only maximizes).
+    pub fn restore_window(hwnd: isize) {
+        // SAFETY: ShowWindowAsync takes any window handle; a stale one fails.
+        unsafe {
+            windows_sys::Win32::UI::WindowsAndMessaging::ShowWindowAsync(hwnd as _, windows_sys::Win32::UI::WindowsAndMessaging::SW_RESTORE);
+        }
+    }
+
     /// Open Settings > Default apps on Morph's page (or the list, when that
     /// launch fails).
     pub fn open_settings() -> Result<(), String> {
@@ -151,7 +160,7 @@ mod imp {
 }
 
 #[cfg(windows)]
-pub use imp::{open_settings, register, user_choice};
+pub use imp::{open_settings, register, restore_window, user_choice};
 
 #[cfg(test)]
 mod tests {

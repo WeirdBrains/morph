@@ -1108,6 +1108,13 @@ def frameless(m, r):
     m.xdo("click", "--repeat", "2", "--delay", "80", "1")
     r.check("frame", "double-clicking again restores", wait_for(lambda: (state(m) or {}).get("w") == 1190), str(state(m)))
     _, _, w, _ = m.geometry(win)
+    # The maximize button toggles by the window's real state.
+    m.click(win, w - 56, 18)
+    r.check("frame", "the maximize button maximizes", wait_for(lambda: (state(m) or {}).get("w", 0) > 1300), str(state(m)))
+    _, _, w2, _ = m.geometry(win)
+    m.click(win, w2 - 56, 18)
+    r.check("frame", "the maximize button again restores", wait_for(lambda: (state(m) or {}).get("w") == 1190), str(state(m)))
+    _, _, w, _ = m.geometry(win)
     m.click(win, w - 22, 18)
     r.check("frame", "the close button closes the window", wait_for(lambda: m.proc.poll() is not None, 5), "still running")
 
