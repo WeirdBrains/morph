@@ -133,25 +133,51 @@ pub(crate) fn cbor<T: Serialize>(value: &T) -> Result<Vec<u8>> {
     cbor4ii::serde::to_vec(Vec::new(), value).map_err(|_| Error::Invalid("could not encode"))
 }
 
+/// Most relay circuits an offer carries; the rest of [`MAX_ADDRS`] is direct
+/// addresses.
+pub const MAX_CIRCUITS: usize = 2;
+
 /// The addresses worth putting in an offer: no wildcard or link-local ones, the
-/// `/p2p/` suffix dropped, loopback only when nothing else is there (tests and
-/// single-machine checks), at most [`MAX_ADDRS`], IPv4 first.
+/// node's own trailing `/p2p/` dropped, loopback only when nothing else is
+/// there (tests and single-machine checks), at most [`MAX_ADDRS`]. Direct
+/// addresses come first, IPv4 before IPv6; relay circuits
+/// (`…/p2p/RELAY/p2p-circuit`) keep their relay id and always get up to
+/// [`MAX_CIRCUITS`] places, so a device on another network can still dial in.
 pub fn offer_addrs(reachable: &[String]) -> Vec<String> {
-    let mut plain: Vec<String> = Vec::new();
+    let mut direct: Vec<String> = Vec::new();
+    let mut circuits: Vec<String> = Vec::new();
     for a in reachable {
-        let base = a.split("/p2p/").next().unwrap_or("").to_string();
-        if !base.is_empty() && !plain.contains(&base) && base.parse::<Multiaddr>().is_ok() {
-            plain.push(base);
+        let a = a.trim();
+        let base = match a.rsplit_once("/p2p/") {
+            Some((head, id)) if !id.contains('/') => head,
+            _ => a,
+        };
+        if base.is_empty() || base.parse::<Multiaddr>().is_err() {
+            continue;
+        }
+        let circuit = base.contains("/p2p-circuit");
+        let base = base.to_string();
+        let list = if circuit { &mut circuits } else { &mut direct };
+        if !list.contains(&base) {
+            list.push(base);
         }
     }
     let loopback = |a: &String| a.starts_with("/ip4/127.") || a.starts_with("/ip6/::1/");
-    let mut out: Vec<String> = plain.iter().filter(|a| !loopback(a)).cloned().collect();
+    let mut out: Vec<String> = direct.iter().filter(|a| !loopback(a)).cloned().collect();
     if out.is_empty() {
-        out = plain;
+        out = direct;
     }
     out.sort_by_key(|a| !a.starts_with("/ip4/"));
-    out.truncate(MAX_ADDRS);
+    circuits.sort_by_key(|a| a.contains("/quic"));
+    circuits.truncate(MAX_CIRCUITS);
+    out.truncate(MAX_ADDRS - circuits.len());
+    out.extend(circuits);
     out
+}
+
+/// Whether `addrs` (from [`offer_addrs`]) include a relay circuit.
+pub fn has_circuit(addrs: &[String]) -> bool {
+    addrs.iter().any(|a| a.contains("/p2p-circuit"))
 }
 
 #[cfg(test)]
@@ -222,5 +248,29 @@ mod tests {
         assert_eq!(out[0], "/ip4/192.168.1.5/tcp/1");
         assert!(out.iter().all(|a| !a.contains("127.0.0.1") && !a.contains("/p2p/")));
         assert_eq!(offer_addrs(&[format!("/ip4/127.0.0.1/tcp/9/p2p/{peer}")]), vec!["/ip4/127.0.0.1/tcp/9"]);
+    }
+
+    #[test]
+    fn relay_circuits_keep_their_relay_and_always_fit() {
+        let peer = Keypair::generate_ed25519().public().to_peer_id();
+        let relay = Keypair::generate_ed25519().public().to_peer_id();
+        let circuit = format!("/dns4/relay.example.com/tcp/4747/p2p/{relay}/p2p-circuit");
+        let mut addrs: Vec<String> = (2..10).map(|i| format!("/ip4/10.0.0.{i}/tcp/1/p2p/{peer}")).collect();
+        // libp2p reports a circuit with or without this node's own id at the end
+        addrs.push(circuit.clone());
+        addrs.push(format!("{circuit}/p2p/{peer}"));
+        let out = offer_addrs(&addrs);
+        assert_eq!(out.len(), MAX_ADDRS);
+        assert_eq!(out.last().unwrap(), &circuit, "{out:?}");
+        assert_eq!(out.iter().filter(|a| a.contains("p2p-circuit")).count(), 1);
+        assert!(has_circuit(&out));
+
+        let o = Offer { addrs: out, ..offer(&Keypair::generate_ed25519()) };
+        let key = Keypair::generate_ed25519();
+        let o = Offer { node: key.public().encode_protobuf(), ..o };
+        let (link, _) = encode_link("weirdnet-morph://", &o, &key).unwrap();
+        let read = decode_link("weirdnet-morph://", &link).unwrap();
+        let dial = read.dial_addrs();
+        assert_eq!(dial.last().unwrap().to_string(), format!("{circuit}/p2p/{}", read.peer()));
     }
 }
