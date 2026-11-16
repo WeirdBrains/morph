@@ -517,6 +517,7 @@ def library_panel(m, r, win, top):
     n0, w0 = s0.get("n"), s0.get("w", 0)
     m.key("ctrl+d", delay=0.8)
     r.check("library", "Ctrl+D bookmarks the page", wait_for(lambda: url in bookmarks_file(m)), bookmarks_file(m)[:200])
+    r.check("library", "the star fills and a Bookmarked toast shows at once", wait_for(lambda: m.lines(r"^morph-event drawn star=on toast=Bookmarked$"), 3), str(m.lines(r"^morph-event drawn")[-3:]))
     m.key("ctrl+shift+o", delay=0.8)
     w1 = wait_for(lambda: (st() or {}).get("w", 0) < w0 and (st() or {}).get("w"))
     r.check("library", "Ctrl+Shift+O opens bookmarks beside the page (page narrows)", w1 and w1 < w0, f"{w0} -> {(st() or {}).get('w')}")
@@ -542,6 +543,7 @@ def library_panel(m, r, win, top):
     r.check("library", "after closing, the page has the keyboard", page_takes_key(m, "q", "KeyQ", tab=1), str(st()))
     m.key("ctrl+d", delay=0.8)
     r.check("library", "Ctrl+D again removes the bookmark", wait_for(lambda: url not in bookmarks_file(m)), bookmarks_file(m)[:200])
+    r.check("library", "the star empties with a Bookmark removed toast", wait_for(lambda: m.lines(r"^morph-event drawn star=off toast=Bookmark removed$"), 3), str(m.lines(r"^morph-event drawn")[-3:]))
 
 
 def catalog(m):
@@ -716,6 +718,42 @@ def file_picker(r, binary, display, base):
         r.check("files", "a click on a file input asks the shell for files", asked, str([n for _, n, _ in m2.events()[before:]][-6:]))
         got = wait_for(uploaded, 8) or {}
         r.check("files", "the page gets the file the dialog chose", got.get("n") == 1 and got.get("name") == "hello.txt" and got.get("text") == "hello from the file dialog", str(got))
+    finally:
+        m2.stop()
+
+
+def select_menu(r, binary, display, base):
+    """A click on a <select> opens its list; Down and Enter pick the next
+    option and the page sees one change (Linux: GTK's list on X11, the
+    shell's own on Wayland)."""
+    m2 = Driver(binary, display, tempfile.mkdtemp(prefix="morph-xvfb-select-"))
+    try:
+        win = wait_for(lambda: m2.window("Morph"), 20)
+        r.check("select", "a Morph for the select page opens", win)
+        if not win:
+            return
+        before = len(m2.events())
+        subprocess.run([binary, base + "select.html"], env=m2.env, capture_output=True, timeout=15)
+
+        def sel():
+            for _, n, a in reversed(m2.events()[before:]):
+                if n == "TitleChanged" and a and '"S{' in a:
+                    return json.loads(json.loads(a)[1:])
+            return None
+
+        s0 = wait_for(sel, 10) or {}
+        r.check("select", "the select page loads", s0.get("fruit") == "banana", str(s0))
+        if not s0:
+            return
+        time.sleep(1)
+        win = m2.window("S\\{") or win
+        m2.activate(win)
+        m2.click(win, s0["x"] + 20, 76 + s0["y"] + 8)
+        time.sleep(1.5)
+        m2.key("Down", delay=0.4)
+        m2.key("Return", delay=1.0)
+        got = wait_for(lambda: (sel() or {}).get("fruit") == "cherry" and sel()) or sel() or {}
+        r.check("select", "Down and Enter in its list pick the next option", got.get("fruit") == "cherry" and got.get("changes") == 1, str(got))
     finally:
         m2.stop()
 
@@ -1249,6 +1287,7 @@ def main():
         base = serve_tests()
         favicon(m, r, args.bin, base)
         file_picker(r, args.bin, display, base)
+        select_menu(r, args.bin, display, base)
         last_tab_quits(r, args.bin, display)
         # GPUI draws the frame itself only where the window manager supports
         # _GTK_FRAME_EXTENTS and a compositor runs; xfwm4 has both.
