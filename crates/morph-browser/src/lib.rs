@@ -911,6 +911,11 @@ impl Browser {
         }
     }
 
+    /// The text a page copied ([`Input::Copy`]), once, for the clipboard.
+    pub fn take_copied(&self) -> Option<String> {
+        self.pages.values().find_map(|page| page.view.take_copied())
+    }
+
     /// The pointer shape the active page wants.
     pub fn page_cursor(&self) -> PageCursor {
         self.active_page().view.cursor()

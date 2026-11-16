@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Linux, native Wayland: pasting into a page no longer crashes Morph
+  (SIGSEGV in WebKitGTK's clipboard code, e.g. any paste on github.com, and
+  middle clicks). Pages the shell draws never use WebKit's clipboard: Morph
+  hands them its own clipboard as a real `paste` event (text, or an image as
+  a file, so clipboardData's types, items and files work) and puts what a
+  page copies or cuts on the system clipboard. A middle click on editable
+  text pastes the primary selection, on a link opens it in a new tab.
+  The Xvfb and Wayland checks paste, copy and cut on a test page.
 - `v0.2.0-alpha.10`, desktop chrome: preferences are a full page in a tab
   (Ctrl+, / Cmd+,) with search, sections and every setting; a search engine
   selector left of the address (Google by default, DuckDuckGo; each tab keeps

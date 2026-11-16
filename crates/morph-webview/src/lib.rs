@@ -15,6 +15,7 @@ use std::rc::Rc;
 
 #[cfg(target_os = "linux")]
 pub mod appearance;
+pub mod clipboard;
 pub mod fake;
 pub mod icons;
 pub mod keys;
@@ -363,6 +364,11 @@ pub trait WebView {
     /// the shell draws. Coordinates are logical pixels from the page's
     /// top-left corner.
     fn input(&self, _input: Input) {}
+    /// The text the last [`Input::Copy`] copied, once, for the shell to put
+    /// on the clipboard.
+    fn take_copied(&self) -> Option<String> {
+        None
+    }
     /// The pointer shape the page wants where the pointer last was.
     fn cursor(&self) -> PageCursor {
         PageCursor::Default
@@ -468,6 +474,14 @@ pub enum Input {
     Key(Key),
     /// Text an input method committed.
     Text(String),
+    /// A paste of the shell's clipboard where the page has the keyboard
+    /// (see [`clipboard`]).
+    Paste(clipboard::Clipboard),
+    /// Copy (or cut) the page's selection; the text comes back from
+    /// [`WebView::take_copied`].
+    Copy {
+        cut: bool,
+    },
 }
 
 /// The page bridge a backend injects into every page: `script` runs at
