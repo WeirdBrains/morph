@@ -563,6 +563,32 @@ the id from `$XDG_CONFIG_HOME/mimeapps.list`, and where it was the default
 puts the packaged `morph.desktop` (the id "Make default browser" uses) in its
 place. Rides the next alpha.
 
+## alpha.10: desktop chrome
+
+Built on `wip/alpha10`, a commit per feature, then merged to `main`.
+- Preferences page (`settings_view.rs`, `Cover::Settings`), search engines
+  (`morph_core::search`, per-tab pick in `morph-browser`), the address
+  dropdown (`AddressItem`, mirrors the mobile sheet), tab bar buttons
+  (position menu, collapse), favicons, page file pickers (`take_file_request`
+  answered once), last tab quits (`ShellRequest::Quit`).
+- `weirdnet-morph://`: `morph_core::scheme` parses links (log-safe
+  `describe`); no routes yet, so a link shows a toast. `crates/morph-os` holds
+  the macOS (NSWorkspace / LaunchServices) and Windows (HKCU registration,
+  UserChoice check, Default Apps page) default-browser code.
+- The MSI registers per machine (HKLM StartMenuInternet, Capabilities,
+  RegisteredApplications, `weirdnet-morph`), since the MSI installs per
+  machine; a zip install writes the same keys under HKCU at first run.
+- Frameless macOS/Windows: `TitlebarOptions { appears_transparent }`;
+  `chrome::caption` picks the buttons (`WindowButtons::Native` on macOS leaves
+  78 px for the traffic lights). Windows moves the window through
+  `WindowControlArea::Drag` areas (the empty tab-strip space, a grip at the
+  toolbar's start when tabs are elsewhere); there is no `start_window_move`
+  on Windows in GPUI.
+- Shortcut audit in `morph_ui::actions` (`MAC_RENAMES`, `PC_ONLY`,
+  `MAC_ONLY`); the page script reports whatever the keymap binds.
+- Xvfb: `bar_keys`, `tab_bar`, `favicon`, `file_picker`, `select_menu`,
+  `last_tab_quits`, the star and toast (`morph-event drawn …`).
+
 ## alpha.9: identity
 
 Scope cut by Michael to identity (everything else moved to alpha.10; the

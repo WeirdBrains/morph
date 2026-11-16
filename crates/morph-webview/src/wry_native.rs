@@ -56,6 +56,8 @@ pub struct NativeBackend {
     shortcuts: Vec<String>,
     bridge: Option<PageBridge>,
     views: Vec<(ViewId, std::rc::Weak<Shared>)>,
+    /// Where downloads go (`None`: the system's Downloads folder).
+    downloads: Rc<RefCell<Option<PathBuf>>>,
 }
 
 /// What a view and its handlers share.
@@ -77,6 +79,7 @@ impl NativeBackend {
                 shortcuts: Vec::new(),
                 bridge: None,
                 views: Vec::new(),
+                downloads: Rc::default(),
             }),
             _ => None,
         }
@@ -103,7 +106,13 @@ impl Backend for NativeBackend {
             .with_url(url)
             .with_bounds(wry_rect(spec.bounds))
             .with_visible(spec.visible)
-            .with_initialization_script_for_main_only(PAGE_SCRIPT, true);
+            .with_initialization_script_for_main_only(PAGE_SCRIPT, true)
+            .with_initialization_script_for_main_only(crate::icons::ICON_SCRIPT, true);
+        let downloads = self.downloads.clone();
+        builder = builder.with_download_started_handler(move |_url, path| {
+            *path = crate::download_target(downloads.borrow().as_deref(), path);
+            true
+        });
         if let Some(bridge) = &self.bridge {
             builder = builder.with_initialization_script(&*bridge.script);
         }
@@ -115,6 +124,16 @@ impl Backend for NativeBackend {
             }
             let q = self.queue.clone();
             builder = builder.with_on_web_content_process_terminate_handler(move || q.borrow_mut().push((id, Event::Crashed)));
+        }
+        #[cfg(target_os = "windows")]
+        {
+            // WebView2 runs Edge's own accelerators first (Ctrl+D adds a
+            // favorite, Ctrl+Shift+O opens favorites, Ctrl+H history,
+            // Ctrl+F its find bar), so Morph's shortcuts never reached the
+            // page script that reports them. Without them, every key
+            // reaches the page, and the page script hands Morph its own.
+            use wry::WebViewBuilderExtWindows;
+            builder = builder.with_browser_accelerator_keys(false);
         }
         let q = self.queue.clone();
         builder = builder.with_document_title_changed_handler(move |title| q.borrow_mut().push((id, Event::TitleChanged(title))));
@@ -148,6 +167,10 @@ impl Backend for NativeBackend {
                     Event::UrlChanged(url)
                 }
                 Some(Message::Found(matches)) => Event::FindResult { matches },
+                Some(Message::Icon(data)) => match crate::icons::decode(&data) {
+                    Some(png) => Event::Favicon(png),
+                    None => return,
+                },
                 None => return,
             };
             q.borrow_mut().push((id, event));
@@ -198,6 +221,10 @@ impl Backend for NativeBackend {
     fn set_page_bridge(&mut self, bridge: PageBridge) {
         self.bridge = Some(bridge);
     }
+
+    fn set_downloads_dir(&mut self, dir: Option<std::path::PathBuf>) {
+        *self.downloads.borrow_mut() = dir;
+    }
 }
 
 struct NativeView {
@@ -247,6 +274,9 @@ impl WebView for NativeView {
     }
     fn find(&self, query: &str) -> Result<()> {
         self.view().evaluate_script(&find_script(query)).map_err(backend_err)
+    }
+    fn clear_data(&self) -> Result<()> {
+        self.view().clear_all_browsing_data().map_err(backend_err)
     }
     fn find_next(&self, forward: bool) -> Result<()> {
         let script = format!("window.__morphFind && window.find(window.__morphFind, false, {}, true);", !forward);

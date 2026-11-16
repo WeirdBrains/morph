@@ -15,6 +15,8 @@ pub enum Message {
     Url(String),
     /// Matches found by [`crate::WebView::find`].
     Found(u32),
+    /// The page's icon as a PNG data URL ([`crate::icons::ICON_SCRIPT`]).
+    Icon(String),
 }
 
 impl Message {
@@ -26,6 +28,7 @@ impl Message {
             "k:" if !rest.is_empty() => Some(Message::Shortcut(rest.to_string())),
             "u:" if !rest.is_empty() => Some(Message::Url(rest.to_string())),
             "n:" => rest.parse().ok().map(Message::Found),
+            "i:" if !rest.is_empty() => Some(Message::Icon(rest.to_string())),
             _ => None,
         }
     }
@@ -157,6 +160,7 @@ mod tests {
         assert_eq!(Message::parse("k:ctrl-t"), Some(Message::Shortcut("ctrl-t".into())));
         assert_eq!(Message::parse("u:https://example.com/#a"), Some(Message::Url("https://example.com/#a".into())));
         assert_eq!(Message::parse("n:12"), Some(Message::Found(12)));
+        assert_eq!(Message::parse("i:data:image/png;base64,AA"), Some(Message::Icon("data:image/png;base64,AA".into())));
         for bad in ["", "x", "k:", "u:", "n:x", "z:1"] {
             assert_eq!(Message::parse(bad), None, "{bad}");
         }

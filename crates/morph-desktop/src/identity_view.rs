@@ -42,6 +42,14 @@ pub struct IdentityView {
 impl EventEmitter<ShellRequest> for IdentityView {}
 
 impl IdentityView {
+    pub fn set_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
+        self.theme = theme;
+        for input in &self.inputs {
+            input.update(cx, |i, cx| i.set_theme(theme, cx));
+        }
+        cx.notify();
+    }
+
     pub fn new(home: &Path, profile: &str, profile_name: &str, theme: Theme, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let inputs: Vec<Entity<TextInput>> = (0..INPUTS).map(|_| cx.new(|cx| TextInput::new("", theme, cx))).collect();
         let subs = inputs

@@ -38,6 +38,16 @@ impl TabStrip {
         }
     }
 
+    /// Where the tabs are.
+    pub fn position(self) -> TabPosition {
+        match self {
+            TabStrip::Top => TabPosition::Top,
+            TabStrip::Bottom => TabPosition::Bottom,
+            TabStrip::Side { left: true, .. } => TabPosition::Left,
+            TabStrip::Side { left: false, .. } => TabPosition::Right,
+        }
+    }
+
     /// Whether the row of tabs is the window's top edge (and so its caption).
     pub fn is_caption(self) -> bool {
         self == TabStrip::Top
@@ -89,6 +99,35 @@ pub enum WindowButtons {
     CloseOnly,
     /// Minimize, maximize and close.
     All,
+    /// The system draws them inside Morph's caption (the macOS traffic
+    /// lights): Morph leaves room on the left.
+    Native,
+}
+
+/// Room the macOS traffic lights take at the caption's left edge.
+pub const TRAFFIC_LIGHTS_INSET: f32 = 78.;
+
+/// Where the window's frame comes from, for [`caption`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CaptionHost {
+    /// The system title bar is hidden; the traffic lights stay.
+    Mac,
+    /// The system title bar is hidden; Morph draws the buttons.
+    Windows,
+    /// `frameless` when the compositor lets Morph draw the frame.
+    Linux { frameless: bool },
+}
+
+/// The buttons Morph's caption carries, or `None` when the system's own
+/// title bar does the job. Tiling window managers draw no frame, so they
+/// get the close button even with server decorations.
+pub fn caption(host: CaptionHost, buttons: WindowButtons) -> Option<WindowButtons> {
+    match host {
+        CaptionHost::Mac => Some(WindowButtons::Native),
+        CaptionHost::Windows => Some(WindowButtons::All),
+        CaptionHost::Linux { frameless: true } => Some(buttons),
+        CaptionHost::Linux { frameless: false } => (buttons == WindowButtons::CloseOnly).then_some(WindowButtons::CloseOnly),
+    }
 }
 
 /// Overrides the detection: `close` or `all`.
@@ -167,11 +206,23 @@ pub fn window_buttons(env: &dyn Fn(&str) -> Option<String>) -> WindowButtons {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn every_desktop_gets_the_caption_it_needs() {
+        use WindowButtons::*;
+        assert_eq!(caption(CaptionHost::Mac, All), Some(Native));
+        assert_eq!(caption(CaptionHost::Windows, CloseOnly), Some(All));
+        assert_eq!(caption(CaptionHost::Linux { frameless: true }, All), Some(All));
+        assert_eq!(caption(CaptionHost::Linux { frameless: true }, CloseOnly), Some(CloseOnly));
+        assert_eq!(caption(CaptionHost::Linux { frameless: false }, All), None);
+        assert_eq!(caption(CaptionHost::Linux { frameless: false }, CloseOnly), Some(CloseOnly));
+    }
+
     use super::*;
     use morph_core::settings::DEFAULT_SIDEBAR_WIDTH;
 
     fn with(position: TabPosition, collapsed: bool, width: u32) -> Settings {
-        Settings { tab_position: position, sidebar_collapsed: collapsed, sidebar_width: width }
+        Settings { tab_position: position, sidebar_collapsed: collapsed, sidebar_width: width, ..Settings::default() }
     }
 
     #[test]
@@ -185,6 +236,15 @@ mod tests {
             TabStrip::Side { left: false, width: COLLAPSED_TAB_LIST_WIDTH, collapsed: true }
         );
         assert!(!TabStrip::from_settings(&with(TabPosition::Right, false, 220)).is_caption());
+    }
+
+    #[test]
+    fn a_strip_knows_its_position() {
+        for position in [TabPosition::Top, TabPosition::Bottom, TabPosition::Left, TabPosition::Right] {
+            for collapsed in [false, true] {
+                assert_eq!(TabStrip::from_settings(&with(position, collapsed, 220)).position(), position);
+            }
+        }
     }
 
     #[test]

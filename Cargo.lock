@@ -5431,6 +5431,7 @@ dependencies = [
  "morph-core",
  "morph-identity",
  "morph-keystore",
+ "morph-os",
  "morph-services",
  "morph-ui",
  "morph-webview",
@@ -5473,6 +5474,17 @@ dependencies = [
  "windows-native-keyring-store",
  "zbus-secret-service-keyring-store",
  "zeroize",
+]
+
+[[package]]
+name = "morph-os"
+version = "0.1.0"
+dependencies = [
+ "block2 0.6.2",
+ "core-foundation 0.10.1",
+ "objc2 0.6.5",
+ "windows-sys 0.61.2",
+ "winreg",
 ]
 
 [[package]]

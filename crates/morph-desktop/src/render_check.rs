@@ -95,7 +95,7 @@ pub struct Decision {
     pub note: Option<String>,
 }
 
-fn describe(env: Env) -> String {
+pub fn describe(env: Env) -> String {
     if env.is_empty() { "WebKit's defaults".into() } else { env.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join(" ") }
 }
 

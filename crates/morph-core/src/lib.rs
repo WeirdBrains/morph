@@ -11,6 +11,8 @@ pub mod library_db;
 pub mod omnibox;
 pub mod page_bridge;
 pub mod profiles;
+pub mod scheme;
+pub mod search;
 pub mod settings;
 pub mod tabs;
 

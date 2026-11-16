@@ -74,11 +74,74 @@ pub struct Settings {
     /// Expanded width of the left/right tab list, in logical pixels.
     #[serde(default = "default_sidebar_width")]
     pub sidebar_width: u32,
+    /// The search engine new tabs use ([`crate::search`] id). Default: Google.
+    #[serde(default = "default_search_engine")]
+    pub search_engine: String,
+    /// What new windows and the Home page open; empty is a blank tab.
+    #[serde(default)]
+    pub home_page: String,
+    /// Where downloads go; empty is the system's Downloads folder.
+    #[serde(default)]
+    pub downloads_dir: String,
+    /// The colour theme.
+    #[serde(default)]
+    pub theme: ThemeChoice,
+}
+
+fn default_search_engine() -> String {
+    crate::search::DEFAULT_ENGINE.to_string()
+}
+
+/// The shell's colours.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThemeChoice {
+    #[default]
+    Dark,
+    Light,
+}
+
+impl ThemeChoice {
+    pub fn from_key(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "light" => Self::Light,
+            _ => Self::Dark,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Dark => "dark",
+            Self::Light => "light",
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ThemeChoice {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = Option::<String>::deserialize(deserializer)?;
+        Ok(raw.as_deref().map(Self::from_key).unwrap_or_default())
+    }
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { tab_position: TabPosition::default(), sidebar_collapsed: false, sidebar_width: DEFAULT_SIDEBAR_WIDTH }
+        Self {
+            tab_position: TabPosition::default(),
+            sidebar_collapsed: false,
+            sidebar_width: DEFAULT_SIDEBAR_WIDTH,
+            search_engine: default_search_engine(),
+            home_page: String::new(),
+            downloads_dir: String::new(),
+            theme: ThemeChoice::default(),
+        }
+    }
+}
+
+impl Settings {
+    /// The search engine new tabs use.
+    pub fn engine(&self) -> &'static crate::search::Engine {
+        crate::search::engine(&self.search_engine)
     }
 }
 
@@ -129,6 +192,9 @@ pub fn load(home: impl AsRef<Path>) -> Result<Settings, SettingsError> {
     let raw = fs::read_to_string(path)?;
     let mut settings: Settings = serde_json::from_str(&raw)?;
     settings.sidebar_width = clamp_sidebar_width(settings.sidebar_width);
+    if !crate::search::is_known(&settings.search_engine) {
+        settings.search_engine = default_search_engine();
+    }
     Ok(settings)
 }
 
@@ -345,5 +411,36 @@ mod tests {
         assert_eq!(load(home).unwrap().tab_position, TabPosition::Right);
         crate::profiles::set_current(home, &extra.id).unwrap();
         assert_eq!(load(home).unwrap().tab_position, TabPosition::Bottom);
+    }
+
+    #[test]
+    fn new_preferences_default_and_round_trip() {
+        let tmp = tempdir().unwrap();
+        let home = tmp.path();
+        let s = load(home).unwrap();
+        assert_eq!(s.search_engine, "google");
+        assert_eq!(s.engine().name, "Google");
+        assert_eq!(s.theme, ThemeChoice::Dark);
+        assert!(s.home_page.is_empty() && s.downloads_dir.is_empty());
+        let next = Settings {
+            search_engine: "duckduckgo".into(),
+            home_page: "https://example.com".into(),
+            downloads_dir: "/tmp/dl".into(),
+            theme: ThemeChoice::Light,
+            ..s
+        };
+        save(home, &next).unwrap();
+        assert_eq!(load(home).unwrap(), next);
+        let raw = fs::read_to_string(current_settings_path(home)).unwrap();
+        assert!(raw.contains("\"theme\": \"light\"") && raw.contains("\"search_engine\": \"duckduckgo\""), "{raw}");
+    }
+
+    #[test]
+    fn unknown_engine_or_theme_fall_back() {
+        let tmp = tempdir().unwrap();
+        fs::write(settings_path(tmp.path()), "{\"search_engine\":\"altavista\",\"theme\":\"neon\"}\n").unwrap();
+        let s = load(tmp.path()).unwrap();
+        assert_eq!(s.search_engine, "google");
+        assert_eq!(s.theme, ThemeChoice::Dark);
     }
 }

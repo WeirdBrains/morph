@@ -1,7 +1,11 @@
 <!-- Morph's Windows installer (WiX Toolset v5): morph.exe in Program Files,
-     a Start menu shortcut, upgrades in place. Built by scripts/windows-dist.ps1:
-       wix build packaging/windows/morph.wxs -arch x64 -d Version=0.2.0.8 -d Source=<dir> -o morph.msi -->
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+     a Start menu shortcut, upgrades in place; the welcome, licence and
+     folder screens (WixUI_InstallDir); Morph registered as a browser
+     (Default apps lists it: StartMenuInternet capabilities, http/https and
+     .htm/.html as MorphHTML) and as the weirdnet-morph:// handler.
+     Built by scripts/windows-dist.ps1:
+       wix build packaging/windows/morph.wxs -arch x64 -ext WixToolset.UI.wixext -d Version=0.2.0.8 -d Source=<dir> -o morph.msi -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
   <Package Name="Morph" Manufacturer="WeirdBrains" Version="$(var.Version)"
            UpgradeCode="e7bc4da6-f255-4f15-a508-d868900a2c3f" Scope="perMachine" Compressed="yes">
     <MajorUpgrade DowngradeErrorMessage="A newer Morph is already installed." AllowSameVersionUpgrades="yes" />
@@ -9,6 +13,10 @@
     <Icon Id="MorphIcon" SourceFile="$(var.Source)\Morph.ico" />
     <Property Id="ARPPRODUCTICON" Value="MorphIcon" />
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/WeirdBrains/morph" />
+
+    <!-- Screens: welcome, licence, install folder, ready, progress, done. -->
+    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(sys.SOURCEFILEDIR)License.rtf" />
 
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="Morph">
@@ -24,6 +32,40 @@
         </Component>
         <Component Id="MorphIconFile" Guid="*">
           <File Source="$(var.Source)\Morph.ico" KeyPath="yes" />
+        </Component>
+        <!-- Morph as a browser and the weirdnet-morph:// handler, for every
+             user (the app writes the same keys under HKCU for zip installs,
+             crates/morph-desktop/src/default_browser.rs). -->
+        <Component Id="MorphBrowserRegistration" Guid="*">
+          <RegistryKey Root="HKLM" Key="Software\Clients\StartMenuInternet\Morph">
+            <RegistryValue Type="string" Value="Morph" KeyPath="yes" />
+            <RegistryValue Key="DefaultIcon" Type="string" Value="[INSTALLFOLDER]morph.exe,0" />
+            <RegistryValue Key="shell\open\command" Type="string" Value="&quot;[INSTALLFOLDER]morph.exe&quot;" />
+            <RegistryKey Key="Capabilities">
+              <RegistryValue Name="ApplicationName" Type="string" Value="Morph" />
+              <RegistryValue Name="ApplicationDescription" Type="string" Value="A browser that keeps your data yours." />
+              <RegistryValue Name="ApplicationIcon" Type="string" Value="[INSTALLFOLDER]morph.exe,0" />
+              <RegistryValue Key="URLAssociations" Name="http" Type="string" Value="MorphHTML" />
+              <RegistryValue Key="URLAssociations" Name="https" Type="string" Value="MorphHTML" />
+              <RegistryValue Key="URLAssociations" Name="weirdnet-morph" Type="string" Value="weirdnet-morph" />
+              <RegistryValue Key="FileAssociations" Name=".htm" Type="string" Value="MorphHTML" />
+              <RegistryValue Key="FileAssociations" Name=".html" Type="string" Value="MorphHTML" />
+              <RegistryValue Key="StartMenu" Name="StartMenuInternet" Type="string" Value="Morph" />
+            </RegistryKey>
+          </RegistryKey>
+          <RegistryValue Root="HKLM" Key="Software\RegisteredApplications" Name="Morph" Type="string"
+                         Value="Software\Clients\StartMenuInternet\Morph\Capabilities" />
+          <RegistryKey Root="HKLM" Key="Software\Classes\MorphHTML">
+            <RegistryValue Type="string" Value="Morph HTML Document" />
+            <RegistryValue Key="DefaultIcon" Type="string" Value="[INSTALLFOLDER]morph.exe,0" />
+            <RegistryValue Key="shell\open\command" Type="string" Value="&quot;[INSTALLFOLDER]morph.exe&quot; &quot;%1&quot;" />
+          </RegistryKey>
+          <RegistryKey Root="HKLM" Key="Software\Classes\weirdnet-morph">
+            <RegistryValue Type="string" Value="URL:weirdnet-morph" />
+            <RegistryValue Name="URL Protocol" Type="string" Value="" />
+            <RegistryValue Key="DefaultIcon" Type="string" Value="[INSTALLFOLDER]morph.exe,0" />
+            <RegistryValue Key="shell\open\command" Type="string" Value="&quot;[INSTALLFOLDER]morph.exe&quot; &quot;%1&quot;" />
+          </RegistryKey>
         </Component>
       </Directory>
     </StandardDirectory>
@@ -42,6 +84,7 @@
       <ComponentRef Id="MorphReadme" />
       <ComponentRef Id="MorphIconFile" />
       <ComponentRef Id="MorphShortcut" />
+      <ComponentRef Id="MorphBrowserRegistration" />
     </Feature>
   </Package>
 </Wix>

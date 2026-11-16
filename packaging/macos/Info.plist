@@ -28,5 +28,52 @@
   <true/>
   <key>LSApplicationCategoryType</key>
   <string>public.app-category.productivity</string>
+  <!-- A browser: macOS lists Morph under Default web browser (System
+       Settings, Desktop & Dock) for the http/https URL types and the HTML
+       documents below. weirdnet-morph:// links reach Morph by Apple Events. -->
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key>
+      <string>Web site URL</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSHandlerRank</key>
+      <string>Default</string>
+      <key>CFBundleURLSchemes</key>
+      <array>
+        <string>http</string>
+        <string>https</string>
+      </array>
+    </dict>
+    <dict>
+      <key>CFBundleURLName</key>
+      <string>Weirdnet Morph link</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSHandlerRank</key>
+      <string>Owner</string>
+      <key>CFBundleURLSchemes</key>
+      <array>
+        <string>weirdnet-morph</string>
+      </array>
+    </dict>
+  </array>
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>HTML document</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSHandlerRank</key>
+      <string>Default</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>public.html</string>
+        <string>public.xhtml</string>
+      </array>
+    </dict>
+  </array>
 </dict>
 </plist>

@@ -216,6 +216,14 @@ jobs:
           rm -rf /tmp/smoke && mkdir -p /tmp/smoke
           ditto -x -k dist/morph-*-universal-apple-darwin.zip /tmp/smoke
           hdiutil verify dist/morph-*-universal-apple-darwin.dmg
+          # Registered as a browser and for weirdnet-morph:// (macOS lists it under Default web browser).
+          plist=/tmp/smoke/Morph.app/Contents/Info.plist
+          plutil -lint "$plist"
+          test "$(plutil -extract CFBundleIdentifier raw "$plist")" = com.weirdbrains.morph
+          plutil -convert json -o - "$plist" | python3 -c 'import json,sys; p=json.load(sys.stdin); s={x for t in p["CFBundleURLTypes"] for x in t["CFBundleURLSchemes"]}; d={x for t in p["CFBundleDocumentTypes"] for x in t["LSItemContentTypes"]}; assert {"http","https","weirdnet-morph"} <= s, s; assert {"public.html","public.xhtml"} <= d, d; print("Info.plist ok:", sorted(s), sorted(d))'
+          mnt=$(hdiutil attach -nobrowse -readonly dist/morph-*-universal-apple-darwin.dmg | tail -1 | cut -f3-)
+          grep -q weirdnet-morph "$mnt/Morph.app/Contents/Info.plist"
+          hdiutil detach "$mnt"
           python3 scripts/desktop-smoke.py /tmp/smoke/Morph.app/Contents/MacOS/morph --version "$version" --screenshot dist/smoke-macos.png
       - uses: actions/upload-artifact@v4
         if: always()
@@ -268,9 +276,21 @@ jobs:
           Write-Host $out
           if ($out -notmatch "^morph ") { throw "morph --version printed: $out" }
           if (-not (Test-Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Morph.lnk")) { throw "no Start menu shortcut" }
+          # Registered as a browser (Default apps lists Morph) and for weirdnet-morph://.
+          $caps = 'HKLM:\Software\Clients\StartMenuInternet\Morph\Capabilities'
+          $urls = Get-ItemProperty "$caps\URLAssociations"
+          if ($urls.http -ne 'MorphHTML' -or $urls.https -ne 'MorphHTML') { throw "URLAssociations: $($urls | Out-String)" }
+          if ((Get-ItemProperty "$caps\FileAssociations").'.html' -ne 'MorphHTML') { throw "no .html association" }
+          if ((Get-ItemProperty 'HKLM:\Software\RegisteredApplications').Morph -ne 'Software\Clients\StartMenuInternet\Morph\Capabilities') { throw "not in RegisteredApplications" }
+          $proto = Get-ItemProperty 'HKLM:\Software\Classes\weirdnet-morph'
+          if ($null -eq $proto.'URL Protocol') { throw "weirdnet-morph is not a URL protocol" }
+          $cmd = (Get-ItemProperty 'HKLM:\Software\Classes\weirdnet-morph\shell\open\command').'(default)'
+          if ($cmd -notlike '*morph.exe*%1*') { throw "weirdnet-morph command: $cmd" }
           $p = Start-Process msiexec -ArgumentList "/x `"$msi`" /qn" -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "uninstall failed: $($p.ExitCode)" }
           if (Test-Path $exe) { throw "morph.exe left behind" }
+          if (Test-Path 'HKLM:\Software\Classes\weirdnet-morph') { throw "weirdnet-morph registration left behind" }
+          if (Test-Path 'HKLM:\Software\Clients\StartMenuInternet\Morph') { throw "browser registration left behind" }
       - uses: actions/upload-artifact@v4
         if: always()
         with:

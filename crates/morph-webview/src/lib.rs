@@ -13,7 +13,10 @@
 use std::path::PathBuf;
 use std::rc::Rc;
 
+#[cfg(target_os = "linux")]
+pub mod appearance;
 pub mod fake;
+pub mod icons;
 pub mod keys;
 pub mod native_page;
 #[cfg(target_os = "linux")]
@@ -24,6 +27,36 @@ pub mod render_probe;
 pub mod wry_linux;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 pub mod wry_native;
+
+/// The web engine and its version, for the About page.
+pub fn engine_version() -> String {
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: these return constants of the loaded library.
+        let (major, minor, micro) = unsafe {
+            (webkit2gtk::ffi::webkit_get_major_version(), webkit2gtk::ffi::webkit_get_minor_version(), webkit2gtk::ffi::webkit_get_micro_version())
+        };
+        format!("WebKitGTK {major}.{minor}.{micro}")
+    }
+    #[cfg(target_os = "macos")]
+    {
+        match wry::webview_version() {
+            Ok(v) => format!("WKWebView (WebKit {v})"),
+            Err(_) => "WKWebView (the system's WebKit)".into(),
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        match wry::webview_version() {
+            Ok(v) => format!("Microsoft Edge WebView2 {v}"),
+            Err(_) => "Microsoft Edge WebView2 (runtime not found)".into(),
+        }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        "none".to_string()
+    }
+}
 
 /// Matches counted and highlighted at most, as other browsers cap them.
 pub const FIND_MAX_MATCHES: u32 = 1000;
@@ -97,6 +130,54 @@ pub enum Event {
     FindResult {
         matches: u32,
     },
+    /// A `<select>`'s list opened (pages the shell draws): the shell shows
+    /// it and answers with [`WebView::option_menu`].
+    OptionMenu(OptionMenu),
+    /// The open list closed (chosen, cancelled, or the page took it away).
+    OptionMenuClosed,
+    /// The page's tooltip under the pointer (`title` attributes), or none,
+    /// for the shell to draw (pages the shell draws).
+    Tooltip(Option<String>),
+    /// The page's icon, as PNG bytes (32×32), from [`icons::ICON_SCRIPT`].
+    Favicon(Vec<u8>),
+    /// The page asked for files (`<input type=file>`); the shell shows a
+    /// dialog and answers with [`WebView::choose_files`].
+    FileChooser {
+        multiple: bool,
+    },
+}
+
+/// A `<select>`'s list, for the shell to draw beside the element.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct OptionMenu {
+    pub items: Vec<MenuItem>,
+    /// The element, in logical pixels from the page's top-left corner.
+    pub anchor: Rect,
+}
+
+/// One row of an [`OptionMenu`]. Indexes count every row, group labels too.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct MenuItem {
+    pub label: String,
+    pub tooltip: String,
+    pub enabled: bool,
+    /// An `<optgroup>` label: shown, never chosen.
+    pub group_label: bool,
+    /// An option inside an `<optgroup>` (drawn indented).
+    pub group_child: bool,
+    /// The element's current value.
+    pub selected: bool,
+}
+
+/// The shell's answer to an open [`OptionMenu`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MenuChoice {
+    /// Show row `n` in the element while the list stays open.
+    Highlight(usize),
+    /// Choose row `n` (the page gets `input` and `change`) and close.
+    Activate(usize),
+    /// Close without choosing (the element keeps its value).
+    Cancel,
 }
 
 /// Why a page failed to load, for the shell's error page.
@@ -286,6 +367,16 @@ pub trait WebView {
     fn cursor(&self) -> PageCursor {
         PageCursor::Default
     }
+    /// Answer the page's open [`Event::OptionMenu`]; nothing when none is.
+    fn option_menu(&self, _choice: MenuChoice) {}
+    /// Answer the page's [`Event::FileChooser`]: the chosen files, or
+    /// `None` when the user cancelled.
+    fn choose_files(&self, _paths: Option<Vec<std::path::PathBuf>>) {}
+    /// Forget the profile's cookies, cache and site storage (every view of
+    /// the same data directory shares them).
+    fn clear_data(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// A page drawn off screen: premultiplied BGRA (Cairo's ARGB32 on a
@@ -429,11 +520,47 @@ pub trait Backend {
     /// The host window's scale (device pixels per logical pixel), for
     /// backends that render pages themselves.
     fn set_scale(&mut self, _scale: f64) {}
+    /// Where downloads are saved from now on; `None` is the system's
+    /// Downloads folder.
+    fn set_downloads_dir(&mut self, _dir: Option<std::path::PathBuf>) {}
+}
+
+/// Where a download goes: `dir` (when set) with the file name the engine
+/// suggested in `suggested`, numbered like `name (1).ext` when taken.
+pub fn download_target(dir: Option<&std::path::Path>, suggested: &std::path::Path) -> std::path::PathBuf {
+    let Some(dir) = dir else {
+        return suggested.to_path_buf();
+    };
+    let name = suggested.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "download".into());
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
+        _ => (name.clone(), String::new()),
+    };
+    let mut target = dir.join(&name);
+    let mut n = 1;
+    while target.exists() {
+        target = dir.join(format!("{stem} ({n}){ext}"));
+        n += 1;
+    }
+    target
 }
 
 #[cfg(test)]
 mod bridge_tests {
     use super::*;
+
+    #[test]
+    fn downloads_go_to_the_chosen_folder_without_replacing_files() {
+        let tmp = std::env::temp_dir().join(format!("morph-dl-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let suggested = std::path::Path::new("/home/x/Downloads/report.pdf");
+        assert_eq!(download_target(None, suggested), suggested);
+        assert_eq!(download_target(Some(&tmp), suggested), tmp.join("report.pdf"));
+        std::fs::write(tmp.join("report.pdf"), b"x").unwrap();
+        assert_eq!(download_target(Some(&tmp), suggested), tmp.join("report (1).pdf"));
+        assert_eq!(download_target(Some(&tmp), std::path::Path::new("/a/README")), tmp.join("README"));
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
 
     #[test]
     fn a_reply_is_delivered_as_an_object() {
