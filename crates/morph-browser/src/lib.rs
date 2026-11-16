@@ -171,6 +171,25 @@ impl Internal {
     }
 }
 
+/// The address to keep for a start page typed as `text` (Settings, Open at
+/// start): blank stays blank, Morph's own pages (`morph://about`,
+/// `morph:settings`) are kept in their usual form, `weirdnet-morph://` links
+/// are kept as typed, and anything else follows the address bar's rule
+/// ([`omnibox::target_for`]): addresses open, phrases search with `engine`.
+pub fn start_address(text: &str, engine: &search::Engine) -> String {
+    let text = text.trim();
+    if text.is_empty() {
+        return String::new();
+    }
+    if let Some(internal) = Internal::parse(text) {
+        return internal.url().to_string();
+    }
+    if morph_core::scheme::is_link(text) {
+        return text.to_string();
+    }
+    omnibox::target_for(text, engine).unwrap_or_default()
+}
+
 /// Title and explanation for a page that failed to load.
 pub fn error_text(error: &LoadError) -> (String, String) {
     let host = host(&error.url);
@@ -325,8 +344,15 @@ impl Browser {
         };
         let first = browser.tabs.active_id();
         let url = config.start_url.trim().to_string();
-        browser.attach(first, &url)?;
+        // Morph's own pages are drawn by the shell, never loaded or searched.
+        let internal = Internal::parse(&url);
+        browser.attach(first, if internal.is_some() { "" } else { &url })?;
         browser.after_switch();
+        match internal {
+            Some(Internal::About) => browser.show_own(Cover::About, true),
+            Some(Internal::Settings) => browser.show_own(Cover::Settings, true),
+            _ => {}
+        }
         Ok(browser)
     }
 

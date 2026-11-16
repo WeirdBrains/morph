@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Device linking works across networks: desktop and mobile now ship the
+  official Weirdnet relay (relay.net.weirdbrains.com, TCP and QUIC on 4747)
+  as a built-in default. The device showing a code reserves a circuit on it
+  and puts that address in the QR code next to its direct ones, so a phone
+  on mobile data or on a Wi-Fi that isolates clients can still reach the
+  desktop. On one network the direct addresses still win. Circuit addresses
+  in a code keep their relay id (they were cut to the relay's own address).
+  `MORPH_LINK_RELAYS` replaces the list (empty: none).
+- Settings, Open at start: `morph://about`, `morph:settings` and the other
+  Morph pages, and `weirdnet-morph://` links, are kept as typed instead of
+  turning into a web search, and the start page is now used when Morph
+  starts without a URL (Morph's own pages open as themselves).
+
 ## [0.2.0-alpha.10] - 2026-11-16
 
 - Downloads ask where to save: a click on a download (a GitHub release

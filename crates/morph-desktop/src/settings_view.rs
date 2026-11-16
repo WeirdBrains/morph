@@ -344,7 +344,7 @@ impl SettingsView {
     }
 
     fn set_home_page(&mut self, text: String, cx: &mut Context<Self>) {
-        let page = if text.is_empty() { String::new() } else { morph_core::omnibox::target_for(&text, self.settings.engine()).unwrap_or_default() };
+        let page = morph_browser::start_address(&text, self.settings.engine());
         let next = Settings { home_page: page.clone(), ..self.settings.clone() };
         self.home_page.update(cx, |i, cx| i.set_text(&page, cx));
         self.save(next, cx);

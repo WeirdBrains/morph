@@ -1183,7 +1183,8 @@ pub fn run(home: PathBuf, args: Args, listener: Option<crate::single::Listener>)
             }),
             ..Default::default()
         };
-        let start = args.open.clone().unwrap_or_default();
+        // A URL on the command line, else Settings' Open at start (blank by default).
+        let start = args.open.clone().unwrap_or_else(|| morph_core::settings::load(&home).map(|s| s.home_page).unwrap_or_default());
         let mut listener = listener;
         let opened = cx.open_window(options, |window, cx| {
             cx.new(|cx| {
