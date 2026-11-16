@@ -597,6 +597,38 @@ Built on `wip/alpha10`, a commit per feature, then merged to `main`.
   `MAC_ONLY`); the page script reports whatever the keymap binds.
 - Xvfb: `bar_keys`, `tab_bar`, `favicon`, `file_picker`, `select_menu`,
   `last_tab_quits`, the star and toast (`morph-event drawn …`).
+- Wayland paste crash (alpha.9, SIGSEGV in WebKitGTK's clipboard code on the
+  off-screen window): `morph_webview::clipboard` keeps WebKit away from the
+  GDK clipboard; the shell reads GPUI's clipboard and dispatches a real
+  `paste` event (text, or an image as a file), and writes what a page copies
+  or cuts. Middle click: paste the primary selection on editable text, open
+  a link in a new tab. Xvfb/Wayland `page_clipboard`.
+- ☰ menu: entries emit `ShellRequest::Run(action)` before the menu closes
+  (they did nothing before). The Identity toolbar button is gone. Xvfb and
+  Wayland `main_menu` click every entry; `desktop-smoke.py` runs every entry
+  through `MORPH_TEST_MENU` on all three systems.
+- Downloads: backends report `Event::Download` (start with the suggested
+  name and the staging file, progress on Linux, end). WebKitGTK 2.54 picks
+  the file in the Downloads folder itself before `decide-destination`, so
+  Linux uses WebKit's file as the staging file (`created-destination`).
+  `morph_browser::downloads` moves the file once the bytes and the save
+  dialog's answer (`dialogs::Ask::Download`, the portal on Wayland) are in;
+  cancelling stops it. A bar under the page shows progress and the result.
+  Xvfb/Wayland `download`: a redirect to an attachment, like a GitHub asset.
+- X11: pages no longer get bare Ctrl/Alt/Super presses. WebKit answers a key
+  press asynchronously and re-sends unhandled ones through GTK; after Ctrl in
+  a page and L caught as a shortcut, that answer sometimes never came and the
+  page swallowed its next key (the order-dependent tabs/settings failures).
+
+Mobile parity (desktop features alpha.10 adds that the Flutter app should
+match): the address sheet's full list (back, forward, copy link, refresh,
+bookmark, find, history, bookmarks, identity, settings, profiles); search
+engine picker per tab with a link to the default in settings; settings as a
+searchable page; morph://about; favicons in tabs; downloads with a save
+location, progress and result; paste with images (clipboardData files);
+device linking in both directions: the new device's offer screen (QR, link,
+Copy link, SAS compare) and the existing device's "Add a device" screen
+(invite QR, link, Copy link, Paste link, Paste from clipboard).
 
 ## alpha.9: identity
 
