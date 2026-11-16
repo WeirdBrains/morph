@@ -114,6 +114,10 @@ pub struct BrowserView {
     shortcut_labels: HashMap<Action, String>,
     /// A short note at the bottom (`Bookmarked`), until it times out.
     toast: Option<Toast>,
+    /// Main menu entries `MORPH_TEST_MENU` asks for (comma-separated
+    /// labels), each opened and chosen as a click would, for the smoke
+    /// tests on every desktop.
+    test_menu: Vec<String>,
     /// What the last frame drew (the star, the toast), for the event log.
     drawn: (bool, Option<SharedString>),
     /// The preferences page (morph://settings), drawn in the page area.
@@ -333,6 +337,13 @@ impl BrowserView {
             shell_menu_scroll: ScrollHandle::new(),
             shortcut_labels: HashMap::new(),
             toast: None,
+            test_menu: std::env::var("MORPH_TEST_MENU")
+                .unwrap_or_default()
+                .split(',')
+                .rev()
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect(),
             settings_view: None,
             profiles: Vec::new(),
             tabs_collapsed: false,
@@ -619,6 +630,7 @@ impl BrowserView {
             self.toast = None;
             cx.notify();
         }
+        self.run_test_menu(window, cx);
         let polled = self.browser.poll();
         if polled.changed {
             self.sync_focus(window, cx);
@@ -675,6 +687,9 @@ impl BrowserView {
         let (x, y) = local(event.position, origin);
         let modifiers = crate::page_input::modifiers(&event.modifiers);
         self.browser.page_input(Input::PointerButton { x, y, button: crate::page_input::button(event.button), pressed: true, modifiers });
+        // Pages are drawn by the shell only on Linux (the primary selection
+        // is Linux's too).
+        #[cfg(target_os = "linux")]
         if event.button == MouseButton::Middle && self.browser.draws_pages() && self.browser.page_cursor() == PageCursor::Text {
             // The page does not paste the primary selection itself (see
             // morph_webview::clipboard): a click puts the caret there and
@@ -881,7 +896,7 @@ impl BrowserView {
         self.sync_focus(window, cx);
         if let Some(internal) = internal {
             // morph://bookmarks and the like open the shell's panels.
-            window.dispatch_action(crate::shell::gpui_action(internal.action()), cx);
+            cx.emit(ShellRequest::Run(internal.action()));
         }
         cx.notify();
     }
@@ -967,6 +982,23 @@ impl BrowserView {
         self.open_shell_menu("tab-menu", entries, at, window, cx);
     }
 
+    /// One step of `MORPH_TEST_MENU`: open the main menu, then (next tick)
+    /// choose the asked entry the way a click does.
+    fn run_test_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(label) = self.test_menu.last().cloned() else {
+            return;
+        };
+        match &self.shell_menu {
+            Some(menu) if menu.id == "main-menu" => {
+                self.test_menu.pop();
+                if let Some(i) = MAIN_MENU.iter().position(|e| e.0 == label) {
+                    self.choose_shell_menu(i, window, cx);
+                }
+            }
+            _ => self.open_main_menu(window, cx),
+        }
+    }
+
     /// Run shell menu row `i` and close the menu.
     fn choose_shell_menu(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(command) = self.shell_menu.as_ref().and_then(|m| m.state.choosable(i).then(|| m.commands.get(i).cloned()).flatten()) else {
@@ -974,7 +1006,7 @@ impl BrowserView {
         };
         self.close_shell_menu(window, cx);
         match command {
-            MenuCommand::Run(action) => window.dispatch_action(crate::shell::gpui_action(action), cx),
+            MenuCommand::Run(action) => cx.emit(ShellRequest::Run(action)),
             MenuCommand::Duplicate(tab) => self.browser.duplicate_tab(tab),
             MenuCommand::Reload(tab) => self.browser.reload_tab(tab),
             MenuCommand::Close(tab) => self.browser.close_tab(tab),
@@ -1400,30 +1432,11 @@ impl BrowserView {
                 d.child(
                     self.button("bookmark", if marked { "★" } else { "☆" }, true)
                         .text_color(rgb(if marked { t.accent } else { t.text_primary }))
-                        .on_click(cx.listener(|_, _, window, cx| {
-                            window.dispatch_action(Box::new(crate::shell::Bookmark), cx);
+                        .on_click(cx.listener(|_, _, _, cx| {
+                            cx.emit(ShellRequest::Run(Action::Bookmark));
                         })),
                 )
             })
-            .child(
-                // The identity panel (Ctrl+Shift+L, ⌘⇧L on macOS) has a
-                // button too: a shortcut alone was easy to miss.
-                div()
-                    .id("identity")
-                    .px(px(10.))
-                    .h(px(28.))
-                    .flex()
-                    .items_center()
-                    .rounded(px(14.))
-                    .bg(rgb(t.surface_variant))
-                    .text_size(px(12.))
-                    .cursor_pointer()
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .child("Identity")
-                    .on_click(cx.listener(|_, _, window, cx| {
-                        window.dispatch_action(Box::new(crate::shell::ShowIdentity), cx);
-                    })),
-            )
             .when(!self.profile_label.is_empty(), |d| {
                 let label: SharedString = self.profile_label.clone().into();
                 d.child(
@@ -1439,8 +1452,8 @@ impl BrowserView {
                         .cursor_pointer()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(label)
-                        .on_click(cx.listener(|_, _, window, cx| {
-                            window.dispatch_action(Box::new(crate::shell::ShowProfiles), cx);
+                        .on_click(cx.listener(|_, _, _, cx| {
+                            cx.emit(ShellRequest::Run(Action::ShowProfiles));
                         })),
                 )
             })
@@ -1825,9 +1838,9 @@ impl BrowserView {
             .child(toast.text.clone());
         if let Some((label, action)) = toast.action {
             bar = bar.child(div().id("toast-action").text_color(rgb(t.accent)).cursor_pointer().hover(|s| s.underline()).child(label).on_click(
-                cx.listener(move |this, _, window, cx| {
+                cx.listener(move |this, _, _, cx| {
                     this.toast = None;
-                    window.dispatch_action(crate::shell::gpui_action(action), cx);
+                    cx.emit(ShellRequest::Run(action));
                     cx.notify();
                 }),
             ));
@@ -1852,6 +1865,19 @@ impl BrowserView {
                     .on_key_down(cx.listener(Self::page_key_down))
                     .on_key_up(cx.listener(Self::page_key_up))
                     .on_modifiers_changed(cx.listener(Self::page_modifiers_changed))
+            })
+            // A page in a window of its own (X11) takes its clicks itself; one
+            // that reaches the shell landed while the page's window was being
+            // mapped again (a menu or Morph's own page closed). It still means
+            // the page: it gets the keyboard once it shows, not the shell.
+            .when(!drawn && cover.is_none(), |d| {
+                d.on_mouse_down(
+                    gpui::MouseButton::Left,
+                    cx.listener(|view, _, window, cx| {
+                        view.focus_page(window, cx);
+                        cx.stop_propagation();
+                    }),
+                )
             })
             .child(
                 canvas(
@@ -2205,7 +2231,7 @@ impl BrowserView {
                 None
             }
             AddressItem::Bookmark => {
-                window.dispatch_action(Box::new(crate::shell::Bookmark), cx);
+                cx.emit(ShellRequest::Run(Action::Bookmark));
                 None
             }
             AddressItem::ComingSoon(what) => {
@@ -2220,7 +2246,7 @@ impl BrowserView {
         if let Some(action) = action
             && !self.dispatch(action, window, cx)
         {
-            window.dispatch_action(crate::shell::gpui_action(action), cx);
+            cx.emit(ShellRequest::Run(action));
         }
         cx.notify();
     }

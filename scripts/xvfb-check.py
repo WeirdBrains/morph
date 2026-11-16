@@ -310,6 +310,16 @@ def page_takes_key(m, key, code, **kw):
     return wait_for(lambda: (state(m, **kw) or {}).get("c") == code, 3)
 
 
+def focus_info(m):
+    """Who has the keyboard, for failure details: the X focus window (name
+    and pid) and the shell's last few events."""
+    out = ""
+    if not isinstance(m, WaylandMorph):
+        win = m.xdo("getwindowfocus")
+        out = f"x focus {win} {m.xdo('getwindowname', win)!r} pid {m.xdo('getwindowpid', win)}; "
+    return out + "events " + str([n for _, n, _ in m.events()[-6:]])
+
+
 def wait_for(fn, timeout=6.0):
     end = time.time() + timeout
     value = fn()
@@ -631,7 +641,7 @@ def settings_panel(m, r, win, top):
     m.key("ctrl+w", delay=1.0)
     side = wait_for(lambda: (state(m) or {}).get("w") == w0 - 220 and (state(m) or {}).get("h") == h0 + 34 and w0 - 220)
     r.check("settings", "closing the settings tab shows the page beside a 220 px tab list", side, f"{w0}x{h0} -> {state(m)}")
-    r.check("settings", "after closing, the page has the keyboard", page_takes_key(m, "z", "KeyZ"), str(state(m)))
+    r.check("settings", "after closing, the page has the keyboard", page_takes_key(m, "z", "KeyZ"), f"{state(m)} {focus_info(m)}")
     return w0, h0
 
 
@@ -679,7 +689,7 @@ def tab_bar(m, r, win, top):
         ok = wait_for(lambda: '"sidebar_collapsed":false' in settings_file(m).replace(" ", "")) and wait_for(lambda: size() == expanded)
         r.check("tabs", f"and expands them again ({position})", ok, f"{size()} vs {expanded}")
     m.click(win, 300, top + 300)
-    r.check("tabs", "after the buttons, the page has the keyboard", page_takes_key(m, "z", "KeyZ"), str(state(m)))
+    r.check("tabs", "after the buttons, the page has the keyboard", page_takes_key(m, "z", "KeyZ"), f"{state(m)} {focus_info(m)}")
 
 
 def serve_tests():
@@ -884,6 +894,67 @@ def page_clipboard(r, binary, display, base, wayland):
                 return
     finally:
         m2.stop()
+
+
+MAIN_MENU = ["New tab", "Find in page", "Bookmarks", "History", "Identity", "Profiles", "Settings", "About Morph", "Quit"]
+MENU_SEPARATED = {"Find in page", "Identity", "About Morph", "Quit"}
+
+
+def main_menu(r, binary, display):
+    """Every entry of the ☰ menu, clicked with the mouse in a fresh Morph,
+    does what it says (the menu opened but its entries did nothing in
+    c00f4fc)."""
+
+    def row_center(label):
+        y = 72 + 1 + 4
+        for name in MAIN_MENU:
+            if name in MENU_SEPARATED:
+                y += 9
+            if name == label:
+                return y + 13
+            y += 26
+        raise KeyError(label)
+
+    for label in MAIN_MENU:
+        m2 = Driver(binary, display, tempfile.mkdtemp(prefix="morph-xvfb-menu-"))
+        try:
+            win = wait_for(lambda: m2.own_window(), 20)
+            s0 = wait_for(lambda: state(m2), 20)
+            if not (win and s0):
+                r.check("menu", f"{label}: a Morph opens with its page", False, "no window or page")
+                continue
+            time.sleep(1.0)
+            win = m2.own_window() or win
+            m2.activate(win)
+            _, _, width, _ = m2.geometry(win)
+            w0, h0 = s0.get("w", 0), s0.get("h", 0)
+            before = len(m2.events())
+            m2.click(win, width - 23, 55)
+            time.sleep(0.8)
+            m2.click(win, width - 248 + 80, row_center(label))
+            time.sleep(1.0)
+            st = lambda: state(m2) or {}  # noqa: E731
+            if label == "New tab":
+                ok = wait_for(lambda: any(t == 2 for t, _, _ in m2.events()[before:]))
+                detail = "no tab 2"
+            elif label == "Find in page":
+                ok = wait_for(lambda: st().get("h", h0) < h0)
+                detail = f"page height {h0} -> {st().get('h')}"
+            elif label in ("Bookmarks", "History", "Identity", "Profiles"):
+                ok = wait_for(lambda: st().get("w", w0) < w0)
+                detail = f"page width {w0} -> {st().get('w')} (no panel beside it)"
+            elif label == "Settings":
+                ok = wait_for(lambda: "Settings" in m2.title(win) or "Preferences" in m2.title(win))
+                detail = m2.title(win)
+            elif label == "About Morph":
+                ok = wait_for(lambda: m2.title(win).startswith("About Morph"))
+                detail = m2.title(win)
+            else:
+                ok = wait_for(lambda: m2.proc.poll() == 0)
+                detail = f"exit {m2.proc.poll()}"
+            r.check("menu", f"☰ → {label} works", ok, detail)
+        finally:
+            m2.stop()
 
 
 def last_tab_quits(r, binary, display):
@@ -1512,6 +1583,7 @@ def main():
         file_picker(r, args.bin, display, base)
         select_menu(r, args.bin, display, base)
         page_clipboard(r, args.bin, display, base, args.wayland)
+        main_menu(r, args.bin, display)
         last_tab_quits(r, args.bin, display)
         # GPUI draws the frame itself only where the window manager supports
         # _GTK_FRAME_EXTENTS and a compositor runs; xfwm4 has both.
