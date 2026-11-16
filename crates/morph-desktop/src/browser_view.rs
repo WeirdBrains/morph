@@ -675,6 +675,9 @@ impl BrowserView {
         let (x, y) = local(event.position, origin);
         let modifiers = crate::page_input::modifiers(&event.modifiers);
         self.browser.page_input(Input::PointerButton { x, y, button: crate::page_input::button(event.button), pressed: true, modifiers });
+        // Pages are drawn by the shell only on Linux (the primary selection
+        // is Linux's too).
+        #[cfg(target_os = "linux")]
         if event.button == MouseButton::Middle && self.browser.draws_pages() && self.browser.page_cursor() == PageCursor::Text {
             // The page does not paste the primary selection itself (see
             // morph_webview::clipboard): a click puts the caret there and
