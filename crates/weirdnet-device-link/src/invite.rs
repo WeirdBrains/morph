@@ -7,7 +7,6 @@
 //! user confirms it on both. An invite holds no secret; whoever answers it
 //! still has to show the same code.
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -17,15 +16,14 @@ use weirdnet_net::node::{Handler, Node, NodeConfig};
 use weirdnet_net::profile::{Profile, WEIRDNET};
 use weirdnet_net::{Keypair, Multiaddr, PeerId, now_ms};
 
+use crate::net::listen_addrs;
 use crate::offer::{MAX_ADDRS, cbor};
 use crate::wire::LinkReply;
-use crate::{Error, OFFER_TTL_MS, Result, VERSION, decode_link, offer_addrs};
+use crate::{Error, OFFER_TTL_MS, Result, VERSION, decode_link};
 
 /// The invite's own stream id: offers are pushed here, not on `/weirdnet/link/1`.
 pub static INVITE_PROFILE: Profile = Profile { protocol: "/weirdnet/link-invite/1", thread: "weirdnet-link-invite", ..WEIRDNET };
 
-/// How long the existing device waits for its listeners.
-const LISTEN_WAIT: Duration = Duration::from_secs(5);
 /// Longest invite text accepted.
 const MAX_INVITE: usize = 2048;
 
@@ -125,19 +123,9 @@ impl InviteHost {
         let inbox = Arc::new(Inbox { scheme: scheme.to_string(), token: token.to_vec(), expires_ms, offer: Mutex::new(None) });
         let key = Keypair::generate_ed25519();
         let peer = key.public().to_peer_id();
+        let want_relay = !cfg.relays.is_empty();
         let node = Node::start(&INVITE_PROFILE, key, cfg, inbox.clone())?;
-        let deadline = Instant::now() + LISTEN_WAIT;
-        let addrs = loop {
-            let addrs = offer_addrs(&node.reachable_addrs());
-            if !addrs.is_empty() {
-                break addrs;
-            }
-            if Instant::now() > deadline {
-                node.halt();
-                return Err(Error::Net("network: could not listen for the other device".into()));
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        };
+        let addrs = listen_addrs(&node, want_relay).ok_or_else(|| Error::Net("network: could not listen for the other device".into()))?;
         let invite = Invite { v: VERSION, peer: peer.to_string(), addrs, token: token.to_vec(), expires_ms };
         let link = encode_invite(scheme, &invite)?;
         Ok(InviteHost { node, inbox, link })

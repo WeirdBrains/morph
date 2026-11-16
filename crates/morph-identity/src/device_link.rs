@@ -27,12 +27,27 @@ use crate::{Error, Result};
 pub const SCHEME: &str = "weirdnet-morph://";
 const NODE_AAD: &[u8] = b"morph/identity/node-key/v1";
 
+/// The official WeirdBrains Weirdnet relay, built in on every platform: TCP
+/// first (UDP is often blocked), then QUIC. Its info:
+/// <https://relay.net.weirdbrains.com/.well-known/weirdnet-relay.json>.
+pub const PUBLIC_RELAYS: &[&str] = &[
+    "/dns4/relay.net.weirdbrains.com/tcp/4747/p2p/12D3KooWHp56KezbVCubjuznJGqyn9xTe8PWePfuwv4YQUGxaRBB",
+    "/dns4/relay.net.weirdbrains.com/udp/4747/quic-v1/p2p/12D3KooWHp56KezbVCubjuznJGqyn9xTe8PWePfuwv4YQUGxaRBB",
+];
+
 /// Where the link listens and dials: TCP and QUIC on every interface, on a
-/// port the system picks. The offer carries the addresses, so no discovery
-/// is needed on one network. Relays are not configured yet (LAN or direct
-/// only).
+/// port the system picks, plus a circuit reserved on the public relay. The
+/// code carries the direct addresses and the circuit, so devices on one
+/// network connect directly and devices on different networks (a phone on
+/// mobile data, a guest Wi-Fi that isolates clients) connect through the
+/// relay. `MORPH_LINK_RELAYS` (comma-separated multiaddrs ending in
+/// `/p2p/<relay>`; empty for none) replaces the relay list.
 pub fn net_config() -> NodeConfig {
-    NodeConfig { listen: NodeConfig::default_listen(0), label: "morph-link".into(), ..Default::default() }
+    let relays = match std::env::var("MORPH_LINK_RELAYS") {
+        Ok(v) => v.split(',').filter_map(|a| a.trim().parse().ok()).collect(),
+        Err(_) => PUBLIC_RELAYS.iter().filter_map(|a| a.parse().ok()).collect(),
+    };
+    NodeConfig { listen: NodeConfig::default_listen(0), relays, label: "morph-link".into(), ..Default::default() }
 }
 
 /// What the new device's screen should show.
@@ -250,6 +265,14 @@ mod tests {
 
     fn pw(s: &str) -> SecretString {
         SecretString::from(s.to_string())
+    }
+
+    #[test]
+    fn the_public_relays_are_full_relay_addresses() {
+        for a in PUBLIC_RELAYS {
+            let m: weirdnet_net::Multiaddr = a.parse().unwrap();
+            assert!(a.contains("/p2p/12D3Koo") && weirdnet_net::addr::addr_peer(&m).is_some(), "{a}");
+        }
     }
 
     fn memory() -> NodeConfig {

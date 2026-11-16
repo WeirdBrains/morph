@@ -4,15 +4,41 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use weirdnet_keys::Key32;
-use weirdnet_net::node::{Handler, Node, NodeConfig};
+use weirdnet_net::node::{Handler, Message, Node, NodeConfig};
 use weirdnet_net::{Keypair, PeerId, now_ms};
 
+use crate::offer::has_circuit;
 use crate::session::{Host, HostStatus, Sender, make_transfer};
 use crate::wire::{LinkReply, LinkRequest, Transfer};
 use crate::{Error, LINK_PROFILE, Result, decode_link, offer_addrs};
 
-/// How long the new device waits for its listeners before giving up.
+/// How long a listening device waits for its listeners before giving up.
 const LISTEN_WAIT: Duration = Duration::from_secs(5);
+/// How long it waits for a relay circuit once it has direct addresses; past
+/// that the code carries direct addresses only (same network).
+const RELAY_WAIT: Duration = Duration::from_secs(5);
+
+/// The addresses a listening link node puts in its code. With relays
+/// configured it waits up to [`RELAY_WAIT`] for a circuit through one, so a
+/// device on another network (a phone on mobile data, a guest Wi-Fi) can
+/// dial in. `None` (and the node halted) when it never listened.
+pub(crate) fn listen_addrs<Q: Message, R: Message>(node: &Node<Q, R>, want_relay: bool) -> Option<Vec<String>> {
+    let start = Instant::now();
+    let mut direct_at: Option<Instant> = None;
+    loop {
+        let addrs = offer_addrs(&node.reachable_addrs());
+        if !addrs.is_empty() {
+            let since = *direct_at.get_or_insert_with(Instant::now);
+            if !want_relay || has_circuit(&addrs) || since.elapsed() > RELAY_WAIT {
+                return Some(addrs);
+            }
+        } else if start.elapsed() > LISTEN_WAIT {
+            node.halt();
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
 
 struct HostHandler(Arc<OnceLock<Arc<Host>>>);
 
@@ -37,19 +63,9 @@ impl HostNode {
     /// addresses the node ended up on.
     pub fn start(scheme: &str, node_key: Keypair, cfg: NodeConfig, hint: &str) -> Result<Self> {
         let slot = Arc::new(OnceLock::new());
+        let want_relay = !cfg.relays.is_empty();
         let node = Node::start(&LINK_PROFILE, node_key.clone(), cfg, Arc::new(HostHandler(slot.clone())))?;
-        let deadline = Instant::now() + LISTEN_WAIT;
-        let addrs = loop {
-            let addrs = offer_addrs(&node.reachable_addrs());
-            if !addrs.is_empty() {
-                break addrs;
-            }
-            if Instant::now() > deadline {
-                node.halt();
-                return Err(Error::Net("network: could not listen for the other device".into()));
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        };
+        let addrs = listen_addrs(&node, want_relay).ok_or_else(|| Error::Net("network: could not listen for the other device".into()))?;
         let host = Arc::new(Host::new(scheme, &node_key, addrs, hint, now_ms())?);
         let _ = slot.set(host.clone());
         Ok(HostNode { node, host })
@@ -196,6 +212,25 @@ mod tests {
         assert_eq!(t.seed, seed.0.to_vec());
         assert_eq!(t.node_cert.peer_id, new_device.peer_id().to_string());
         assert_eq!(new_device.status(), HostStatus::Done);
+    }
+
+    /// Over the internet through the WeirdBrains public relay, with no direct
+    /// address in the code at all: `cargo test -p weirdnet-device-link -- --ignored`.
+    #[test]
+    #[ignore = "needs the public relay"]
+    fn a_link_works_through_the_public_relay_alone() {
+        let relay: weirdnet_net::Multiaddr =
+            "/dns4/relay.net.weirdbrains.com/tcp/4747/p2p/12D3KooWHp56KezbVCubjuznJGqyn9xTe8PWePfuwv4YQUGxaRBB".parse().unwrap();
+        let cfg = NodeConfig { relays: vec![relay], ..Default::default() };
+        let new_device = HostNode::start(SCHEME, Keypair::generate_ed25519(), cfg, "Morph behind NAT").unwrap();
+        let offer = decode_link(SCHEME, new_device.link()).unwrap();
+        assert!(offer.offer.addrs.iter().all(|a| a.contains("/p2p-circuit")), "{:?}", offer.offer.addrs);
+        let mut phone = Pairing::start(SCHEME, new_device.link(), NodeConfig::default()).unwrap();
+        let HostStatus::Paired { sas } = new_device.status() else { panic!("not paired") };
+        assert_eq!(sas, phone.sas());
+        new_device.confirm();
+        phone.send(&Key32::random().unwrap(), "Work", "{}").unwrap();
+        assert!(new_device.take().is_ok());
     }
 
     #[test]
