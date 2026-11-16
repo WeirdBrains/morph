@@ -1,6 +1,6 @@
 # iOS build on the self-hosted Mac (labels self-hosted, macOS, ARM64, ios).
 # A workflow of its own so CI never waits on it: when the Mac sleeps the run
-# just queues. Unsigned only: no certificates, profiles or Apple account.
+# just queues, and a failure here shows red without failing CI. Unsigned only: no certificates, profiles or Apple account.
 # Pushes to main and manual runs only, never pull requests (a fork's code
 # must not run on a personal machine).
 name: iOS
@@ -18,7 +18,6 @@ jobs:
   ios:
     runs-on: [self-hosted, macOS, ARM64, ios]
     timeout-minutes: 90
-    continue-on-error: true
     defaults:
       run:
         working-directory: app
