@@ -662,6 +662,28 @@ unfinished alpha.10 work is parked on branch `wip/alpha10`, not built).
   `<desktop>-mimeapps.list` itself (xdg-settings failed on Hyprland), then
   checks each type with `xdg-mime`.
 
+## Release and TAUR (alpha.11)
+
+- Pre-release `v0.2.0-alpha.11` (tag at `dd55483`):
+  https://github.com/WeirdBrains/morph/releases/tag/v0.2.0-alpha.11, created
+  with `python3 scripts/weirdnet_release.py github 0.2.0-alpha.11` and checked
+  with `... assets 0.2.0-alpha.11` (12 assets: the 11 as before plus
+  `morph-0.2.0-alpha.11-android-debug.apk`, the CI debug APK, now in
+  release.toml's [github] files and android [[platforms]] assets). Linux
+  tarball, zip and debs built on the box, rpms in a fedora container
+  (`MORPH_SKIP_DEB=1`); macOS, Windows and Android assets from CI run
+  43898313375 (`dd55483`, every job green on the first attempt). The commit
+  before it, `57d365e`, needed two reruns of desktop-linux (flaky: a Wayland
+  scale-2 "Up arrow scrolls", then an Xvfb invite QR read-back that decoded
+  nothing; neither touched by the change). The `test-2eb5865` pre-release
+  and its tag were deleted.
+- `morph-bin` 0.2.0alpha11-1: tarball sha256
+  `a98e7108bf4aefeb5a2cbffb095548e70dbce0cddb24d22ce29508f7f0b5e551` (matches
+  the uploaded asset); both `.SRCINFO` match `makepkg --printsrcinfo`; built
+  from the release download, installed and started (`morph --version`) in
+  `archlinux:latest`. Archive: `/workspace/dist/morph-bin-0.2.0alpha11.tar.gz`.
+  Not uploaded (no taurctl).
+
 ## Release and TAUR (alpha.10)
 
 - Pre-release `v0.2.0-alpha.10` (tag at `535d50a`):

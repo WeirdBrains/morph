@@ -33,7 +33,8 @@ files = ["dist/morph-{version}-x86_64-unknown-linux-gnu.tar.gz", "dist/morph-{ve
          "dist/morph_{debver}-*_amd64.deb", "dist/morph-standalone_{debver}-*_amd64.deb",
          "dist/morph-{debver}-*.x86_64.rpm", "dist/morph-standalone-{debver}-*.x86_64.rpm",
          "dist/morph-{version}-universal-apple-darwin.zip", "dist/morph-{version}-universal-apple-darwin.dmg",
-         "dist/morph-{version}-x86_64-pc-windows-msvc.zip", "dist/morph-{version}-x86_64-pc-windows-msvc.msi"]
+         "dist/morph-{version}-x86_64-pc-windows-msvc.zip", "dist/morph-{version}-x86_64-pc-windows-msvc.msi",
+         "dist/morph-{version}-android-debug.apk"]   # the CI debug APK (sideload; debug key, not release-signed)
 sums = "SHA256SUMS"
 
 [changelog]
@@ -88,7 +89,7 @@ os = "android"
 arch = ["aarch64", "x86_64"]
 formats = ["apk", "aab"]
 channels = ["github", "apk-sideload", "fdroid", "google-play"]
-assets = []
+assets = ["morph-{version}-android-debug.apk"]
 
 [[platforms]]
 os = "ios"
