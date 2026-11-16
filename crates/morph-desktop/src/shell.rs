@@ -773,6 +773,9 @@ impl Shell {
     /// Route a shell action: the shell's own first, then the component in
     /// the main slot, then the others.
     fn run(&mut self, action: Action, window: &mut Window, cx: &mut Context<Self>) {
+        if std::env::var_os("MORPH_LOG_EVENTS").is_some_and(|v| v == "1") {
+            println!("morph-event action {}", action.name());
+        }
         match action {
             Action::Quit => {
                 self.quit(cx);

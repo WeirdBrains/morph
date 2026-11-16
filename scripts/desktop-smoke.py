@@ -10,7 +10,8 @@ shell's page events (MORPH_LOG_EVENTS=1) must show all three.
 Then the Identity panel: the shortcut pressed as a user would (Cmd+Shift+L
 through System Events on macOS, Ctrl+Shift+L through SendKeys on Windows)
 must open it, and so must a second launch that asks for it through
-MORPH_TEST_ACTIONS (the same path a menu or button takes).
+MORPH_TEST_ACTIONS (the same path a menu or button takes). Last, every ☰
+menu entry through MORPH_TEST_MENU (the code path of a click).
 
 Exits 0 when every check passed. Uses a throwaway MORPH_HOME.
 """
@@ -228,6 +229,41 @@ def main():
             check("the link QR code paints and reads back as its link", texts is not None and got in texts, f"decoded {[t[:40] for t in texts or []]}")
     proc3.kill()
     proc3.wait(timeout=30)
+    # Every ☰ menu entry, opened and chosen the way a click does
+    # (MORPH_TEST_MENU): each must reach the shell as its action, the panels
+    # must open, and Quit, last, must quit cleanly.
+    entries = [
+        ("New tab", "browser.new_tab"),
+        ("Find in page", "browser.find"),
+        ("Bookmarks", "library.show_bookmarks"),
+        ("History", "library.show_history"),
+        ("Identity", "shell.show_identity"),
+        ("Profiles", "shell.show_profiles"),
+        ("Settings", "shell.show_settings"),
+        ("About Morph", "shell.show_about"),
+        ("Quit", "shell.quit"),
+    ]
+    env4 = dict(env, MORPH_TEST_MENU=",".join(e[0] for e in entries), MORPH_HOME=tempfile.mkdtemp(prefix="morph-smoke-menu-"))
+    proc4, lines4 = launch(a.binary, url, env4)
+    seen4 = []
+    deadline = time.monotonic() + a.timeout
+    while time.monotonic() < deadline and not (proc4.poll() is not None and lines4.empty()):
+        try:
+            line = lines4.get(timeout=0.5)
+        except queue.Empty:
+            continue
+        log.append(line.rstrip())
+        seen4.append(line)
+    text4 = "".join(seen4)
+    for label, action in entries:
+        check(f"menu: {label} runs {action}", f"morph-event action {action}" in text4)
+    check("menu: the identity panel opened", "morph-event panel morph.identity" in text4)
+    try:
+        code = proc4.wait(timeout=15)
+    except subprocess.TimeoutExpired:
+        proc4.kill()
+        code = None
+    check("menu: Quit quits with exit code 0", code == 0, f"exit code {code}")
     server.shutdown()
     print("--- morph output ---")
     print("\n".join(log[-80:]))
