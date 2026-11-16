@@ -995,6 +995,9 @@ def main_menu(r, binary, display):
             win = m2.own_window() or win
             m2.activate(win)
             _, _, width, _ = m2.geometry(win)
+            # The first state can come before the window took its size
+            # (seen on Wayland at scale 2): measure from the settled one.
+            s0 = state(m2) or s0
             w0, h0 = s0.get("w", 0), s0.get("h", 0)
             before = len(m2.events())
             m2.click(win, width - 23, 55)
