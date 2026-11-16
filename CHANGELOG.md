@@ -26,6 +26,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   made the default browser on both (NSWorkspace on macOS; the Default Apps
   settings page on Windows, with Morph registered under StartMenuInternet).
   The MSI has the usual install screens (licence, folder).
+- Device linking works from either side: Add a device on the device that
+  has the identity now shows its own QR code, link and Copy link (an invite);
+  the new device pastes or scans it on its Link from another device screen,
+  which also keeps its own QR. Both screens then show the same six-digit code
+  as before, and nothing moves until it is confirmed on both. Pasting the new
+  device's link under Add a device still works. The Xvfb, Wayland and
+  macOS/Windows smoke checks decode the QR codes from screenshots.
+- Back from the About or Settings page gives the tab its page's title again.
 - `weirdnet-morph://` is registered on every OS (desktop file, Info.plist,
   the MSI and the per-user registry) and links go to the running Morph
   (single instance on Linux and Windows, Apple Events on macOS).

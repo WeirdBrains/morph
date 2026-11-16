@@ -584,6 +584,15 @@ Built on `wip/alpha10`, a commit per feature, then merged to `main`.
   `WindowControlArea::Drag` areas (the empty tab-strip space, a grip at the
   toolbar's start when tabs are elsewhere); there is no `start_window_move`
   on Windows in GPUI.
+- Two-way device linking: `weirdnet_device_link::invite` (an existing
+  device's `weirdnet-morph://invite/…`: peer, addresses, a 16-byte token,
+  120 s expiry; served on `/weirdnet/link-invite/1`). The new device answers
+  with its usual signed offer link; the existing device then pairs with it
+  exactly as if scanned, so the SAS and the sealed transfer are unchanged.
+  An invite holds no secret and takes one answer. `MORPH_TEST_IDENTITY=offer`
+  opens the offer screen for the smoke checks, which decode the QR
+  (zxing-cpp) from a screenshot; `MORPH_REQUIRE_QR=1` in CI makes a missing
+  decoder a failure.
 - Shortcut audit in `morph_ui::actions` (`MAC_RENAMES`, `PC_ONLY`,
   `MAC_ONLY`); the page script reports whatever the keymap binds.
 - Xvfb: `bar_keys`, `tab_bar`, `favicon`, `file_picker`, `select_menu`,
