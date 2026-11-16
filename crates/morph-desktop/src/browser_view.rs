@@ -114,6 +114,8 @@ pub struct BrowserView {
     shortcut_labels: HashMap<Action, String>,
     /// A short note at the bottom (`Bookmarked`), until it times out.
     toast: Option<Toast>,
+    /// What the last frame drew (the star, the toast), for the event log.
+    drawn: (bool, Option<SharedString>),
     /// The preferences page (morph://settings), drawn in the page area.
     settings_view: Option<gpui::AnyView>,
     /// The profiles (id, name, shown), for the address menu.
@@ -313,6 +315,7 @@ impl BrowserView {
             mirrored_focus: false,
             find_input,
             marked: false,
+            drawn: (false, None),
             profile_label: String::new(),
             strip: TabStrip::Top,
             caption: None,
@@ -1946,6 +1949,13 @@ impl Render for BrowserView {
             self.mirrored_focus = true;
         }
         self.sync_address_menu(cx);
+        let drawn = (self.marked, self.toast.as_ref().map(|t| t.text.clone()));
+        if drawn != self.drawn {
+            if std::env::var_os("MORPH_LOG_EVENTS").is_some_and(|v| v == "1") {
+                println!("morph-event drawn star={} toast={}", if drawn.0 { "on" } else { "off" }, drawn.1.as_deref().unwrap_or("-"));
+            }
+            self.drawn = drawn;
+        }
         let content = div().flex().flex_col().min_w(px(0.)).min_h(px(0.));
         let content = if matches!(self.strip, TabStrip::Side { .. }) { content.flex_1().h_full() } else { content.size_full() };
         let overlays = self.overlays(window, cx);
