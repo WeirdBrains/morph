@@ -652,11 +652,12 @@ def settings_panel(m, r, win, top):
     m.key("Right", delay=0.4)
     m.key("Right", delay=0.8)
     r.check("settings", "searching, Enter and Right twice move the tabs to the left (saved)", wait_for(lambda: '"left"' in settings_file(m)), settings_file(m))
-    relays_section(m, r)
     if shutil.which("xdg-mime"):
         # Making Morph the default runs off the UI thread: the keys above did not wait.
         r.check("settings", "the keys did not wait for the default-browser work", time.time() - settings_check < 8.0, f"{time.time() - settings_check:.1f}s")
         r.check("settings", "Enter on Default browser makes Morph the default (xdg-mime reads it back)", wait_for(lambda: get() == "morph.desktop,morph.desktop", 15), get())
+    # After the timed default-browser checks: the relay check waits on its own.
+    relays_section(m, r)
     m.key("ctrl+w", delay=1.0)
     side = wait_for(lambda: (state(m) or {}).get("w") == w0 - 220 and (state(m) or {}).get("h") == h0 + 34 and w0 - 220)
     r.check("settings", "closing the settings tab shows the page beside a 220 px tab list", side, f"{w0}x{h0} -> {state(m)}")
