@@ -33,6 +33,40 @@ impl Theme {
     }
 }
 
+impl Theme {
+    /// A light counterpart with the same roles.
+    pub const fn light() -> Self {
+        Self {
+            background: 0xF7F7FA,
+            surface: 0xFFFFFF,
+            surface_variant: 0xE6E7EE,
+            text_primary: 0x15161C,
+            text_secondary: 0x55576A,
+            accent: 0x0077A8,
+            accent_alt: 0xC2189B,
+            border: 0x8C8EA0,
+            selection: 0xB8E6F5,
+            error: 0xC62842,
+        }
+    }
+
+    /// The theme a profile's setting names.
+    pub fn for_choice(choice: morph_core::settings::ThemeChoice) -> Self {
+        match choice {
+            morph_core::settings::ThemeChoice::Dark => Self::dark(),
+            morph_core::settings::ThemeChoice::Light => Self::light(),
+        }
+    }
+
+    /// Whether this is a dark theme (pages get dark form controls).
+    pub fn is_dark(&self) -> bool {
+        let r = (self.background >> 16) & 0xFF;
+        let g = (self.background >> 8) & 0xFF;
+        let b = self.background & 0xFF;
+        r + g + b < 0x180
+    }
+}
+
 impl Default for Theme {
     fn default() -> Self {
         Self::dark()
@@ -46,5 +80,14 @@ mod tests {
         let t = super::Theme::default();
         assert_eq!(t.background, 0x0D0D12);
         assert_eq!(t.accent, 0x00E5FF);
+    }
+
+    #[test]
+    fn both_themes_keep_text_readable_on_their_background() {
+        use super::Theme;
+        assert!(Theme::dark().is_dark());
+        assert!(!Theme::light().is_dark());
+        assert_eq!(Theme::for_choice(morph_core::settings::ThemeChoice::Light), Theme::light());
+        assert_eq!(Theme::for_choice(morph_core::settings::ThemeChoice::Dark), Theme::default());
     }
 }

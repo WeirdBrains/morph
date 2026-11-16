@@ -12,6 +12,9 @@ use std::path::{Path, PathBuf};
 
 /// Why there is no answer on macOS and Windows: Morph does not register
 /// as a browser there yet (no URL handler in the app bundle or registry).
+/// What the settings say once Morph is the default.
+pub const MADE_DEFAULT: &str = "Links from other apps now open in Morph.";
+
 pub const OTHER_SYSTEMS: &str = "Morph cannot be the default browser on this system yet";
 
 /// The desktop entry the packages install.

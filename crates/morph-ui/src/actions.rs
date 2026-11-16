@@ -38,6 +38,8 @@ pub enum Action {
     ShowIdentity,
     /// Show the About page (morph://about).
     ShowAbout,
+    /// Show the preferences at the search engine section.
+    ShowSearchSettings,
 }
 
 impl Action {
@@ -67,6 +69,7 @@ impl Action {
             Action::ShowSettings => "shell.show_settings".into(),
             Action::ShowIdentity => "shell.show_identity".into(),
             Action::ShowAbout => "shell.show_about".into(),
+            Action::ShowSearchSettings => "shell.show_search_settings".into(),
         }
     }
 
@@ -95,6 +98,7 @@ impl Action {
             Action::ShowSettings,
             Action::ShowIdentity,
             Action::ShowAbout,
+            Action::ShowSearchSettings,
         ];
         if let Some(action) = fixed.into_iter().find(|a| a.name() == name) {
             return Some(action);

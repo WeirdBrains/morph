@@ -1,0 +1,25 @@
+<!doctype html>
+<!-- A file input filling the page, for scripts/xvfb-check.py: a click
+     opens the file dialog (the shell answers it from MORPH_TEST_PICK_OPEN)
+     and the title reports what the page got. -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>upload</title>
+<style>
+  body { margin: 0; }
+  #f { position: fixed; inset: 0; width: 100%; height: 100%; font-size: 120px; }
+</style>
+</head>
+<body>
+<input id="f" type="file" multiple>
+<script>
+  const f = document.getElementById("f");
+  f.addEventListener("change", async () => {
+    const files = [...f.files];
+    const text = files.length ? await files[0].text() : "";
+    document.title = "U" + JSON.stringify({ n: files.length, name: files.length ? files[0].name : "", text: text.trim() });
+  });
+</script>
+</body>
+</html>

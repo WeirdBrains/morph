@@ -38,6 +38,16 @@ impl TabStrip {
         }
     }
 
+    /// Where the tabs are.
+    pub fn position(self) -> TabPosition {
+        match self {
+            TabStrip::Top => TabPosition::Top,
+            TabStrip::Bottom => TabPosition::Bottom,
+            TabStrip::Side { left: true, .. } => TabPosition::Left,
+            TabStrip::Side { left: false, .. } => TabPosition::Right,
+        }
+    }
+
     /// Whether the row of tabs is the window's top edge (and so its caption).
     pub fn is_caption(self) -> bool {
         self == TabStrip::Top
@@ -171,7 +181,7 @@ mod tests {
     use morph_core::settings::DEFAULT_SIDEBAR_WIDTH;
 
     fn with(position: TabPosition, collapsed: bool, width: u32) -> Settings {
-        Settings { tab_position: position, sidebar_collapsed: collapsed, sidebar_width: width }
+        Settings { tab_position: position, sidebar_collapsed: collapsed, sidebar_width: width, ..Settings::default() }
     }
 
     #[test]
@@ -185,6 +195,15 @@ mod tests {
             TabStrip::Side { left: false, width: COLLAPSED_TAB_LIST_WIDTH, collapsed: true }
         );
         assert!(!TabStrip::from_settings(&with(TabPosition::Right, false, 220)).is_caption());
+    }
+
+    #[test]
+    fn a_strip_knows_its_position() {
+        for position in [TabPosition::Top, TabPosition::Bottom, TabPosition::Left, TabPosition::Right] {
+            for collapsed in [false, true] {
+                assert_eq!(TabStrip::from_settings(&with(position, collapsed, 220)).position(), position);
+            }
+        }
     }
 
     #[test]

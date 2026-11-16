@@ -24,6 +24,8 @@ pub enum Call {
     Terminate,
     Input(Input),
     OptionMenu(MenuChoice),
+    ChooseFiles(Option<Vec<std::path::PathBuf>>),
+    ClearData,
     Dropped,
 }
 
@@ -221,6 +223,13 @@ impl WebView for FakeView {
     }
     fn option_menu(&self, choice: MenuChoice) {
         self.backend.record(self.id, Call::OptionMenu(choice));
+    }
+    fn choose_files(&self, paths: Option<Vec<std::path::PathBuf>>) {
+        self.backend.record(self.id, Call::ChooseFiles(paths));
+    }
+    fn clear_data(&self) -> crate::Result<()> {
+        self.backend.record(self.id, Call::ClearData);
+        Ok(())
     }
 }
 

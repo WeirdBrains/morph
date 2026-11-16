@@ -30,6 +30,12 @@ pub struct ProfilesView {
 impl EventEmitter<ShellRequest> for ProfilesView {}
 
 impl ProfilesView {
+    pub fn set_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
+        self.theme = theme;
+        self.input.update(cx, |i, cx| i.set_theme(theme, cx));
+        cx.notify();
+    }
+
     pub fn new(home: &Path, shown: &str, theme: Theme, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let input = cx.new(|cx| TextInput::new("Profile name", theme, cx));
         let sub = cx.subscribe_in(&input, window, |this, _, event, window, cx| match event {
