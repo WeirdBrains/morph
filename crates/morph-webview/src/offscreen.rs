@@ -170,7 +170,6 @@ impl Backend for OffscreenBackend {
             .with_initialization_script(CONTROL_SCHEME_SCRIPT)
             .with_initialization_script(crate::icons::ICON_SCRIPT)
             .with_new_window_req_handler(popup_handler(id, self.queue.clone(), self.popups.clone(), self.bridge.clone()));
-        let builder = crate::wry_linux::with_downloads(builder, &mut self.hooked, &spec.data_dir, &self.downloads);
         let view = match with_bridge(builder, &self.bridge).build_gtk(&vbox) {
             Ok(view) => view,
             Err(e) => {
@@ -185,6 +184,7 @@ impl Backend for OffscreenBackend {
         embedder.remove(&vbox);
         window.add(&vbox);
         engine.disconnect(quiet);
+        crate::wry_linux::hook_downloads(&engine, id, &mut self.hooked, &spec.data_dir, &self.downloads, &self.queue);
         attach_bridge(&engine, &self.bridge);
         watch(&engine, id, &self.queue, &self.shortcuts);
         let chooser: crate::wry_linux::Chooser = Rc::default();
@@ -290,7 +290,11 @@ impl Backend for OffscreenBackend {
     }
 
     fn set_downloads_dir(&mut self, dir: Option<PathBuf>) {
-        *self.downloads.borrow_mut() = dir;
+        *self.downloads.dir.borrow_mut() = dir;
+    }
+
+    fn cancel_download(&mut self, id: u64) {
+        self.downloads.cancel(id);
     }
 
     fn set_page_bridge(&mut self, bridge: PageBridge) {
