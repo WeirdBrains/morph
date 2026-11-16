@@ -84,6 +84,13 @@ impl IdentityView {
     pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.model.cancel();
         self.model.reload();
+        // Smoke checks open a QR screen without keys (macOS and Windows
+        // runners may not send them): `offer` (no identity) or `add`.
+        match (std::env::var("MORPH_TEST_IDENTITY").as_deref(), &self.model.step) {
+            (Ok("offer"), Step::Choose) => self.model.start_offer(),
+            (Ok("add"), Step::Overview) => self.model.start(Step::AddDevice),
+            _ => {}
+        }
         self.enter_step(window, cx);
         cx.emit(ShellRequest::FocusShell);
     }
@@ -92,6 +99,8 @@ impl IdentityView {
     pub fn poll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.model.poll() {
             self.enter_step(window, cx);
+        } else if self.model.take_dirty() {
+            cx.notify();
         }
         if self.copied.as_ref().is_some_and(|(_, at)| at.elapsed() >= clipboard_time()) {
             self.clear_clipboard(cx);
@@ -366,7 +375,27 @@ impl IdentityView {
                 .child(button(t, "identity-restore", "3  Restore from a backup file", false).on_click(cx.listener(|this, _, w, cx| this.go(Step::Restore, w, cx))))
                 .child(button(t, "identity-link", "4  Link from another device", false).on_click(cx.listener(|this, _, w, cx| this.offer(w, cx))))
                 .into_any_element(),
-            Step::Create | Step::Import | Step::Restore | Step::Received { .. } | Step::Reveal | Step::Shards | Step::Export | Step::AddDevice => {
+            Step::AddDevice => {
+                let mut body = col();
+                if let Some(link) = self.model.invite_link() {
+                    let copy = link.to_string();
+                    body = body
+                        .child(self.text("On the new device, open Identity, choose Link from another device and scan this code, or paste this link there."))
+                        .child(qr(link, t))
+                        .child(div().text_size(px(11.)).text_color(rgb(t.text_secondary)).overflow_hidden().child(link.to_string()))
+                        .child(
+                            button(t, "identity-copy", "Copy link", false)
+                                .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))),
+                        );
+                }
+                let intro = if self.model.answered() {
+                    "The new device answered. Type this profile's password and press Pair; both screens then show the same code."
+                } else {
+                    "Or, when the new device shows a code of its own, paste its link below. Your password unlocks the identity to send."
+                };
+                body.child(self.text(intro)).child(inputs).child(row(main("identity-submit", "Pair").into_any_element(), back.into_any_element())).into_any_element()
+            }
+            Step::Create | Step::Import | Step::Restore | Step::Received { .. } | Step::Reveal | Step::Shards | Step::Export => {
                 let (intro, label): (&str, &'static str) = match self.model.step {
                     Step::Create => ("The password unlocks this identity on this device.", "Create"),
                     Step::Import => ("Type the 24 words you wrote down, in order.", "Restore"),
@@ -378,10 +407,7 @@ impl IdentityView {
                         "Make shards",
                     ),
                     Step::Export => ("The backup holds the recovery words, sealed with its own password.", "Save backup"),
-                    _ => (
-                        "On the new device, open Identity and choose Link from another device. It shows a QR code and its link: copy the link there and paste it here.",
-                        "Pair",
-                    ),
+                    _ => ("", ""),
                 };
                 col().child(self.text(intro)).child(inputs).child(row(main("identity-submit", label).into_any_element(), back.into_any_element())).into_any_element()
             }
@@ -445,12 +471,12 @@ impl IdentityView {
                     .child(self.text("On your other device, open Identity, choose Add a device and scan this code or paste the link."))
                     .child(qr(link, t))
                     .child(div().text_size(px(11.)).text_color(rgb(t.text_secondary)).overflow_hidden().child(link.clone()))
-                    .child(row(
-                        button(t, "identity-copy", "Copy link", false)
-                            .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy.clone())))
-                            .into_any_element(),
-                        back.into_any_element(),
-                    ))
+                    .child(
+                        button(t, "identity-copy", "Copy link", false).on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))),
+                    )
+                    .child(self.text("Or, when your other device shows a code under Add a device, paste its link here:"))
+                    .child(inputs)
+                    .child(row(main("identity-submit", "Send").into_any_element(), back.into_any_element()))
                     .child(self.text("Waiting for the other device…"))
                     .into_any_element()
             }

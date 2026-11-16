@@ -71,6 +71,18 @@ def screenshot(path):
         print(f"screenshot failed: {e}")
 
 
+def qr_texts(path):
+    """QR codes in a screenshot (zxing-cpp); None without a decoder."""
+    try:
+        import zxingcpp
+        from PIL import Image
+    except ImportError:
+        return None
+    if not os.path.exists(path):
+        return []
+    return [r.text for r in zxingcpp.read_barcodes(Image.open(path)) if r.format == zxingcpp.BarcodeFormat.QRCode]
+
+
 def press_identity_shortcut():
     """Press the Identity shortcut in the frontmost app, as a user would."""
     if sys.platform == "darwin":
@@ -184,6 +196,38 @@ def main():
         screenshot(a.screenshot.replace(".png", "-identity-panel.png"))
     proc2.kill()
     proc2.wait(timeout=30)
+    # The device-link QR paints: the offer screen opens by itself
+    # (MORPH_TEST_IDENTITY) and the screenshot must decode to its link.
+    env3 = dict(env2, MORPH_TEST_IDENTITY="offer", MORPH_HOME=tempfile.mkdtemp(prefix="morph-smoke-qr-"))
+    proc3, lines3 = launch(a.binary, url, env3)
+    offer = re.compile(r"morph-event link offer=(\S+)")
+    got = None
+    deadline = time.monotonic() + a.timeout
+    while got is None and time.monotonic() < deadline and proc3.poll() is None:
+        try:
+            line = lines3.get(timeout=0.5)
+        except queue.Empty:
+            continue
+        log.append(line.rstrip())
+        m = offer.search(line)
+        got = m.group(1) if m else None
+    check("Link from another device shows an offer", got, "no offer logged")
+    if got:
+        activate(proc3)
+        texts = None
+        shot = (a.screenshot or os.path.join(tempfile.mkdtemp(), "smoke.png")).replace(".png", "-link-qr.png")
+        for _ in range(4):
+            time.sleep(2)
+            screenshot(shot)
+            texts = qr_texts(shot)
+            if texts is None or got in texts:
+                break
+        if texts is None and os.environ.get("MORPH_REQUIRE_QR") != "1":
+            print("SKIP  the link QR code paints (no QR decoder: pip install zxing-cpp pillow)")
+        else:
+            check("the link QR code paints and reads back as its link", texts is not None and got in texts, f"decoded {[t[:40] for t in texts or []]}")
+    proc3.kill()
+    proc3.wait(timeout=30)
     server.shutdown()
     print("--- morph output ---")
     print("\n".join(log[-80:]))

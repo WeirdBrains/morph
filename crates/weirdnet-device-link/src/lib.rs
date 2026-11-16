@@ -13,11 +13,13 @@
 //!
 //! Nothing secret is in the offer, and nothing here logs secrets.
 mod bytes;
+pub mod invite;
 pub mod net;
 pub mod offer;
 pub mod session;
 pub mod wire;
 
+pub use invite::{Invite, InviteHost, answer_invite, decode_invite, encode_invite, is_invite};
 pub use net::{HostNode, Pairing};
 pub use offer::{Offer, VerifiedOffer, decode_link, encode_link, offer_addrs};
 pub use session::{Host, HostStatus, Sender};
