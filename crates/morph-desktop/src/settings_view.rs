@@ -23,7 +23,7 @@ pub struct SettingsView {
     /// Whether Morph opens links, read when the panel opens.
     browser: Option<Status>,
     browser_note: Option<String>,
-    /// A running `xdg-settings` (never on the UI thread).
+    /// The default-browser work (never on the UI thread).
     browser_check: Option<default_browser::Check>,
 }
 
@@ -93,7 +93,7 @@ impl SettingsView {
         cx.notify();
     }
 
-    /// Pick up a finished `xdg-settings`; called by the host's tick.
+    /// Pick up finished default-browser work; called by the host's tick.
     pub fn poll(&mut self, cx: &mut Context<Self>) {
         let Some((status, made)) = self.browser_check.as_ref().and_then(|c| c.take()) else {
             return;
