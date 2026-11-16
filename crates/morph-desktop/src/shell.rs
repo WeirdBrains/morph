@@ -870,10 +870,17 @@ impl Shell {
         }
         // Frameless: our own caption and buttons. Tiling window managers
         // draw no frame either, so they get the close button regardless.
-        let caption = match window.window_decorations() {
-            Decorations::Client { .. } => Some(self.buttons),
-            Decorations::Server => (self.buttons == WindowButtons::CloseOnly).then_some(WindowButtons::CloseOnly),
+        // macOS and Windows hide the system title bar (`appears_transparent`):
+        // the traffic lights sit in Morph's caption on macOS, and Morph draws
+        // minimize, maximize and close on Windows.
+        let host = if MAC {
+            chrome::CaptionHost::Mac
+        } else if cfg!(windows) {
+            chrome::CaptionHost::Windows
+        } else {
+            chrome::CaptionHost::Linux { frameless: matches!(window.window_decorations(), Decorations::Client { .. }) }
         };
+        let caption = chrome::caption(host, self.buttons);
         if self.last_caption != Some(caption) {
             if let Some(main) = self.main() {
                 main.set_caption(caption, cx);
@@ -1162,9 +1169,15 @@ pub fn run(home: PathBuf, args: Args, listener: Option<crate::single::Listener>)
             window_min_size: Some(size(px(480.), px(320.))),
             // Frameless where the desktop can draw it (a compositor runs):
             // the tab row is the caption. GPUI keeps server decorations
-            // otherwise. macOS and Windows keep their own title bar and
-            // window buttons.
+            // otherwise. macOS and Windows hide the system title bar: the
+            // top row (tabs, or the toolbar) is the caption, with the traffic
+            // lights inset on macOS and Morph's own buttons on Windows.
             window_decorations: Some(if cfg!(target_os = "linux") { WindowDecorations::Client } else { WindowDecorations::Server }),
+            titlebar: (!cfg!(target_os = "linux")).then(|| gpui::TitlebarOptions {
+                title: None,
+                appears_transparent: true,
+                traffic_light_position: Some(gpui::point(px(12.), px(11.))),
+            }),
             ..Default::default()
         };
         let start = args.open.clone().unwrap_or_default();
