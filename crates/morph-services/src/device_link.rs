@@ -9,7 +9,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 pub use morph_identity::device_link::LinkState;
-use morph_identity::device_link::{AddDevice, NewDevice, net_config};
+pub use morph_identity::device_link::is_invite;
+use morph_identity::device_link::{AddDevice, Invite, NewDevice, net_config};
 use morph_identity::profile_identity::{self, ProfileIdentity, SecretString};
 
 use crate::home::{now_ms, profile_dir};
@@ -38,6 +39,15 @@ pub struct Links {
     next: AtomicU64,
     hosts: Mutex<HashMap<u64, NewDevice>>,
     pairings: Mutex<HashMap<u64, AddDevice>>,
+    invites: Mutex<HashMap<u64, Invite>>,
+}
+
+/// An existing device's invite: show `link` as a QR code and as text.
+#[derive(Debug, Clone)]
+pub struct InviteView {
+    pub session: u64,
+    pub link: String,
+    pub expires_ms: i64,
 }
 
 fn guard<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -122,6 +132,41 @@ impl Links {
             let _ = pairing.cancel();
         }
     }
+
+    /// Existing device: listen for a new device that scans this device's QR.
+    pub fn invite_start(&self) -> Result<InviteView> {
+        let invite = Invite::start(net_config()).map_err(Error::failed)?;
+        let view = InviteView { session: self.next_id(), link: invite.link().to_string(), expires_ms: invite.expires_ms() };
+        guard(&self.invites).insert(view.session, invite);
+        Ok(view)
+    }
+
+    /// Existing device: the offer link a new device answered the invite
+    /// with, once; `Ok(None)` while it waits. An expired invite is gone.
+    pub fn invite_take(&self, session: u64) -> Result<Option<String>> {
+        let mut invites = guard(&self.invites);
+        let invite = invites.get(&session).ok_or(Error::LinkGone)?;
+        if let Some(link) = invite.take_offer() {
+            return Ok(Some(link));
+        }
+        if invite.expired() {
+            invites.remove(&session);
+            return Err(Error::LinkGone);
+        }
+        Ok(None)
+    }
+
+    /// Existing device: stop listening for answers.
+    pub fn invite_cancel(&self, session: u64) {
+        guard(&self.invites).remove(&session);
+    }
+
+    /// New device: answer the existing device's `invite` with this
+    /// session's offer; pairing then goes on as if it had been scanned.
+    pub fn new_device_answer(&self, session: u64, invite: &str) -> Result<()> {
+        let link = guard(&self.hosts).get(&session).ok_or(Error::LinkGone)?.link().to_string();
+        morph_identity::device_link::answer_invite(invite, &link, net_config()).map_err(Error::failed)
+    }
 }
 
 #[cfg(test)]
@@ -181,6 +226,39 @@ mod tests {
         assert!(matches!(links.new_device_status(offer.session), Err(Error::LinkGone)), "session ended");
         assert_eq!(crate::library::state(&new, "p1").unwrap(), LibraryState::Unlocked);
         assert_eq!(*crate::identity::recovery_words(&new, "p1", &pw("new password")).unwrap(), *made.words);
+    }
+
+    /// The other direction over real TCP: the existing device shows an
+    /// invite, the new device answers it, and the existing device pairs with
+    /// the offer it got; the identity moves after the same code check.
+    #[test]
+    fn a_new_device_that_answers_an_invite_gets_the_identity() {
+        let links = Links::default();
+        let (_a, old) = home_with_work();
+        let (_b, new) = home_with_work();
+        let made = crate::identity::create(&old, "p1", &pw("old password")).unwrap();
+
+        let invite = links.invite_start().unwrap();
+        assert!(invite.link.starts_with("weirdnet-morph://invite/"));
+        assert!(is_invite(&invite.link));
+        assert_eq!(links.invite_take(invite.session).unwrap(), None);
+        let offer = links.new_device_start("Morph test").unwrap();
+        links.new_device_answer(offer.session, &invite.link).unwrap();
+        let answered = links.invite_take(invite.session).unwrap().expect("the new device's offer");
+        assert_eq!(answered, offer.link);
+        assert_eq!(links.invite_take(invite.session).unwrap(), None, "taken once");
+        let pairing = links.add_device_start(&old, "p1", "Work", &pw("old password"), &answered).unwrap();
+        match wait(&links, offer.session, |s| matches!(s, LinkState::Paired { .. })) {
+            LinkState::Paired { sas } => assert_eq!(sas, pairing.sas),
+            other => panic!("{other:?}"),
+        }
+        links.new_device_confirm(offer.session).unwrap();
+        links.add_device_send(pairing.session).unwrap();
+        wait(&links, offer.session, |s| matches!(s, LinkState::Received { .. }));
+        let linked = links.new_device_finish(&new, "p1", offer.session, &pw("new password")).unwrap();
+        assert_eq!(linked.user_id, made.identity.user_id);
+        links.invite_cancel(invite.session);
+        assert!(matches!(links.invite_take(invite.session), Err(Error::LinkGone)));
     }
 
     #[test]
