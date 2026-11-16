@@ -777,3 +777,41 @@ fn a_morph_start_page_opens_as_morphs_own_page_not_a_search() {
     let (b, _) = browser("morph:settings");
     assert_eq!(b.cover(), Some(&Cover::Settings));
 }
+
+#[test]
+fn a_tab_with_nothing_in_it_shows_the_start_screen() {
+    let (mut b, fake) = browser("");
+    let view = fake.created()[0];
+    assert_eq!(b.cover(), Some(&Cover::Start));
+    assert_eq!(fake.last_visible(view), Some(false), "the empty web view stays hidden");
+    assert!(b.tabs()[0].own);
+
+    // An address replaces it with the page.
+    type_into_address(&mut b, "example.com");
+    assert_eq!(b.cover(), None);
+    assert_eq!(fake.last_visible(view), Some(true));
+
+    // A new blank tab gets it too; About over it goes back to it.
+    b.new_tab("");
+    let blank = *fake.created().last().unwrap();
+    assert_eq!(b.cover(), Some(&Cover::Start));
+    assert_eq!(fake.last_visible(blank), Some(false));
+    b.show_about(true);
+    assert_eq!(b.cover(), Some(&Cover::About));
+    b.dispatch(Action::Back);
+    assert_eq!(b.cover(), Some(&Cover::Start));
+    assert_eq!(fake.last_visible(blank), Some(false));
+    assert_eq!(b.active_url(), "");
+
+    // Reload does not uncover the empty view.
+    b.dispatch(Action::Reload);
+    assert_eq!(b.cover(), Some(&Cover::Start));
+    assert_eq!(fake.last_visible(blank), Some(false));
+
+    // Closing the page tab leaves the blank one; closing everything but a
+    // page tab leaves that page.
+    b.dispatch(Action::SelectTab(0));
+    assert_eq!(b.cover(), None);
+    b.dispatch(Action::SelectTab(1));
+    assert_eq!(b.cover(), Some(&Cover::Start));
+}

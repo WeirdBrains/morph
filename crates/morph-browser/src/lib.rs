@@ -101,13 +101,16 @@ pub enum Cover {
     About,
     /// Morph's preferences (morph://settings), drawn by the shell.
     Settings,
+    /// A tab with nothing in it yet (a new or blank tab): the shell draws
+    /// Morph's start screen, as the phone app does, until an address loads.
+    Start,
 }
 
 impl Cover {
     /// One of Morph's own pages (About, Settings) rather than a problem
     /// with the page.
     pub fn is_own(&self) -> bool {
-        matches!(self, Cover::About | Cover::Settings)
+        matches!(self, Cover::About | Cover::Settings | Cover::Start)
     }
 }
 
@@ -371,8 +374,15 @@ impl Browser {
             visible: active && self.shown,
         })?;
         self.by_view.insert(view.id(), id);
+        let blank = target.is_empty();
         let _ = self.tabs.update(id, target, String::new());
-        self.pages.insert(id, Page::new(view));
+        let mut page = Page::new(view);
+        if blank {
+            // Nothing to show: the start screen covers the empty web view.
+            page.cover = Some(Cover::Start);
+            let _ = page.view.set_visible(false);
+        }
+        self.pages.insert(id, page);
         Ok(())
     }
 
@@ -862,7 +872,8 @@ impl Browser {
             let url = page.shown_url.take().unwrap_or_default();
             let own = page.cover.as_ref().is_some_and(Cover::is_own);
             let shown_title = page.shown_title.take();
-            self.set_cover(id, None);
+            // Nothing under it (a blank tab): back to the start screen.
+            self.set_cover(id, url.is_empty().then_some(Cover::Start));
             let title = match shown_title {
                 Some(title) if own => title,
                 _ if own => String::new(),

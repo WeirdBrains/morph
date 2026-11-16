@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Desktop: a tab with nothing in it (a new tab, the blank tab left after
+  closing the last page, Back from About on a blank tab) shows Morph's start
+  screen, as the phone app does: the lockup, "A distributed web browser with
+  local AI.", a dimmer "Type an address." and the cyan and magenta glitch
+  bars, on the theme's background (the light lockup on the light theme).
+  Before, the empty web view showed (white on some backends). It is drawn by
+  the shell on every backend (X11, Wayland, macOS, Windows), and the Xvfb
+  and Wayland checks screenshot it. The phone app's tests cover every case
+  with no page (a fresh start, a new tab, closing the last page, closing all
+  tabs).
+- iOS: the keystore uses the data protection keychain (the iOS build failed:
+  the keyring crate needs its `protected` store there). macOS keeps the
+  login keychain.
+
 - Android: CI and release APKs are signed with one fixed test key (the
   `ANDROID_TEST_*` repository secrets; not a Play release key), so a new APK
   installs over the last one. Before, every CI run signed with a new debug

@@ -566,6 +566,80 @@ void main() {
     }
   });
 
+  testWidgets('every tab with nothing in it shows the start page', (
+    tester,
+  ) async {
+    final view = tester.view;
+    view.physicalSize = const Size(412, 915);
+    view.devicePixelRatio = 1.0;
+    addTearDown(view.reset);
+
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      await tester.pumpWidget(
+        MorphApp(
+          api: FakeMorphApi(),
+          home: '/tmp/morph-does-not-exist',
+          subscribeToTicks: false,
+          loadPageBridgeAsset: false,
+        ),
+      );
+      await _pumpUntilIdentity(tester);
+      final startPage = find.byKey(const Key('start-page'));
+      final hint = find.text('Type an address.');
+      expect(startPage, findsOneWidget, reason: 'a fresh start');
+      expect(hint, findsOneWidget);
+      expect(
+        find.text('A distributed web browser with local AI.'),
+        findsOneWidget,
+      );
+
+      await _enterAndSubmitUrl(tester, 'one.example');
+      await _pumpUntilWebViewAttached(tester, fakeWebView);
+      await tester.pumpAndSettle();
+      expect(startPage, findsNothing);
+
+      // A new tab has no address yet.
+      await _newTab(tester);
+      await tester.pumpAndSettle();
+      expect(startPage, findsOneWidget, reason: 'a new tab');
+
+      // Back to the page, then close it and the blank one: the tab left
+      // (a fresh one) shows the start page.
+      await _showTab(tester, 0);
+      await tester.pumpAndSettle();
+      expect(startPage, findsNothing);
+      await tester.tap(find.byKey(const Key('tab-count')));
+      await tester.pumpAndSettle();
+      await tester.fling(
+        find.byType(MorphTabCard).first,
+        const Offset(-300, 0),
+        800,
+      );
+      await tester.pumpAndSettle();
+      expect(find.byType(MorphTabCard), findsOneWidget);
+      await tester.tap(find.byType(MorphTabCard).first);
+      await tester.pumpAndSettle();
+      expect(startPage, findsOneWidget, reason: 'the blank tab left');
+
+      // Close all tabs: a fresh tab with the start page.
+      await _enterAndSubmitUrl(tester, 'two.example');
+      await tester.pumpAndSettle();
+      expect(startPage, findsNothing);
+      await tester.tap(find.byKey(const Key('tab-count')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('tab-switcher-menu')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('tab-switcher-close-all')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('tab-switcher')), findsNothing);
+      expect(startPage, findsOneWidget, reason: 'after closing every tab');
+      expect(hint, findsOneWidget);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
   testWidgets('phone tab grid keeps each tab platform web view alive', (
     tester,
   ) async {
