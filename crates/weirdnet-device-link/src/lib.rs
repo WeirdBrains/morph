@@ -16,12 +16,14 @@ mod bytes;
 pub mod invite;
 pub mod net;
 pub mod offer;
+pub mod relays;
 pub mod session;
 pub mod wire;
 
 pub use invite::{Invite, InviteHost, answer_invite, decode_invite, encode_invite, is_invite};
 pub use net::{HostNode, Pairing};
 pub use offer::{Offer, VerifiedOffer, decode_link, encode_link, offer_addrs};
+pub use relays::{RelayProbe, RelayState, relay_states};
 pub use session::{Host, HostStatus, Sender};
 pub use wire::{LinkReply, LinkRequest, Transfer};
 

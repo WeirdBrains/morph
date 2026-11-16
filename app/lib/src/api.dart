@@ -1,6 +1,6 @@
 /// The Rust surface the shell needs. Widget tests use a fake so they can run
 /// on the Dart VM without loading generated FFI bindings or `libmorph_bridge.so`.
-abstract class MorphApi {
+abstract class MorphApi implements MorphRelaySource {
   String coreVersion();
 
   /// What typing [input] into the address bar opens (`morph-core`'s rule,
@@ -219,6 +219,85 @@ abstract class MorphApi {
   /// Existing device: the codes match; send the identity.
   Future<void> linkAddDeviceSend(int session);
   Future<void> linkAddDeviceCancel(int session);
+}
+
+/// The relays device linking uses, and whether Morph is connected to them
+/// now. The state comes from the running link nodes or a relay check (never
+/// guessed); with none running, [MorphRelayReport.nodes] is 0.
+abstract class MorphRelaySource {
+  /// The relays now. Cheap; never waits on the network.
+  MorphRelayReport relayReport();
+
+  /// Reach the relays for 30 s (a node like a link's), so the report shows
+  /// real state while no link runs.
+  Future<void> relayCheckStart();
+  Future<void> relayCheckStop();
+}
+
+enum MorphRelayState {
+  /// No node runs: Morph is not connected to any relay.
+  noNode,
+  notConnected,
+  connected,
+
+  /// Connected with a circuit reservation: other devices can reach this one.
+  reserved;
+
+  /// The bridge's word (`no-node`, `not-connected`, `connected`, `reserved`).
+  static MorphRelayState parse(String word) => switch (word) {
+    'reserved' => reserved,
+    'connected' => connected,
+    'not-connected' => notConnected,
+    _ => noNode,
+  };
+}
+
+/// One configured relay.
+class MorphRelay {
+  const MorphRelay({
+    required this.peer,
+    required this.addrs,
+    required this.title,
+    required this.state,
+    required this.label,
+    this.host,
+    this.rttMs,
+  });
+
+  final String peer;
+
+  /// Its configured multiaddrs.
+  final List<String> addrs;
+
+  /// Its display name (from its well-known info), else its host.
+  final String title;
+  final String? host;
+  final MorphRelayState state;
+
+  /// What a screen says about [state].
+  final String label;
+
+  /// Ping round trip, when the network layer reports it.
+  final int? rttMs;
+}
+
+class MorphRelayReport {
+  const MorphRelayReport({
+    required this.nodes,
+    required this.checking,
+    required this.summary,
+    required this.relays,
+  });
+
+  /// Running nodes the state came from (0: nothing runs).
+  final int nodes;
+
+  /// A relay check runs.
+  final bool checking;
+
+  /// One line for a link screen.
+  final String summary;
+  final List<MorphRelay> relays;
 }
 
 /// The prefix of an existing device's invite (Add a device on the desktop).

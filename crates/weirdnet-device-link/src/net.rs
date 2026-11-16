@@ -98,6 +98,11 @@ impl HostNode {
     pub fn peer_id(&self) -> PeerId {
         self.node.peer_id()
     }
+
+    /// The node's network status (connections, relay reservations).
+    pub fn net_status(&self) -> weirdnet_net::node::Status {
+        self.node.status()
+    }
 }
 
 impl Drop for HostNode {
@@ -155,6 +160,11 @@ impl Pairing {
 
     pub fn peer(&self) -> PeerId {
         self.sender.offer().peer()
+    }
+
+    /// The node's network status (connections, relay reservations).
+    pub fn net_status(&self) -> weirdnet_net::node::Status {
+        self.node.status()
     }
 
     /// The user confirmed the codes match: send the identity, once.

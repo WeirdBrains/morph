@@ -8,6 +8,10 @@ use std::path::{Path, PathBuf};
 
 use morph_identity::profile_identity::{self, ProfileIdentity, SecretString, Source, Zeroizing};
 use morph_services::device_link::{InviteView, LinkState, Links, is_invite};
+use morph_services::relays::{RelayReport, RelayStatus};
+
+/// How often a link screen reads the relay state again.
+const RELAY_POLL: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// Shortest profile or backup password accepted.
 pub const MIN_PASSWORD: usize = 8;
@@ -99,6 +103,19 @@ pub enum Secret {
     Shard(usize),
 }
 
+/// The link screens' relay line for `report`: the summary and the least
+/// ready relay's state (no relay at all reads as no node).
+pub fn relay_line(report: &RelayReport) -> (String, RelayStatus) {
+    let order = |s: RelayStatus| match s {
+        RelayStatus::NoNode => 0,
+        RelayStatus::NotConnected => 1,
+        RelayStatus::Connected => 2,
+        RelayStatus::Reserved => 3,
+    };
+    let worst = report.relays.iter().map(|r| report.status(r)).min_by_key(|s| order(*s)).unwrap_or(RelayStatus::NoNode);
+    (report.summary(), worst)
+}
+
 /// What a submit did, for the host.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
@@ -123,6 +140,9 @@ pub struct Identity {
     answered: Option<String>,
     /// Something changed without a new step (the invite was answered).
     dirty: bool,
+    /// The relay status line on the link screens, and when it was read.
+    relay_line: Option<(String, RelayStatus)>,
+    relays_read: Option<std::time::Instant>,
 }
 
 impl Identity {
@@ -139,6 +159,8 @@ impl Identity {
             invite: None,
             answered: None,
             dirty: false,
+            relay_line: None,
+            relays_read: None,
         };
         this.reload();
         this
@@ -223,6 +245,38 @@ impl Identity {
     }
 
     /// Whether something on the step changed since the last call.
+    /// Whether the step runs a link node (and so shows the relay line).
+    pub fn links_running(&self) -> bool {
+        matches!(self.step, Step::Offer { .. } | Step::Paired { .. } | Step::Adding { .. } | Step::AddDevice)
+    }
+
+    /// The relay status line for the link screens: its text and the worst
+    /// relay state, read from the running link nodes.
+    pub fn relay_line(&self) -> Option<&(String, RelayStatus)> {
+        self.relay_line.as_ref().filter(|_| self.links_running())
+    }
+
+    /// Read the relay state again (at most every [`RELAY_POLL`]) while a link
+    /// screen shows. Marks the panel dirty when the line changed.
+    pub fn poll_relays(&mut self) {
+        if !self.links_running() {
+            self.relays_read = None;
+            return;
+        }
+        if self.relays_read.is_some_and(|t| t.elapsed() < RELAY_POLL) {
+            return;
+        }
+        self.relays_read = Some(std::time::Instant::now());
+        let line = relay_line(&self.links.relays());
+        if self.relay_line.as_ref() != Some(&line) {
+            if std::env::var_os("MORPH_LOG_EVENTS").is_some_and(|v| v == "1") {
+                println!("morph-event link relays state={}", line.1.as_str());
+            }
+            self.relay_line = Some(line);
+            self.dirty = true;
+        }
+    }
+
     pub fn take_dirty(&mut self) -> bool {
         std::mem::take(&mut self.dirty)
     }
@@ -682,6 +736,22 @@ fn link_failure(state: &LinkState) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_relay_line_shows_the_least_ready_relay() {
+        use morph_identity::device_link::{Multiaddr, NetStatus, PUBLIC_RELAYS};
+        let one: Vec<Multiaddr> = PUBLIC_RELAYS.iter().map(|a| a.parse().unwrap()).collect();
+        let (text, state) = relay_line(&RelayReport::build(&one, &[], false, |_, _| None));
+        assert_eq!(state, RelayStatus::NoNode);
+        assert!(text.starts_with("Not connected"), "{text}");
+        let peer = "12D3KooWHp56KezbVCubjuznJGqyn9xTe8PWePfuwv4YQUGxaRBB".to_string();
+        let up = NetStatus { connected: vec![peer.clone()], reservations: vec![peer], ..Default::default() };
+        assert_eq!(relay_line(&RelayReport::build(&one, std::slice::from_ref(&up), false, |_, _| None)).1, RelayStatus::Reserved);
+        let mut two = one.clone();
+        two.push("/ip4/192.0.2.7/tcp/4001/p2p/12D3KooWEyoppNCUx8Yx66oV9fJnriXwCcXwDDUA2kj6vnc6iDEp".parse().unwrap());
+        assert_eq!(relay_line(&RelayReport::build(&two, &[up], false, |_, _| None)).1, RelayStatus::NotConnected);
+        assert_eq!(relay_line(&RelayReport::build(&[], &[NetStatus::default()], false, |_, _| None)).1, RelayStatus::NoNode);
+    }
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()

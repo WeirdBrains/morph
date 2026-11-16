@@ -10,6 +10,7 @@ import 'rust/api/library.dart' as rust_library;
 import 'rust/api/omnibox.dart' as rust_omnibox;
 import 'rust/api/page.dart' as rust_page;
 import 'rust/api/profiles.dart' as rust_profiles;
+import 'rust/api/relays.dart' as rust_relays;
 
 /// Production `MorphApi` backed by flutter_rust_bridge.
 class FfiMorphApi implements MorphApi {
@@ -670,4 +671,32 @@ class FfiMorphApi implements MorphApi {
   @override
   Future<void> linkAddDeviceCancel(int session) =>
       rust_link.linkAddDeviceCancel(session: BigInt.from(session));
+
+  @override
+  MorphRelayReport relayReport() {
+    final v = rust_relays.relayReport();
+    return MorphRelayReport(
+      nodes: v.nodes,
+      checking: v.checking,
+      summary: v.summary,
+      relays: [
+        for (final r in v.relays)
+          MorphRelay(
+            peer: r.peer,
+            addrs: r.addrs,
+            title: r.title,
+            host: r.host,
+            state: MorphRelayState.parse(r.state),
+            label: r.label,
+            rttMs: r.rttMs?.toInt(),
+          ),
+      ],
+    );
+  }
+
+  @override
+  Future<void> relayCheckStart() => rust_relays.relayCheckStart();
+
+  @override
+  Future<void> relayCheckStop() => rust_relays.relayCheckStop();
 }

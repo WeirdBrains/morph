@@ -2,9 +2,11 @@ import 'dart:async';
 
 import 'package:material_ui/material_ui.dart';
 
+import '../api.dart';
 import '../default_browser.dart';
 import '../theme/morph_theme.dart';
 import 'library_page.dart';
+import 'relay_status.dart';
 
 /// Morph settings: this profile's data, the default browser, and About.
 class MorphSettingsPage extends StatefulWidget {
@@ -16,7 +18,11 @@ class MorphSettingsPage extends StatefulWidget {
     required this.onClearHistory,
     required this.onOpenLibrary,
     this.defaultBrowser,
+    this.relays,
   });
+
+  /// Null hides the Relays section.
+  final MorphRelaySource? relays;
 
   /// Null or unsupported hides the Default browser section.
   final MorphDefaultBrowser? defaultBrowser;
@@ -156,6 +162,10 @@ class _MorphSettingsPageState extends State<MorphSettingsPage> {
           if (widget.defaultBrowser?.supported ?? false) ...[
             const _Header('Browser · all profiles'),
             _defaultBrowserTile(),
+          ],
+          if (widget.relays != null) ...[
+            const _Header('Relays · all profiles'),
+            MorphRelaySection(source: widget.relays!),
           ],
           const _Header('About'),
           ListTile(

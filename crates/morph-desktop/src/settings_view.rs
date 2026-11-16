@@ -17,6 +17,11 @@ use morph_ui::actions::Action;
 use morph_ui::chrome::SettingsChange;
 use morph_ui::theme::Theme;
 
+use std::sync::mpsc;
+
+use morph_services::device_link::Links;
+use morph_services::relays::{RelayReport, RelayStatus};
+
 use crate::default_browser::{self, Status};
 use crate::shell::ShellRequest;
 use crate::text_input::{TextInput, TextInputEvent};
@@ -34,11 +39,12 @@ pub enum Section {
     Downloads,
     Privacy,
     Identity,
+    Relays,
     About,
 }
 
 impl Section {
-    pub const ALL: [Section; 10] = [
+    pub const ALL: [Section; 11] = [
         Section::Profile,
         Section::Browser,
         Section::Search,
@@ -48,6 +54,7 @@ impl Section {
         Section::Downloads,
         Section::Privacy,
         Section::Identity,
+        Section::Relays,
         Section::About,
     ];
 
@@ -62,6 +69,7 @@ impl Section {
             Section::Downloads => "Downloads",
             Section::Privacy => "Privacy and site data",
             Section::Identity => "Identity and backup",
+            Section::Relays => "Relays",
             Section::About => "About",
         }
     }
@@ -78,13 +86,14 @@ impl Section {
             Section::Downloads => "downloads folder save files",
             Section::Privacy => "clear browsing data cookies cache site permissions camera microphone location",
             Section::Identity => "identity backup recovery restore devices link",
+            Section::Relays => "relays relay network weirdnet connected connection reservation slot link devices nat peer",
             Section::About => "about version licence license notices",
         }
     }
 
     /// Whether the setting is the same for every profile.
     pub fn app_wide(self) -> bool {
-        matches!(self, Section::Browser | Section::About)
+        matches!(self, Section::Browser | Section::Relays | Section::About)
     }
 
     /// Whether a search for `query` shows this section.
@@ -112,6 +121,7 @@ pub enum Item {
     DefaultDownloads,
     ClearData,
     OpenIdentity,
+    CheckRelays,
     OpenAbout,
 }
 
@@ -127,11 +137,12 @@ impl Item {
             Item::ChooseDownloads | Item::DefaultDownloads => Section::Downloads,
             Item::ClearData => Section::Privacy,
             Item::OpenIdentity => Section::Identity,
+            Item::CheckRelays => Section::Relays,
             Item::OpenAbout => Section::About,
         }
     }
 
-    pub const ALL: [Item; 16] = [
+    pub const ALL: [Item; 17] = [
         Item::OpenBookmarks,
         Item::OpenHistory,
         Item::ClearHistory,
@@ -147,6 +158,7 @@ impl Item {
         Item::DefaultDownloads,
         Item::ClearData,
         Item::OpenIdentity,
+        Item::CheckRelays,
         Item::OpenAbout,
     ];
 
@@ -167,6 +179,9 @@ pub fn cycle<T: PartialEq + Copy>(list: &[T], current: T, forward: bool) -> T {
     let n = list.len();
     list[if forward { (i + 1) % n } else { (i + n - 1) % n }]
 }
+
+/// How often the page reads the relay state again while it is open.
+const RELAY_POLL: std::time::Duration = std::time::Duration::from_secs(1);
 
 const POSITIONS: [TabPosition; 4] = [TabPosition::Top, TabPosition::Bottom, TabPosition::Left, TabPosition::Right];
 const THEMES: [ThemeChoice; 2] = [ThemeChoice::Dark, ThemeChoice::Light];
@@ -190,6 +205,12 @@ pub struct SettingsView {
     scroll: ScrollHandle,
     /// A folder dialog is open.
     dialog: Option<gpui::Task<()>>,
+    /// The relays as last read (after the page first opened), and when.
+    relays: Option<RelayReport>,
+    relays_read: Option<std::time::Instant>,
+    /// A relay check starting on its own thread.
+    relay_check: Option<mpsc::Receiver<Result<(), String>>>,
+    relay_note: Option<String>,
     _subscriptions: Vec<gpui::Subscription>,
 }
 
@@ -247,6 +268,10 @@ impl SettingsView {
             current: None,
             scroll: ScrollHandle::new(),
             dialog: None,
+            relays: None,
+            relays_read: None,
+            relay_check: None,
+            relay_note: None,
             _subscriptions: subscriptions,
         };
         view.reload_quietly();
@@ -291,6 +316,8 @@ impl SettingsView {
             self.browser_check = Some(default_browser::Check::status(default_browser::system));
         }
         self.browser_note = None;
+        self.relays_read = None;
+        self.read_relays(cx);
         if let Some(section) = section {
             self.search.update(cx, |s, cx| s.set_text("", cx));
             self.current = visible_items("").iter().position(|i| i.section() == section);
@@ -385,6 +412,7 @@ impl SettingsView {
 
     /// Pick up finished default-browser work; called by the host's tick.
     pub fn poll(&mut self, cx: &mut Context<Self>) {
+        self.poll_relays(cx);
         let Some((status, made)) = self.browser_check.as_ref().and_then(|c| c.take()) else {
             return;
         };
@@ -393,6 +421,58 @@ impl SettingsView {
         self.browser_note = made.map(|made| match made {
             Ok(note) | Err(note) => note,
         });
+        cx.notify();
+    }
+
+    /// Read the relay state now; cheap, never touches the network.
+    fn read_relays(&mut self, cx: &mut Context<Self>) {
+        self.relays_read = Some(std::time::Instant::now());
+        let next = Links::global().relays();
+        if self.relays.as_ref() != Some(&next) {
+            if std::env::var_os("MORPH_LOG_EVENTS").is_some_and(|v| v == "1") {
+                let state = next.relays.first().map_or("none", |r| next.status(r).as_str());
+                println!("morph-event relays nodes={} checking={} state={state} count={}", next.nodes, next.checking, next.relays.len());
+            }
+            self.relays = Some(next);
+            cx.notify();
+        }
+    }
+
+    /// Follow the relay state once the page has opened, and a starting check.
+    fn poll_relays(&mut self, cx: &mut Context<Self>) {
+        if let Some(rx) = &self.relay_check {
+            match rx.try_recv() {
+                Ok(done) => {
+                    self.relay_check = None;
+                    self.relay_note = done.err().map(|e| format!("Could not check the relays: {e}"));
+                    self.read_relays(cx);
+                    cx.notify();
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => self.relay_check = None,
+            }
+        }
+        if self.relays_read.is_some_and(|t| t.elapsed() >= RELAY_POLL) {
+            self.read_relays(cx);
+        }
+    }
+
+    /// Reach the relays for a moment (a node like a link's), off the UI thread.
+    fn check_relays(&mut self, cx: &mut Context<Self>) {
+        if self.relay_check.is_some() || self.relays.as_ref().is_some_and(|r| r.checking) {
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        let spawned = std::thread::Builder::new().name("morph-relay-check".into()).spawn(move || {
+            let _ = tx.send(Links::global().relay_check_start().map_err(|e| e.to_string()));
+        });
+        match spawned {
+            Ok(_) => {
+                self.relay_check = Some(rx);
+                self.relay_note = None;
+            }
+            Err(e) => self.relay_note = Some(format!("Could not check the relays: {e}")),
+        }
         cx.notify();
     }
 
@@ -434,6 +514,7 @@ impl SettingsView {
                 self.note = Some("Cookies, cache, site storage and history cleared for this profile.".into());
             }
             Item::OpenIdentity => cx.emit(ShellRequest::Run(Action::ShowIdentity)),
+            Item::CheckRelays => self.check_relays(cx),
             Item::OpenAbout => cx.emit(ShellRequest::Run(Action::ShowAbout)),
         }
         cx.notify();
@@ -550,6 +631,68 @@ impl SettingsView {
             ))
             .children(rows)
             .into_any_element()
+    }
+
+    /// Settings → Relays: the summary with a check button, then each relay.
+    fn relay_rows(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+        let t = self.theme;
+        let Some(report) = &self.relays else {
+            return vec![self.row(Item::CheckRelays, "Relays", Some("Reading…".into()), div().into_any_element(), cx)];
+        };
+        let checking = report.checking || self.relay_check.is_some();
+        let help = self.relay_note.clone().unwrap_or_else(|| report.summary());
+        let control = if report.relays.is_empty() {
+            div().into_any_element()
+        } else if checking {
+            div().text_size(px(12.)).text_color(rgb(t.text_secondary)).child("Checking…").into_any_element()
+        } else {
+            button(t, "settings-relays-check", "Check now", false)
+                .on_click(cx.listener(|this, _, w, cx| this.activate(Item::CheckRelays, w, cx)))
+                .into_any_element()
+        };
+        let mut rows = vec![self.row(Item::CheckRelays, "Relays this device links through", Some(help), control, cx)];
+        for relay in &report.relays {
+            let status = report.status(relay);
+            let color = match status {
+                RelayStatus::Reserved => t.accent,
+                RelayStatus::Connected => t.text_primary,
+                _ => t.text_secondary,
+            };
+            let mut state = status.label().to_string();
+            if let Some(ms) = relay.rtt_ms {
+                state.push_str(&format!(" · {ms} ms"));
+            }
+            rows.push(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .px(px(12.))
+                    .py(px(6.))
+                    .rounded(px(8.))
+                    .bg(rgb(t.surface))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap(px(8.))
+                            .child(div().text_size(px(13.)).child(relay.title()))
+                            .child(div().text_size(px(12.)).text_color(rgb(color)).child(state)),
+                    )
+                    .child(div().text_size(px(11.)).text_color(rgb(t.text_secondary)).child(format!("Peer {}", relay.peer)))
+                    .children(relay.addrs.iter().map(|a| div().text_size(px(11.)).text_color(rgb(t.text_secondary)).child(a.clone())))
+                    .into_any_element(),
+            );
+        }
+        rows.push(
+            div()
+                .px(px(12.))
+                .text_size(px(12.))
+                .text_color(rgb(t.text_secondary))
+                .child("Morph reaches a relay only while linking a device or during a check (30 s). A reserved slot lets a device on another network reach this one.")
+                .into_any_element(),
+        );
+        rows
     }
 
     fn section_rows(&self, section: Section, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
@@ -745,6 +888,7 @@ impl SettingsView {
                     cx,
                 ),
             ],
+            Section::Relays => self.relay_rows(cx),
             Section::About => vec![
                 self.row(
                     Item::OpenAbout,
@@ -863,7 +1007,9 @@ mod tests {
         for s in Section::ALL {
             assert!(Item::ALL.iter().any(|i| i.section() == s), "{s:?} has nothing to reach by keyboard");
         }
-        assert!(Section::Browser.app_wide());
+        assert!(Section::Browser.app_wide() && Section::Relays.app_wide());
+        assert_eq!(Section::ALL.into_iter().filter(|s| s.matches("relay")).collect::<Vec<_>>(), [Section::Relays]);
+        assert_eq!(visible_items("relays"), [Item::CheckRelays]);
         for s in [Section::Profile, Section::Search, Section::Layout, Section::Appearance, Section::Downloads, Section::Privacy] {
             assert!(!s.app_wide(), "{s:?} is per profile");
         }

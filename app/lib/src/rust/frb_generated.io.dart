@@ -12,6 +12,7 @@ import 'api/library.dart';
 import 'api/omnibox.dart';
 import 'api/page.dart';
 import 'api/profiles.dart';
+import 'api/relays.dart';
 import 'api/settings.dart';
 
 import 'dart:async';
@@ -60,6 +61,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ProfileIdentityView dco_decode_box_autoadd_profile_identity_view(dynamic raw);
+
+  @protected
+  BigInt dco_decode_box_autoadd_u_64(dynamic raw);
 
   @protected
   CatalogView dco_decode_catalog_view(dynamic raw);
@@ -134,12 +138,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<ProfileView> dco_decode_list_profile_view(dynamic raw);
 
   @protected
+  List<RelayStatusView> dco_decode_list_relay_status_view(dynamic raw);
+
+  @protected
   String? dco_decode_opt_String(dynamic raw);
 
   @protected
   ProfileIdentityView? dco_decode_opt_box_autoadd_profile_identity_view(
     dynamic raw,
   );
+
+  @protected
+  BigInt? dco_decode_opt_box_autoadd_u_64(dynamic raw);
 
   @protected
   List<String>? dco_decode_opt_list_String(dynamic raw);
@@ -152,6 +162,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ProfileView dco_decode_profile_view(dynamic raw);
+
+  @protected
+  RelayReportView dco_decode_relay_report_view(dynamic raw);
+
+  @protected
+  RelayStatusView dco_decode_relay_status_view(dynamic raw);
 
   @protected
   SettingsView dco_decode_settings_view(dynamic raw);
@@ -204,6 +220,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ProfileIdentityView sse_decode_box_autoadd_profile_identity_view(
     SseDeserializer deserializer,
   );
+
+  @protected
+  BigInt sse_decode_box_autoadd_u_64(SseDeserializer deserializer);
 
   @protected
   CatalogView sse_decode_catalog_view(SseDeserializer deserializer);
@@ -296,12 +315,20 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<ProfileView> sse_decode_list_profile_view(SseDeserializer deserializer);
 
   @protected
+  List<RelayStatusView> sse_decode_list_relay_status_view(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
 
   @protected
   ProfileIdentityView? sse_decode_opt_box_autoadd_profile_identity_view(
     SseDeserializer deserializer,
   );
+
+  @protected
+  BigInt? sse_decode_opt_box_autoadd_u_64(SseDeserializer deserializer);
 
   @protected
   List<String>? sse_decode_opt_list_String(SseDeserializer deserializer);
@@ -316,6 +343,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ProfileView sse_decode_profile_view(SseDeserializer deserializer);
+
+  @protected
+  RelayReportView sse_decode_relay_report_view(SseDeserializer deserializer);
+
+  @protected
+  RelayStatusView sse_decode_relay_status_view(SseDeserializer deserializer);
 
   @protected
   SettingsView sse_decode_settings_view(SseDeserializer deserializer);
@@ -382,6 +415,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     ProfileIdentityView self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_box_autoadd_u_64(BigInt self, SseSerializer serializer);
 
   @protected
   void sse_encode_catalog_view(CatalogView self, SseSerializer serializer);
@@ -504,6 +540,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_relay_status_view(
+    List<RelayStatusView> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);
 
   @protected
@@ -511,6 +553,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     ProfileIdentityView? self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_opt_box_autoadd_u_64(BigInt? self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_list_String(List<String>? self, SseSerializer serializer);
@@ -529,6 +574,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_profile_view(ProfileView self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_relay_report_view(
+    RelayReportView self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_relay_status_view(
+    RelayStatusView self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_settings_view(SettingsView self, SseSerializer serializer);

@@ -16,9 +16,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use weirdnet_device_link::{HostNode, HostStatus, InviteHost, Pairing};
+pub use weirdnet_device_link::{RelayProbe, RelayState, relay_states};
 use weirdnet_keys::{Key32, SecretString, password_seal};
 use weirdnet_net::Keypair;
+pub use weirdnet_net::Multiaddr;
 use weirdnet_net::node::NodeConfig;
+pub use weirdnet_net::node::Status as NetStatus;
 
 use crate::profile_identity::{self, ProfileIdentity, Source, identity_dir};
 use crate::{Error, Result};
@@ -43,11 +46,15 @@ pub const PUBLIC_RELAYS: &[&str] = &[
 /// relay. `MORPH_LINK_RELAYS` (comma-separated multiaddrs ending in
 /// `/p2p/<relay>`; empty for none) replaces the relay list.
 pub fn net_config() -> NodeConfig {
-    let relays = match std::env::var("MORPH_LINK_RELAYS") {
+    NodeConfig { listen: NodeConfig::default_listen(0), relays: link_relays(), label: "morph-link".into(), ..Default::default() }
+}
+
+/// The relays links use: [`PUBLIC_RELAYS`], or `MORPH_LINK_RELAYS` when set.
+pub fn link_relays() -> Vec<weirdnet_net::Multiaddr> {
+    match std::env::var("MORPH_LINK_RELAYS") {
         Ok(v) => v.split(',').filter_map(|a| a.trim().parse().ok()).collect(),
         Err(_) => PUBLIC_RELAYS.iter().filter_map(|a| a.parse().ok()).collect(),
-    };
-    NodeConfig { listen: NodeConfig::default_listen(0), relays, label: "morph-link".into(), ..Default::default() }
+    }
 }
 
 /// What the new device's screen should show.
@@ -119,6 +126,11 @@ impl NewDevice {
 
     pub fn state(&self) -> LinkState {
         self.host.status().into()
+    }
+
+    /// The listening node's network status (connections, relay reservations).
+    pub fn net_status(&self) -> NetStatus {
+        self.host.net_status()
     }
 
     /// The user tapped "Codes match" here.
@@ -196,6 +208,11 @@ impl AddDevice {
         self.pairing.device()
     }
 
+    /// The pairing node's network status (connections, relay reservations).
+    pub fn net_status(&self) -> NetStatus {
+        self.pairing.net_status()
+    }
+
     /// The codes match: send the identity, once.
     pub fn send(&mut self) -> Result<()> {
         self.pairing.send(&self.seed, &self.profile_name, "{}").map_err(link_error)
@@ -239,6 +256,11 @@ impl Invite {
     /// The new device's offer link, once it answered.
     pub fn take_offer(&self) -> Option<String> {
         self.0.take_offer()
+    }
+
+    /// The listening node's network status (connections, relay reservations).
+    pub fn net_status(&self) -> NetStatus {
+        self.0.net_status()
     }
 }
 
