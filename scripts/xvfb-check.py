@@ -690,6 +690,18 @@ def favicon(m, r, binary, base):
     r.check("icons", "a page's icon reaches its tab", got and "bytes" in got[-1], str(got))
 
 
+def hand_to(r, group, binary, url, env):
+    """Launch `binary url` and expect it to hand the URL to the running
+    Morph and exit; a launch that keeps running is a failed check, not a
+    crashed run."""
+    try:
+        subprocess.run([binary, url], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+        return True
+    except subprocess.TimeoutExpired:
+        r.check(group, "a second launch hands its URL over and exits", False, "still running after 15 s")
+        return False
+
+
 def file_picker(r, binary, display, base):
     """A page's <input type=file> opens the system's file dialog (answered
     from MORPH_TEST_PICK_OPEN here) and the page gets the file."""
@@ -697,12 +709,14 @@ def file_picker(r, binary, display, base):
     pick.write_text("hello from the file dialog\n")
     m2 = Driver(binary, display, tempfile.mkdtemp(prefix="morph-xvfb-files-"), extra_env={"MORPH_TEST_PICK_OPEN": str(pick)})
     try:
-        win = wait_for(lambda: m2.window("Morph"), 20)
+        # Its own window: the first Morph still runs on this display.
+        win = wait_for(lambda: m2.own_window(), 20)
         r.check("files", "a Morph for the upload page opens", win)
         if not win:
             return
         before = len(m2.events())
-        subprocess.run([binary, base + "upload.html"], env=m2.env, capture_output=True, timeout=15)
+        if not hand_to(r, "files", binary, base + "upload.html", m2.env):
+            return
 
         def uploaded():
             for _, n, a in reversed(m2.events()[before:]):
@@ -728,12 +742,14 @@ def select_menu(r, binary, display, base):
     shell's own on Wayland)."""
     m2 = Driver(binary, display, tempfile.mkdtemp(prefix="morph-xvfb-select-"))
     try:
-        win = wait_for(lambda: m2.window("Morph"), 20)
+        # Its own window: the first Morph still runs on this display.
+        win = wait_for(lambda: m2.own_window(), 20)
         r.check("select", "a Morph for the select page opens", win)
         if not win:
             return
         before = len(m2.events())
-        subprocess.run([binary, base + "select.html"], env=m2.env, capture_output=True, timeout=15)
+        if not hand_to(r, "select", binary, base + "select.html", m2.env):
+            return
 
         def sel():
             for _, n, a in reversed(m2.events()[before:]):
