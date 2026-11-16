@@ -585,6 +585,20 @@ def settings_file(m):
     return path.read_text(errors="replace") if path.exists() else ""
 
 
+def internal_pages(m, r, win, top):
+    """morph://about typed in the address opens the About page in the tab;
+    Back returns to the page."""
+    m.activate(win)
+    m.click(win, 300, top + 300)
+    before = m.title(win)
+    m.key("ctrl+l", delay=0.5)
+    m.type("morph://about")
+    m.key("Return", delay=1.0)
+    r.check("about", "morph://about opens the About page", wait_for(lambda: m.title(win).startswith("About Morph")), m.title(win))
+    m.key("alt+Left", delay=1.0)
+    r.check("about", "Alt+Left goes back to the page", wait_for(lambda: not m.title(win).startswith("About")), f"{m.title(win)} (was {before})")
+
+
 def settings_panel(m, r, win, top):
     """Ctrl+, opens the preferences as a page (a tab of its own) with the
     keyboard: / searches, Enter goes to the first setting, Right changes
@@ -690,6 +704,18 @@ def favicon(m, r, binary, base):
     r.check("icons", "a page's icon reaches its tab", got and "bytes" in got[-1], str(got))
 
 
+def hand_to(r, group, binary, url, env):
+    """Launch `binary url` and expect it to hand the URL to the running
+    Morph and exit; a launch that keeps running is a failed check, not a
+    crashed run."""
+    try:
+        subprocess.run([binary, url], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+        return True
+    except subprocess.TimeoutExpired:
+        r.check(group, "a second launch hands its URL over and exits", False, "still running after 15 s")
+        return False
+
+
 def file_picker(r, binary, display, base):
     """A page's <input type=file> opens the system's file dialog (answered
     from MORPH_TEST_PICK_OPEN here) and the page gets the file."""
@@ -697,12 +723,14 @@ def file_picker(r, binary, display, base):
     pick.write_text("hello from the file dialog\n")
     m2 = Driver(binary, display, tempfile.mkdtemp(prefix="morph-xvfb-files-"), extra_env={"MORPH_TEST_PICK_OPEN": str(pick)})
     try:
-        win = wait_for(lambda: m2.window("Morph"), 20)
+        # Its own window: the first Morph still runs on this display.
+        win = wait_for(lambda: m2.own_window(), 20)
         r.check("files", "a Morph for the upload page opens", win)
         if not win:
             return
         before = len(m2.events())
-        subprocess.run([binary, base + "upload.html"], env=m2.env, capture_output=True, timeout=15)
+        if not hand_to(r, "files", binary, base + "upload.html", m2.env):
+            return
 
         def uploaded():
             for _, n, a in reversed(m2.events()[before:]):
@@ -728,12 +756,14 @@ def select_menu(r, binary, display, base):
     shell's own on Wayland)."""
     m2 = Driver(binary, display, tempfile.mkdtemp(prefix="morph-xvfb-select-"))
     try:
-        win = wait_for(lambda: m2.window("Morph"), 20)
+        # Its own window: the first Morph still runs on this display.
+        win = wait_for(lambda: m2.own_window(), 20)
         r.check("select", "a Morph for the select page opens", win)
         if not win:
             return
         before = len(m2.events())
-        subprocess.run([binary, base + "select.html"], env=m2.env, capture_output=True, timeout=15)
+        if not hand_to(r, "select", binary, base + "select.html", m2.env):
+            return
 
         def sel():
             for _, n, a in reversed(m2.events()[before:]):
@@ -987,6 +1017,88 @@ def identity_restore(r, binary, display, user_id, backup):
         m2.stop()
 
 
+def qr_texts(path):
+    """The QR codes a screenshot holds, decoded (zxing-cpp); None when no
+    decoder is installed (`pip install zxing-cpp pillow`)."""
+    try:
+        import zxingcpp
+        from PIL import Image
+    except ImportError:
+        return None
+    return [res.text for res in zxingcpp.read_barcodes(Image.open(path)) if res.format == zxingcpp.BarcodeFormat.QRCode]
+
+
+def screenshot(m, path):
+    if isinstance(m, WaylandMorph):
+        subprocess.run(["grim", str(path)], env=m.env, capture_output=True, timeout=20)
+    else:
+        subprocess.run(["import", "-window", "root", str(path)], env=m.env, capture_output=True, timeout=20)
+
+
+def check_qr(r, area, what, m, expected):
+    """The screen shows a QR code that decodes to `expected` (it painted,
+    and it is the right one)."""
+    path = Path(tempfile.mkdtemp(prefix="morph-xvfb-qr-")) / "screen.png"
+    texts = None
+    for _ in range(3):
+        screenshot(m, path)
+        texts = qr_texts(path) if path.exists() else []
+        if texts is None or expected in texts:
+            break
+        time.sleep(1.0)
+    if texts is None:
+        if os.environ.get("MORPH_REQUIRE_QR") == "1":
+            r.check(area, what, False, "no QR decoder (pip install zxing-cpp pillow)")
+        else:
+            print(f"SKIP  {area:7} {what} (no QR decoder)", flush=True)
+        return
+    r.check(area, what, expected in texts, f"decoded {[t[:40] for t in texts]}")
+
+
+def identity_link_invite(m, r, binary, display, user_id):
+    """The other direction: the device with the identity shows a QR under
+    Add a device (a), a fresh Morph pastes its link on its own link screen
+    (4), and after the password and the same code check the new one gets
+    the identity."""
+    win, w0 = open_identity(m, r, "invite")
+    m.key("a", delay=1.5)
+    invite = wait_for(lambda: [line.split("invite=", 1)[1].strip() for line in m.lines(r"morph-event link invite=")])
+    r.check("invite", "Add a device shows a code of its own", invite, "no invite logged")
+    if not invite:
+        return
+    check_qr(r, "invite", "its QR code paints and reads back as its link", m, invite[-1])
+    m4 = Driver(binary, display, tempfile.mkdtemp(prefix="morph-xvfb-invite-"))
+    try:
+        r.check("invite", "a new device (another home) opens", wait_for(lambda: state(m4), 20))
+        new_win, _ = open_identity(m4, r, "invite")
+        m4.key("4", delay=1.5)
+        offer = wait_for(lambda: m4.lines(r"morph-event link offer="))
+        if offer:
+            check_qr(r, "invite", "the new device's QR code paints and reads back as its link", m4, offer[-1].split("offer=", 1)[1].strip())
+        fill(m4, invite[-1])
+        r.check("invite", "pasting the code there reaches this device", wait_for(lambda: m.lines(r"morph-event link answered"), 15), "no answer")
+        # This device still shows Add a device, its password field focused:
+        # the password, Enter, and Enter on the empty link field pairs with
+        # the link that came back.
+        m.activate(win)
+        fill(m, PASSWORD)
+        m.key("Return", delay=1.0)
+        time.sleep(3.0)
+        m.key("Return", delay=1.0)
+        m4.activate(new_win)
+        m4.key("Return", delay=3.0)
+        fill(m4, PASSWORD)
+        got = wait_for(lambda: identity_file(m4, "default").get("user_id"), 20)
+        r.check("invite", "after both confirm, the new device has the same identity", got and got == user_id, f"{got} vs {user_id}")
+    finally:
+        m4.stop()
+    m.activate(win)
+    for _ in range(3):
+        if (state(m) or {}).get("w") == w0:
+            break
+        m.key("Escape", delay=0.8)
+
+
 def identity_link(m, r, binary, display, user_id):
     """Device linking: a fresh Morph (another home) offers a link with 4; the
     first adds it (a, password, link); both show the same code, Enter on
@@ -1002,6 +1114,7 @@ def identity_link(m, r, binary, display, user_id):
         r.check("link", "4 shows a link (and its QR code)", offer, "no offer logged")
         if not offer:
             return
+        check_qr(r, "link", "the offer's QR code paints and reads back as its link", m3, offer[0])
         win, w0 = open_identity(m, r, "link")
         m.key("a", delay=0.8)
         fill(m, PASSWORD, offer[0])
@@ -1274,6 +1387,7 @@ def main():
             r.check("popup", "Ctrl+W closes the popup", not m.window(r"^P\{"), "still open")
         profiles_panel(m, r, win, top)
         tab_bar(m, r, win, top)
+        internal_pages(m, r, win, top)
         w0, h0 = settings_panel(m, r, win, top)
         m.stop()
         m = Driver(args.bin, display, home)
@@ -1311,6 +1425,7 @@ def main():
             if len(shards) == 5:
                 identity_shards_restore(r, args.bin, display, user_id, shards)
             identity_link(m, r, args.bin, display, user_id)
+            identity_link_invite(m, r, args.bin, display, user_id)
             m.stop()
             m = Driver(args.bin, display, str(m.home))
             identity_relaunch(m, r)

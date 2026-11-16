@@ -67,6 +67,25 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    let paths = match morph_identity::Paths::resolve(None) {
+        Ok(paths) => paths,
+        Err(e) => {
+            eprintln!("morph: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    // A Morph already running for this home takes the URL (a new tab) and
+    // this launch ends here, before any start-up work (render check,
+    // media probe, desktop files) that could leave children holding the
+    // caller's output open.
+    let socket = single::socket_for(&paths.home);
+    let request = match &args.open {
+        Some(url) => single::Request::Open(url.clone()),
+        None => single::Request::Show,
+    };
+    if single::hand_off(&socket, &request) {
+        return ExitCode::SUCCESS;
+    }
     #[cfg(target_os = "linux")]
     if let Err(e) = backend::start() {
         eprintln!("morph: {e}");
@@ -78,23 +97,6 @@ fn main() -> ExitCode {
     // GStreamer and VA-API for the About page, found in the background.
     #[cfg(target_os = "linux")]
     about::probe_media(backend::startup().is_some_and(|s| s.va_ranked));
-    let paths = match morph_identity::Paths::resolve(None) {
-        Ok(paths) => paths,
-        Err(e) => {
-            eprintln!("morph: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    // A Morph already running for this home takes the URL (a new tab) and
-    // this launch ends here.
-    let socket = single::socket_for(&paths.home);
-    let request = match &args.open {
-        Some(url) => single::Request::Open(url.clone()),
-        None => single::Request::Show,
-    };
-    if single::hand_off(&socket, &request) {
-        return ExitCode::SUCCESS;
-    }
     let listener = match single::Listener::bind(&socket) {
         Ok(listener) => Some(listener),
         Err(e) => {

@@ -15,7 +15,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use weirdnet_device_link::{HostNode, HostStatus, Pairing};
+use weirdnet_device_link::{HostNode, HostStatus, InviteHost, Pairing};
 use weirdnet_keys::{Key32, SecretString, password_seal};
 use weirdnet_net::Keypair;
 use weirdnet_net::node::NodeConfig;
@@ -190,6 +190,51 @@ impl AddDevice {
     pub fn cancel(&self) -> Result<()> {
         self.pairing.cancel().map_err(link_error)
     }
+}
+
+/// The existing device's invite: a QR the new device scans when it is the
+/// one with a camera (or the link pasted there). The new device answers with
+/// its own offer link, which [`Invite::take_offer`] hands back for
+/// [`AddDevice::start`]; the code check is the same.
+pub struct Invite(InviteHost);
+
+impl std::fmt::Debug for Invite {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Invite").finish_non_exhaustive()
+    }
+}
+
+impl Invite {
+    pub fn start(cfg: NodeConfig) -> Result<Self> {
+        InviteHost::start(SCHEME, cfg).map(Invite).map_err(link_error)
+    }
+
+    pub fn link(&self) -> &str {
+        self.0.link()
+    }
+
+    pub fn expires_ms(&self) -> i64 {
+        self.0.expires_ms()
+    }
+
+    pub fn expired(&self) -> bool {
+        self.0.expired()
+    }
+
+    /// The new device's offer link, once it answered.
+    pub fn take_offer(&self) -> Option<String> {
+        self.0.take_offer()
+    }
+}
+
+/// Whether `text` is an existing device's invite (not a new device's link).
+pub fn is_invite(text: &str) -> bool {
+    weirdnet_device_link::is_invite(SCHEME, text)
+}
+
+/// The new device answers `invite` with its offer.
+pub fn answer_invite(invite: &str, offer_link: &str, cfg: NodeConfig) -> Result<()> {
+    weirdnet_device_link::answer_invite(SCHEME, invite.trim(), offer_link, cfg).map_err(link_error)
 }
 
 /// Whether `profile_dir` holds a node key that came with a link.
