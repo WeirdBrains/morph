@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- The ☰ menu's entries work (they did nothing: the action was sent after
+  the menu had closed and dropped the keyboard focus, so it never reached
+  the shell). The address dropdown, toast and morph:// actions go to the
+  shell the same way now. The Identity button left the toolbar; Identity is
+  in the ☰ menu (and Ctrl+Shift+L / ⌘⇧L). Xvfb and Wayland checks click
+  every entry and check what it did; the smoke tests on macOS, Windows and
+  Linux choose every entry too.
+- Linux X11: a page that was clicked keeps the keyboard even when the window
+  manager hands focus to Morph's window late (seen under load), and when
+  switching back to Morph from another window.
 - Linux, native Wayland: pasting into a page no longer crashes Morph
   (SIGSEGV in WebKitGTK's clipboard code, e.g. any paste on github.com, and
   middle clicks). Pages the shell draws never use WebKit's clipboard: Morph
