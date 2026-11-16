@@ -304,32 +304,19 @@ impl HostKeys {
         self.retry_focus();
     }
 
-    /// Stop giving X focus to page window `page` (it is closing).
-    fn forget(&self, page: u64) {
-        if self.pending.get().is_some_and(|(p, _)| p == page) {
-            self.pending.set(None);
-        }
-    }
-
     /// Give the pending page X focus if it does not have it and can take it.
     fn retry_focus(&self) {
         let (Some(conn), Some((page, left))) = (self.conn.as_ref(), self.pending.get()) else {
             return;
         };
-        // After the retries the page keeps the keyboard for as long as the
-        // shell has not taken it back (`focus_host`): when X focus lands on
-        // the shell's window itself, it is passed on to the page again. It
-        // got there late from the window manager (a click's focus under
-        // load) or from switching back to Morph from another window. Focus
-        // in another window is left alone.
-        self.pending.set(Some((page, left.saturating_sub(1))));
+        self.pending.set(left.checked_sub(1).map(|left| (page, left)));
         // SAFETY: the display is open; the window id is a page window, a
         // child of the shell's window. Focus is only set while it is mapped.
         unsafe {
             let mut focused: x11_dl::xlib::Window = 0;
             let mut revert = 0;
             (conn.xlib.XGetInputFocus)(conn.display, &mut focused, &mut revert);
-            if focused as u64 == page || (left == 0 && focused as u64 != self.host) {
+            if focused as u64 == page {
                 return;
             }
             let mut attrs: x11_dl::xlib::XWindowAttributes = std::mem::zeroed();
@@ -873,10 +860,6 @@ pub(crate) use crate::FIND_MAX_MATCHES;
 
 impl Drop for WryView {
     fn drop(&mut self) {
-        // The page's X window goes away: never ask X about it again.
-        if let Some(page) = page_window(&self.view.webview()) {
-            self.keys.forget(page);
-        }
         let _ = self.view.set_visible(false);
         let popups = self.popups.borrow_mut().remove(&self.id).unwrap_or_default();
         for popup in popups {
