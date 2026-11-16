@@ -14,6 +14,8 @@ pub struct AddressElement {
 }
 
 pub struct Prepainted {
+    /// How far the text is scrolled left, so the cursor stays in view.
+    scroll: Pixels,
     line: Option<ShapedLine>,
     cursor: Option<PaintQuad>,
     selection: Option<PaintQuad>,
@@ -85,6 +87,27 @@ impl Element for AddressElement {
         };
         let font_size = style.font_size.to_pixels(window.rem_size());
         let line = window.text_system().shape_line(text, font_size, &runs, None);
+        // A long address scrolls inside the bar (to the cursor while
+        // editing, to its start otherwise) and is clipped at its edge, so
+        // it never runs under the chips beside the bar.
+        let room = (bounds.size.width - px(2.)).max(px(0.));
+        let most = (line.width - room).max(px(0.));
+        let scroll = if !focused || field.text().is_empty() {
+            px(0.)
+        } else {
+            let x = line.x_for_index(cursor);
+            let old = view.address_scroll.get();
+            let s = if x < old {
+                x
+            } else if x > old + room {
+                x - room
+            } else {
+                old
+            };
+            s.clamp(px(0.), most)
+        };
+        view.address_scroll.set(scroll);
+        let bounds = Bounds::new(point(bounds.left() - scroll, bounds.top()), bounds.size);
         let (selection, cursor) = if !focused {
             (None, None)
         } else if selection.is_empty() || field.text().is_empty() {
@@ -95,7 +118,7 @@ impl Element for AddressElement {
             let to = point(bounds.left() + line.x_for_index(selection.end), bounds.bottom());
             (Some(fill(Bounds::from_corners(from, to), rgba((theme.accent << 8) | 0x55))), None)
         };
-        Prepainted { line: Some(line), cursor, selection }
+        Prepainted { scroll, line: Some(line), cursor, selection }
     }
 
     fn paint(
@@ -110,16 +133,33 @@ impl Element for AddressElement {
     ) {
         let focus = self.view.read(cx).address_focus().clone();
         window.handle_input(&focus, ElementInputHandler::new(bounds, self.view.clone()), cx);
-        if let Some(selection) = prepainted.selection.take() {
-            window.paint_quad(selection);
-        }
         let Some(line) = prepainted.line.take() else {
             return;
         };
-        let _ = line.paint(bounds.origin, window.line_height(), gpui::TextAlign::Left, None, window, cx);
-        if let Some(cursor) = prepainted.cursor.take() {
-            window.paint_quad(cursor);
+        // Where the text starts (left of the bar when scrolled), for hit
+        // tests; as wide again as the scroll so the bar's right part counts.
+        let text_bounds =
+            Bounds::new(point(bounds.left() - prepainted.scroll, bounds.top()), size(bounds.size.width + prepainted.scroll, bounds.size.height));
+        window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
+            if let Some(selection) = prepainted.selection.take() {
+                window.paint_quad(selection);
+            }
+            let _ = line.paint(text_bounds.origin, window.line_height(), gpui::TextAlign::Left, None, window, cx);
+            if let Some(cursor) = prepainted.cursor.take() {
+                window.paint_quad(cursor);
+            }
+        });
+        if crate::browser_view::log_layout() {
+            let chip = self.view.read(cx).button_bounds.borrow().get("profile").map(|b| f32::from(b.left()));
+            println!(
+                "morph-event address text_w={:.0} bar_w={:.0} scroll={:.0} right={:.0} chip_left={:.0}",
+                f32::from(line.width),
+                f32::from(bounds.size.width),
+                f32::from(prepainted.scroll),
+                f32::from(bounds.right()),
+                chip.unwrap_or(-1.)
+            );
         }
-        self.view.update(cx, |view, _| view.set_address_layout(line, bounds));
+        self.view.update(cx, |view, _| view.set_address_layout(line, text_bounds));
     }
 }

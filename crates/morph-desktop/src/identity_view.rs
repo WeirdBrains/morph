@@ -2,7 +2,9 @@
 //! identity, its recovery words and backups, and moving it between devices
 //! with a QR link. The steps live in [`crate::identity`]; this draws them.
 
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::{
@@ -37,6 +39,9 @@ pub struct IdentityView {
     qr_shard: Option<usize>,
     /// An open file dialog.
     dialog: Option<Task<()>>,
+    /// The QR codes drawn lately, by text: encoding one takes milliseconds,
+    /// and the panel redraws with the window (a page painting underneath).
+    qr_cache: RefCell<Vec<(String, Rc<QrModules>)>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -73,6 +78,7 @@ impl IdentityView {
             copied: None,
             qr_shard: None,
             dialog: None,
+            qr_cache: RefCell::new(Vec::new()),
             _subscriptions: subs,
         }
     }
@@ -345,6 +351,29 @@ impl IdentityView {
     }
 
     /// Which relay the link uses and whether it is connected, on the link screens.
+    /// `text` as a QR code, encoded once and kept while it shows.
+    fn qr(&self, text: &str) -> gpui::AnyElement {
+        if text.is_empty() {
+            return self.text("Getting a code ready…").into_any_element();
+        }
+        let mut cache = self.qr_cache.borrow_mut();
+        let hit = cache.iter().find(|(t, _)| t == text).map(|(_, m)| m.clone());
+        let modules = match hit {
+            Some(m) => m,
+            None => {
+                let Some(m) = QrModules::encode(text) else {
+                    return div().text_color(rgb(self.theme.error)).child("Too long for a QR code; copy it instead.").into_any_element();
+                };
+                log_event(format!("qr encoded version={} modules={}", m.version, m.width));
+                let m = Rc::new(m);
+                cache.insert(0, (text.to_string(), m.clone()));
+                cache.truncate(2);
+                m
+            }
+        };
+        qr(modules)
+    }
+
     fn relay_line(&self) -> Option<gpui::Div> {
         let t = self.theme;
         let (text, state) = self.model.relay_line()?;
@@ -391,11 +420,14 @@ impl IdentityView {
                 .into_any_element(),
             Step::AddDevice => {
                 let mut body = col();
+                if self.model.is_starting() {
+                    body = body.child(self.text("Getting a code ready for the new device to scan…"));
+                }
                 if let Some(link) = self.model.invite_link() {
                     let copy = link.to_string();
                     body = body
                         .child(self.text("On the new device, open Identity, choose Link from another device and scan this code, or paste this link there."))
-                        .child(qr(link, t))
+                        .child(self.qr(link))
                         .child(div().text_size(px(11.)).text_color(rgb(t.text_secondary)).overflow_hidden().child(link.to_string()))
                         .child(
                             button(t, "identity-copy", "Copy link", false)
@@ -471,7 +503,7 @@ impl IdentityView {
                                         cx.notify();
                                     }))),
                             )
-                            .children(qr_open.then(|| qr(shard, t)))
+                            .children(qr_open.then(|| self.qr(shard)))
                     }))
                     .child(
                         div()
@@ -487,7 +519,7 @@ impl IdentityView {
                 let copy = link.clone();
                 col()
                     .child(self.text("On your other device, open Identity, choose Add a device and scan this code or paste the link."))
-                    .child(qr(link, t))
+                    .child(self.qr(link))
                     .child(div().text_size(px(11.)).text_color(rgb(t.text_secondary)).overflow_hidden().child(link.clone()))
                     .child(
                         button(t, "identity-copy", "Copy link", false).on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))),
@@ -553,13 +585,15 @@ fn words_grid(t: Theme, words: &str) -> gpui::Div {
         .child(column(&list[half..]))
 }
 
-/// `text` as a QR code, dark modules on white with a quiet zone.
-fn qr(text: &str, t: Theme) -> gpui::AnyElement {
-    let Some((width, dark)) = qr_modules(text) else {
-        return div().text_color(rgb(t.error)).child("Too long for a QR code; copy it instead.").into_any_element();
-    };
-    let side = 220.;
+/// A QR code drawn dark on white with a 4-module quiet zone, each module a
+/// whole number of pixels (5 or more for an invite) so a phone camera reads
+/// it off the screen; one quad per run of dark modules in a row.
+fn qr(m: Rc<QrModules>) -> gpui::AnyElement {
+    let cells = m.width + 2 * QUIET;
+    let cell = (QR_SIDE / cells as f32).floor().clamp(3., 8.);
+    let side = cell * cells as f32;
     div()
+        .flex_none()
         .w(px(side))
         .h(px(side))
         .bg(rgb(0xffffff))
@@ -567,15 +601,9 @@ fn qr(text: &str, t: Theme) -> gpui::AnyElement {
             canvas(
                 |_, _, _| {},
                 move |bounds, _, window, _| {
-                    let quiet = 4;
-                    let cells = (width + 2 * quiet) as f32;
-                    let cell = f32::from(bounds.size.width) / cells;
-                    for (i, on) in dark.iter().enumerate() {
-                        if *on {
-                            let (x, y) = ((i % width + quiet) as f32, (i / width + quiet) as f32);
-                            let origin = point(bounds.origin.x + px(x * cell), bounds.origin.y + px(y * cell));
-                            window.paint_quad(fill(gpui::Bounds::new(origin, size(px(cell.ceil()), px(cell.ceil()))), rgb(0x000000)));
-                        }
+                    for &(x, y, len) in &m.runs {
+                        let origin = point(bounds.origin.x + px((x + QUIET) as f32 * cell), bounds.origin.y + px((y + QUIET) as f32 * cell));
+                        window.paint_quad(fill(gpui::Bounds::new(origin, size(px(len as f32 * cell), px(cell))), rgb(0x000000)));
                     }
                 },
             )
@@ -584,14 +612,57 @@ fn qr(text: &str, t: Theme) -> gpui::AnyElement {
         .into_any_element()
 }
 
+/// Quiet zone around a QR code, in modules (the standard's minimum).
+const QUIET: usize = 4;
+/// Most the drawn code may take, in pixels.
+const QR_SIDE: f32 = 340.;
+
+/// An encoded QR code: its side in modules, version, and the dark runs
+/// (column, row, length) to paint.
+pub struct QrModules {
+    pub width: usize,
+    pub version: i16,
+    pub runs: Vec<(usize, usize, usize)>,
+}
+
+impl QrModules {
+    /// Medium error correction (15%): screens have glare and moiré but no
+    /// dirt, and a higher level would make the code denser.
+    pub fn encode(text: &str) -> Option<Self> {
+        let code = qrcode::QrCode::with_error_correction_level(text.as_bytes(), qrcode::EcLevel::M).ok()?;
+        let code_version = match code.version() {
+            qrcode::Version::Normal(v) | qrcode::Version::Micro(v) => v,
+        };
+        let width = code.width();
+        let dark: Vec<bool> = code.to_colors().into_iter().map(|c| c == qrcode::Color::Dark).collect();
+        let mut runs = Vec::new();
+        for y in 0..width {
+            let mut x = 0;
+            while x < width {
+                if dark[y * width + x] {
+                    let start = x;
+                    while x < width && dark[y * width + x] {
+                        x += 1;
+                    }
+                    runs.push((start, y, x - start));
+                } else {
+                    x += 1;
+                }
+            }
+        }
+        Some(QrModules { width, version: code_version, runs })
+    }
+}
+
 /// [`CLIPBOARD_TIME`], or `MORPH_TEST_CLIPBOARD_SECS` under the checks.
 fn clipboard_time() -> Duration {
     std::env::var("MORPH_TEST_CLIPBOARD_SECS").ok().and_then(|s| s.parse().ok()).map(Duration::from_secs).unwrap_or(CLIPBOARD_TIME)
 }
 
 /// `text` as QR modules: the side and each module, dark or not, row by row.
+#[cfg(test)]
 pub fn qr_modules(text: &str) -> Option<(usize, Vec<bool>)> {
-    let code = qrcode::QrCode::new(text.as_bytes()).ok()?;
+    let code = qrcode::QrCode::with_error_correction_level(text.as_bytes(), qrcode::EcLevel::M).ok()?;
     Some((code.width(), code.to_colors().into_iter().map(|c| c == qrcode::Color::Dark).collect()))
 }
 

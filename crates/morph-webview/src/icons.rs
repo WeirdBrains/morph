@@ -15,7 +15,11 @@ pub const ICON_SCRIPT: &str = r#"(() => {
   const h = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.morphIcon;
   const post = h ? (m) => h.postMessage(m) : (window.ipc ? (m) => window.ipc.postMessage("i:" + m) : null);
   if (!post || !/^https?:$/.test(location.protocol)) return;
-  let sent = "";
+  // The candidates last tried, as one string: a page that keeps changing
+  // its <head> (Gmail adds styles and scripts all the time) loads nothing
+  // again until its icons themselves change, and never posts the same
+  // picture twice.
+  let tried = "", posted = "", timer = 0;
   const candidates = () => {
     const links = [...document.querySelectorAll("link[rel]")].filter((l) => /(^|\s)(icon|shortcut icon|apple-touch-icon)(\s|$)/i.test(l.rel) && l.href);
     const size = (l) => { const m = /(\d+)x\d+/.exec(l.getAttribute("sizes") || ""); return m ? +m[1] : (/svg/.test(l.type || l.href) ? 64 : 16); };
@@ -24,7 +28,7 @@ pub const ICON_SCRIPT: &str = r#"(() => {
   };
   const load = (urls) => {
     const url = urls.shift();
-    if (!url || url === sent) return;
+    if (!url) return;
     const img = new Image();
     if (new URL(url, location.href).origin !== location.origin) img.crossOrigin = "anonymous";
     img.onload = () => {
@@ -32,17 +36,28 @@ pub const ICON_SCRIPT: &str = r#"(() => {
         const c = document.createElement("canvas");
         c.width = c.height = 32;
         c.getContext("2d").drawImage(img, 0, 0, 32, 32);
-        sent = url;
-        post(c.toDataURL("image/png"));
+        const png = c.toDataURL("image/png");
+        if (png !== posted) { posted = png; post(png); }
       } catch (_) { load(urls); }
     };
     img.onerror = () => load(urls);
     img.src = url;
   };
-  const run = () => load(candidates());
+  const run = () => {
+    timer = 0;
+    const urls = candidates();
+    const key = urls.join("\n");
+    if (key === tried) return;
+    tried = key;
+    load(urls);
+  };
+  // Changes come in bursts: look once they settle.
+  const soon = () => { if (!timer) timer = setTimeout(run, 300); };
   if (document.readyState === "complete") run(); else addEventListener("load", run, { once: true });
   addEventListener("DOMContentLoaded", () => {
-    if (document.head) new MutationObserver(run).observe(document.head, { childList: true, subtree: true, attributes: true, attributeFilter: ["href", "rel"] });
+    if (document.head) new MutationObserver((records) => {
+      if (records.some((r) => r.type === "attributes" || [...r.addedNodes, ...r.removedNodes].some((n) => n.nodeName === "LINK"))) soon();
+    }).observe(document.head, { childList: true, subtree: true, attributes: true, attributeFilter: ["href", "rel"] });
   }, { once: true });
 })();"#;
 
@@ -116,5 +131,12 @@ mod tests {
         assert!(ICON_SCRIPT.contains("window.top !== window"));
         assert!(ICON_SCRIPT.contains("https?:"));
         assert!(ICON_SCRIPT.contains("/favicon.ico"));
+    }
+
+    #[test]
+    fn the_script_ignores_head_changes_that_are_not_icons() {
+        assert!(ICON_SCRIPT.contains("key === tried"), "the same candidates are not loaded again");
+        assert!(ICON_SCRIPT.contains("png !== posted"), "the same picture is not posted again");
+        assert!(ICON_SCRIPT.contains("nodeName === \"LINK\""), "only <link> changes count");
     }
 }

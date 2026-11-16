@@ -1,0 +1,56 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>hover</title>
+<!-- A dark <select> in a big page whose classes change as the pointer
+     moves (like Gmail's hover states), with a 100 ms timer. The title
+     reports the timer's lateness (t: 90th percentile gap, ms), how often
+     something rewrote the select's style or marks (w: per second, over the
+     last 2 s) and the pointer moves the page saw (mv). -->
+<style>
+  body { margin: 0; font: 13px sans-serif; }
+  .dark { background: #202124; color: #eee; }
+  .row { height: 18px; border-bottom: 1px solid #eee; }
+  .row.hot { background: #e8f0fe; }
+</style>
+</head>
+<body>
+<div class="dark" style="padding: 8px"><select id="s" class="dark"><option>One</option><option>Two</option></select></div>
+<div id="rows"></div>
+<script>
+  const rows = document.getElementById("rows");
+  for (let i = 0; i < 3000; i++) {
+    const d = document.createElement("div");
+    d.className = "row";
+    d.textContent = "row " + i;
+    rows.appendChild(d);
+  }
+  let hot = null, mv = 0;
+  addEventListener("mousemove", (e) => {
+    mv++;
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    if (el !== hot) {
+      if (hot) hot.classList.remove("hot");
+      if (el && el.classList.contains("row")) el.classList.add("hot");
+      hot = el;
+    }
+  });
+  const writes = [];
+  new MutationObserver((rs) => { for (const _ of rs) writes.push(performance.now()); })
+    .observe(document.getElementById("s"), { attributes: true });
+  const gaps = [];
+  let last = performance.now();
+  const p90 = (a) => a.length ? Math.round([...a].sort((x, y) => x - y)[Math.floor(a.length * 0.9)]) : -1;
+  function tick() {
+    const now = performance.now();
+    gaps.push(now - last); if (gaps.length > 30) gaps.shift();
+    last = now;
+    while (writes.length && writes[0] < now - 2000) writes.shift();
+    document.title = "M" + JSON.stringify({ t: p90(gaps), w: writes.length / 2, mv });
+    setTimeout(tick, 100);
+  }
+  setTimeout(tick, 100);
+</script>
+</body>
+</html>

@@ -53,6 +53,14 @@ pub struct InviteView {
     pub expires_ms: i64,
 }
 
+/// Drop a link node on its own thread: stopping one joins its network
+/// thread, which a caller on the UI thread should not wait for.
+fn drop_later<T: Send + 'static>(x: T) {
+    if std::thread::Builder::new().name("morph-link-stop".into()).spawn(move || drop(x)).is_err() {
+        // could not spawn: dropped here instead
+    }
+}
+
 fn guard<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|p| p.into_inner())
 }
@@ -120,8 +128,10 @@ impl Links {
 
     /// New device: stop listening (screen closed, or the codes differ).
     pub fn new_device_cancel(&self, session: u64) {
-        if let Some(device) = guard(&self.hosts).remove(&session) {
+        let device = guard(&self.hosts).remove(&session);
+        if let Some(device) = device {
             device.cancel();
+            drop_later(device);
         }
     }
 
@@ -143,8 +153,11 @@ impl Links {
 
     /// Existing device: the codes differ, or the user gave up.
     pub fn add_device_cancel(&self, session: u64) {
-        if let Some(pairing) = guard(&self.pairings).remove(&session) {
-            let _ = pairing.cancel();
+        let pairing = guard(&self.pairings).remove(&session);
+        if let Some(pairing) = pairing {
+            drop_later(move || {
+                let _ = pairing.cancel();
+            });
         }
     }
 
@@ -165,7 +178,9 @@ impl Links {
             return Ok(Some(link));
         }
         if invite.expired() {
-            invites.remove(&session);
+            if let Some(old) = invites.remove(&session) {
+                drop_later(old);
+            }
             return Err(Error::LinkGone);
         }
         Ok(None)
@@ -173,7 +188,10 @@ impl Links {
 
     /// Existing device: stop listening for answers.
     pub fn invite_cancel(&self, session: u64) {
-        guard(&self.invites).remove(&session);
+        let invite = guard(&self.invites).remove(&session);
+        if let Some(invite) = invite {
+            drop_later(invite);
+        }
     }
 
     /// New device: answer the existing device's `invite` with this

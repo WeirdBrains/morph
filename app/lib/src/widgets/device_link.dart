@@ -32,14 +32,28 @@ class MorphQrCode extends StatelessWidget {
   final String data;
   final double size;
 
-  @override
-  Widget build(BuildContext context) {
+  /// The last code encoded, kept across rebuilds (a status line ticking
+  /// beside it rebuilds the screen).
+  static (String, QrImage)? _last;
+
+  static QrImage _encode(String data) {
+    final last = _last;
+    if (last != null && last.$1 == data) {
+      return last.$2;
+    }
     final image = QrImage(
       QrCode(
         payload: QrPayload.fromString(data),
         errorCorrectLevel: QrErrorCorrectLevel.low,
       ),
     );
+    _last = (data, image);
+    return image;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final image = _encode(data);
     return Semantics(
       label: 'QR code',
       child: Container(

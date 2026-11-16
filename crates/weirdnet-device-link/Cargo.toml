@@ -13,6 +13,8 @@ publish = false
 
 [dependencies]
 base64 = "0.22"
+# Protocol, for ranking addresses (the version libp2p uses).
+multiaddr = "0.19"
 cbor4ii = { version = "1.2", features = ["serde1", "use_std"] }
 serde = { version = "1", features = ["derive"] }
 sha2.workspace = true
@@ -20,3 +22,6 @@ thiserror.workspace = true
 weirdnet-keys.workspace = true
 weirdnet-net.workspace = true
 zeroize.workspace = true
+
+[dev-dependencies]
+qrcode.workspace = true
