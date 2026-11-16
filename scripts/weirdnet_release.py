@@ -437,6 +437,17 @@ def read_current(root, cfg):
     return v
 
 
+def previous_build(root, tag, rel):
+    """The pubspec build number (+N) at `tag`, or None (no tag, no file, no +N)."""
+    if not tag:
+        return None
+    r = subprocess.run(["git", "-C", str(root), "show", f"{tag}:{rel}"], capture_output=True, text=True)
+    if r.returncode != 0:
+        return None
+    m = re.search(r"^version:\s*\S+?\+(\d+)[ \t]*$", r.stdout, re.M)
+    return int(m.group(1)) if m else None
+
+
 def plan_files(root, cfg, ctx):
     plan = Plan(root)
     old, new = ctx["old"], ctx["version"]
@@ -503,8 +514,17 @@ def plan_files(root, cfg, ctx):
                 got = set(builds.values())
                 if None in got or len(got) != 1:
                     raise ReleaseError(f"pubspec build numbers differ or are missing: {builds}")
-                plan.build = int(got.pop()) + 1
+                current = int(got.pop())
+                plan.build = current + 1
                 ctx["build"] = plan.build
+                # The store build number (Android versionCode, iOS CFBundleVersion) must grow with
+                # every release: never at or below the one the last release tag shipped.
+                for rel in rels:
+                    shipped = previous_build(plan.root, ctx.get("old_tag"), rel)
+                    if shipped is not None and plan.build <= shipped:
+                        raise ReleaseError(f"{rel}: build number {plan.build} does not increase on {ctx.get('old_tag')}'s {shipped}")
+                if plan.build <= current:
+                    raise ReleaseError(f"pubspec build number did not increase ({current} -> {plan.build})")
             for rel in rels:
                 b = builds[rel]
                 suffix = f"+{plan.build}" if mode == "increment" else (f"+{b}" if b and mode == "keep" else "")

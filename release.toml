@@ -23,6 +23,11 @@ kind = "cargo-package"
 paths = ["crates/morph-desktop/Cargo.toml"]
 primary = true
 
+[[files]]                       # the phone apps: versionName / CFBundleShortVersionString follow the release,
+kind = "pubspec"                # and the +N build (versionCode / CFBundleVersion) grows by one each release;
+paths = ["app/pubspec.yaml"]    # the cut fails if it would not exceed the last tag's
+build = "increment"
+
 [[files]]
 kind = "cargo-lock"
 paths = ["Cargo.lock"]

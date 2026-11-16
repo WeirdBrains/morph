@@ -1,0 +1,55 @@
+# iOS build on the self-hosted Mac (labels self-hosted, macOS, ARM64, ios).
+# A workflow of its own so CI never waits on it: when the Mac sleeps the run
+# just queues. Unsigned only: no certificates, profiles or Apple account.
+# Pushes to main and manual runs only, never pull requests (a fork's code
+# must not run on a personal machine).
+name: iOS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ios:
+    runs-on: [self-hosted, macOS, ARM64, ios]
+    timeout-minutes: 90
+    continue-on-error: true
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v5
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.50.0
+          cache: true
+      - name: Rust iOS targets
+        run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+      - run: flutter config --enable-swift-package-manager
+      - run: flutter pub get
+      - name: Device build (unsigned)
+        run: flutter build ios --release --no-codesign
+      - name: Simulator build
+        run: flutter build ios --simulator --debug
+      - name: Version in the app
+        run: |
+          for app in build/ios/iphoneos/Runner.app build/ios/iphonesimulator/Runner.app; do
+            echo "$app: $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Info.plist") ($(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Info.plist"))"
+          done
+      - name: Pack the apps
+        run: |
+          mkdir -p build/ios-artifacts
+          ditto -c -k --keepParent build/ios/iphoneos/Runner.app build/ios-artifacts/morph-ios-unsigned-device.zip
+          ditto -c -k --keepParent build/ios/iphonesimulator/Runner.app build/ios-artifacts/morph-ios-simulator.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: morph-ios-unsigned
+          path: app/build/ios-artifacts/*.zip
+          if-no-files-found: error
+          retention-days: 14
