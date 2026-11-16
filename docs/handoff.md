@@ -662,6 +662,24 @@ unfinished alpha.10 work is parked on branch `wip/alpha10`, not built).
   `<desktop>-mimeapps.list` itself (xdg-settings failed on Hyprland), then
   checks each type with `xdg-mime`.
 
+## Release and TAUR (alpha.13)
+
+- Pre-release `v0.2.0-alpha.13` (tag at `0c679c5`, cut from `1b1471d`):
+  https://github.com/WeirdBrains/morph/releases/tag/v0.2.0-alpha.13. It
+  brings relay status to Settings and the link screens, with Check now. All
+  12 assets come from CI run 43972546521 (`0c679c5`, all green), and
+  `... assets 0.2.0-alpha.13` passed.
+- `app/pubspec.yaml` `0.2.0-alpha.13+10402`. The APK reports versionName
+  0.2.0-alpha.13 and versionCode 10402, and is signed by the fixed test key
+  (certificate SHA-256
+  `c2af967c4775c926f6db7f051be293821f7b8c4c5b3596c3745ae72fbc8bba51`).
+- `morph-bin` 0.2.0alpha13-1: tarball sha256
+  `20ff35379237d22df51cde6016f1395ebfb03f26512570fd2f326209566ad496` (matches
+  the release's SHA256SUMS). Both `.SRCINFO` files match the script's
+  generator, and `taur_check` is clean. The archive
+  `/workspace/dist/morph-bin-0.2.0alpha13.tar.gz` was made with `taur_pack`.
+  It was not uploaded (no taurctl).
+
 ## Release and TAUR (alpha.12)
 
 - Pre-release `v0.2.0-alpha.12` (tag at `1003d22`):
