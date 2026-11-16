@@ -2,8 +2,8 @@
 
 Status: design, 2026-11-12. Section 4 (login over QR) is built; see
 `qr-login.md`. Identity backups and restore from a file (a subset of
-sections 1 and 2, below) are built since 2026-11-13. Dark shards have design
-notes in `dark-shards.md`. The rest is not built yet. Decisions are recorded
+sections 1 and 2, below) are built since 2026-11-13; plain paper shards
+(3 of 5) since 2026-11-15. Dark shards have design notes in `dark-shards.md`. The rest is not built yet. Decisions are recorded
 in ARCHITECTURE.md (section 5, "Identity recovery and sync").
 
 Every Morph profile has its own Weirdnet identity: a 32-byte seed, shown as

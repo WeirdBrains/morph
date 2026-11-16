@@ -2,27 +2,40 @@
 //! identity, its recovery words and backups, and moving it between devices
 //! with a QR link. The steps live in [`crate::identity`]; this draws them.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use gpui::{
-    App, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyDownEvent, Subscription, Window, canvas, div, fill, point,
+    App, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyDownEvent, Subscription, Task, Window, canvas, div, fill, point,
     prelude::*, px, rgb, size,
 };
 use morph_services::device_link::Links;
 use morph_ui::theme::Theme;
 
-use crate::identity::{Identity, Outcome, Step, source_text};
+use crate::dialogs::{self, Ask};
+use crate::identity::{Helper, Identity, Outcome, Secret, Step, join_paths, source_text};
 use crate::shell::ShellRequest;
 use crate::text_input::{TextInput, TextInputEvent};
 use crate::widgets::{button, heading, icon};
+use morph_identity::profile_identity::Zeroizing;
 
 const INPUTS: usize = 3;
+
+/// How long a copied secret stays on the clipboard.
+pub const CLIPBOARD_TIME: Duration = Duration::from_secs(60);
 
 pub struct IdentityView {
     model: Identity,
     theme: Theme,
     inputs: Vec<Entity<TextInput>>,
     focus: FocusHandle,
+    /// A secret put on the clipboard, cleared after [`CLIPBOARD_TIME`] if
+    /// the clipboard still holds it.
+    copied: Option<(Zeroizing<String>, Instant)>,
+    /// The shard shown as a QR code.
+    qr_shard: Option<usize>,
+    /// An open file dialog.
+    dialog: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -38,11 +51,21 @@ impl IdentityView {
                 cx.subscribe_in(input, window, move |this, _, event, window, cx| match event {
                     TextInputEvent::Submit { .. } => this.field_submitted(i, window, cx),
                     TextInputEvent::Cancel => this.escape(window, cx),
+                    TextInputEvent::Tab { back } => this.tab(i, *back, window, cx),
                     TextInputEvent::Changed => {}
                 })
             })
             .collect();
-        Self { model: Identity::new(home, profile, profile_name, Links::global()), theme, inputs, focus: cx.focus_handle(), _subscriptions: subs }
+        Self {
+            model: Identity::new(home, profile, profile_name, Links::global()),
+            theme,
+            inputs,
+            focus: cx.focus_handle(),
+            copied: None,
+            qr_shard: None,
+            dialog: None,
+            _subscriptions: subs,
+        }
     }
 
     pub fn set_profile_name(&mut self, name: &str) {
@@ -62,11 +85,133 @@ impl IdentityView {
         if self.model.poll() {
             self.enter_step(window, cx);
         }
+        if self.copied.as_ref().is_some_and(|(_, at)| at.elapsed() >= clipboard_time()) {
+            self.clear_clipboard(cx);
+        }
+    }
+
+    /// Take a copied secret off the clipboard, unless something else
+    /// replaced it since.
+    fn clear_clipboard(&mut self, cx: &mut Context<Self>) {
+        let Some((secret, _)) = self.copied.take() else {
+            return;
+        };
+        let current = cx.read_from_clipboard().and_then(|item| item.text()).map(Zeroizing::new);
+        if current.as_deref().is_some_and(|c| c.as_str() == secret.as_str()) {
+            cx.write_to_clipboard(ClipboardItem::new_string(String::new()));
+            log_event("clipboard cleared");
+        }
+    }
+
+    /// Put `secret` on the clipboard for a minute.
+    fn copy_secret(&mut self, secret: Secret, cx: &mut Context<Self>) {
+        let Some(text) = self.model.secret_text(secret) else {
+            return;
+        };
+        cx.write_to_clipboard(ClipboardItem::new_string(text.to_string()));
+        self.copied = Some((text, Instant::now()));
+        self.model.error = None;
+        self.model.notice = Some(format!("Copied. Morph clears the clipboard in {} seconds.", clipboard_time().as_secs()));
+        log_event(match secret {
+            Secret::Words => "copied words".to_string(),
+            Secret::Shard(n) => format!("copied shard {}", n + 1),
+        });
+        cx.notify();
+    }
+
+    /// Save `secret` where a Save dialog says.
+    fn download(&mut self, secret: Secret, cx: &mut Context<Self>) {
+        let answer = dialogs::ask(cx, Ask::Save { name: self.model.file_name(secret) });
+        self.dialog = Some(cx.spawn(async move |this, cx| {
+            let result = answer.await;
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Ok(paths) => {
+                        if let Some(path) = paths.first() {
+                            this.model.save_secret(secret, path);
+                            log_event(format!("saved {}", path.display()));
+                        }
+                    }
+                    Err(e) => this.model.error = Some(e),
+                }
+                cx.notify();
+            });
+        }));
+    }
+
+    /// Save every shard into a folder a dialog picks.
+    fn download_all(&mut self, cx: &mut Context<Self>) {
+        let answer = dialogs::ask(cx, Ask::Folder);
+        self.dialog = Some(cx.spawn(async move |this, cx| {
+            let result = answer.await;
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Ok(paths) => {
+                        if let Some(dir) = paths.first() {
+                            this.model.save_all_shards(dir);
+                            log_event(format!("saved shards in {}", dir.display()));
+                        }
+                    }
+                    Err(e) => this.model.error = Some(e),
+                }
+                cx.notify();
+            });
+        }));
+    }
+
+    /// Fill field `i` from its helper: the clipboard, or a native dialog.
+    fn helper(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(field) = self.model.fields().get(i).copied() else {
+            return;
+        };
+        let input = self.inputs[i].clone();
+        window.focus(&input.focus_handle(cx), cx);
+        let ask = match field.helper {
+            Helper::None => return,
+            Helper::Paste => {
+                let text = cx.read_from_clipboard().and_then(|item| item.text()).map(Zeroizing::new).unwrap_or_default();
+                input.update(cx, |input, cx| input.set_text(text.trim(), cx));
+                return;
+            }
+            Helper::Open => Ask::Open { multiple: true },
+            Helper::Save => {
+                let typed = input.read(cx).text().to_string();
+                let name = PathBuf::from(typed.trim())
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "morph-identity-backup.txt".into());
+                Ask::Save { name }
+            }
+        };
+        let answer = dialogs::ask(cx, ask);
+        self.dialog = Some(cx.spawn(async move |this, cx| {
+            let result = answer.await;
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Ok(paths) if !paths.is_empty() => input.update(cx, |input, cx| input.set_text(&join_paths(&paths), cx)),
+                    Ok(_) => {}
+                    Err(e) => this.model.error = Some(e),
+                }
+                cx.notify();
+            });
+        }));
+    }
+
+    /// Tab and Shift+Tab move between the step's fields, wrapping.
+    fn tab(&mut self, i: usize, back: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let n = self.model.fields().len();
+        if n == 0 {
+            return;
+        }
+        let next = if back { (i + n - 1) % n } else { (i + 1) % n };
+        window.focus(&self.inputs[next].focus_handle(cx), cx);
+        cx.notify();
     }
 
     /// Set the inputs up for the step and put the keyboard in the first one
     /// (or on the panel, whose keys pick an action).
     fn enter_step(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.qr_shard = None;
         let fields = self.model.fields();
         let defaults = self.model.defaults();
         for (i, input) in self.inputs.iter().enumerate() {
@@ -137,7 +282,7 @@ impl IdentityView {
                 self.escape(window, cx);
                 true
             }
-            ("enter", Step::Words(_) | Step::RevealWords(_) | Step::Paired { .. } | Step::Adding { .. }) => {
+            ("enter", Step::Words(_) | Step::RevealWords(_) | Step::ShardList(_) | Step::Paired { .. } | Step::Adding { .. }) => {
                 self.submit(window, cx);
                 true
             }
@@ -150,6 +295,19 @@ impl IdentityView {
             }
             ("w", Step::Overview) => self.then(Step::Reveal, window, cx),
             ("b", Step::Overview) => self.then(Step::Export, window, cx),
+            ("s", Step::Overview) => self.then(Step::Shards, window, cx),
+            ("c", Step::Words(_) | Step::RevealWords(_)) => {
+                self.copy_secret(Secret::Words, cx);
+                true
+            }
+            ("d", Step::Words(_) | Step::RevealWords(_)) => {
+                self.download(Secret::Words, cx);
+                true
+            }
+            ("a", Step::ShardList(_)) => {
+                self.download_all(cx);
+                true
+            }
             ("a", Step::Overview) => self.then(Step::AddDevice, window, cx),
             _ => false,
         };
@@ -171,13 +329,24 @@ impl IdentityView {
         let t = self.theme;
         let col = || div().flex().flex_col().gap(px(8.));
         let fields = self.model.fields();
-        let inputs = div().flex().flex_col().gap(px(6.)).children(
-            self.inputs
-                .iter()
-                .take(fields.len())
-                .zip(fields)
-                .map(|(input, f)| div().flex().flex_col().gap(px(2.)).child(heading(t, f.label)).child(div().flex().child(input.clone()))),
-        );
+        let inputs =
+            div().flex().flex_col().gap(px(6.)).children(self.inputs.iter().take(fields.len()).zip(fields).enumerate().map(|(i, (input, f))| {
+                let label = match f.helper {
+                    Helper::None => None,
+                    Helper::Paste => Some("Paste from clipboard"),
+                    Helper::Open => Some("Choose files…"),
+                    Helper::Save => Some("Choose…"),
+                };
+                let helper = label.map(|label| {
+                    button(t, ("identity-helper", i), label, false).flex_none().on_click(cx.listener(move |this, _, w, cx| this.helper(i, w, cx)))
+                });
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .child(heading(t, f.label))
+                    .child(div().flex().flex_row().gap(px(6.)).child(div().flex_1().flex().child(input.clone())).children(helper))
+            }));
         let main = |id: &'static str, label: &'static str| button(t, id, label, true).on_click(cx.listener(|this, _, w, cx| this.submit(w, cx)));
         let back = button(t, "identity-back", "Back", false).on_click(cx.listener(|this, _, w, cx| this.escape(w, cx)));
         let row = |a: gpui::AnyElement, b: gpui::AnyElement| div().flex().flex_row().gap(px(6.)).child(a).child(b);
@@ -189,23 +358,79 @@ impl IdentityView {
                 .child(button(t, "identity-restore", "3  Restore from a backup file", false).on_click(cx.listener(|this, _, w, cx| this.go(Step::Restore, w, cx))))
                 .child(button(t, "identity-link", "4  Link from another device", false).on_click(cx.listener(|this, _, w, cx| this.offer(w, cx))))
                 .into_any_element(),
-            Step::Create | Step::Import | Step::Restore | Step::Received { .. } | Step::Reveal | Step::Export | Step::AddDevice => {
+            Step::Create | Step::Import | Step::Restore | Step::Received { .. } | Step::Reveal | Step::Shards | Step::Export | Step::AddDevice => {
                 let (intro, label): (&str, &'static str) = match self.model.step {
                     Step::Create => ("The password unlocks this identity on this device.", "Create"),
                     Step::Import => ("Type the 24 words you wrote down, in order.", "Restore"),
                     Step::Restore => ("A backup Morph saved, or a text file with the recovery words.", "Restore"),
                     Step::Received { .. } => ("Your identity arrived from the other device. Choose its password on this device.", "Finish"),
                     Step::Reveal => ("Your password shows the recovery words.", "Show"),
+                    Step::Shards => (
+                        "Split the identity into 5 shards, any 3 of which bring it back; one alone tells nothing. Give them to people or places you trust. Your password makes them.",
+                        "Make shards",
+                    ),
                     Step::Export => ("The backup holds the recovery words, sealed with its own password.", "Save backup"),
-                    _ => ("On the new device, choose Link from another device and copy the link it shows here.", "Pair"),
+                    _ => (
+                        "On the new device, open Identity and choose Link from another device. It shows a QR code and its link: copy the link there and paste it here.",
+                        "Pair",
+                    ),
                 };
                 col().child(self.text(intro)).child(inputs).child(row(main("identity-submit", label).into_any_element(), back.into_any_element())).into_any_element()
             }
             Step::Words(words) | Step::RevealWords(words) => col()
                 .child(self.text("Write these 24 words down, in order, and keep them offline. Anyone with them has your identity."))
                 .child(words_grid(t, words))
-                .child(main("identity-done", "Done (Enter)"))
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap(px(6.))
+                        .child(button(t, "identity-words-copy", "c  Copy", false).on_click(cx.listener(|this, _, _, cx| this.copy_secret(Secret::Words, cx))))
+                        .child(button(t, "identity-words-download", "d  Download…", false).on_click(cx.listener(|this, _, _, cx| this.download(Secret::Words, cx))))
+                        .child(main("identity-done", "Done (Enter)")),
+                )
+                .child(self.text("A copy leaves the clipboard after a minute. A saved file belongs offline: print it, then delete it."))
                 .into_any_element(),
+            Step::ShardList(shards) => {
+                let total = shards.len();
+                let need = crate::identity::SHARD_THRESHOLD;
+                col()
+                    .child(self.text(format!("Any {need} of these {total} shards bring the identity back; one alone tells nothing. Give each to a different person or place, and keep them offline.")))
+                    .children(shards.iter().enumerate().map(|(n, shard)| {
+                        let qr_open = self.qr_shard == Some(n);
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(4.))
+                            .p(px(8.))
+                            .rounded(px(6.))
+                            .bg(rgb(t.background))
+                            .child(heading(t, format!("Shard {} of {total} (need {need})", n + 1)))
+                            .child(div().text_size(px(11.)).font_family("monospace").overflow_hidden().child(shard.clone()))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .gap(px(6.))
+                                    .child(button(t, ("shard-copy", n), "Copy", false).on_click(cx.listener(move |this, _, _, cx| this.copy_secret(Secret::Shard(n), cx))))
+                                    .child(button(t, ("shard-download", n), "Download…", false).on_click(cx.listener(move |this, _, _, cx| this.download(Secret::Shard(n), cx))))
+                                    .child(button(t, ("shard-qr", n), if qr_open { "Hide QR" } else { "QR" }, false).on_click(cx.listener(move |this, _, _, cx| {
+                                        this.qr_shard = if this.qr_shard == Some(n) { None } else { Some(n) };
+                                        cx.notify();
+                                    }))),
+                            )
+                            .children(qr_open.then(|| qr(shard, t)))
+                    }))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap(px(6.))
+                            .child(button(t, "shards-download-all", "a  Download all shards…", false).on_click(cx.listener(|this, _, _, cx| this.download_all(cx))))
+                            .child(main("identity-done", "Done (Enter)")),
+                    )
+                    .into_any_element()
+            }
             Step::Offer { link, .. } => {
                 let copy = link.clone();
                 col()
@@ -249,6 +474,7 @@ impl IdentityView {
                     .child(self.text(format!("This identity was {source}.")))
                     .child(button(t, "identity-words", "w  Show recovery words", false).on_click(cx.listener(|this, _, w, cx| this.go(Step::Reveal, w, cx))))
                     .child(button(t, "identity-backup", "b  Save a backup", false).on_click(cx.listener(|this, _, w, cx| this.go(Step::Export, w, cx))))
+                    .child(button(t, "identity-shards", "s  Split into shards", false).on_click(cx.listener(|this, _, w, cx| this.go(Step::Shards, w, cx))))
                     .child(button(t, "identity-add", "a  Add a device", false).on_click(cx.listener(|this, _, w, cx| this.go(Step::AddDevice, w, cx))))
                     .into_any_element()
             }
@@ -275,11 +501,9 @@ fn words_grid(t: Theme, words: &str) -> gpui::Div {
 
 /// `text` as a QR code, dark modules on white with a quiet zone.
 fn qr(text: &str, t: Theme) -> gpui::AnyElement {
-    let Ok(code) = qrcode::QrCode::new(text.as_bytes()) else {
-        return div().text_color(rgb(t.error)).child("The link is too long for a QR code; copy it instead.").into_any_element();
+    let Some((width, dark)) = qr_modules(text) else {
+        return div().text_color(rgb(t.error)).child("Too long for a QR code; copy it instead.").into_any_element();
     };
-    let width = code.width();
-    let dark: Vec<bool> = code.to_colors().into_iter().map(|c| c == qrcode::Color::Dark).collect();
     let side = 220.;
     div()
         .w(px(side))
@@ -304,6 +528,24 @@ fn qr(text: &str, t: Theme) -> gpui::AnyElement {
             .size_full(),
         )
         .into_any_element()
+}
+
+/// [`CLIPBOARD_TIME`], or `MORPH_TEST_CLIPBOARD_SECS` under the checks.
+fn clipboard_time() -> Duration {
+    std::env::var("MORPH_TEST_CLIPBOARD_SECS").ok().and_then(|s| s.parse().ok()).map(Duration::from_secs).unwrap_or(CLIPBOARD_TIME)
+}
+
+/// `text` as QR modules: the side and each module, dark or not, row by row.
+pub fn qr_modules(text: &str) -> Option<(usize, Vec<bool>)> {
+    let code = qrcode::QrCode::new(text.as_bytes()).ok()?;
+    Some((code.width(), code.to_colors().into_iter().map(|c| c == qrcode::Color::Dark).collect()))
+}
+
+/// What happened, for the checks (`MORPH_LOG_EVENTS=1`). Never a secret.
+fn log_event(what: impl AsRef<str>) {
+    if std::env::var_os("MORPH_LOG_EVENTS").is_some_and(|v| v == "1") {
+        println!("morph-event identity {}", what.as_ref());
+    }
 }
 
 impl Focusable for IdentityView {
@@ -337,5 +579,33 @@ impl Render for IdentityView {
             .child(self.step_body(cx))
             .children(self.model.notice.clone().map(|n| div().text_size(px(12.)).text_color(rgb(t.accent)).child(n)))
             .children(self.model.error.clone().map(|e| div().text_size(px(12.)).text_color(rgb(t.error)).child(e)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Draw the modules as a scanner would see them and read them back.
+    fn decode(text: &str) -> String {
+        let (width, dark) = qr_modules(text).unwrap();
+        let (quiet, scale) = (4, 4);
+        let side = (width + 2 * quiet) * scale;
+        let mut img = rqrr::PreparedImage::prepare_from_greyscale(side, side, |x, y| {
+            let (mx, my) = (x / scale, y / scale);
+            let on = mx >= quiet && my >= quiet && mx < width + quiet && my < width + quiet && dark[(my - quiet) * width + (mx - quiet)];
+            if on { 0 } else { 255 }
+        });
+        let grids = img.detect_grids();
+        assert_eq!(grids.len(), 1);
+        grids[0].decode().unwrap().1
+    }
+
+    #[test]
+    fn the_link_and_shard_codes_decode_to_their_text() {
+        let link = "weirdnet-link:v1:12D3KooWExamplePeerId0000000000000000000000000000:/ip4/192.168.1.20/tcp/41234:abcdef0123456789abcdef0123456789";
+        assert_eq!(decode(link), link);
+        let shard = "weirdnet-shard-v1:0a1b2c3d:3:2:02aabbccddeeff00112233445566778899aabbccddeeff0011223344556677889900:1234abcd";
+        assert_eq!(decode(shard), shard);
     }
 }

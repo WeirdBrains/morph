@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- `v0.2.0-alpha.9`, identity: the recovery words get Copy (the clipboard
+  clears itself after a minute if it still holds them) and Download (a
+  native Save dialog, a file only you can read, with a note to keep it
+  offline). New "Split into shards": 5 paper shards, any 3 of which restore
+  the identity (weirdnet-keys Shamir shards, so Muninn reads them too), each
+  with Copy, Download and a QR code, plus "Download all shards" (one file per
+  shard, "shard N of 5, any 3"). Restore takes shards too: pasted into the
+  words field, or chosen as files. File fields in the Identity panel open
+  native dialogs (the desktop portal on Linux); the link field and the words
+  field have "Paste from clipboard". Tab and Shift+Tab move between the
+  panel's fields (password fields included). An Identity button in the
+  toolbar, and page shortcuts on macOS: a Cmd shortcut pressed while a page
+  has the keyboard now reaches the shell (Cmd+Shift+L opened nothing).
+  Linux: "Make Morph the default browser" writes `mimeapps.list` itself
+  (and each existing `<desktop>-mimeapps.list` for `$XDG_CURRENT_DESKTOP`,
+  which wins over it) instead of calling `xdg-settings`, which failed on
+  Hyprland and left the list half-written; `xdg-mime` checks every type.
+  The old Flutter build's `org.weirdbrains.morph.desktop` and its
+  mimeapps entries are removed at start-up when they carry Morph's marker.
+
 - `v0.2.0-alpha.8` (phase 7), GPUI desktop shell on macOS and Windows: pages
   are WKWebView (macOS) and WebView2 (Windows) child views behind the same
   web view trait as Linux, with the page bridge, find in page, shell

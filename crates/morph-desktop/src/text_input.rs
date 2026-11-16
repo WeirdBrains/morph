@@ -17,7 +17,10 @@ use morph_ui::text::TextField;
 use morph_ui::theme::Theme;
 use unicode_segmentation::UnicodeSegmentation;
 
-actions!(text_input, [Backspace, Delete, Left, Right, SelectLeft, SelectRight, SelectAll, Home, End, Paste, Copy, Cut, Submit, SubmitBack, Cancel]);
+actions!(
+    text_input,
+    [Backspace, Delete, Left, Right, SelectLeft, SelectRight, SelectAll, Home, End, Paste, Copy, Cut, Submit, SubmitBack, Cancel, Next, Previous]
+);
 
 /// The key context the input's bindings apply in.
 pub const CONTEXT: &str = "TextInput";
@@ -31,6 +34,9 @@ pub enum TextInputEvent {
     Submit { back: bool },
     /// Escape.
     Cancel,
+    /// Tab (`back` for Shift+Tab): the owner moves the keyboard to its next
+    /// or previous field.
+    Tab { back: bool },
 }
 
 /// Keys for the input's editing actions, in its key context.
@@ -53,6 +59,8 @@ pub fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("enter", Submit, c),
         KeyBinding::new("shift-enter", SubmitBack, c),
         KeyBinding::new("escape", Cancel, c),
+        KeyBinding::new("tab", Next, c),
+        KeyBinding::new("shift-tab", Previous, c),
     ]
     .into_iter()
     .chain(
@@ -263,6 +271,8 @@ impl Render for TextInput {
             .on_action(cx.listener(|_, _: &Submit, _, cx| cx.emit(TextInputEvent::Submit { back: false })))
             .on_action(cx.listener(|_, _: &SubmitBack, _, cx| cx.emit(TextInputEvent::Submit { back: true })))
             .on_action(cx.listener(|_, _: &Cancel, _, cx| cx.emit(TextInputEvent::Cancel)))
+            .on_action(cx.listener(|_, _: &Next, _, cx| cx.emit(TextInputEvent::Tab { back: false })))
+            .on_action(cx.listener(|_, _: &Previous, _, cx| cx.emit(TextInputEvent::Tab { back: true })))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))

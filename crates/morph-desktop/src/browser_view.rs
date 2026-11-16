@@ -79,6 +79,7 @@ impl BrowserView {
                     this.browser.set_find_query(&query);
                 }
                 TextInputEvent::Submit { back } => this.browser.find_next(!back),
+                TextInputEvent::Tab { .. } => {}
                 TextInputEvent::Cancel => this.close_find(window, cx),
             }
             cx.notify();
@@ -711,6 +712,25 @@ impl BrowserView {
                         })),
                 )
             })
+            .child(
+                // The identity panel (Ctrl+Shift+L, ⌘⇧L on macOS) has a
+                // button too: a shortcut alone was easy to miss.
+                div()
+                    .id("identity")
+                    .px(px(10.))
+                    .h(px(28.))
+                    .flex()
+                    .items_center()
+                    .rounded(px(14.))
+                    .bg(rgb(t.surface_variant))
+                    .text_size(px(12.))
+                    .cursor_pointer()
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child("Identity")
+                    .on_click(cx.listener(|_, _, window, cx| {
+                        window.dispatch_action(Box::new(crate::shell::ShowIdentity), cx);
+                    })),
+            )
             .when(!self.profile_label.is_empty(), |d| {
                 let label: SharedString = self.profile_label.clone().into();
                 d.child(

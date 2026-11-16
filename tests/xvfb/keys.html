@@ -11,11 +11,12 @@
   #a { position: fixed; top: 8px; left: 10px; width: 200px; }
   #b { position: fixed; top: 8px; left: 240px; width: 200px; }
   #open { position: fixed; top: 8px; left: 470px; }
+  #pw { position: fixed; top: 8px; left: 560px; width: 120px; }
   #tall { height: 6000px; padding-top: 60px; }
 </style>
 </head>
 <body>
-<div id="bar"><input id="a" autocomplete="off"><input id="b" autocomplete="off"><button id="open">popup</button></div>
+<div id="bar"><input id="a" autocomplete="off"><input id="b" autocomplete="off"><button id="open">popup</button><input id="pw" type="password" autocomplete="off"></div>
 <div id="tall">Tall page for scrolling. A needle for find in page.<p style="margin-top: 2000px">Another needle, far down.</p></div>
 <script>
   const popup = new URLSearchParams(location.search).has("popup");
@@ -29,7 +30,7 @@
     const state = {
       p: popup ? 1 : 0, id: loadId, n: st.n, k: st.k, c: st.c, m: st.m,
       y: Math.round(scrollY), f: el && el.id ? el.id : (el ? el.tagName.toLowerCase() : ""),
-      a: a.value, b: b.value, s: el && "selectionStart" in el ? el.selectionStart : -1,
+      a: a.value, b: b.value, pw: pw.value, s: el && "selectionStart" in el ? el.selectionStart : -1,
       w: innerWidth, h: innerHeight, d: devicePixelRatio, log: st.log.slice(-8),
     };
     document.title = (popup ? "P" : "M") + JSON.stringify(state);

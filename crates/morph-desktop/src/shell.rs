@@ -321,6 +321,11 @@ pub struct Shell {
     buttons: WindowButtons,
     /// The caption last passed to the main component.
     last_caption: Option<Option<WindowButtons>>,
+    /// The panel in the sidebar, for `MORPH_LOG_EVENTS`.
+    last_sidebar: Option<String>,
+    /// Actions `MORPH_TEST_ACTIONS` asks for (comma-separated names, run
+    /// one per tick from the first), for the smoke tests.
+    test_actions: Vec<Action>,
     /// Later launches' URLs (single instance).
     listener: Option<crate::single::Listener>,
     _subscriptions: Vec<Subscription>,
@@ -367,6 +372,13 @@ impl Shell {
             last_marked: None,
             buttons: chrome::window_buttons(&|k| std::env::var(k).ok()),
             last_caption: None,
+            last_sidebar: None,
+            test_actions: std::env::var("MORPH_TEST_ACTIONS")
+                .unwrap_or_default()
+                .split(',')
+                .rev()
+                .filter_map(|name| Action::from_name(name.trim()))
+                .collect(),
             listener: None,
             _subscriptions: subscriptions,
             profile_subscriptions: Vec::new(),
@@ -636,9 +648,19 @@ impl Shell {
             shortcuts.extend(component.tick(window, cx));
         }
         for key in shortcuts {
-            if let Some(action) = self.keymap.action_for(&key) {
+            if let Some(action) = page_action(&self.keymap, &key, MAC) {
                 self.run(action, window, cx);
             }
+        }
+        let sidebar = self.layout.shown(Slot::Sidebar).map(|k| k.as_str().to_string());
+        if sidebar != self.last_sidebar {
+            if std::env::var_os("MORPH_LOG_EVENTS").is_some_and(|v| v == "1") {
+                println!("morph-event panel {}", sidebar.as_deref().unwrap_or("none"));
+            }
+            self.last_sidebar = sidebar;
+        }
+        if let Some(action) = self.test_actions.pop() {
+            self.run(action, window, cx);
         }
         // Frameless: our own caption and buttons. Tiling window managers
         // draw no frame either, so they get the close button regardless.
@@ -857,7 +879,34 @@ pub fn platform_keystrokes(keystroke: &str, mac: bool) -> Vec<String> {
 /// (Ctrl+F opens the find bar). Everything else (Ctrl+C/V/X/A/Z, arrows,
 /// Page Up/Down, Space, Tab, keypad) goes to the page.
 fn page_shortcuts(keymap: &Keymap) -> Vec<String> {
-    keymap.bindings().iter().flat_map(|b| platform_keystrokes(&b.keystroke, MAC)).collect()
+    keymap.bindings().iter().flat_map(|b| platform_keystrokes(&b.keystroke, MAC)).map(|k| canonical(&k)).collect()
+}
+
+/// `keystroke` with its modifiers in one order (ctrl, alt, shift, cmd), the
+/// order the page script writes them: `cmd-shift-l` is `shift-cmd-l`.
+pub fn canonical(keystroke: &str) -> String {
+    const ORDER: [&str; 4] = ["ctrl", "alt", "shift", "cmd"];
+    let (mods, key) = match keystroke.rsplit_once('-') {
+        // `ctrl--` (the minus key) splits into `ctrl-` and ``.
+        Some((m, "")) => (m.strip_suffix('-').unwrap_or(m), "-"),
+        Some((m, k)) => (m, k),
+        None => return keystroke.to_string(),
+    };
+    let held: Vec<&str> = mods.split('-').collect();
+    let mut out: String = ORDER.iter().filter(|m| held.contains(m)).map(|m| format!("{m}-")).collect();
+    out.push_str(key);
+    out
+}
+
+/// The action for a shortcut a page reported. On macOS a Cmd shortcut is
+/// its Ctrl binding's (the keymap lists the Ctrl form).
+fn page_action(keymap: &Keymap, key: &str, mac: bool) -> Option<Action> {
+    let key = canonical(key);
+    let find = |k: &str| keymap.bindings().iter().find(|b| canonical(&b.keystroke) == k).map(|b| b.action);
+    find(&key).or_else(|| {
+        let rest = key.strip_prefix("cmd-").map(str::to_string).or_else(|| key.contains("-cmd-").then(|| key.replacen("-cmd-", "-", 1)))?;
+        (mac && !key.contains("ctrl-") && !rest.ends_with("tab")).then(|| find(&canonical(&format!("ctrl-{rest}")))).flatten()
+    })
 }
 
 /// Open the window and run until it closes.
@@ -981,6 +1030,25 @@ mod tests {
         assert_eq!(platform_keystrokes("ctrl-tab", true), ["ctrl-tab"]);
         assert_eq!(platform_keystrokes("ctrl-shift-tab", true), ["ctrl-shift-tab"]);
         assert_eq!(platform_keystrokes("f5", true), ["f5"]);
+    }
+
+    #[test]
+    fn page_shortcuts_match_whatever_order_the_modifiers_come_in() {
+        assert_eq!(canonical("cmd-shift-l"), "shift-cmd-l");
+        assert_eq!(canonical("shift-ctrl-o"), "ctrl-shift-o");
+        assert_eq!(canonical("ctrl--"), "ctrl--");
+        assert_eq!(canonical("f3"), "f3");
+        let keymap = Keymap::default();
+        // What the page script sends on macOS for Cmd+Shift+L and Cmd+T.
+        assert_eq!(page_action(&keymap, "shift-cmd-l", true), Some(Action::ShowIdentity));
+        assert_eq!(page_action(&keymap, "cmd-t", true), Some(Action::NewTab));
+        assert_eq!(page_action(&keymap, "ctrl-shift-l", true), Some(Action::ShowIdentity));
+        assert_eq!(page_action(&keymap, "shift-cmd-l", false), None, "Cmd is not Ctrl off macOS");
+        assert_eq!(page_action(&keymap, "cmd-tab", true), None);
+        // Every shortcut the page is told about leads back to an action.
+        for key in page_shortcuts(&keymap) {
+            assert!(page_action(&keymap, &key, MAC).is_some(), "{key}");
+        }
     }
 
     #[test]

@@ -40,6 +40,7 @@ impl ProfilesView {
                 }
                 cx.notify();
             }
+            TextInputEvent::Tab { .. } => {}
             TextInputEvent::Changed => {}
         });
         Self { profiles: Profiles::new(home, shown), theme, input, editing: None, focus: cx.focus_handle(), _subscriptions: vec![sub] }
