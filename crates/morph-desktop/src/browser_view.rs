@@ -1645,10 +1645,14 @@ impl BrowserView {
     }
 
     /// What Morph shows instead of a page that crashed, hung or failed to
-    /// load. The web view is hidden meanwhile.
+    /// load, Morph's own pages, and the start screen of a tab with nothing
+    /// in it. The web view is hidden meanwhile.
     fn cover_panel(&self, cover: &Cover, cx: &mut Context<Self>) -> gpui::AnyElement {
         if *cover == Cover::About {
             return self.about_panel(cx);
+        }
+        if *cover == Cover::Start {
+            return crate::brand::start_screen(self.theme).id("start-page").into_any_element();
         }
         if *cover == Cover::Settings {
             return match &self.settings_view {
@@ -1683,7 +1687,7 @@ impl BrowserView {
                 let (title, detail) = morph_browser::error_text(error);
                 (title, detail, vec![reload("Try again").into_any_element()])
             }
-            Cover::About | Cover::Settings => unreachable!("drawn above"),
+            Cover::About | Cover::Settings | Cover::Start => unreachable!("drawn above"),
         };
         let url = match cover {
             Cover::Failed(error) => error.url.clone(),

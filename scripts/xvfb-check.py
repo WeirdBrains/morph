@@ -1286,6 +1286,56 @@ def screenshot(m, path):
             pass
 
 
+def start_screen(m, r, win, top):
+    """A tab with nothing in it shows Morph's start screen (as the phone app
+    does): the dark background, the white lockup and text in the middle, and
+    the faint cyan and magenta glitch bars (55% over the background), not an
+    empty white web view."""
+    try:
+        from PIL import Image
+    except ImportError:
+        if os.environ.get("MORPH_REQUIRE_QR") == "1":
+            r.check("start", "a blank tab shows the start screen", False, "no Pillow (pip install pillow)")
+        else:
+            print("SKIP  start   a blank tab shows the start screen (no Pillow)", flush=True)
+        return
+    path = Path(tempfile.mkdtemp(prefix="morph-xvfb-start-")) / "screen.png"
+    detail = "no screenshot"
+    for _ in range(4):
+        time.sleep(0.8)
+        screenshot(m, path)
+        if not path.exists():
+            continue
+        img = Image.open(path).convert("RGB")
+        wx, wy, ww, wh = m.geometry(win)
+        f = img.width / ww if isinstance(m, WaylandMorph) and ww else 1.0
+        box = (int(wx * f), int((wy + top) * f), int((wx + ww) * f), int((wy + wh) * f))
+        page = img.crop(box)
+        px = page.load()
+        pw, ph = page.size
+        near = lambda c, want, tol=14: all(abs(a - b) <= tol for a, b in zip(c, want))
+        corners = [px[x, y] for x, y in ((24, 24), (pw - 25, 24), (24, ph - 25), (pw - 25, ph - 25), (pw // 2, 24))]
+        dark = sum(near(c, (13, 13, 18), 10) for c in corners)
+        cyan = magenta = white = 0
+        for y in range(0, ph, 2):
+            for x in range(0, pw, 2):
+                c = px[x, y]
+                if near(c, (6, 132, 148)):
+                    cyan += 1
+                elif near(c, (146, 30, 126)):
+                    magenta += 1
+                elif min(c) > 225:
+                    white += 1
+        n = f * f
+        detail = f"dark corners {dark}/5, bar pixels cyan {cyan} magenta {magenta}, white {white} (scale {f:g})"
+        if dark >= 4 and cyan >= 120 * n and magenta >= 120 * n and white >= 400 * n:
+            break
+    else:
+        r.check("start", "a blank tab shows the start screen", False, detail)
+        return
+    r.check("start", "a blank tab shows the start screen", True, detail)
+
+
 def check_qr(r, area, what, m, expected):
     """The screen shows a QR code that decodes to `expected` (it painted,
     and it is the right one)."""
@@ -1598,6 +1648,7 @@ def main():
         n0 = (state(m) or {}).get("n")
         m.key("ctrl+t", delay=1.0)
         r.check("shell", "Ctrl+T opens a tab from the page", wait_for(lambda: any(t == 2 for t, _, _ in m.events())), "no tab 2 events")
+        start_screen(m, r, win, top)
         target = PAGE.as_uri() + "?second"
         m.type(target)
         m.key("Return", delay=1.5)
