@@ -17,6 +17,15 @@ const MAX_QUERY_CHARS: usize = 2000;
 /// Everything else, including any phrase and unknown schemes such as
 /// `javascript:`, becomes a search.
 pub fn target(input: &str) -> Option<String> {
+    target_with(input, &|q| search_url(q))
+}
+
+/// [`target`], with phrases sent to `engine` (see [`crate::search`]).
+pub fn target_for(input: &str, engine: &crate::search::Engine) -> Option<String> {
+    target_with(input, &|q| engine.url(q))
+}
+
+fn target_with(input: &str, search_url: &dyn Fn(&str) -> String) -> Option<String> {
     let text = input.trim();
     if text.is_empty() {
         return None;
@@ -49,9 +58,15 @@ pub fn target(input: &str) -> Option<String> {
 /// Morph's default web search (DuckDuckGo) until a search-engine setting
 /// exists. Whitespace is collapsed and the query capped at 2000 characters.
 pub fn search_url(query: &str) -> String {
+    format!("https://duckduckgo.com/?q={}", encoded_query(query))
+}
+
+/// `query` with whitespace collapsed, capped at 2000 characters and
+/// form-encoded, ready for a search engine's address.
+pub fn encoded_query(query: &str) -> String {
     let collapsed = query.split_whitespace().collect::<Vec<_>>().join(" ");
     let capped: String = collapsed.chars().take(MAX_QUERY_CHARS).collect();
-    format!("https://duckduckgo.com/?q={}", encode_query_component(&capped))
+    encode_query_component(&capped)
 }
 
 /// Form-style query encoding, as Dart's `Uri.encodeQueryComponent`: unreserved
@@ -216,5 +231,15 @@ mod tests {
         assert_eq!(search_url("javascript:alert(1)"), "https://duckduckgo.com/?q=javascript%3Aalert%281%29");
         assert_eq!(search_url("café"), "https://duckduckgo.com/?q=caf%C3%A9");
         assert_eq!(search_url(&"a".repeat(2500)).len(), "https://duckduckgo.com/?q=".len() + 2000);
+    }
+
+    #[test]
+    fn phrases_go_to_the_chosen_engine_and_addresses_stay_addresses() {
+        let google = crate::search::engine("google");
+        assert_eq!(super::target_for("rust gpui", google).as_deref(), Some("https://www.google.com/search?q=rust+gpui"));
+        assert_eq!(super::target_for("example.com", google).as_deref(), Some("https://example.com"));
+        let ddg = crate::search::engine("duckduckgo");
+        assert_eq!(super::target_for("rust", ddg).as_deref(), Some("https://duckduckgo.com/?q=rust"));
+        assert_eq!(super::target_for("  ", ddg), None);
     }
 }

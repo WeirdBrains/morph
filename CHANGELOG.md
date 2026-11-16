@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- `v0.2.0-alpha.10`, desktop chrome: preferences are a full page in a tab
+  (Ctrl+, / Cmd+,) with search, sections and every setting; a search engine
+  selector left of the address (Google by default, DuckDuckGo; each tab keeps
+  its pick) with "Default search engine settings…"; clicking or focusing the
+  address opens a dropdown that matches the mobile sheet (back, forward, copy
+  link, refresh, bookmark, find, history, bookmarks, identity, settings,
+  profiles), driven by arrows, Enter and Escape. Tab bar buttons switch the
+  tab position (top, bottom, left, right) and collapse the tab list to icons
+  with tooltips. Favicons in tabs. Pages' `<input type=file>` opens the
+  system file dialog. Closing the last tab quits Morph. The star fills at
+  once with a "Bookmarked" toast. morph://about and the hamburger menu.
+  Linux: `<select>` lists drawn by the shell on Wayland and placed under the
+  control on X11; dark sites get dark controls.
+- macOS and Windows: no system title bar. The top row (tabs, or the toolbar
+  when tabs are elsewhere) is the caption, with the traffic lights inset on
+  macOS and Morph's own minimize, maximize and close on Windows. Morph can be
+  made the default browser on both (NSWorkspace on macOS; the Default Apps
+  settings page on Windows, with Morph registered under StartMenuInternet).
+  The MSI has the usual install screens (licence, folder).
+- `weirdnet-morph://` is registered on every OS (desktop file, Info.plist,
+  the MSI and the per-user registry) and links go to the running Morph
+  (single instance on Linux and Windows, Apple Events on macOS).
+- Shortcuts: macOS uses Cmd throughout, plus Cmd+Y history (Cmd+H hides the
+  app), Cmd+[ and Cmd+] back and forward, Cmd+Option+arrows to switch tabs
+  and Ctrl+Cmd+F full screen. Windows and Linux add Ctrl+PgUp/PgDn,
+  Ctrl+F4, F6 and Alt+D; Ctrl+Shift+R, Shift+F5 and Ctrl+F5 reload. On
+  Windows, WebView2's own accelerators (Ctrl+D favourites and the like) are
+  off so Morph's shortcuts reach the shell.
+
 ## [0.2.0-alpha.9] - 2026-11-15
 
 - `v0.2.0-alpha.9`, identity: the recovery words get Copy (the clipboard

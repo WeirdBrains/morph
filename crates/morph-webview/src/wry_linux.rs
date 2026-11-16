@@ -24,7 +24,9 @@ use crate::{Backend, Error, Event, LoadError, PageBridge, Rect, Result, Spec, Vi
 
 /// Start GTK on this thread. Call once, before [`WryBackend::new`].
 pub fn init() -> Result<()> {
-    gtk::init().map_err(|e| Error::Backend(format!("GTK did not start: {e}")))
+    gtk::init().map_err(|e| Error::Backend(format!("GTK did not start: {e}")))?;
+    crate::appearance::start();
+    Ok(())
 }
 
 /// The X11 window id behind a window handle, if it is an X11 window.
@@ -72,6 +74,52 @@ pub(crate) const UNDO_REDO_SCRIPT: &str = r#"(() => {
   });
 })();"#;
 
+/// WebKitGTK draws a `<select>` with its own face, light or dark by the
+/// element's `color-scheme`, and ignores the page's background for it, so
+/// a dark site that styles its selects (`background: #1c2027; color: #eee`)
+/// without saying `color-scheme: dark` got light text on a white face where
+/// Chrome shows the page's dark one. A select whose page background is dark
+/// and that asks for no scheme of its own is given `color-scheme: dark`
+/// (and checked again when the page changes or the system scheme flips).
+pub(crate) const CONTROL_SCHEME_SCRIPT: &str = r#"(() => {
+  const MARK = "data-morph-scheme";
+  const luminance = (color) => {
+    const m = /rgba?\(([^)]+)\)/.exec(color);
+    if (!m) return null;
+    const [r, g, b, a = 1] = m[1].split(/[\s,\/]+/).filter(Boolean).map(Number);
+    return a < 0.5 ? null : (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  };
+  const fix = (el) => {
+    if (el.hasAttribute(MARK)) {
+      el.style.removeProperty("color-scheme");
+      el.removeAttribute(MARK);
+    }
+    const style = getComputedStyle(el);
+    if (style.colorScheme && style.colorScheme !== "normal") return;
+    const bg = luminance(style.backgroundColor);
+    if (bg !== null && bg < 0.4) {
+      el.style.setProperty("color-scheme", "dark");
+      el.setAttribute(MARK, "dark");
+    }
+  };
+  let queued = false;
+  const run = () => {
+    queued = false;
+    document.querySelectorAll("select").forEach(fix);
+  };
+  const later = () => {
+    if (!queued) { queued = true; requestAnimationFrame(run); }
+  };
+  document.addEventListener("DOMContentLoaded", () => {
+    run();
+    new MutationObserver((records) => {
+      if (records.some((r) => r.type === "childList" || (r.target.tagName === "SELECT" && r.attributeName !== MARK) || r.attributeName === "class")) later();
+    }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "style"] });
+  });
+  addEventListener("load", later);
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", later);
+})();"#;
+
 pub(crate) struct Popup {
     pub(crate) window: gtk::Window,
     _view: wry::WebView,
@@ -94,6 +142,8 @@ pub struct WryBackend {
     /// from the X settings, GPUI from Xft.dpi).
     scale: f64,
     engines: Vec<gtk::glib::WeakRef<webkit2gtk::WebView>>,
+    downloads: Downloads,
+    hooked: HashSet<Option<PathBuf>>,
 }
 
 /// The zoom that makes a page as large as the shell around it.
@@ -316,6 +366,8 @@ impl WryBackend {
             bridge: None,
             scale: 1.0,
             engines: Vec::new(),
+            downloads: Rc::default(),
+            hooked: HashSet::new(),
         }
     }
 }
@@ -367,6 +419,75 @@ fn keystroke(event: &gtk::gdk::EventKey) -> Option<String> {
     }
     out.push_str(&key);
     Some(out)
+}
+
+/// The page's open `<input type=file>` request, until the shell answers it.
+pub(crate) type Chooser = Rc<RefCell<Option<webkit2gtk::FileChooserRequest>>>;
+
+/// Where downloads go, shared with each context's download handler.
+pub(crate) type Downloads = Rc<RefCell<Option<PathBuf>>>;
+
+/// Hooks every WebKitGTK backend adds to a page: its icon (from
+/// [`crate::icons::ICON_SCRIPT`], over a message handler of its own so a
+/// page can only report its own icon) and file chooser requests, which the
+/// shell answers with the system's dialog (the desktop portal).
+pub(crate) fn watch_more(engine: &webkit2gtk::WebView, id: ViewId, queue: &Queue, chooser: &Chooser) {
+    if let Some(manager) = engine.user_content_manager() {
+        let q = queue.clone();
+        manager.connect_script_message_received(Some("morphIcon"), move |_, message| {
+            let Some(body) = message.js_value().map(|v| v.to_str().to_string()) else {
+                return;
+            };
+            if let Some(png) = crate::icons::decode(&body) {
+                q.borrow_mut().push((id, Event::Favicon(png)));
+            }
+        });
+        manager.register_script_message_handler("morphIcon");
+    }
+    let (q, c) = (queue.clone(), chooser.clone());
+    engine.connect_run_file_chooser(move |_, request| {
+        use webkit2gtk::FileChooserRequestExt;
+        let multiple = request.selects_multiple();
+        if let Some(old) = c.borrow_mut().replace(request.clone()) {
+            old.cancel();
+        }
+        q.borrow_mut().push((id, Event::FileChooser { multiple }));
+        true
+    });
+}
+
+/// Answer a page's file chooser request.
+pub(crate) fn answer_chooser(chooser: &Chooser, paths: Option<Vec<PathBuf>>) {
+    use webkit2gtk::FileChooserRequestExt;
+    let Some(request) = chooser.borrow_mut().take() else {
+        return;
+    };
+    match paths.filter(|p| !p.is_empty()) {
+        Some(paths) => {
+            let names: Vec<String> = paths.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+            let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+            request.select_files(&refs);
+        }
+        None => request.cancel(),
+    }
+}
+
+/// Add the download handler to `builder` once per web context (WebKit
+/// keeps one handler list per context, and every view shares it).
+pub(crate) fn with_downloads<'a>(
+    builder: WebViewBuilder<'a>,
+    hooked: &mut HashSet<Option<PathBuf>>,
+    data_dir: &Option<PathBuf>,
+    downloads: &Downloads,
+) -> WebViewBuilder<'a> {
+    if !hooked.insert(data_dir.clone()) {
+        return builder;
+    }
+    let downloads = downloads.clone();
+    builder.with_download_started_handler(move |_url, path| {
+        *path = crate::download_target(downloads.borrow().as_deref(), path);
+        true
+    })
 }
 
 /// Report page signals for `id` into `queue` and route shell shortcuts.
@@ -505,6 +626,7 @@ pub(crate) fn popup_handler(
         let builder = WebViewBuilder::new()
             .with_related_view(features.opener.webview.clone())
             .with_initialization_script(UNDO_REDO_SCRIPT)
+            .with_initialization_script(CONTROL_SCHEME_SCRIPT)
             .with_new_window_req_handler(popup_handler(tab, queue.clone(), popups.clone(), bridge.clone()));
         let built = with_bridge(builder, &bridge).build_gtk(&vbox);
         let view = match built {
@@ -577,12 +699,17 @@ impl Backend for WryBackend {
             .with_url(url)
             .with_bounds(wry_rect(spec.bounds))
             .with_initialization_script(UNDO_REDO_SCRIPT)
+            .with_initialization_script(CONTROL_SCHEME_SCRIPT)
+            .with_initialization_script(crate::icons::ICON_SCRIPT)
             .with_visible(spec.visible)
             .with_new_window_req_handler(popup_handler(id, self.queue.clone(), self.popups.clone(), self.bridge.clone()));
+        let builder = with_downloads(builder, &mut self.hooked, &spec.data_dir, &self.downloads);
         let view = with_bridge(builder, &self.bridge).build_as_child(&self.parent).map_err(backend_err)?;
         let engine = view.webview();
         attach_bridge(&engine, &self.bridge);
         watch(&engine, id, &self.queue, &self.shortcuts);
+        let chooser: Chooser = Rc::default();
+        watch_more(&engine, id, &self.queue, &chooser);
         apply_zoom(&engine, self.scale);
         self.engines.retain(|e| e.upgrade().is_some());
         self.engines.push(engine.downgrade());
@@ -608,7 +735,7 @@ impl Backend for WryBackend {
             let keys = self.keys.clone();
             top.connect_key_release_event(move |_, e| if keys.forward(e, false) { Propagation::Stop } else { Propagation::Proceed });
         }
-        Ok(Box::new(WryView { id, view, popups: self.popups.clone(), keys: self.keys.clone(), bounds: Cell::new(spec.bounds) }))
+        Ok(Box::new(WryView { id, view, popups: self.popups.clone(), keys: self.keys.clone(), bounds: Cell::new(spec.bounds), chooser }))
     }
 
     fn poll(&mut self) -> Vec<(ViewId, Event)> {
@@ -631,6 +758,10 @@ impl Backend for WryBackend {
         self.bridge = Some(bridge);
     }
 
+    fn set_downloads_dir(&mut self, dir: Option<PathBuf>) {
+        *self.downloads.borrow_mut() = dir;
+    }
+
     fn set_scale(&mut self, scale: f64) {
         if (self.scale - scale).abs() < 1e-9 {
             return;
@@ -648,11 +779,18 @@ struct WryView {
     popups: Popups,
     keys: HostKeys,
     bounds: Cell<Rect>,
+    chooser: Chooser,
 }
 
 impl WebView for WryView {
     fn id(&self) -> ViewId {
         self.id
+    }
+    fn choose_files(&self, paths: Option<Vec<PathBuf>>) {
+        answer_chooser(&self.chooser, paths);
+    }
+    fn clear_data(&self) -> Result<()> {
+        self.view.clear_all_browsing_data().map_err(backend_err)
     }
     fn load_url(&self, url: &str) -> Result<()> {
         self.view.load_url(url).map_err(backend_err)

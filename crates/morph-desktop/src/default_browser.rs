@@ -1,4 +1,6 @@
-//! "Make Morph the default browser" on Linux. Morph writes the user's
+//! "Make Morph the default browser". On macOS and Windows the system
+//! decides (crate `morph-os`: Launch Services, and Windows' Default apps
+//! with Morph's registered capabilities). On Linux Morph writes the user's
 //! `mimeapps.list` itself (the freedesktop MIME applications spec) instead of
 //! calling `xdg-settings`, whose generic mode fails on desktops it does not
 //! know (Hyprland: exit 4, with `mimeapps.list` left half-written). It sets
@@ -10,9 +12,18 @@
 
 use std::path::{Path, PathBuf};
 
-/// Why there is no answer on macOS and Windows: Morph does not register
-/// as a browser there yet (no URL handler in the app bundle or registry).
+/// What the settings say once Morph is the default.
+pub const MADE_DEFAULT: &str = "Links from other apps now open in Morph.";
+
+/// Why there is no answer on a system Morph has no default-browser path for.
 pub const OTHER_SYSTEMS: &str = "Morph cannot be the default browser on this system yet";
+
+/// What the settings say when the system did not answer in time.
+pub const NO_ANSWER: &str = "The system did not answer; try again.";
+
+/// The longest the settings wait for an answer (the calls inside have
+/// their own limit, [`morph_os::DESKTOP_CALL_LIMIT`]).
+const CHECK_LIMIT: std::time::Duration = std::time::Duration::from_secs(45);
 
 /// The desktop entry the packages install.
 pub const DESKTOP_ID: &str = "morph.desktop";
@@ -185,19 +196,76 @@ pub fn make_default(dirs: &Dirs, run: Runner) -> Result<(), String> {
     if failed.is_empty() { Ok(()) } else { Err(format!("these still open with another app: {}", failed.join(", "))) }
 }
 
-/// The real runner: run the command and capture its output. Off Linux
-/// there is nothing to run; the system settings choose the browser.
+/// Morph's own scheme (`weirdnet-morph://`), which no other app handles.
+pub const SCHEME_TYPE: &str = "x-scheme-handler/weirdnet-morph";
+
+/// `text` with Morph handling [`SCHEME_TYPE`] when nothing does yet;
+/// `None` when the list already names a handler (the user's choice stays).
+pub fn with_scheme(text: &str) -> Option<String> {
+    if default_in(text, SCHEME_TYPE).is_some() {
+        return None;
+    }
+    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+    match lines.iter().position(|l| l.trim() == format!("[{DEFAULTS}]")) {
+        Some(i) => lines.insert(i + 1, format!("{SCHEME_TYPE}={DESKTOP_ID}")),
+        None => {
+            if lines.last().is_some_and(|l| !l.trim().is_empty()) {
+                lines.push(String::new());
+            }
+            lines.push(format!("[{DEFAULTS}]"));
+            lines.push(format!("{SCHEME_TYPE}={DESKTOP_ID}"));
+        }
+    }
+    let mut out = lines.join("\n");
+    out.push('\n');
+    Some(out)
+}
+
+/// Register `weirdnet-morph://` for Morph in the user's `mimeapps.list`
+/// when no list names a handler for it (at start, off the UI thread).
+pub fn ensure_scheme(dirs: &Dirs) -> Result<bool, String> {
+    let lists = dirs.lists();
+    if lists.iter().filter_map(|p| std::fs::read_to_string(p).ok()).any(|t| default_in(&t, SCHEME_TYPE).is_some()) {
+        return Ok(false);
+    }
+    let common = dirs.config.join("mimeapps.list");
+    let old = std::fs::read_to_string(&common).unwrap_or_default();
+    match with_scheme(&old) {
+        Some(new) => write_atomic(&common, &new).map(|_| true).map_err(|e| format!("could not write {}: {e}", common.display())),
+        None => Ok(false),
+    }
+}
+
+/// The real runner: run the command, with a time limit, and capture its
+/// output. Off Linux there is nothing to run.
 pub fn system(program: &str, args: &[&str]) -> Result<String, String> {
     if !cfg!(target_os = "linux") {
         return Err(OTHER_SYSTEMS.into());
     }
-    let out = std::process::Command::new(program).args(args).output().map_err(|e| format!("{program}: {e}"))?;
-    if out.status.success() {
-        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-    } else {
-        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        Err(if err.is_empty() { format!("{program} failed ({})", out.status) } else { format!("{err} ({})", out.status) })
-    }
+    morph_os::run(program, args, morph_os::DESKTOP_CALL_LIMIT)
+}
+
+/// Whether Morph is the default, asked of macOS or Windows.
+#[cfg(any(target_os = "macos", windows))]
+fn platform_status() -> Status {
+    #[cfg(target_os = "macos")]
+    let default = morph_os::macos::is_default();
+    #[cfg(windows)]
+    let default =
+        morph_os::windows::is_default(morph_os::windows::user_choice("http").as_deref(), morph_os::windows::user_choice("https").as_deref());
+    if default { Status::Default } else { Status::Other("another browser".into()) }
+}
+
+/// Make Morph the default on macOS (the system asks the user), or register
+/// it and open Windows Settings, where the user picks it.
+#[cfg(any(target_os = "macos", windows))]
+fn platform_make_default() -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    return morph_os::macos::make_default(morph_os::DESKTOP_CALL_LIMIT).map(|()| MADE_DEFAULT.to_string());
+    #[cfg(windows)]
+    return morph_os::windows::register()
+        .and_then(|()| morph_os::windows::open_settings())
+        .map(|()| morph_os::windows::CHOOSE_IN_SETTINGS.to_string());
 }
 
 /// A runner a background thread can own.
@@ -205,32 +273,56 @@ pub type SystemRunner = fn(&str, &[&str]) -> Result<String, String>;
 
 /// The work off the UI thread (`xdg-mime` and `update-desktop-database`
 /// can take seconds). [`Check::take`] gives the result once it is there.
+/// A status, and for [`Check::make_default`] what the attempt says
+/// (`Ok(note)` or `Err(why)`).
+pub type Outcome = (Status, Option<Result<String, String>>);
+
 pub struct Check {
-    rx: std::sync::mpsc::Receiver<(Status, Option<Result<(), String>>)>,
+    rx: std::sync::mpsc::Receiver<Outcome>,
+    /// Past this the settings stop waiting and say the system did not answer.
+    deadline: std::time::Instant,
+    making: bool,
 }
 
 impl Check {
     /// Read the current default browser.
     pub fn status(run: SystemRunner) -> Self {
+        #[cfg(any(target_os = "macos", windows))]
+        {
+            let _ = run;
+            Self::spawn(false, || (platform_status(), None))
+        }
+        #[cfg(not(any(target_os = "macos", windows)))]
         Self::status_in(Dirs::system(), run)
     }
 
     /// Make Morph the default, then read the result back.
     pub fn make_default(run: SystemRunner) -> Self {
+        #[cfg(any(target_os = "macos", windows))]
+        {
+            let _ = run;
+            Self::spawn(true, || {
+                let made = platform_make_default();
+                (platform_status(), Some(made))
+            })
+        }
+        #[cfg(not(any(target_os = "macos", windows)))]
         Self::make_default_in(Dirs::system(), run)
     }
 
+    #[cfg_attr(any(target_os = "macos", windows), allow(dead_code))]
     fn status_in(dirs: Option<Dirs>, run: SystemRunner) -> Self {
-        Self::spawn(move || match &dirs {
+        Self::spawn(false, move || match &dirs {
             Some(d) => (status(d), None),
             None => (Status::Unknown(no_answer(run)), None),
         })
     }
 
+    #[cfg_attr(any(target_os = "macos", windows), allow(dead_code))]
     fn make_default_in(dirs: Option<Dirs>, run: SystemRunner) -> Self {
-        Self::spawn(move || match &dirs {
+        Self::spawn(true, move || match &dirs {
             Some(d) => {
-                let made = make_default(d, &run);
+                let made = make_default(d, &run).map(|()| MADE_DEFAULT.to_string());
                 (status(d), Some(made))
             }
             None => {
@@ -240,18 +332,29 @@ impl Check {
         })
     }
 
-    fn spawn(work: impl FnOnce() -> (Status, Option<Result<(), String>>) + Send + 'static) -> Self {
+    fn spawn(making: bool, work: impl FnOnce() -> Outcome + Send + 'static) -> Self {
+        Self::spawn_with_limit(making, CHECK_LIMIT, work)
+    }
+
+    fn spawn_with_limit(making: bool, limit: std::time::Duration, work: impl FnOnce() -> Outcome + Send + 'static) -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let _ = tx.send(work());
         });
-        Self { rx }
+        Self { rx, deadline: std::time::Instant::now() + limit, making }
     }
 
-    /// The status (and, for [`Check::make_default`], whether it worked) once
-    /// the work finished; `None` while it runs.
-    pub fn take(&self) -> Option<(Status, Option<Result<(), String>>)> {
-        self.rx.try_recv().ok()
+    /// The status (and, for [`Check::make_default`], what it says) once the
+    /// work finished, or a "no answer" once it took too long; `None` while
+    /// it runs.
+    pub fn take(&self) -> Option<Outcome> {
+        match self.rx.try_recv() {
+            Ok(outcome) => Some(outcome),
+            Err(_) if std::time::Instant::now() >= self.deadline => {
+                Some((Status::Unknown(NO_ANSWER.into()), self.making.then(|| Err(NO_ANSWER.into()))))
+            }
+            Err(_) => None,
+        }
     }
 }
 
@@ -372,6 +475,19 @@ mod tests {
     }
 
     #[test]
+    fn the_scheme_is_registered_once_and_a_choice_is_kept() {
+        let (_t, d) = dirs(&[]);
+        assert_eq!(ensure_scheme(&d), Ok(true));
+        let text = std::fs::read_to_string(d.config.join("mimeapps.list")).unwrap();
+        assert_eq!(default_in(&text, SCHEME_TYPE).as_deref(), Some(DESKTOP_ID));
+        assert_eq!(ensure_scheme(&d), Ok(false), "a second run changes nothing");
+        let other = "[Default Applications]\nx-scheme-handler/weirdnet-morph=other.desktop\n";
+        assert_eq!(with_scheme(other), None, "another handler stays");
+        let kept = with_scheme("[Default Applications]\ntext/html=firefox.desktop\n").unwrap();
+        assert!(kept.contains("text/html=firefox.desktop\n") && kept.contains("weirdnet-morph=morph.desktop\n"), "{kept}");
+    }
+
+    #[test]
     fn morph_is_default_only_when_http_and_https_both_say_so() {
         let (_t, d) = dirs(&[]);
         std::fs::create_dir_all(&d.config).unwrap();
@@ -404,6 +520,17 @@ mod tests {
             assert!(std::time::Instant::now() < end, "the check never finished");
             std::thread::sleep(std::time::Duration::from_millis(5));
         };
-        assert_eq!(done, (Status::Default, Some(Ok(()))));
+        assert_eq!(done, (Status::Default, Some(Ok(MADE_DEFAULT.to_string()))));
+    }
+
+    #[test]
+    fn a_check_that_hangs_gives_up_at_its_limit() {
+        let check = Check::spawn_with_limit(true, std::time::Duration::from_millis(50), || {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            (Status::Default, None)
+        });
+        assert!(check.take().is_none());
+        std::thread::sleep(std::time::Duration::from_millis(80));
+        assert_eq!(check.take(), Some((Status::Unknown(NO_ANSWER.into()), Some(Err(NO_ANSWER.into())))));
     }
 }

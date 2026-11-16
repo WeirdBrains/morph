@@ -55,12 +55,14 @@ actions!(
         ShowHistory,
         ShowProfiles,
         ShowSettings,
-        ShowIdentity
+        ShowIdentity,
+        ShowAbout,
+        ShowSearchSettings
     ]
 );
 
 /// The GPUI action for a Morph action.
-fn gpui_action(action: Action) -> Box<dyn gpui::Action> {
+pub(crate) fn gpui_action(action: Action) -> Box<dyn gpui::Action> {
     match action {
         Action::NewTab => Box::new(NewTab),
         Action::CloseTab => Box::new(CloseTab),
@@ -91,6 +93,8 @@ fn gpui_action(action: Action) -> Box<dyn gpui::Action> {
         Action::ShowProfiles => Box::new(ShowProfiles),
         Action::ShowSettings => Box::new(ShowSettings),
         Action::ShowIdentity => Box::new(ShowIdentity),
+        Action::ShowAbout => Box::new(ShowAbout),
+        Action::ShowSearchSettings => Box::new(ShowSearchSettings),
     }
 }
 
@@ -120,6 +124,16 @@ pub enum ShellRequest {
     SettingsChanged,
     /// The profile got an identity (its library is encrypted and open now).
     IdentityChanged,
+    /// Run a shell action (a button on a page or in a menu).
+    Run(Action),
+    /// Change the shown profile's layout settings (the tab bar's buttons).
+    Change(morph_ui::chrome::SettingsChange),
+    /// Forget the shown profile's history.
+    ClearHistory,
+    /// Forget the shown profile's cookies, cache, site storage and history.
+    ClearBrowsingData,
+    /// The last tab closed: save and quit.
+    Quit,
 }
 
 /// Components each profile has its own of; rebuilt on a profile switch.
@@ -148,6 +162,9 @@ pub trait Hosted {
     }
     /// Whether the shown page is bookmarked (drives the star).
     fn set_page_marked(&self, _marked: bool, _cx: &mut App) {}
+    /// A short note at the bottom of the component (`Bookmarked`), with an
+    /// action to offer beside it.
+    fn toast(&self, _text: &str, _action: Option<(&'static str, Action)>, _cx: &mut App) {}
     /// Give the component the keyboard (a panel above it closed).
     fn focus_content(&self, _window: &mut Window, _cx: &mut App) {}
     /// The profile's name, for a component that shows it.
@@ -157,6 +174,11 @@ pub trait Hosted {
     /// The window is frameless (`Some`, with the buttons to draw) and this
     /// component, in the main slot, should act as its caption.
     fn set_caption(&self, _caption: Option<WindowButtons>, _cx: &mut App) {}
+    /// The preferences page, for the main component to draw.
+    /// The profiles to list (id, name, shown).
+    fn set_profiles(&self, _profiles: Vec<(String, String, bool)>, _cx: &mut App) {}
+    /// Forget the profile's site data (cookies, cache, storage).
+    fn clear_site_data(&self, _cx: &mut App) {}
 }
 
 impl Hosted for Entity<BrowserView> {
@@ -193,6 +215,9 @@ impl Hosted for Entity<BrowserView> {
     fn set_page_marked(&self, marked: bool, cx: &mut App) {
         self.update(cx, |view, cx| view.set_marked(marked, cx));
     }
+    fn toast(&self, text: &str, action: Option<(&'static str, Action)>, cx: &mut App) {
+        self.update(cx, |view, cx| view.toast(text, action, cx));
+    }
     fn focus_content(&self, window: &mut Window, cx: &mut App) {
         self.update(cx, |view, cx| view.focus_page(window, cx));
     }
@@ -202,12 +227,22 @@ impl Hosted for Entity<BrowserView> {
     fn apply_settings(&self, settings: &morph_core::settings::Settings, cx: &mut App) {
         self.update(cx, |view, cx| view.apply_settings(settings, cx));
     }
+    fn set_profiles(&self, profiles: Vec<(String, String, bool)>, cx: &mut App) {
+        self.update(cx, |v, cx| v.set_profiles(profiles, cx));
+    }
+    fn clear_site_data(&self, cx: &mut App) {
+        self.update(cx, |v, _| v.clear_site_data());
+    }
     fn set_caption(&self, caption: Option<WindowButtons>, cx: &mut App) {
         self.update(cx, |view, cx| view.set_caption(caption, cx));
     }
 }
 
 impl Hosted for Entity<IdentityView> {
+    fn apply_settings(&self, settings: &morph_core::settings::Settings, cx: &mut App) {
+        let theme = Theme::for_choice(settings.theme);
+        self.update(cx, |view, cx| view.set_theme(theme, cx));
+    }
     fn kind(&self) -> KindId {
         KindId::new(component::IDENTITY)
     }
@@ -232,6 +267,10 @@ impl Hosted for Entity<IdentityView> {
 }
 
 impl Hosted for Entity<SettingsView> {
+    fn apply_settings(&self, settings: &morph_core::settings::Settings, cx: &mut App) {
+        let theme = Theme::for_choice(settings.theme);
+        self.update(cx, |view, cx| view.set_theme(theme, cx));
+    }
     fn kind(&self) -> KindId {
         KindId::new(component::SETTINGS)
     }
@@ -253,6 +292,10 @@ impl Hosted for Entity<SettingsView> {
 }
 
 impl Hosted for Entity<ProfilesView> {
+    fn apply_settings(&self, settings: &morph_core::settings::Settings, cx: &mut App) {
+        let theme = Theme::for_choice(settings.theme);
+        self.update(cx, |view, cx| view.set_theme(theme, cx));
+    }
     fn kind(&self) -> KindId {
         KindId::new(component::PROFILES)
     }
@@ -273,6 +316,10 @@ impl Hosted for Entity<ProfilesView> {
 }
 
 impl Hosted for Entity<LibraryView> {
+    fn apply_settings(&self, settings: &morph_core::settings::Settings, cx: &mut App) {
+        let theme = Theme::for_choice(settings.theme);
+        self.update(cx, |view, cx| view.set_theme(theme, cx));
+    }
     fn kind(&self) -> KindId {
         KindId::new(component::LIBRARY)
     }
@@ -328,6 +375,8 @@ pub struct Shell {
     test_actions: Vec<Action>,
     /// Later launches' URLs (single instance).
     listener: Option<crate::single::Listener>,
+    /// weirdnet-morph:// links to route once the window runs.
+    pending_links: Vec<String>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -348,11 +397,25 @@ impl Shell {
             catalog.register(kind);
         }
         let profiles = cx.new(|cx| ProfilesView::new(&home, &profile, theme, window, cx));
-        let settings = cx.new(|cx| SettingsView::new(&home, theme, cx));
+        let settings = cx.new(|cx| SettingsView::new(&home, theme, window, cx));
         let subscriptions = vec![
             cx.subscribe_in(&profiles, window, |shell, _, request, window, cx| shell.request(request, window, cx)),
             cx.subscribe_in(&settings, window, |shell, _, request, window, cx| shell.request(request, window, cx)),
+            // Back in front: the default browser may have changed meanwhile.
+            cx.observe_window_activation(window, |shell, window, cx| {
+                if window.is_window_active()
+                    && let Some(settings) = &shell.settings
+                {
+                    settings.update(cx, |view, _| view.recheck());
+                }
+            }),
         ];
+        // Settings are a page now, not a panel: an old layout's settings
+        // sidebar is dropped.
+        let mut layout = layout;
+        if layout.shown(Slot::Sidebar).is_some_and(|k| k.as_str() == component::SETTINGS) {
+            layout.toggle(Slot::Sidebar);
+        }
         let mut shell = Self {
             home,
             profile,
@@ -380,8 +443,16 @@ impl Shell {
                 .filter_map(|name| Action::from_name(name.trim()))
                 .collect(),
             listener: None,
+            pending_links: Vec::new(),
             _subscriptions: subscriptions,
             profile_subscriptions: Vec::new(),
+        };
+        // A weirdnet-morph:// link is routed, never loaded as a page.
+        let start = if morph_core::scheme::is_link(start) {
+            shell.pending_links.push(start.to_string());
+            ""
+        } else {
+            start
         };
         shell.build(start, window, cx);
         shell
@@ -401,7 +472,17 @@ impl Shell {
         let keystrokes = page_shortcuts(&self.keymap);
         self.error = match BrowserView::create(&home, &profile, start, window, &keystrokes) {
             Ok(browser) => {
-                let view = cx.new(|cx| BrowserView::new(browser, theme, window, cx));
+                let labels = crate::browser_view::shortcut_labels(&self.keymap);
+                let view = cx.new(|cx| {
+                    let mut view = BrowserView::new(browser, theme, window, cx);
+                    view.set_shortcut_labels(labels);
+                    view
+                });
+                self.profile_subscriptions.push(cx.subscribe_in(&view, window, |shell, _, request, window, cx| shell.request(request, window, cx)));
+                if let Some(settings) = &self.settings {
+                    let any: AnyView = settings.clone().into();
+                    view.update(cx, |v, cx| v.set_settings_view(any, cx));
+                }
                 self.components.insert(0, Box::new(view));
                 None
             }
@@ -430,22 +511,40 @@ impl Shell {
         }
         self.update_profile_label(cx);
         if let Some(settings) = &self.settings {
-            settings.update(cx, |view, _| view.reload());
+            settings.update(cx, |view, cx| view.reload(cx));
         }
         self.apply_settings(cx);
+        self.update_profile_list(cx);
         if locked {
             self.show_library(Tab::Bookmarks, window, cx);
         }
     }
 
     /// Pass the shown profile's settings to every component.
-    fn apply_settings(&self, cx: &mut App) {
+    fn apply_settings(&mut self, cx: &mut App) {
         let Some(settings) = &self.settings else {
             return;
         };
         let current = settings.read(cx).settings().clone();
+        self.theme = Theme::for_choice(current.theme);
         for c in &self.components {
             c.apply_settings(&current, cx);
+        }
+    }
+
+    /// Tell the components which profiles there are (the address menu
+    /// lists them).
+    fn update_profile_list(&self, cx: &mut App) {
+        let list: Vec<(String, String, bool)> = morph_core::profiles::list(&self.home)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|p| {
+                let shown = p.id == self.profile;
+                (p.id, p.name, shown)
+            })
+            .collect();
+        for c in &self.components {
+            c.set_profiles(list.clone(), cx);
         }
     }
 
@@ -498,7 +597,10 @@ impl Shell {
             ShellRequest::FocusShell => self.focus_shell(cx),
             ShellRequest::LibraryUnlocked => self.last_marked = None,
             ShellRequest::SwitchProfile(id) => self.switch_profile(id, window, cx),
-            ShellRequest::ProfileRenamed => self.update_profile_label(cx),
+            ShellRequest::ProfileRenamed => {
+                self.update_profile_label(cx);
+                self.update_profile_list(cx);
+            }
             ShellRequest::SettingsChanged => self.apply_settings(cx),
             ShellRequest::IdentityChanged => {
                 // The new identity encrypted the library; open it so history
@@ -509,8 +611,42 @@ impl Shell {
                 }
                 self.last_marked = None;
             }
+            ShellRequest::Run(action) => self.run(*action, window, cx),
+            ShellRequest::Change(change) => {
+                if let Some(settings) = self.settings.clone() {
+                    settings.update(cx, |view, cx| view.change(*change, cx));
+                }
+            }
+            ShellRequest::ClearHistory => self.clear_history(cx),
+            ShellRequest::ClearBrowsingData => {
+                self.clear_history(cx);
+                for c in &self.components {
+                    c.clear_site_data(cx);
+                }
+            }
+            ShellRequest::Quit => self.quit(cx),
         }
         cx.notify();
+    }
+
+    fn clear_history(&self, cx: &mut App) {
+        if let Err(e) = morph_core::library::clear_history(&self.home, &self.profile) {
+            eprintln!("morph: could not clear the history: {e}");
+        }
+        if let Some(library) = &self.library {
+            library.update(cx, |view, cx| view.reload(cx));
+        }
+    }
+
+    /// Save what the window shows and quit (the last tab closed, Ctrl+Q,
+    /// the menu). Settings are saved as they change; the layout is saved
+    /// here once more so a quit never loses it.
+    fn quit(&self, cx: &mut App) {
+        self.save_layout();
+        if std::env::var_os("MORPH_LOG_EVENTS").is_some_and(|v| v == "1") {
+            println!("morph-event quit");
+        }
+        cx.quit();
     }
 
     fn focus_shell(&self, cx: &App) {
@@ -526,6 +662,44 @@ impl Shell {
     }
 
     /// Open the library on `tab`, or close it when it already shows that.
+    /// Ctrl+D or the star: bookmark the page or remove its bookmark, say
+    /// so, and redraw the star at once. A locked library opens to be
+    /// unlocked instead of doing nothing.
+    fn bookmark(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(library) = self.library.clone() else {
+            return;
+        };
+        if self.main().and_then(|m| m.page(cx)).is_none() {
+            return;
+        }
+        if library.read(cx).is_locked() {
+            let kind = KindId::new(component::LIBRARY);
+            if self.layout.shown(Slot::Sidebar) != Some(&kind) || library.read(cx).tab() != Tab::Bookmarks {
+                self.show_library(Tab::Bookmarks, window, cx);
+            }
+            if let Some(main) = self.main() {
+                main.toast("Unlock your library to bookmark this page", None, cx);
+            }
+            return;
+        }
+        // The library follows the page on the next tick; make sure it has
+        // this one before toggling.
+        let page = self.main().and_then(|c| c.page(cx));
+        library.update(cx, |view, cx| view.set_page(page.clone(), cx));
+        self.last_page = page;
+        library.update(cx, |view, cx| view.toggle_bookmark(cx));
+        let marked = library.read(cx).marked();
+        self.last_marked = Some(marked);
+        if let Some(main) = self.main() {
+            main.set_page_marked(marked, cx);
+            main.toast(if marked { "Bookmarked" } else { "Bookmark removed" }, Some(("Bookmarks", Action::ShowBookmarks)), cx);
+        }
+        if std::env::var_os("MORPH_LOG_EVENTS").is_some_and(|v| v == "1") {
+            println!("morph-event bookmark {}", if marked { "added" } else { "removed" });
+        }
+        cx.notify();
+    }
+
     fn show_library(&mut self, tab: Tab, window: &mut Window, cx: &mut Context<Self>) {
         let Some(library) = self.library.clone() else {
             return;
@@ -578,17 +752,16 @@ impl Shell {
         cx.notify();
     }
 
-    /// Open or close the settings panel.
-    fn show_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Show the preferences page (in a tab of the main component), at
+    /// `section` if given.
+    fn show_settings(&mut self, section: Option<crate::settings_view::Section>, window: &mut Window, cx: &mut Context<Self>) {
         let Some(settings) = self.settings.clone() else {
             return;
         };
-        if !self.layout.toggle_kind(Slot::Sidebar, KindId::new(component::SETTINGS)) {
-            self.request(&ShellRequest::ClosePanel, window, cx);
-            return;
+        if let Some(main) = self.main() {
+            main.dispatch(Action::ShowSettings, window, cx);
         }
-        self.save_layout();
-        settings.update(cx, |view, cx| view.focus(window, cx));
+        settings.update(cx, |view, cx| view.focus(section, window, cx));
         self.focus_shell(cx);
         cx.notify();
     }
@@ -602,17 +775,19 @@ impl Shell {
     fn run(&mut self, action: Action, window: &mut Window, cx: &mut Context<Self>) {
         match action {
             Action::Quit => {
-                cx.quit();
+                self.quit(cx);
                 return;
             }
             Action::ToggleFullscreen => {
                 window.toggle_fullscreen();
                 return;
             }
+            Action::Bookmark => return self.bookmark(window, cx),
             Action::ShowBookmarks => return self.show_library(Tab::Bookmarks, window, cx),
             Action::ShowHistory => return self.show_library(Tab::History, window, cx),
             Action::ShowProfiles => return self.show_profiles(window, cx),
-            Action::ShowSettings => return self.show_settings(window, cx),
+            Action::ShowSettings => return self.show_settings(None, window, cx),
+            Action::ShowSearchSettings => return self.show_settings(Some(crate::settings_view::Section::Search), window, cx),
             Action::ShowIdentity => return self.show_identity(window, cx),
             _ => {}
         }
@@ -630,16 +805,47 @@ impl Shell {
         cx.notify();
     }
 
+    /// A URL from outside (another launch, the OS): a new tab, or for a
+    /// weirdnet-morph:// link, its route.
+    fn open_external(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) {
+        use morph_core::scheme;
+        if !scheme::is_link(url) {
+            if let Some(main) = self.main() {
+                main.open_url(url, true, window, cx);
+            }
+            return;
+        }
+        let note = match scheme::parse(url).map(scheme::route) {
+            Some(scheme::Route::Unknown(link)) => {
+                // Only the log-safe form: a link's query may carry tokens.
+                eprintln!("morph: no handler for {} yet", link.describe());
+                if std::env::var_os("MORPH_LOG_EVENTS").is_some_and(|v| v == "1") {
+                    println!("morph-event link unknown {}", link.describe());
+                }
+                "weirdnet-morph links open peer content from v0.3 on"
+            }
+            None => {
+                eprintln!("morph: ignoring a malformed {} link", scheme::SCHEME);
+                "That weirdnet-morph link is not valid"
+            }
+        };
+        if let Some(main) = self.main() {
+            main.toast(note, None, cx);
+        }
+    }
+
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if window.focused(cx).is_none() {
             window.focus(&self.focus, cx);
         }
-        let handed = self.listener.as_ref().map(|l| l.take()).unwrap_or_default();
+        let mut handed = self.listener.as_ref().map(|l| l.take()).unwrap_or_default();
+        // Links the OS handed over directly (Apple Events on macOS) and a
+        // weirdnet-morph:// link Morph was started with.
+        handed.extend(take_opened_urls().into_iter().map(crate::single::Request::Open));
+        handed.extend(self.pending_links.drain(..).map(crate::single::Request::Open));
         for request in handed {
-            if let crate::single::Request::Open(url) = &request
-                && let Some(main) = self.main()
-            {
-                main.open_url(url, true, window, cx);
+            if let crate::single::Request::Open(url) = &request {
+                self.open_external(url, window, cx);
             }
             window.activate_window();
         }
@@ -648,7 +854,7 @@ impl Shell {
             shortcuts.extend(component.tick(window, cx));
         }
         for key in shortcuts {
-            if let Some(action) = page_action(&self.keymap, &key, MAC) {
+            if let Some(action) = page_action(&self.keymap, &key) {
                 self.run(action, window, cx);
             }
         }
@@ -664,10 +870,17 @@ impl Shell {
         }
         // Frameless: our own caption and buttons. Tiling window managers
         // draw no frame either, so they get the close button regardless.
-        let caption = match window.window_decorations() {
-            Decorations::Client { .. } => Some(self.buttons),
-            Decorations::Server => (self.buttons == WindowButtons::CloseOnly).then_some(WindowButtons::CloseOnly),
+        // macOS and Windows hide the system title bar (`appears_transparent`):
+        // the traffic lights sit in Morph's caption on macOS, and Morph draws
+        // minimize, maximize and close on Windows.
+        let host = if MAC {
+            chrome::CaptionHost::Mac
+        } else if cfg!(windows) {
+            chrome::CaptionHost::Windows
+        } else {
+            chrome::CaptionHost::Linux { frameless: matches!(window.window_decorations(), Decorations::Client { .. }) }
         };
+        let caption = chrome::caption(host, self.buttons);
         if self.last_caption != Some(caption) {
             if let Some(main) = self.main() {
                 main.set_caption(caption, cx);
@@ -801,6 +1014,8 @@ impl Render for Shell {
             ShowProfiles => Action::ShowProfiles,
             ShowSettings => Action::ShowSettings,
             ShowIdentity => Action::ShowIdentity,
+            ShowAbout => Action::ShowAbout,
+            ShowSearchSettings => Action::ShowSearchSettings,
         ]);
         let root = root.on_any_mouse_down(cx.listener(|this, _, _, cx| this.focus_shell(cx)));
         if let Some(error) = &self.error {
@@ -842,6 +1057,12 @@ fn address_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-x", Cut, c),
         KeyBinding::new("enter", Submit, c),
         KeyBinding::new("escape", Cancel, c),
+        KeyBinding::new("down", MenuDown, c),
+        KeyBinding::new("up", MenuUp, c),
+        KeyBinding::new("tab", FocusNextStop, c),
+        KeyBinding::new("tab", FocusNextStop, Some(BAR_BUTTON_CONTEXT)),
+        KeyBinding::new("shift-tab", FocusPreviousStop, Some(BAR_BUTTON_CONTEXT)),
+        KeyBinding::new("escape", Cancel, Some(BAR_BUTTON_CONTEXT)),
     ]
     .into_iter()
     .chain(
@@ -859,27 +1080,14 @@ fn address_bindings() -> Vec<KeyBinding> {
     .collect()
 }
 
-/// macOS: every Ctrl shortcut also works with Cmd, as Mac users expect.
+/// macOS: Morph's shortcuts use Cmd there (`Keymap::for_platform`).
 pub const MAC: bool = cfg!(target_os = "macos");
-
-/// `keystroke`, and on macOS (`mac`) its Cmd form for a Ctrl shortcut
-/// (not Ctrl+Tab: Cmd+Tab belongs to the system).
-pub fn platform_keystrokes(keystroke: &str, mac: bool) -> Vec<String> {
-    let mut out = vec![keystroke.to_string()];
-    if mac
-        && let Some(rest) = keystroke.strip_prefix("ctrl-")
-        && !rest.ends_with("tab")
-    {
-        out.push(format!("cmd-{rest}"));
-    }
-    out
-}
 
 /// Keys the shell takes even while a page has focus: every bound shortcut
 /// (Ctrl+F opens the find bar). Everything else (Ctrl+C/V/X/A/Z, arrows,
 /// Page Up/Down, Space, Tab, keypad) goes to the page.
 fn page_shortcuts(keymap: &Keymap) -> Vec<String> {
-    keymap.bindings().iter().flat_map(|b| platform_keystrokes(&b.keystroke, MAC)).map(|k| canonical(&k)).collect()
+    keymap.bindings().iter().map(|b| canonical(&b.keystroke)).collect()
 }
 
 /// `keystroke` with its modifiers in one order (ctrl, alt, shift, cmd), the
@@ -898,29 +1106,40 @@ pub fn canonical(keystroke: &str) -> String {
     out
 }
 
-/// The action for a shortcut a page reported. On macOS a Cmd shortcut is
-/// its Ctrl binding's (the keymap lists the Ctrl form).
-fn page_action(keymap: &Keymap, key: &str, mac: bool) -> Option<Action> {
+/// The action for a shortcut a page reported (the keymap already has each
+/// platform's modifier).
+fn page_action(keymap: &Keymap, key: &str) -> Option<Action> {
     let key = canonical(key);
-    let find = |k: &str| keymap.bindings().iter().find(|b| canonical(&b.keystroke) == k).map(|b| b.action);
-    find(&key).or_else(|| {
-        let rest = key.strip_prefix("cmd-").map(str::to_string).or_else(|| key.contains("-cmd-").then(|| key.replacen("-cmd-", "-", 1)))?;
-        (mac && !key.contains("ctrl-") && !rest.ends_with("tab")).then(|| find(&canonical(&format!("ctrl-{rest}")))).flatten()
-    })
+    keymap.bindings().iter().find(|b| canonical(&b.keystroke) == key).map(|b| b.action)
 }
 
 /// Open the window and run until it closes.
+/// URLs the OS asked the running app to open (macOS Apple Events: links
+/// and weirdnet-morph:// clicked elsewhere), until the shell's tick takes
+/// them.
+static OPENED_URLS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn take_opened_urls() -> Vec<String> {
+    OPENED_URLS.lock().map(|mut urls| std::mem::take(&mut *urls)).unwrap_or_default()
+}
+
 pub fn run(home: PathBuf, args: Args, listener: Option<crate::single::Listener>) {
-    gpui_platform::application().run(move |cx: &mut App| {
-        let keymap = Keymap::default();
+    let app = gpui_platform::application();
+    app.on_open_urls(|urls| {
+        if let Ok(mut opened) = OPENED_URLS.lock() {
+            opened.extend(urls);
+        }
+    });
+    app.run(move |cx: &mut App| {
+        // On macOS every shortcut uses Cmd (`Keymap::for_platform`).
+        let keymap = Keymap::default().for_platform(MAC);
         let mut bindings = address_bindings();
         bindings.extend(crate::text_input::bindings());
         for binding in keymap.bindings() {
-            for keystroke in platform_keystrokes(&binding.keystroke, MAC) {
-                match KeyBinding::load(&keystroke, gpui_action(binding.action), None, false, None, cx) {
-                    Ok(b) => bindings.push(b),
-                    Err(e) => eprintln!("morph: ignoring key {keystroke}: {e:?}"),
-                }
+            let keystroke = &binding.keystroke;
+            match KeyBinding::load(keystroke, gpui_action(binding.action), None, false, None, cx) {
+                Ok(b) => bindings.push(b),
+                Err(e) => eprintln!("morph: ignoring key {keystroke}: {e:?}"),
             }
         }
         cx.bind_keys(bindings);
@@ -950,9 +1169,15 @@ pub fn run(home: PathBuf, args: Args, listener: Option<crate::single::Listener>)
             window_min_size: Some(size(px(480.), px(320.))),
             // Frameless where the desktop can draw it (a compositor runs):
             // the tab row is the caption. GPUI keeps server decorations
-            // otherwise. macOS and Windows keep their own title bar and
-            // window buttons.
+            // otherwise. macOS and Windows hide the system title bar: the
+            // top row (tabs, or the toolbar) is the caption, with the traffic
+            // lights inset on macOS and Morph's own buttons on Windows.
             window_decorations: Some(if cfg!(target_os = "linux") { WindowDecorations::Client } else { WindowDecorations::Server }),
+            titlebar: (!cfg!(target_os = "linux")).then(|| gpui::TitlebarOptions {
+                title: None,
+                appears_transparent: true,
+                traffic_light_position: Some(gpui::point(px(12.), px(11.))),
+            }),
             ..Default::default()
         };
         let start = args.open.clone().unwrap_or_default();
@@ -1023,31 +1248,32 @@ mod tests {
     }
 
     #[test]
-    fn mac_shortcuts_also_take_cmd() {
-        assert_eq!(platform_keystrokes("ctrl-t", false), ["ctrl-t"]);
-        assert_eq!(platform_keystrokes("ctrl-t", true), ["ctrl-t", "cmd-t"]);
-        assert_eq!(platform_keystrokes("ctrl-shift-g", true), ["ctrl-shift-g", "cmd-shift-g"]);
-        assert_eq!(platform_keystrokes("ctrl-tab", true), ["ctrl-tab"]);
-        assert_eq!(platform_keystrokes("ctrl-shift-tab", true), ["ctrl-shift-tab"]);
-        assert_eq!(platform_keystrokes("f5", true), ["f5"]);
-    }
-
-    #[test]
     fn page_shortcuts_match_whatever_order_the_modifiers_come_in() {
         assert_eq!(canonical("cmd-shift-l"), "shift-cmd-l");
         assert_eq!(canonical("shift-ctrl-o"), "ctrl-shift-o");
         assert_eq!(canonical("ctrl--"), "ctrl--");
         assert_eq!(canonical("f3"), "f3");
-        let keymap = Keymap::default();
+        let mac = Keymap::default().for_platform(true);
         // What the page script sends on macOS for Cmd+Shift+L and Cmd+T.
-        assert_eq!(page_action(&keymap, "shift-cmd-l", true), Some(Action::ShowIdentity));
-        assert_eq!(page_action(&keymap, "cmd-t", true), Some(Action::NewTab));
-        assert_eq!(page_action(&keymap, "ctrl-shift-l", true), Some(Action::ShowIdentity));
-        assert_eq!(page_action(&keymap, "shift-cmd-l", false), None, "Cmd is not Ctrl off macOS");
-        assert_eq!(page_action(&keymap, "cmd-tab", true), None);
-        // Every shortcut the page is told about leads back to an action.
-        for key in page_shortcuts(&keymap) {
-            assert!(page_action(&keymap, &key, MAC).is_some(), "{key}");
+        assert_eq!(page_action(&mac, "shift-cmd-l"), Some(Action::ShowIdentity));
+        assert_eq!(page_action(&mac, "cmd-t"), Some(Action::NewTab));
+        let other = Keymap::default().for_platform(false);
+        assert_eq!(page_action(&other, "shift-cmd-l"), None, "Cmd is not Ctrl off macOS");
+        assert_eq!(page_action(&other, "shift-ctrl-l"), Some(Action::ShowIdentity));
+        for keymap in [mac, other] {
+            for key in page_shortcuts(&keymap) {
+                assert!(page_action(&keymap, &key).is_some(), "{key}");
+            }
+        }
+    }
+
+    #[test]
+    fn every_platform_key_parses_for_gpui() {
+        for keymap in [Keymap::default().for_platform(true), Keymap::default().for_platform(false)] {
+            for b in keymap.bindings() {
+                assert!(gpui::Keystroke::parse(Box::leak(b.keystroke.clone().into_boxed_str())).is_ok(), "{}", b.keystroke);
+                assert_eq!(page_action(&keymap, &canonical(&b.keystroke)), Some(b.action), "{}", b.keystroke);
+            }
         }
     }
 

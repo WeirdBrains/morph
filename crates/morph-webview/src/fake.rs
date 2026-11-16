@@ -4,7 +4,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::{Backend, Event, Frame, Input, Rect, Result, Spec, ViewId, WebView};
+use crate::{Backend, Event, Frame, Input, MenuChoice, Rect, Result, Spec, ViewId, WebView};
 
 /// A call a fake web view received.
 #[derive(Debug, Clone, PartialEq)]
@@ -23,6 +23,9 @@ pub enum Call {
     FindClear,
     Terminate,
     Input(Input),
+    OptionMenu(MenuChoice),
+    ChooseFiles(Option<Vec<std::path::PathBuf>>),
+    ClearData,
     Dropped,
 }
 
@@ -217,6 +220,16 @@ impl WebView for FakeView {
     }
     fn input(&self, input: Input) {
         self.backend.record(self.id, Call::Input(input));
+    }
+    fn option_menu(&self, choice: MenuChoice) {
+        self.backend.record(self.id, Call::OptionMenu(choice));
+    }
+    fn choose_files(&self, paths: Option<Vec<std::path::PathBuf>>) {
+        self.backend.record(self.id, Call::ChooseFiles(paths));
+    }
+    fn clear_data(&self) -> crate::Result<()> {
+        self.backend.record(self.id, Call::ClearData);
+        Ok(())
     }
 }
 
