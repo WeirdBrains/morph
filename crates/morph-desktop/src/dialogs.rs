@@ -19,6 +19,8 @@ pub enum Ask {
     Folder,
     /// Where to save a new file, suggesting `name`.
     Save { name: String },
+    /// Where to save a download named `name`, starting in `dir`.
+    Download { dir: PathBuf, name: String },
 }
 
 /// The chosen paths (empty when the user cancelled), or why no dialog could open.
@@ -29,7 +31,7 @@ fn test_answer(ask: &Ask, open: Option<String>, dir: Option<String>) -> Option<V
     match ask {
         Ask::Open { .. } => open.map(|v| v.split(';').filter(|p| !p.is_empty()).map(PathBuf::from).collect()),
         Ask::Folder => dir.map(|d| vec![PathBuf::from(d)]),
-        Ask::Save { name } => dir.map(|d| vec![PathBuf::from(d).join(name)]),
+        Ask::Save { name } | Ask::Download { name, .. } => dir.map(|d| vec![PathBuf::from(d).join(name)]),
     }
 }
 
@@ -48,8 +50,13 @@ pub fn ask(cx: &App, ask: Ask) -> Answer {
         return Box::pin(async move { Ok(paths) });
     }
     match ask {
-        Ask::Save { name } => {
-            let rx = cx.prompt_for_new_path(&start_dir(), Some(&name));
+        Ask::Save { .. } | Ask::Download { .. } => {
+            let (dir, name) = match ask {
+                Ask::Download { dir, name } if dir.is_dir() => (dir, name),
+                Ask::Save { name } | Ask::Download { name, .. } => (start_dir(), name),
+                _ => unreachable!(),
+            };
+            let rx = cx.prompt_for_new_path(&dir, Some(&name));
             Box::pin(async move {
                 match rx.await {
                     Ok(Ok(Some(path))) => Ok(vec![path]),
@@ -89,6 +96,10 @@ mod tests {
         assert_eq!(test_answer(&Ask::Open { multiple: true }, open.clone(), None), Some(vec![PathBuf::from("/a/x.txt"), PathBuf::from("/b/y.txt")]));
         assert_eq!(test_answer(&Ask::Folder, None, dir.clone()), Some(vec![PathBuf::from("/tmp/pick")]));
         assert_eq!(test_answer(&Ask::Save { name: "w.txt".into() }, None, dir), Some(vec![PathBuf::from("/tmp/pick/w.txt")]));
+        assert_eq!(
+            test_answer(&Ask::Download { dir: "/d".into(), name: "a.bin".into() }, None, Some("/tmp/pick".into())),
+            Some(vec![PathBuf::from("/tmp/pick/a.bin")])
+        );
         assert_eq!(test_answer(&Ask::Save { name: "w.txt".into() }, open, None), None, "no dir hook: a real dialog");
     }
 }
