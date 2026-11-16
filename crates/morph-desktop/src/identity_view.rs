@@ -84,6 +84,13 @@ impl IdentityView {
     pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.model.cancel();
         self.model.reload();
+        // Smoke checks open a QR screen without keys (macOS and Windows
+        // runners may not send them): `offer` (no identity) or `add`.
+        match (std::env::var("MORPH_TEST_IDENTITY").as_deref(), &self.model.step) {
+            (Ok("offer"), Step::Choose) => self.model.start_offer(),
+            (Ok("add"), Step::Overview) => self.model.start(Step::AddDevice),
+            _ => {}
+        }
         self.enter_step(window, cx);
         cx.emit(ShellRequest::FocusShell);
     }
