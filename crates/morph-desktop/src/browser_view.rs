@@ -501,8 +501,18 @@ impl BrowserView {
         }
         self.caption_pressed = event.click_count < 2;
         if event.click_count >= 2 {
-            window.zoom_window();
+            if self.caption == Some(WindowButtons::Native) {
+                // What the user set for a title bar double click (zoom or minimize).
+                window.titlebar_double_click();
+            } else {
+                window.zoom_window();
+            }
         }
+    }
+
+    /// Room for the macOS traffic lights at the start of the top row.
+    fn traffic_lights(&self) -> bool {
+        self.caption == Some(WindowButtons::Native)
     }
 
     fn caption_mouse_move(&mut self, event: &MouseMoveEvent, window: &mut Window, _cx: &mut Context<Self>) {
@@ -520,7 +530,7 @@ impl BrowserView {
 
     /// Minimize, maximize and close (or close alone on tiling desktops).
     fn window_controls(&self, cx: &mut Context<Self>) -> Option<gpui::Div> {
-        let buttons = self.caption?;
+        let buttons = self.caption.filter(|b| *b != WindowButtons::Native)?;
         let t = self.theme;
         // The hover colour is the control's own: GPUI takes one hover style.
         let control = |id: &'static str, label: &'static str, hover: u32| {
@@ -541,11 +551,23 @@ impl BrowserView {
         let mut row = div().flex().flex_row().items_center().gap(px(2.)).pl(px(8.));
         if buttons == WindowButtons::All {
             row = row
-                .child(control("window-minimize", "—", t.surface_variant).on_click(|_, window, _| window.minimize_window()))
-                .child(control("window-maximize", "□", t.surface_variant).on_click(|_, window, _| window.zoom_window()));
+                .child(
+                    control("window-minimize", "—", t.surface_variant)
+                        .window_control_area(gpui::WindowControlArea::Min)
+                        .on_click(|_, window, _| window.minimize_window()),
+                )
+                .child(
+                    control("window-maximize", "□", t.surface_variant)
+                        .window_control_area(gpui::WindowControlArea::Max)
+                        .on_click(|_, window, _| window.zoom_window()),
+                );
         }
         let _ = cx;
-        Some(row.child(control("window-close", "×", t.error).on_click(|_, window, _| window.remove_window())))
+        // Windows answers its own hit test with the control areas (snap
+        // layouts on maximize); elsewhere the clicks do the work.
+        Some(row.child(
+            control("window-close", "×", t.error).window_control_area(gpui::WindowControlArea::Close).on_click(|_, window, _| window.remove_window()),
+        ))
     }
 
     /// Show `text` at the bottom for a few seconds, with `action` offered.
@@ -1171,6 +1193,7 @@ impl BrowserView {
             .when(self.strip != TabStrip::Bottom, |d| d.items_end())
             .h(px(TAB_STRIP_HEIGHT))
             .px(px(6.))
+            .when(self.strip == TabStrip::Top && self.traffic_lights(), |d| d.pl(px(morph_ui::chrome::TRAFFIC_LIGHTS_INSET)))
             .gap(px(2.))
             .bg(rgb(t.background))
             .children(tabs.into_iter().enumerate().map(|(index, tab)| self.tab_item(index, tab, cx)))
@@ -1181,7 +1204,13 @@ impl BrowserView {
                     .on_mouse_move(cx.listener(Self::caption_mouse_move))
                     .on_mouse_up(MouseButton::Left, cx.listener(Self::caption_mouse_up))
             })
-            .child(div().flex_1().h_full())
+            .child(
+                div()
+                    .id("tab-strip-space")
+                    .flex_1()
+                    .h_full()
+                    .when(self.strip == TabStrip::Top, |d| d.window_control_area(gpui::WindowControlArea::Drag)),
+            )
             .child(collapse)
             .when(self.strip == TabStrip::Top, |d| d.children(self.window_controls(cx).map(|c| c.h_full().items_center())))
     }
@@ -1198,6 +1227,7 @@ impl BrowserView {
             .w(px(width as f32))
             .h_full()
             .bg(rgb(t.background))
+            .when(self.traffic_lights() && matches!(self.strip, TabStrip::Side { left: true, .. }), |d| d.pt(px(28.)))
             .child(
                 div()
                     .id("tab-list")
@@ -1234,11 +1264,19 @@ impl BrowserView {
             .gap(px(4.))
             .h(px(TOOLBAR_HEIGHT))
             .px(px(8.))
+            .when(self.traffic_lights() && matches!(self.strip, TabStrip::Bottom | TabStrip::Side { left: false, .. }), |d| {
+                d.pl(px(morph_ui::chrome::TRAFFIC_LIGHTS_INSET))
+            })
             .bg(rgb(t.surface))
             .when(!self.strip.is_caption(), |d| {
                 d.on_mouse_down(MouseButton::Left, cx.listener(Self::caption_mouse_down))
                     .on_mouse_move(cx.listener(Self::caption_mouse_move))
                     .on_mouse_up(MouseButton::Left, cx.listener(Self::caption_mouse_up))
+            })
+            // Windows moves a window only through its hit test: an empty
+            // grip at the start of the toolbar when the toolbar is the top row.
+            .when(cfg!(windows) && !self.strip.is_caption(), |d| {
+                d.child(div().id("toolbar-grip").w(px(14.)).h_full().window_control_area(gpui::WindowControlArea::Drag))
             })
             .child(self.button("back", "←", state.can_back).on_click(cx.listener(|this, _, w, cx| {
                 this.dispatch(Action::Back, w, cx);
