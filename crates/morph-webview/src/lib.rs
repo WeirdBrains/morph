@@ -13,11 +13,11 @@
 use std::path::PathBuf;
 use std::rc::Rc;
 
+#[cfg(target_os = "linux")]
+pub mod appearance;
 pub mod fake;
 pub mod keys;
 pub mod native_page;
-#[cfg(target_os = "linux")]
-pub mod appearance;
 #[cfg(target_os = "linux")]
 pub mod offscreen;
 #[cfg(target_os = "linux")]
@@ -32,8 +32,9 @@ pub fn engine_version() -> String {
     #[cfg(target_os = "linux")]
     {
         // SAFETY: these return constants of the loaded library.
-        let (major, minor, micro) =
-            unsafe { (webkit2gtk::ffi::webkit_get_major_version(), webkit2gtk::ffi::webkit_get_minor_version(), webkit2gtk::ffi::webkit_get_micro_version()) };
+        let (major, minor, micro) = unsafe {
+            (webkit2gtk::ffi::webkit_get_major_version(), webkit2gtk::ffi::webkit_get_minor_version(), webkit2gtk::ffi::webkit_get_micro_version())
+        };
         format!("WebKitGTK {major}.{minor}.{micro}")
     }
     #[cfg(target_os = "macos")]

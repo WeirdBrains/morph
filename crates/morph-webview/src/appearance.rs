@@ -155,8 +155,9 @@ pub fn start() -> Scheme {
                 }
             },
         );
-        // The subscription lasts as long as Morph does.
-        std::mem::forget(id);
+        // The subscription lasts as long as Morph does: the id is never
+        // unsubscribed and the connection is kept alive.
+        let _ = id;
         std::mem::forget(bus);
     }
     scheme

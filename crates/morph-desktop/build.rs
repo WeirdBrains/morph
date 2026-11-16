@@ -28,13 +28,21 @@ fn main() {
     println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
     if let Some(dir) = git(&["rev-parse", "--git-dir"]) {
         let dir = std::path::Path::new(&dir);
-        let dir = if dir.is_absolute() { dir.to_path_buf() } else { std::path::Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap_or_default()).join(dir) };
+        let dir = if dir.is_absolute() {
+            dir.to_path_buf()
+        } else {
+            std::path::Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap_or_default()).join(dir)
+        };
         println!("cargo:rerun-if-changed={}", dir.join("HEAD").display());
         if let Some(head) = git(&["symbolic-ref", "-q", "HEAD"]) {
             println!("cargo:rerun-if-changed={}", dir.join(head).display());
         }
     }
-    let commit = std::env::var("MORPH_GIT_COMMIT").ok().filter(|s| !s.is_empty()).or_else(|| git(&["rev-parse", "--short=12", "HEAD"])).unwrap_or_else(|| "unknown".into());
+    let commit = std::env::var("MORPH_GIT_COMMIT")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| git(&["rev-parse", "--short=12", "HEAD"]))
+        .unwrap_or_else(|| "unknown".into());
     let secs = std::env::var("SOURCE_DATE_EPOCH")
         .ok()
         .and_then(|s| s.trim().parse::<i64>().ok())

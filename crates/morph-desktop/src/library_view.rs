@@ -59,9 +59,11 @@ impl LibraryView {
                     }
                 }
                 TextInputEvent::Cancel => cx.emit(ShellRequest::ClosePanel),
+                TextInputEvent::Tab { .. } => {}
             }),
             cx.subscribe_in(&password, window, |this, input, event, window, cx| match event {
                 TextInputEvent::Submit { .. } => this.unlock(window, cx),
+                TextInputEvent::Tab { .. } => {}
                 TextInputEvent::Cancel => cx.emit(ShellRequest::ClosePanel),
                 TextInputEvent::Changed => {
                     let _ = input;
@@ -74,6 +76,7 @@ impl LibraryView {
                     cx.notify();
                 }
                 TextInputEvent::Changed => {}
+                TextInputEvent::Tab { .. } => {}
             }),
         ];
         let mut view = Self {

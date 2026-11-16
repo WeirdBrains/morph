@@ -160,6 +160,24 @@ pub fn recovery_words(profile_dir: &Path, password: &SecretString) -> Result<Zer
     Ok(to_words(&open_seed(profile_dir, password)?)?)
 }
 
+/// The identity's seed split into `count` paper shards, any `threshold` of
+/// which rebuild it (Shamir, weirdnet-keys text form, so Muninn reads them
+/// too), after checking the password. One shard alone tells nothing.
+pub fn shards(profile_dir: &Path, password: &SecretString, threshold: usize, count: usize) -> Result<Vec<Zeroizing<String>>> {
+    Ok(weirdnet_keys::shards::split(&crate::profile(), &open_seed(profile_dir, password)?, threshold, count)?)
+}
+
+/// The recovery words that enough `shards` of one set rebuild.
+pub fn words_from_shards(shards: &[String]) -> Result<Zeroizing<String>> {
+    Ok(to_words(&weirdnet_keys::shards::combine(&crate::profile(), shards)?)?)
+}
+
+/// A shard's set id, threshold and number (no secret parts), or `None` for
+/// text that is not a shard.
+pub fn shard_meta(shard: &str) -> Option<(String, usize, u32)> {
+    weirdnet_keys::shards::meta(&crate::profile(), shard).ok()
+}
+
 pub(crate) fn open_seed(profile_dir: &Path, password: &SecretString) -> Result<Key32> {
     let identity = load(profile_dir)?.ok_or_else(|| Error::Message("this profile has no identity yet".into()))?;
     let raw = fs::read(sealed_path(profile_dir))?;

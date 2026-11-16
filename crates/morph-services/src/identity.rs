@@ -61,6 +61,13 @@ pub fn recovery_words(home: &Path, profile_id: &str, password: &SecretString) ->
     profile_identity::recovery_words(&dir, password).map_err(Error::failed)
 }
 
+/// `profile_id`'s identity split into `count` paper shards, any `threshold`
+/// of which rebuild it, after checking the profile password.
+pub fn shards(home: &Path, profile_id: &str, password: &SecretString, threshold: usize, count: usize) -> Result<Vec<Zeroizing<String>>> {
+    let dir = profile_dir(home, profile_id)?;
+    profile_identity::shards(&dir, password, threshold, count).map_err(Error::failed)
+}
+
 /// A backup of `profile_id`'s identity sealed under `backup_password` (an
 /// armored age file of its recovery words), after checking the profile password.
 pub fn export_backup(home: &Path, profile_id: &str, password: &SecretString, backup_password: &SecretString) -> Result<Zeroizing<String>> {

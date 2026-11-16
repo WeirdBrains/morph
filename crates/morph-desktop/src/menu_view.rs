@@ -63,7 +63,14 @@ pub fn menu(
     on_hover: RowHandler,
     on_click: RowHandler,
 ) -> Stateful<Div> {
-    let list = div().id(SharedString::from(format!("{id}-rows"))).flex().flex_col().overflow_y_scroll().track_scroll(scroll).max_h(px(max_height - 2.)).py(px(PADDING));
+    let list = div()
+        .id(SharedString::from(format!("{id}-rows")))
+        .flex()
+        .flex_col()
+        .overflow_y_scroll()
+        .track_scroll(scroll)
+        .max_h(px(max_height - 2.))
+        .py(px(PADDING));
     let list = list.children(rows.iter().enumerate().map(|(i, row)| {
         let lit = highlighted == Some(i) && row.enabled && !row.header;
         let (hover, click) = (on_hover.clone(), on_click.clone());
@@ -89,11 +96,7 @@ pub fn menu(
             .child(div().w(px(10.)).text_color(rgb(t.accent)).child(if row.checked { "✓" } else { "" }))
             .child(div().flex_1().overflow_hidden().whitespace_nowrap().child(row.label.clone()))
             .when(!row.detail.is_empty(), |d| d.child(div().text_size(px(12.)).text_color(rgb(t.text_secondary)).child(row.detail.clone())));
-        div()
-            .flex()
-            .flex_col()
-            .when(row.separator, |d| d.child(div().h(px(1.)).my(px(4.)).bg(rgb(t.surface_variant))))
-            .child(line)
+        div().flex().flex_col().when(row.separator, |d| d.child(div().h(px(1.)).my(px(4.)).bg(rgb(t.surface_variant)))).child(line)
     }));
     div()
         .id(id)
@@ -154,8 +157,20 @@ pub fn shortcut_label(keystroke: &str, mac: bool) -> String {
     let (mods, key) = parts.split_at(parts.len().saturating_sub(1));
     let key = match key.first().copied().unwrap_or("") {
         "," => ",".to_string(),
-        "left" => if mac { "←".into() } else { "Left".into() },
-        "right" => if mac { "→".into() } else { "Right".into() },
+        "left" => {
+            if mac {
+                "←".into()
+            } else {
+                "Left".into()
+            }
+        }
+        "right" => {
+            if mac {
+                "→".into()
+            } else {
+                "Right".into()
+            }
+        }
         "tab" => "Tab".into(),
         "escape" => "Esc".into(),
         k if k.len() == 1 => k.to_uppercase(),
@@ -240,7 +255,7 @@ mod more_tests {
 
     #[test]
     fn keys_map_to_list_keys() {
-        let k = |s: &str| gpui::Keystroke::parse(s).unwrap();
+        let k = |s: &'static str| gpui::Keystroke::parse(s).unwrap();
         assert_eq!(menu_key(&k("down")), Some(MenuKey::Down));
         assert_eq!(menu_key(&k("pageup")), Some(MenuKey::PageUp));
         assert_eq!(menu_key(&k("enter")), Some(MenuKey::Enter));

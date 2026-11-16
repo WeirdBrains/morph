@@ -6,11 +6,15 @@
 
 use std::path::{Path, PathBuf};
 
-use morph_identity::profile_identity::{ProfileIdentity, SecretString, Source, Zeroizing};
+use morph_identity::profile_identity::{self, ProfileIdentity, SecretString, Source, Zeroizing};
 use morph_services::device_link::{LinkState, Links};
 
 /// Shortest profile or backup password accepted.
 pub const MIN_PASSWORD: usize = 8;
+
+/// Paper shards: any `SHARD_THRESHOLD` of `SHARD_COUNT` rebuild the identity.
+pub const SHARD_THRESHOLD: usize = 3;
+pub const SHARD_COUNT: usize = 5;
 
 /// Where the panel is.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,6 +46,10 @@ pub enum Step {
     Reveal,
     RevealWords(String),
     Export,
+    /// Paper shards after the password.
+    Shards,
+    /// The shards, shown until the user leaves the step.
+    ShardList(Vec<String>),
     /// Send this profile's identity to a new device: password and its link.
     AddDevice,
     /// Paired with the new device; compare `sas` and send.
@@ -57,10 +65,36 @@ pub enum Step {
 pub struct Field {
     pub label: &'static str,
     pub masked: bool,
+    /// The button beside the field.
+    pub helper: Helper,
+}
+
+/// What fills a field besides typing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Helper {
+    None,
+    /// Paste from the clipboard.
+    Paste,
+    /// Choose files to open (a native picker; several allowed).
+    Open,
+    /// Choose where to save (a native Save dialog).
+    Save,
 }
 
 const fn field(label: &'static str, masked: bool) -> Field {
-    Field { label, masked }
+    Field { label, masked, helper: Helper::None }
+}
+
+const fn with(label: &'static str, helper: Helper) -> Field {
+    Field { label, masked: false, helper }
+}
+
+/// A secret the panel shows that can be copied or saved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Secret {
+    Words,
+    /// Shard number `n` (counting from 0).
+    Shard(usize),
 }
 
 /// What a submit did, for the host.
@@ -114,18 +148,18 @@ impl Identity {
         const PASSWORD: Field = field("Password for this profile", true);
         const NEW: Field = field("New password for this profile", true);
         const CREATE: &[Field] = &[field("New password (8 characters or more)", true), field("The same password again", true)];
-        const IMPORT: &[Field] = &[field("The 24 recovery words", false), NEW];
-        const RESTORE: &[Field] = &[field("Backup file (path)", false), field("The backup's password (empty if none)", true), NEW];
+        const IMPORT: &[Field] = &[with("The 24 recovery words, or enough shards", Helper::Paste), NEW];
+        const RESTORE: &[Field] = &[with("Backup, words or shard files", Helper::Open), field("The backup's password (empty if none)", true), NEW];
         const RECEIVED: &[Field] = &[NEW];
         const REVEAL: &[Field] = &[PASSWORD];
-        const EXPORT: &[Field] = &[PASSWORD, field("A password for the backup", true), field("Save the backup as (path)", false)];
-        const ADD: &[Field] = &[PASSWORD, field("The link the new device shows", false)];
+        const EXPORT: &[Field] = &[PASSWORD, field("A password for the backup", true), with("Save the backup as", Helper::Save)];
+        const ADD: &[Field] = &[PASSWORD, with("The link the new device shows", Helper::Paste)];
         match self.step {
             Step::Create => CREATE,
             Step::Import => IMPORT,
             Step::Restore => RESTORE,
             Step::Received { .. } => RECEIVED,
-            Step::Reveal => REVEAL,
+            Step::Reveal | Step::Shards => REVEAL,
             Step::Export => EXPORT,
             Step::AddDevice => ADD,
             _ => &[],
@@ -239,11 +273,29 @@ impl Identity {
                 self.done(identity, "Identity restored from its recovery words.")
             }
             Step::Restore => {
-                let path = expand_home(v(0).trim());
-                let contents = std::fs::read(&path).map_err(|e| format!("Could not read {}: {e}", path.display()))?;
+                let paths = split_paths(v(0));
+                if paths.is_empty() {
+                    return Err("Choose the backup file.".into());
+                }
+                let mut files = Vec::new();
+                for path in &paths {
+                    files.push(Zeroizing::new(std::fs::read(path).map_err(|e| format!("Could not read {}: {e}", path.display()))?));
+                }
+                let shards: Vec<String> = files.iter().flat_map(|f| find_shards(&String::from_utf8_lossy(f))).collect();
+                if !shards.is_empty() {
+                    let words = words_from_shards(&shards)?;
+                    let pw = new_password(v(2), None)?;
+                    let identity = morph_services::identity::import(&home, &profile, &words, &pw)
+                        .map_err(|e| format!("Those shards did not restore an identity: {e}"))?;
+                    return self.done(identity, "Identity restored from its shards.");
+                }
+                if paths.len() > 1 {
+                    return Err("Choose one backup file (several files only for shards).".into());
+                }
+                let contents = &files[0];
                 let backup_pw = (!v(1).is_empty()).then(|| SecretString::from(v(1).to_string()));
                 let pw = new_password(v(2), None)?;
-                let identity = morph_services::identity::restore_backup(&home, &profile, &contents, backup_pw.as_ref(), &pw)
+                let identity = morph_services::identity::restore_backup(&home, &profile, contents, backup_pw.as_ref(), &pw)
                     .map_err(|e| format!("Could not restore the backup: {e}"))?;
                 self.done(identity, "Identity restored from the backup.")
             }
@@ -266,8 +318,14 @@ impl Identity {
                 self.step = Step::RevealWords(words.to_string());
                 Ok(Outcome::Stay)
             }
-            Step::RevealWords(_) => {
+            Step::RevealWords(_) | Step::ShardList(_) => {
                 self.step = Step::Overview;
+                Ok(Outcome::Stay)
+            }
+            Step::Shards => {
+                let shards = morph_services::identity::shards(&home, &profile, &password(v(0)), SHARD_THRESHOLD, SHARD_COUNT)
+                    .map_err(|_| "Wrong password.".to_string())?;
+                self.step = Step::ShardList(shards.iter().map(|s| s.to_string()).collect());
                 Ok(Outcome::Stay)
             }
             Step::Export => {
@@ -281,7 +339,7 @@ impl Identity {
                 }
                 let armored = morph_services::identity::export_backup(&home, &profile, &password(v(0)), &backup_pw)
                     .map_err(|_| "Wrong password.".to_string())?;
-                write_private(&path, armored.as_bytes()).map_err(|e| format!("Could not write {}: {e}", path.display()))?;
+                write_private(&path, armored.as_bytes(), false).map_err(|e| format!("Could not write {}: {e}", path.display()))?;
                 self.step = Step::Overview;
                 self.notice = Some(format!("Backup saved to {}.", path.display()));
                 Ok(Outcome::Stay)
@@ -346,13 +404,129 @@ fn new_password(text: &str, again: Option<&str>) -> Result<SecretString, String>
     Ok(password(text))
 }
 
-/// The recovery words, normalised: 24 words separated by single spaces.
+/// The recovery words, normalised: 24 words separated by single spaces, or
+/// the words that the shards in `text` rebuild.
 fn recovery_words(text: &str) -> Result<Zeroizing<String>, String> {
+    let shards = find_shards(text);
+    if !shards.is_empty() {
+        return words_from_shards(&shards);
+    }
     let words: Vec<String> = text.split_whitespace().map(str::to_lowercase).collect();
     if words.len() != 24 {
         return Err(format!("A recovery phrase has 24 words; that has {}.", words.len()));
     }
     Ok(Zeroizing::new(words.join(" ")))
+}
+
+/// The shards in `text`: every word that reads as one.
+pub fn find_shards(text: &str) -> Vec<String> {
+    text.split_whitespace().filter(|w| profile_identity::shard_meta(w).is_some()).map(str::to_string).collect()
+}
+
+fn words_from_shards(shards: &[String]) -> Result<Zeroizing<String>, String> {
+    profile_identity::words_from_shards(shards).map_err(|e| format!("Those shards did not rebuild the identity: {e}"))
+}
+
+/// The paths in a file field: one per line or separated by `;` (a picker
+/// that chose several fills it that way), `~/` expanded.
+pub fn split_paths(text: &str) -> Vec<PathBuf> {
+    text.split(['\n', ';']).map(str::trim).filter(|p| !p.is_empty()).map(expand_home).collect()
+}
+
+/// A file field's text for the paths a picker chose.
+pub fn join_paths(paths: &[PathBuf]) -> String {
+    paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join("; ")
+}
+
+/// The profile's name as a file name part (`My Stuff!` to `my-stuff`).
+fn slug(profile_name: &str) -> String {
+    let slug: String = profile_name.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' }).collect();
+    let slug = slug.trim_matches('-');
+    if slug.is_empty() { "profile".into() } else { slug.into() }
+}
+
+impl Identity {
+    /// `secret` as clipboard text (the bare words or shard).
+    pub fn secret_text(&self, secret: Secret) -> Option<Zeroizing<String>> {
+        match (&self.step, secret) {
+            (Step::Words(w) | Step::RevealWords(w), Secret::Words) => Some(Zeroizing::new(w.clone())),
+            (Step::ShardList(shards), Secret::Shard(n)) => shards.get(n).map(|s| Zeroizing::new(s.clone())),
+            _ => None,
+        }
+    }
+
+    /// The file name to suggest when saving `secret`.
+    pub fn file_name(&self, secret: Secret) -> String {
+        let slug = slug(&self.profile_name);
+        match secret {
+            Secret::Words => format!("morph-recovery-words-{slug}.txt"),
+            Secret::Shard(n) => format!("morph-shard-{slug}-{}-of-{}.txt", n + 1, self.shard_count()),
+        }
+    }
+
+    fn shard_count(&self) -> usize {
+        match &self.step {
+            Step::ShardList(s) => s.len(),
+            _ => 0,
+        }
+    }
+
+    /// What a saved file of `secret` holds: a short note, then the secret on
+    /// its own line (restore finds it there).
+    pub fn file_text(&self, secret: Secret) -> Option<Zeroizing<String>> {
+        let text = self.secret_text(secret)?;
+        let name = &self.profile_name;
+        Some(Zeroizing::new(match secret {
+            Secret::Words => format!(
+                "Morph recovery words for the profile \"{name}\".\nAnyone with these 24 words has the identity. Keep them offline: print this, then delete the file.\n\n{}\n",
+                text.as_str()
+            ),
+            Secret::Shard(n) => {
+                let k = profile_identity::shard_meta(&text).map(|m| m.1).unwrap_or(SHARD_THRESHOLD);
+                format!(
+                    "Morph identity shard {} of {} for the profile \"{name}\". Any {k} of the {} shards rebuild the identity; one alone tells nothing.\nGive each shard to a different person or place, and keep it offline.\n\n{}\n",
+                    n + 1,
+                    self.shard_count(),
+                    self.shard_count(),
+                    text.as_str()
+                )
+            }
+        }))
+    }
+
+    /// Save `secret` to `path` (the user chose it in a Save dialog, which
+    /// already asked about replacing a file).
+    pub fn save_secret(&mut self, secret: Secret, path: &Path) {
+        let Some(text) = self.file_text(secret) else {
+            return;
+        };
+        self.error = None;
+        match write_private(path, text.as_bytes(), true) {
+            Ok(()) => self.notice = Some(format!("Saved to {}. Keep it offline; anyone with it has your identity.", path.display())),
+            Err(e) => self.error = Some(format!("Could not write {}: {e}", path.display())),
+        }
+    }
+
+    /// Save every shard into `dir`, one file each; refuses to replace files.
+    pub fn save_all_shards(&mut self, dir: &Path) {
+        self.error = None;
+        let count = self.shard_count();
+        if let Some(taken) = (0..count).map(|n| dir.join(self.file_name(Secret::Shard(n)))).find(|p| p.exists()) {
+            self.error = Some(format!("{} already exists; choose another folder.", taken.display()));
+            return;
+        }
+        for n in 0..count {
+            let path = dir.join(self.file_name(Secret::Shard(n)));
+            let Some(text) = self.file_text(Secret::Shard(n)) else {
+                return;
+            };
+            if let Err(e) = write_private(&path, text.as_bytes(), false) {
+                self.error = Some(format!("Could not write {}: {e}", path.display()));
+                return;
+            }
+        }
+        self.notice = Some(format!("Saved {count} shard files in {}. Give each to a different person or place.", dir.display()));
+    }
 }
 
 /// `~/x` to the home directory's `x`.
@@ -366,16 +540,19 @@ fn expand_home(path: &str) -> PathBuf {
 
 /// `~/morph-<profile>-identity-backup.txt`, the export's suggested name.
 fn suggested_backup_path(profile_name: &str) -> String {
-    let slug: String = profile_name.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' }).collect();
-    let slug = slug.trim_matches('-');
-    format!("~/morph-{}-identity-backup.txt", if slug.is_empty() { "profile" } else { slug })
+    format!("~/morph-{}-identity-backup.txt", slug(profile_name))
 }
 
-/// Write a new file only the user can read.
-fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+/// Write a file only the user can read: a new one, or (`replace`) over an
+/// old one.
+fn write_private(path: &Path, bytes: &[u8], replace: bool) -> std::io::Result<()> {
     use std::io::Write;
     let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
+    if replace {
+        options.write(true).create(true).truncate(true);
+    } else {
+        options.write(true).create_new(true);
+    }
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
     // Windows: a new file in the user's profile inherits the profile's ACL
@@ -536,6 +713,62 @@ mod tests {
         assert_eq!(new.submit(&s(&["new password"])), Outcome::IdentityChanged, "{:?}", new.error);
         assert_eq!(new.identity.as_ref().unwrap().user_id, old.identity.as_ref().unwrap().user_id);
         assert_eq!(new.identity.as_ref().unwrap().source, Source::Linked);
+    }
+
+    #[test]
+    fn shards_save_one_file_each_and_any_three_restore() {
+        let (t, home) = home();
+        morph_core::profiles::create(&home, "Spare").unwrap();
+        let mut id = Identity::new(&home, "p1", "Work", links());
+        id.start(Step::Create);
+        id.submit(&s(&["long enough", "long enough"]));
+        let Step::Words(words) = id.step.clone() else { panic!() };
+        assert_eq!(id.secret_text(Secret::Words).unwrap().as_str(), words);
+        assert_eq!(id.file_name(Secret::Words), "morph-recovery-words-work.txt");
+        let words_file = t.path().join("words.txt");
+        id.save_secret(Secret::Words, &words_file);
+        let saved = std::fs::read_to_string(&words_file).unwrap();
+        assert!(saved.contains(&words) && saved.contains("offline"), "{saved}");
+        id.submit(&[]);
+
+        id.start(Step::Shards);
+        id.submit(&s(&["wrong password"]));
+        assert_eq!(id.error.as_deref(), Some("Wrong password."));
+        id.submit(&s(&["long enough"]));
+        let Step::ShardList(shards) = id.step.clone() else { panic!("{:?}", id.error) };
+        assert_eq!(shards.len(), SHARD_COUNT);
+        assert_eq!(id.file_name(Secret::Shard(1)), "morph-shard-work-2-of-5.txt");
+        let dir = t.path().join("shards");
+        std::fs::create_dir(&dir).unwrap();
+        id.save_all_shards(&dir);
+        assert!(id.error.is_none(), "{:?}", id.error);
+        let files: Vec<PathBuf> = (1..=5).map(|n| dir.join(format!("morph-shard-work-{n}-of-5.txt"))).collect();
+        let second = std::fs::read_to_string(&files[1]).unwrap();
+        assert!(second.contains("shard 2 of 5") && second.contains("Any 3 of the 5") && second.contains(&shards[1]), "{second}");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&files[0]).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        id.save_all_shards(&dir);
+        assert!(id.error.as_deref().unwrap().contains("already exists"), "never replaces shard files");
+
+        // Two shards are not enough; three files restore another profile.
+        let mut spare = Identity::new(&home, "p2", "Spare", links());
+        spare.start(Step::Restore);
+        let two = join_paths(&files[..2]);
+        assert_eq!(spare.submit(&s(&[&two, "", "spare pass"])), Outcome::Stay);
+        assert!(spare.error.as_deref().unwrap().contains("did not rebuild"), "{:?}", spare.error);
+        let three = join_paths(&[files[4].clone(), files[0].clone(), files[2].clone()]);
+        assert_eq!(spare.submit(&s(&[&three, "", "spare pass"])), Outcome::IdentityChanged, "{:?}", spare.error);
+        assert_eq!(spare.identity.as_ref().unwrap().user_id, id.identity.as_ref().unwrap().user_id);
+
+        // Pasted shards in the words field work too.
+        let mut default = Identity::new(&home, "default", "Default", links());
+        default.start(Step::Import);
+        let pasted = format!("{}\n{}\n{}", shards[1], shards[3], shards[2]);
+        assert_eq!(default.submit(&s(&[&pasted, "other pass"])), Outcome::IdentityChanged, "{:?}", default.error);
+        assert_eq!(default.identity.as_ref().unwrap().user_id, id.identity.as_ref().unwrap().user_id);
     }
 
     #[test]

@@ -1028,6 +1028,16 @@ Michael: Weirdnet should register custom protocols such as `weirdnet-morph://` t
 applications such as Morph, so those links can be broadcast across the network
 without confusion and every Weirdnet app resolves them the same way.
 
+**What the scheme is for** _(added 2026-11-15)_. Michael: every app that uses
+Weirdnet registers a `weirdnet-<app>://` protocol with the OS, and that scheme
+is how the app's p2p parts call for a resource across the distributed net. A
+`weirdnet-<app>://` URL names a resource held by peers, not by a server; the
+app's handler resolves it through the scheme registry below and `weirdnet-net`,
+then fetches it from the peers that hold it. OS registration of
+`weirdnet-morph://` (Linux, macOS, Windows) ships in Morph alpha.10, first as
+routing only: the URL reaches the running Morph through the single-instance
+handoff, and unknown paths are logged without acting on them.
+
 This is a **Weirdnet** capability, not a Morph-only one. It lives in a new crate,
 `weirdnet-schemes` (W16). Libp2p stream protocol ids (`/morph/...`, W9) stay
 separate; this crate is only for URL schemes.

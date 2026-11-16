@@ -51,7 +51,11 @@ pub fn va_status(decoders: &[&str], legacy: bool, render_node: bool, ranked: boo
         return "off (no GPU render node)".into();
     }
     if decoders.is_empty() {
-        return if legacy { "gstreamer-vaapi only (Morph ranks the newer va decoders)".into() } else { "off (no GStreamer VA decoders; install gst-plugins-bad)".into() };
+        return if legacy {
+            "gstreamer-vaapi only (Morph ranks the newer va decoders)".into()
+        } else {
+            "off (no GStreamer VA decoders; install gst-plugins-bad)".into()
+        };
     }
     let names: Vec<&str> = decoders.iter().map(|d| d.trim_start_matches("va").trim_end_matches("dec")).collect();
     format!("on: {}{}", names.join(", "), if ranked { " (ranked first)" } else { " (not ranked: GST_PLUGIN_FEATURE_RANK or MORPH_VAAPI=0)" })

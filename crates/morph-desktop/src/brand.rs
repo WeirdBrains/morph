@@ -19,7 +19,12 @@ pub fn wordmark() -> Arc<gpui::Image> {
 /// and magenta pairs at 22% and 72% of the width.
 pub fn slices(width: f32, t: Theme) -> [(f32, f32, bool, u32); 4] {
     let (mid, mid2) = (width * 0.22, width * 0.72);
-    [(mid, mid + 28., true, t.accent), (mid + 18., mid + 52., false, t.accent_alt), (mid2, mid2 + 36., true, t.accent_alt), (mid2 - 16., mid2 + 12., false, t.accent)]
+    [
+        (mid, mid + 28., true, t.accent),
+        (mid + 18., mid + 52., false, t.accent_alt),
+        (mid2, mid2 + 36., true, t.accent_alt),
+        (mid2 - 16., mid2 + 12., false, t.accent),
+    ]
 }
 
 /// The rule, 3 px tall and as wide as its parent.

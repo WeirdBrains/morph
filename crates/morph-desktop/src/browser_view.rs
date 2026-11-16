@@ -16,8 +16,8 @@ use std::rc::Rc;
 use gpui::{
     App, Bounds, ClipboardItem, Context, Corners, CursorStyle, DispatchPhase, Entity, EntityInputHandler, FocusHandle, Focusable, Hitbox,
     HitboxBehavior, KeyDownEvent, KeyUpEvent, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
-    RenderImage, ScrollEvent, ScrollHandle, ShapedLine, SharedString, Subscription, UTF16Selection, Window, actions, anchored, canvas, deferred,
-    div, point, prelude::*, px, rgb, size,
+    RenderImage, ScrollEvent, ScrollHandle, ShapedLine, SharedString, Subscription, UTF16Selection, Window, actions, anchored, canvas, deferred, div,
+    point, prelude::*, px, rgb, size,
 };
 use morph_browser::{Browser, Config, Cover, MenuState};
 use morph_core::tabs::TabId;
@@ -160,6 +160,7 @@ impl BrowserView {
                     this.browser.set_find_query(&query);
                 }
                 TextInputEvent::Submit { back } => this.browser.find_next(!back),
+                TextInputEvent::Tab { .. } => {}
                 TextInputEvent::Cancel => this.close_find(window, cx),
             }
             cx.notify();
@@ -613,7 +614,14 @@ impl BrowserView {
     }
 
     /// Open a shell menu at `at` (window coordinates) and give it the keyboard.
-    fn open_shell_menu(&mut self, id: &'static str, entries: Vec<(Row, MenuCommand)>, at: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+    fn open_shell_menu(
+        &mut self,
+        id: &'static str,
+        entries: Vec<(Row, MenuCommand)>,
+        at: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.close_shell_menu(window, cx);
         let items = entries
             .iter()
@@ -953,6 +961,25 @@ impl BrowserView {
                         })),
                 )
             })
+            .child(
+                // The identity panel (Ctrl+Shift+L, ⌘⇧L on macOS) has a
+                // button too: a shortcut alone was easy to miss.
+                div()
+                    .id("identity")
+                    .px(px(10.))
+                    .h(px(28.))
+                    .flex()
+                    .items_center()
+                    .rounded(px(14.))
+                    .bg(rgb(t.surface_variant))
+                    .text_size(px(12.))
+                    .cursor_pointer()
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child("Identity")
+                    .on_click(cx.listener(|_, _, window, cx| {
+                        window.dispatch_action(Box::new(crate::shell::ShowIdentity), cx);
+                    })),
+            )
             .when(!self.profile_label.is_empty(), |d| {
                 let label: SharedString = self.profile_label.clone().into();
                 d.child(
@@ -977,15 +1004,17 @@ impl BrowserView {
                 let label: SharedString = if state.popups == 1 { "1 popup".into() } else { format!("{} popups", state.popups).into() };
                 d.child(div().px(px(8.)).text_size(px(12.)).text_color(rgb(t.accent_alt)).child(label))
             })
-            .child(self.button("main-menu-button", "☰", true).when(self.shell_menu.as_ref().is_some_and(|m| m.id == "main-menu"), |d| d.bg(rgb(t.surface_variant))).on_click(cx.listener(
-                |this, _, window, cx| {
-                    if this.shell_menu.as_ref().is_some_and(|m| m.id == "main-menu") {
-                        this.close_shell_menu(window, cx);
-                    } else {
-                        this.open_main_menu(window, cx);
-                    }
-                },
-            )))
+            .child(
+                self.button("main-menu-button", "☰", true)
+                    .when(self.shell_menu.as_ref().is_some_and(|m| m.id == "main-menu"), |d| d.bg(rgb(t.surface_variant)))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        if this.shell_menu.as_ref().is_some_and(|m| m.id == "main-menu") {
+                            this.close_shell_menu(window, cx);
+                        } else {
+                            this.open_main_menu(window, cx);
+                        }
+                    })),
+            )
             .when(!self.strip.is_caption(), |d| d.children(self.window_controls(cx)))
     }
 
@@ -1184,7 +1213,8 @@ impl BrowserView {
                 })
                 .collect();
             let anchor = ((area.x + a.x) as f32, (area.y + a.y) as f32, a.width as f32, a.height as f32);
-            let (x, y, w, h) = menu_view::place(anchor, (area.x as f32, area.y as f32, area.width as f32, area.height as f32), menu_view::natural_height(&rows));
+            let (x, y, w, h) =
+                menu_view::place(anchor, (area.x as f32, area.y as f32, area.width as f32, area.height as f32), menu_view::natural_height(&rows));
             if let Some(i) = menu.highlighted
                 && self.select_scrolled != Some(i)
             {
@@ -1194,10 +1224,12 @@ impl BrowserView {
             let this = cx.entity();
             let hover: menu_view::RowHandler = Rc::new({
                 let this = this.clone();
-                move |i, _, cx| this.update(cx, |view, cx| {
-                    view.browser.menu_hover(i);
-                    cx.notify();
-                })
+                move |i, _, cx| {
+                    this.update(cx, |view, cx| {
+                        view.browser.menu_hover(i);
+                        cx.notify();
+                    })
+                }
             });
             let click: menu_view::RowHandler = Rc::new(move |i, window, cx| {
                 this.update(cx, |view, cx| {
@@ -1257,17 +1289,13 @@ impl BrowserView {
                 .child(div().flex_1().font_family("monospace").child(value))
         });
         let link = |id: &'static str, label: &'static str, url: &'static str| {
-            div()
-                .id(id)
-                .text_color(rgb(t.accent))
-                .cursor_pointer()
-                .hover(|s| s.underline())
-                .child(label)
-                .on_click(cx.listener(move |this, _, window, cx| {
+            div().id(id).text_color(rgb(t.accent)).cursor_pointer().hover(|s| s.underline()).child(label).on_click(cx.listener(
+                move |this, _, window, cx| {
                     this.browser.new_tab(url);
                     this.sync_focus(window, cx);
                     cx.notify();
-                }))
+                },
+            ))
         };
         let notices = cx.listener(|this, _, window, cx| {
             if let Some(path) = crate::notices::write_page() {
@@ -1295,15 +1323,11 @@ impl BrowserView {
                     .child(div().w(px(560.)).child(crate::brand::glitch_rule(t)))
                     .child(div().text_size(px(14.)).text_color(rgb(t.text_secondary)).child("A browser that keeps your data yours."))
                     .child(div().w(px(560.)).flex().flex_col().gap(px(6.)).text_size(px(13.)).children(rows))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .gap(px(8.))
-                            .child(crate::widgets::button(t, "about-copy", "Copy diagnostics", true).on_click(cx.listener(|_, _, _, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(crate::about::diagnostics(&crate::about::lines())));
-                            }))),
-                    )
+                    .child(div().flex().flex_row().gap(px(8.)).child(crate::widgets::button(t, "about-copy", "Copy diagnostics", true).on_click(
+                        cx.listener(|_, _, _, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(crate::about::diagnostics(&crate::about::lines())));
+                        }),
+                    )))
                     .child(
                         div()
                             .flex()
@@ -1312,9 +1336,19 @@ impl BrowserView {
                             .text_size(px(13.))
                             .child(link("about-site", "Website", crate::about::WEBSITE))
                             .child(link("about-repo", "Source code", crate::about::REPOSITORY))
-                            .child(div().id("about-notices").text_color(rgb(t.accent)).cursor_pointer().hover(|s| s.underline()).child("Open-source notices").on_click(notices)),
+                            .child(
+                                div()
+                                    .id("about-notices")
+                                    .text_color(rgb(t.accent))
+                                    .cursor_pointer()
+                                    .hover(|s| s.underline())
+                                    .child("Open-source notices")
+                                    .on_click(notices),
+                            ),
                     )
-                    .child(div().text_size(px(11.)).text_color(rgb(t.text_secondary)).child("Morph is free software under the BSD 3-Clause license.")),
+                    .child(
+                        div().text_size(px(11.)).text_color(rgb(t.text_secondary)).child("Morph is free software under the BSD 3-Clause license."),
+                    ),
             )
             .into_any_element()
     }
@@ -1337,13 +1371,13 @@ impl BrowserView {
             .text_color(rgb(t.text_primary))
             .child(toast.text.clone());
         if let Some((label, action)) = toast.action {
-            bar = bar.child(div().id("toast-action").text_color(rgb(t.accent)).cursor_pointer().hover(|s| s.underline()).child(label).on_click(cx.listener(
-                move |this, _, window, cx| {
+            bar = bar.child(div().id("toast-action").text_color(rgb(t.accent)).cursor_pointer().hover(|s| s.underline()).child(label).on_click(
+                cx.listener(move |this, _, window, cx| {
                     this.toast = None;
                     window.dispatch_action(crate::shell::gpui_action(action), cx);
                     cx.notify();
-                },
-            )));
+                }),
+            ));
         }
         Some(bar.into_any_element())
     }
@@ -1512,12 +1546,20 @@ impl Render for BrowserView {
         let content = if matches!(self.strip, TabStrip::Side { .. }) { content.flex_1().h_full() } else { content.size_full() };
         let overlays = self.overlays(window, cx);
         let body = match self.strip {
-            TabStrip::Top => {
-                content.child(self.tab_strip(cx)).child(self.toolbar(cx)).children(self.find_bar(cx)).child(self.page_area(cx)).children(self.toast_bar(cx)).into_any_element()
-            }
-            TabStrip::Bottom => {
-                content.child(self.toolbar(cx)).children(self.find_bar(cx)).child(self.page_area(cx)).children(self.toast_bar(cx)).child(self.tab_strip(cx)).into_any_element()
-            }
+            TabStrip::Top => content
+                .child(self.tab_strip(cx))
+                .child(self.toolbar(cx))
+                .children(self.find_bar(cx))
+                .child(self.page_area(cx))
+                .children(self.toast_bar(cx))
+                .into_any_element(),
+            TabStrip::Bottom => content
+                .child(self.toolbar(cx))
+                .children(self.find_bar(cx))
+                .child(self.page_area(cx))
+                .children(self.toast_bar(cx))
+                .child(self.tab_strip(cx))
+                .into_any_element(),
             TabStrip::Side { left, width, collapsed } => {
                 let content = content.child(self.toolbar(cx)).children(self.find_bar(cx)).child(self.page_area(cx)).children(self.toast_bar(cx));
                 let list = self.tab_list(width, collapsed, cx);

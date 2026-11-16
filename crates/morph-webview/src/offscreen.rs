@@ -21,7 +21,9 @@ use gtk::prelude::*;
 use webkit2gtk::{FindControllerExt, FindOptions, HitTestResultExt, OptionMenuExt, WebViewExt};
 use wry::{WebContext, WebViewBuilder, WebViewBuilderExtUnix, WebViewExtUnix};
 
-use crate::wry_linux::{CONTROL_SCHEME_SCRIPT, FIND_MAX_MATCHES, Popups, Queue, UNDO_REDO_SCRIPT, attach_bridge, backend_err, popup_handler, watch, with_bridge};
+use crate::wry_linux::{
+    CONTROL_SCHEME_SCRIPT, FIND_MAX_MATCHES, Popups, Queue, UNDO_REDO_SCRIPT, attach_bridge, backend_err, popup_handler, watch, with_bridge,
+};
 use crate::{
     Backend, Event, Frame, Input, Key, MenuChoice, MenuItem, Modifiers, MouseButton, OptionMenu, PageBridge, PageCursor, Rect, Result, Spec, ViewId,
     WebView, keys,

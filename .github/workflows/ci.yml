@@ -225,7 +225,7 @@ jobs:
             dist/morph-*-universal-apple-darwin.zip
             dist/morph-*-universal-apple-darwin.dmg
             dist/SHA256SUMS-macos
-            dist/smoke-macos.png
+            dist/smoke-macos*.png
           if-no-files-found: warn
 
   # The GPUI desktop shell on Windows (WebView2 child views): clippy and the
@@ -279,7 +279,7 @@ jobs:
             dist/morph-*-x86_64-pc-windows-msvc.zip
             dist/morph-*-x86_64-pc-windows-msvc.msi
             dist/SHA256SUMS-windows
-            dist/smoke-windows.png
+            dist/smoke-windows*.png
           if-no-files-found: warn
 
   # The Nix flake: both packages (from the release in packaging/nix/release.json)

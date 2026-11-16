@@ -87,10 +87,12 @@ impl MenuState {
         let n = self.menu.items.len();
         let start = self.highlighted.unwrap_or(n.saturating_sub(1));
         // One letter repeated cycles through the rows starting with it.
-        let repeat = self.typed.chars().count() > 1 && self.typed.chars().all(|t| Some(t) == self.typed.chars().next());
+        let repeat = self.typed.chars().count() > 1 && self.typed.chars().all(|t| self.typed.starts_with(t));
         let prefix = if repeat { self.typed.chars().take(1).collect::<String>() } else { self.typed.clone() };
         let from = if self.typed.chars().count() == 1 || repeat { 1 } else { 0 };
-        (0..n).map(|k| (start + from + k) % n.max(1)).find(|&i| self.choosable(i) && self.menu.items[i].label.trim_start().to_lowercase().starts_with(&prefix))
+        (0..n)
+            .map(|k| (start + from + k) % n.max(1))
+            .find(|&i| self.choosable(i) && self.menu.items[i].label.trim_start().to_lowercase().starts_with(&prefix))
     }
 
     /// Highlight row `i` (the pointer is over it); `None` for a row that
