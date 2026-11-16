@@ -1475,7 +1475,7 @@ def error_page(m, r, win, top):
     # Back shows the page under the error page again, with the keyboard.
     m.key("y")
     back = wait_for(lambda: (state(m, tab=2) or {}).get("c") == "KeyY")
-    r.check("error", "Alt+Left leaves the error page for the page under it", back, f"{m.title(win)} {state(m, tab=2)}")
+    r.check("error", "Alt+Left leaves the error page for the page under it", back, f"{m.title(win)} {state(m, tab=2)} {focus_info(m)}")
 
 
 def main():
