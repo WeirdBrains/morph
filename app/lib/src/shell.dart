@@ -450,6 +450,10 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
     if (!mounted) {
       return;
     }
+    if (morphIsLinkInvite(url)) {
+      await _openLinkInvite(url);
+      return;
+    }
     if (_tabHasPage(tabs.activeId) || _showSwitcher) {
       _openTab();
     }
@@ -526,6 +530,7 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
   @override
   void dispose() {
     _catalogNotifier.dispose();
+    _linkInvite.dispose();
     unawaited(_linkSub?.cancel());
     WidgetsBinding.instance.removeObserver(this);
     morphSurfaceWatch.removeListener(_onOverlayClosed);
@@ -1041,6 +1046,60 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
     }
   }
 
+  /// The camera QR scanner, where there is one.
+  Future<String?> Function()? get _scanQr =>
+      widget.scanQr ?? (MorphQrScanner.available ? MorphQrScanner.scan : null);
+
+  /// Another device's device-link invite waiting for the onboarding's "Link
+  /// from another device" screen to answer it.
+  final _linkInvite = ValueNotifier<String?>(null);
+
+  /// Another device's device-link invite (scanned, opened as a link, or
+  /// scanned under Add a device): this device is the new one, so the
+  /// identity comes here. Only a profile without an identity can take it.
+  Future<void> _openLinkInvite(String invite) async {
+    if (!mounted) {
+      return;
+    }
+    final profileId = _profileId;
+    MorphIdentity? identity = _identity;
+    try {
+      identity = await widget.api.profileIdentity(profileId, home: _home);
+    } catch (_) {
+      // Keep what the shell knows.
+    }
+    if (!mounted || profileId != _profileId) {
+      return;
+    }
+    if (identity == null) {
+      _linkInvite.value = invite.trim();
+      await _openOnboarding();
+      return;
+    }
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        key: const Key('link-invite-has-identity'),
+        title: const Text('This profile already has an identity'),
+        content: Text(
+          'That code is from a device adding a new device. $_profileName '
+          'on this device already has an identity, so it cannot take '
+          'another one. Switch to a profile without an identity and open '
+          'the code again, or, to add the other device to this identity, '
+          'choose Link from another device there and scan its code here '
+          'under Add a device.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+    _onOverlayClosed();
+  }
+
   Future<void> _openOnboarding() async {
     if (_onboardingOpen || !mounted) {
       return;
@@ -1079,22 +1138,29 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
             Navigator.of(panel).pop();
           },
           onSkip: () => Navigator.of(panel).pop(),
-          linkFromDevice: (_) => MorphLinkFromDevice(
-            api: widget.api,
-            profileId: profileId,
-            home: home,
-            onDone: (identity) {
-              finished = true;
-              if (mounted && profileId == _profileId) {
-                setState(() => _identity = identity);
-              }
-              Navigator.of(panel).pop();
-            },
+          linkInvite: _linkInvite,
+          linkFromDevice: (_) => ValueListenableBuilder<String?>(
+            valueListenable: _linkInvite,
+            builder: (_, invite, _) => MorphLinkFromDevice(
+              api: widget.api,
+              profileId: profileId,
+              home: home,
+              scan: _scanQr,
+              invite: invite,
+              onDone: (identity) {
+                finished = true;
+                if (mounted && profileId == _profileId) {
+                  setState(() => _identity = identity);
+                }
+                Navigator.of(panel).pop();
+              },
+            ),
           ),
         ),
       );
     } finally {
       _onboardingOpen = false;
+      _linkInvite.value = null;
     }
     if (!finished) {
       _onboardingSkipped.add(profileId);
@@ -1238,10 +1304,12 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
               profileId: _profileId,
               profileName: _profileName,
               home: _home,
-              scan:
-                  widget.scanQr ??
-                  (MorphQrScanner.available ? MorphQrScanner.scan : null),
+              scan: _scanQr,
               onClose: () => Navigator.of(panel).pop(),
+              onInvite: (invite) {
+                Navigator.of(panel).pop();
+                unawaited(_openLinkInvite(invite));
+              },
             ),
           ),
         ),

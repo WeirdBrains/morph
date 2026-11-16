@@ -130,4 +130,34 @@ void main() {
     await sub.cancel();
     await links.dispose();
   });
+
+  test('device-link invites come through; other Morph links do not', () async {
+    expect(
+      MorphIncomingLinks.isOpenable('weirdnet-morph://invite/abc'),
+      isTrue,
+    );
+    expect(MorphIncomingLinks.isOpenable('weirdnet-morph://link/abc'), isFalse);
+    expect(MorphIncomingLinks.isOpenable('weirdnet-morph://peer/x'), isFalse);
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      return switch (call.method) {
+        'initialLink' => 'weirdnet-morph://invite/launch',
+        'initialShare' => null,
+        _ => throw StateError(call.method),
+      };
+    });
+    final links = MorphIncomingLinks(channel: channel);
+    expect(await links.initialLinks(), ['weirdnet-morph://invite/launch']);
+    final got = <String>[];
+    final sub = links.later.listen(got.add);
+    await messenger.handlePlatformMessage(
+      channel.name,
+      channel.codec.encodeMethodCall(
+        const MethodCall('open', 'weirdnet-morph://invite/later'),
+      ),
+      (_) {},
+    );
+    await Future<void>.delayed(Duration.zero);
+    expect(got, ['weirdnet-morph://invite/later']);
+    await sub.cancel();
+  });
 }

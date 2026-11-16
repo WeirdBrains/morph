@@ -119,6 +119,8 @@ class MorphLinkFromDevice extends StatefulWidget {
     required this.onDone,
     this.home,
     this.deviceName,
+    this.scan,
+    this.invite,
     this.pollEvery = const Duration(milliseconds: 500),
   });
 
@@ -128,6 +130,14 @@ class MorphLinkFromDevice extends StatefulWidget {
   final String? deviceName;
   final ValueChanged<MorphIdentity> onDone;
   final Duration pollEvery;
+
+  /// Opens the camera and returns the scanned text, for the other device's
+  /// invite (Add a device on the desktop); null hides the button.
+  final Future<String?> Function()? scan;
+
+  /// An invite that opened this screen (a scanned code or a
+  /// `weirdnet-morph://invite/…` link): answered as soon as the offer is up.
+  final String? invite;
 
   @override
   State<MorphLinkFromDevice> createState() => _MorphLinkFromDeviceState();
@@ -143,6 +153,9 @@ class _MorphLinkFromDeviceState extends State<MorphLinkFromDevice> {
   Timer? _poll;
   final _password = TextEditingController();
   final _confirm = TextEditingController();
+  final _invite = TextEditingController();
+  bool _answering = false;
+  bool _answered = false;
 
   @override
   void initState() {
@@ -166,8 +179,16 @@ class _MorphLinkFromDeviceState extends State<MorphLinkFromDevice> {
         unawaited(widget.api.linkNewDeviceCancel(offer.session));
         return;
       }
-      setState(() => _offer = offer);
+      setState(() {
+        _offer = offer;
+        _answered = false;
+      });
       _poll = Timer.periodic(widget.pollEvery, (_) => unawaited(_refresh()));
+      final invite = widget.invite;
+      if (invite != null && invite.trim().isNotEmpty) {
+        _invite.text = invite.trim();
+        await _answer();
+      }
     } catch (e) {
       if (mounted) {
         setState(() => _error = _friendlyLinkError(e));
@@ -193,6 +214,76 @@ class _MorphLinkFromDeviceState extends State<MorphLinkFromDevice> {
       _poll?.cancel();
       if (mounted) {
         setState(() => _error = _friendlyLinkError(e));
+      }
+    }
+  }
+
+  @override
+  void didUpdateWidget(MorphLinkFromDevice old) {
+    super.didUpdateWidget(old);
+    final invite = widget.invite?.trim();
+    if (invite != null &&
+        invite.isNotEmpty &&
+        invite != old.invite?.trim() &&
+        _offer != null &&
+        !_answered) {
+      _invite.text = invite;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          unawaited(_answer());
+        }
+      });
+    }
+  }
+
+  Future<void> _scanInvite() async {
+    final text = await widget.scan?.call();
+    if (text != null && mounted) {
+      setState(() => _invite.text = text.trim());
+      await _answer();
+    }
+  }
+
+  /// Send this device's offer to the other device's invite; it then pairs
+  /// with this device as if it had scanned this device's code.
+  Future<void> _answer() async {
+    final offer = _offer;
+    final invite = _invite.text.trim();
+    if (offer == null || _answering) {
+      return;
+    }
+    if (invite.isEmpty) {
+      setState(() => _error = 'Scan or paste the other device\'s code.');
+      return;
+    }
+    if (!morphIsLinkInvite(invite)) {
+      setState(
+        () => _error = invite.startsWith(morphLinkOfferPrefix)
+            ? 'That is a new device\'s code. Scan it under Add a device on '
+                  'the device that has the identity.'
+            : 'That is not a Morph device code.',
+      );
+      return;
+    }
+    setState(() {
+      _answering = true;
+      _error = null;
+    });
+    try {
+      await widget.api.linkNewDeviceAnswer(offer.session, invite);
+      if (mounted) {
+        setState(() => _answered = true);
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(
+          () => _error =
+              'Could not reach the other device: ${_friendlyLinkError(e)}',
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _answering = false);
       }
     }
   }
@@ -270,7 +361,64 @@ class _MorphLinkFromDeviceState extends State<MorphLinkFromDevice> {
     }
     _password.dispose();
     _confirm.dispose();
+    _invite.dispose();
     super.dispose();
+  }
+
+  /// Answering the other device's invite: its code scanned or pasted here.
+  List<Widget> _inviteSection(TextStyle muted) {
+    if (_answered) {
+      return [
+        const SizedBox(height: 20),
+        Text(
+          'Sent. Waiting for the other device to pair…',
+          key: const Key('link-invite-sent'),
+          textAlign: TextAlign.center,
+          style: muted,
+        ),
+        const SizedBox(height: 12),
+        const Center(child: CircularProgressIndicator()),
+      ];
+    }
+    return [
+      const SizedBox(height: 20),
+      const Divider(),
+      const SizedBox(height: 8),
+      Text(
+        'Or, if the other device shows a code under Add a device, scan or '
+        'paste that code here.',
+        textAlign: TextAlign.center,
+        style: muted,
+      ),
+      const SizedBox(height: 12),
+      if (widget.scan != null) ...[
+        FilledButton.icon(
+          key: const Key('link-invite-scan'),
+          onPressed: _answering ? null : _scanInvite,
+          icon: const Icon(Icons.qr_code_scanner),
+          label: const Text('Scan the other device\'s code'),
+        ),
+        const SizedBox(height: 12),
+      ],
+      TextField(
+        key: const Key('link-invite-field'),
+        controller: _invite,
+        enabled: !_answering,
+        autocorrect: false,
+        enableSuggestions: false,
+        decoration: const InputDecoration(
+          labelText: 'The other device\'s code',
+          hintText: 'weirdnet-morph://invite/…',
+        ),
+        onSubmitted: (_) => unawaited(_answer()),
+      ),
+      const SizedBox(height: 8),
+      OutlinedButton(
+        key: const Key('link-invite-send'),
+        onPressed: _answering ? null : () => unawaited(_answer()),
+        child: Text(_answering ? 'Sending…' : 'Send'),
+      ),
+    ];
   }
 
   @override
@@ -344,6 +492,7 @@ class _MorphLinkFromDeviceState extends State<MorphLinkFromDevice> {
           textAlign: TextAlign.center,
           style: muted,
         ),
+        ..._inviteSection(muted),
       ]);
     } else if (!_confirmed) {
       children.addAll([
@@ -440,6 +589,7 @@ class MorphAddDevice extends StatefulWidget {
     this.home,
     this.scan,
     this.onClose,
+    this.onInvite,
   });
 
   final MorphApi api;
@@ -450,6 +600,10 @@ class MorphAddDevice extends StatefulWidget {
   /// Opens the camera and returns the scanned text; null hides the button.
   final Future<String?> Function()? scan;
   final VoidCallback? onClose;
+
+  /// Another device's invite was scanned or pasted here (it is adding a
+  /// device, so this one is the new device); null explains instead.
+  final ValueChanged<String>? onInvite;
 
   @override
   State<MorphAddDevice> createState() => _MorphAddDeviceState();
@@ -467,19 +621,42 @@ class _MorphAddDeviceState extends State<MorphAddDevice> {
     final text = await widget.scan?.call();
     if (text != null && mounted) {
       setState(() => _link.text = text.trim());
-      if (_password.text.isNotEmpty) {
+      if (morphIsLinkInvite(text) || _password.text.isNotEmpty) {
         await _pair();
       }
     }
   }
 
+  /// An invite here means the other device holds the identity and this one
+  /// should receive it: hand it to [MorphAddDevice.onInvite].
+  bool _routeInvite(String link) {
+    if (!morphIsLinkInvite(link)) {
+      return false;
+    }
+    final onInvite = widget.onInvite;
+    if (onInvite != null) {
+      _password.clear();
+      onInvite(link);
+    } else {
+      setState(
+        () => _error =
+            'That code is from a device adding a new device. Open Link from '
+            'another device on a profile without an identity to use it.',
+      );
+    }
+    return true;
+  }
+
   Future<void> _pair() async {
     final link = _link.text.trim();
+    if (_routeInvite(link)) {
+      return;
+    }
     if (_password.text.isEmpty) {
       setState(() => _error = 'Enter this profile\'s password.');
       return;
     }
-    if (!link.startsWith('weirdnet-morph://link/')) {
+    if (!link.startsWith(morphLinkOfferPrefix)) {
       setState(
         () => _error = 'Scan the code on the new device, or paste its link.',
       );

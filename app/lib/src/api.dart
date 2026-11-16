@@ -200,6 +200,12 @@ abstract class MorphApi {
   });
   Future<void> linkNewDeviceCancel(int session);
 
+  /// New device: answer the existing device's [invite]
+  /// (`weirdnet-morph://invite/…`, scanned or pasted) with this session's
+  /// offer. The existing device then pairs as if it had scanned this
+  /// device's code; [linkNewDeviceStatus] goes on as usual.
+  Future<void> linkNewDeviceAnswer(int session, String invite);
+
   /// Existing device: check [profileId]'s [password], read [link] (scanned
   /// or pasted) and pair with the new device.
   Future<MorphLinkPairing> linkAddDeviceStart(
@@ -214,6 +220,17 @@ abstract class MorphApi {
   Future<void> linkAddDeviceSend(int session);
   Future<void> linkAddDeviceCancel(int session);
 }
+
+/// The prefix of an existing device's invite (Add a device on the desktop).
+const morphLinkInvitePrefix = 'weirdnet-morph://invite/';
+
+/// The prefix of a new device's link (Link from another device).
+const morphLinkOfferPrefix = 'weirdnet-morph://link/';
+
+/// Whether [text] is an existing device's invite rather than a new device's
+/// link.
+bool morphIsLinkInvite(String text) =>
+    text.trim().toLowerCase().startsWith(morphLinkInvitePrefix);
 
 /// A new device's offer: [link] is what the QR code encodes.
 class MorphLinkOffer {

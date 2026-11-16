@@ -2692,3 +2692,22 @@ alpha.6 on my-desktop (Hyprland, NVIDIA GPU, nvidia-open 615.78.08, webkit2gtk
   runs; otherwise it keeps server decorations, and the shell then draws no
   window buttons except close on tiling WMs (which draw no frame).
 
+### 2026-11-16 — Device linking through the relay, and mobile answers invites
+
+Device-link nodes now reserve a circuit on the built-in WeirdBrains relay
+(`morph_identity::device_link::PUBLIC_RELAYS`, TCP then QUIC on 4747; env
+`MORPH_LINK_RELAYS` replaces the list) and put that circuit next to their
+direct addresses in the code, so devices on different networks link through
+the relay and devices on one network still connect directly. weirdnet-net
+0.1.0 reserves one circuit per relay peer (the first address, TCP).
+
+Mobile can answer a desktop's invite (`weirdnet-morph://invite/…`): the
+new-device screen scans or takes a pasted invite and calls
+`link_new_device_answer`; invites also arrive as links (Android VIEW intent
+filter for `weirdnet-morph`, iOS `CFBundleURLTypes` plus a scene delegate in
+`AppDelegate.swift` on `org.weirdbrains.morph/links`). iOS scans with
+AVFoundation's built-in QR detection (`MorphQrScanner` in
+`AppDelegate.swift`, `org.weirdbrains.morph/scan`); Android keeps CameraX and
+ZXing (no Play Services), so no scanner package such as mobile_scanner is
+added.
+

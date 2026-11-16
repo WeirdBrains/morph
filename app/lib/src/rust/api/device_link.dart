@@ -48,6 +48,23 @@ Future<void> linkNewDeviceCancel({required BigInt session}) => RustLib
     .api
     .crateApiDeviceLinkLinkNewDeviceCancel(session: session);
 
+/// New device: answer the existing device's invite (`weirdnet-morph://invite/…`,
+/// scanned or pasted) with this session's offer. The existing device then
+/// pairs as if it had scanned this device's code; poll
+/// [`link_new_device_status`] as usual.
+Future<void> linkNewDeviceAnswer({
+  required BigInt session,
+  required String invite,
+}) => RustLib.instance.api.crateApiDeviceLinkLinkNewDeviceAnswer(
+  session: session,
+  invite: invite,
+);
+
+/// Whether `text` is an existing device's invite rather than a new device's
+/// link.
+bool linkIsInvite({required String text}) =>
+    RustLib.instance.api.crateApiDeviceLinkLinkIsInvite(text: text);
+
 /// Existing device: check `profile_id`'s password, read `link` and pair with
 /// the new device.
 Future<LinkPairingView> linkAddDeviceStart({

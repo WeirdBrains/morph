@@ -635,6 +635,13 @@ class FfiMorphApi implements MorphApi {
       rust_link.linkNewDeviceCancel(session: BigInt.from(session));
 
   @override
+  Future<void> linkNewDeviceAnswer(int session, String invite) =>
+      rust_link.linkNewDeviceAnswer(
+        session: BigInt.from(session),
+        invite: invite.trim(),
+      );
+
+  @override
   Future<MorphLinkPairing> linkAddDeviceStart(
     String profileId,
     String profileName,

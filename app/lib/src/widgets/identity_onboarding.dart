@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../api.dart';
@@ -28,9 +29,15 @@ class MorphIdentityOnboarding extends StatefulWidget {
     required this.onDone,
     required this.onSkip,
     this.linkFromDevice,
+    this.linkInvite,
     this.backupKind,
     this.onRestoreBackup,
   });
+
+  /// Another device's invite: while it holds one, the screen shows "Link
+  /// from another device" (opened with it, or switched to when one
+  /// arrives). Needs [linkFromDevice], which should answer it.
+  final ValueListenable<String?>? linkInvite;
 
   final String profileName;
   final Future<MorphNewIdentity> Function(String password) onCreate;
@@ -60,7 +67,23 @@ class MorphIdentityOnboarding extends StatefulWidget {
 }
 
 class _MorphIdentityOnboardingState extends State<MorphIdentityOnboarding> {
-  _Step _step = _Step.welcome;
+  late _Step _step = _inviteWaiting ? _Step.link : _Step.welcome;
+
+  bool get _inviteWaiting =>
+      widget.linkFromDevice != null && widget.linkInvite?.value != null;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.linkInvite?.addListener(_onInvite);
+  }
+
+  void _onInvite() {
+    if (_inviteWaiting && _step != _Step.link && !_busy && mounted) {
+      _go(_Step.link);
+    }
+  }
+
   final _password = TextEditingController();
   final _confirm = TextEditingController();
   final _words = TextEditingController();
@@ -74,6 +97,7 @@ class _MorphIdentityOnboardingState extends State<MorphIdentityOnboarding> {
 
   @override
   void dispose() {
+    widget.linkInvite?.removeListener(_onInvite);
     _password.dispose();
     _confirm.dispose();
     _words.dispose();

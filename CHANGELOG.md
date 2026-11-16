@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Mobile answers a desktop's device-link code: the new-device screen (Link
+  from another device) has "Scan the other device's code" and a paste field
+  for the `weirdnet-morph://invite/…` code that Add a device shows on the
+  desktop, and sends this device's offer to it; pairing then runs as before
+  (same six digits on both screens). A `weirdnet-morph://invite/…` link
+  opened from another app (Android intent, iOS URL scheme) opens linking
+  on a profile without an identity, and an invite scanned under Add a device
+  goes there too; a profile that already has an identity explains instead.
+  iOS scans QR codes now (AVFoundation, no new dependencies; camera
+  permission text in Info.plist). Bridge: `link_new_device_answer`,
+  `link_is_invite`.
+
 - Device linking works across networks: desktop and mobile now ship the
   official Weirdnet relay (relay.net.weirdbrains.com, TCP and QUIC on 4747)
   as a built-in default. The device showing a code reserves a circuit on it

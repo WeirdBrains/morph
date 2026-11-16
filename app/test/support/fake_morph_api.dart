@@ -660,6 +660,21 @@ class FakeMorphApi implements MorphApi {
   Future<void> linkNewDeviceCancel(int session) async =>
       linkCalls.add('cancel $session');
 
+  /// Thrown by [linkNewDeviceAnswer] when set (the desktop is unreachable).
+  Object? linkAnswerError;
+
+  @override
+  Future<void> linkNewDeviceAnswer(int session, String invite) async {
+    final error = linkAnswerError;
+    if (error != null) {
+      throw error;
+    }
+    if (!invite.startsWith('weirdnet-morph://invite/')) {
+      throw StateError('not a device invite');
+    }
+    linkCalls.add('answer $session $invite');
+  }
+
   @override
   Future<MorphLinkPairing> linkAddDeviceStart(
     String profileId,
