@@ -153,6 +153,10 @@ impl Default for Keymap {
         let mut bindings: Vec<Binding> = fixed.into_iter().map(|(k, a)| Binding { keystroke: k.into(), action: a }).collect();
         bindings.extend((1..=8).map(|n| Binding { keystroke: format!("ctrl-{n}"), action: Action::SelectTab(n - 1) }));
         bindings.push(Binding { keystroke: "ctrl-9".into(), action: Action::SelectLastTab });
+        // Second keys other browsers have, after the first so menus show
+        // the first.
+        let more = [("ctrl-shift-r", Action::Reload), ("shift-f5", Action::Reload), ("ctrl-f5", Action::Reload)];
+        bindings.extend(more.into_iter().map(|(k, a)| Binding { keystroke: k.into(), action: a }));
         Self { bindings }
     }
 }
@@ -160,9 +164,28 @@ impl Default for Keymap {
 /// Keystrokes that keep Ctrl on macOS: switching tabs is Ctrl+Tab there too.
 pub const MAC_CTRL_EXCEPTIONS: [&str; 2] = ["ctrl-tab", "ctrl-shift-tab"];
 
+/// Keys macOS browsers use instead: Cmd+H hides the app, so history is
+/// Cmd+Y; Option+arrows move by word in text fields, so back and forward
+/// are Cmd+[ and Cmd+]; F11 shows the desktop, so full screen is Ctrl+Cmd+F.
+pub const MAC_RENAMES: [(&str, &str); 4] = [("ctrl-h", "cmd-y"), ("alt-left", "cmd-["), ("alt-right", "cmd-]"), ("f11", "ctrl-cmd-f")];
+
+/// Keys only one side has (Windows and Linux, or macOS), added after the
+/// shared ones.
+const PC_ONLY: [(&str, Action); 5] = [
+    ("ctrl-pagedown", Action::NextTab),
+    ("ctrl-pageup", Action::PrevTab),
+    ("ctrl-f4", Action::CloseTab),
+    ("f6", Action::FocusAddress),
+    ("alt-d", Action::FocusAddress),
+];
+const MAC_ONLY: [(&str, Action); 2] = [("cmd-alt-right", Action::NextTab), ("cmd-alt-left", Action::PrevTab)];
+
 /// `keystroke` on the platform: on macOS Morph's Ctrl shortcuts use Cmd
 /// (`ctrl-shift-o` is `cmd-shift-o`), except [`MAC_CTRL_EXCEPTIONS`].
 pub fn platform_keystroke(keystroke: &str, mac: bool) -> String {
+    if let Some((_, to)) = MAC_RENAMES.iter().find(|(from, _)| mac && *from == keystroke) {
+        return to.to_string();
+    }
     match keystroke.strip_prefix("ctrl-") {
         Some(rest) if mac && !MAC_CTRL_EXCEPTIONS.contains(&keystroke) => format!("cmd-{rest}"),
         _ => keystroke.to_string(),
@@ -173,7 +196,14 @@ impl Keymap {
     /// The keymap as bound on the platform ([`platform_keystroke`]): the one
     /// place the macOS Cmd rule lives.
     pub fn for_platform(&self, mac: bool) -> Keymap {
-        Keymap { bindings: self.bindings.iter().map(|b| Binding { keystroke: platform_keystroke(&b.keystroke, mac), action: b.action }).collect() }
+        let mut bindings: Vec<Binding> =
+            self.bindings.iter().map(|b| Binding { keystroke: platform_keystroke(&b.keystroke, mac), action: b.action }).collect();
+        for (k, a) in if mac { &MAC_ONLY[..] } else { &PC_ONLY[..] } {
+            if !bindings.iter().any(|b| b.keystroke == *k) {
+                bindings.push(Binding { keystroke: k.to_string(), action: *a });
+            }
+        }
+        Keymap { bindings }
     }
 
     pub fn bindings(&self) -> &[Binding] {
@@ -206,7 +236,7 @@ mod tests {
         let mac = Keymap::default().for_platform(true);
         for b in mac.bindings() {
             assert!(
-                !b.keystroke.starts_with("ctrl-") || MAC_CTRL_EXCEPTIONS.contains(&b.keystroke.as_str()),
+                !b.keystroke.starts_with("ctrl-") || b.keystroke.contains("cmd-") || MAC_CTRL_EXCEPTIONS.contains(&b.keystroke.as_str()),
                 "{} still uses Ctrl on macOS",
                 b.keystroke
             );
@@ -217,7 +247,39 @@ mod tests {
         assert_eq!(mac.action_for("cmd-9"), Some(Action::SelectLastTab));
         assert_eq!(mac.action_for("ctrl-tab"), Some(Action::NextTab));
         assert_eq!(mac.action_for("ctrl-t"), None);
-        assert_eq!(Keymap::default().for_platform(false), Keymap::default());
+    }
+
+    #[test]
+    fn the_shortcut_audit_keys_each_platform_expects() {
+        let mac = Keymap::default().for_platform(true);
+        assert_eq!(mac.action_for("cmd-y"), Some(Action::ShowHistory));
+        assert_eq!(mac.action_for("cmd-h"), None, "Cmd+H hides the app");
+        assert_eq!(mac.action_for("cmd-["), Some(Action::Back));
+        assert_eq!(mac.action_for("cmd-]"), Some(Action::Forward));
+        assert_eq!(mac.action_for("alt-left"), None, "Option+Left moves by word");
+        assert_eq!(mac.action_for("ctrl-cmd-f"), Some(Action::ToggleFullscreen));
+        assert_eq!(mac.action_for("cmd-alt-right"), Some(Action::NextTab));
+        assert_eq!(mac.action_for("cmd-shift-r"), Some(Action::Reload));
+        assert_eq!(mac.action_for("f6"), None);
+        let pc = Keymap::default().for_platform(false);
+        assert_eq!(pc.action_for("ctrl-h"), Some(Action::ShowHistory));
+        assert_eq!(pc.action_for("alt-left"), Some(Action::Back));
+        assert_eq!(pc.action_for("ctrl-pagedown"), Some(Action::NextTab));
+        assert_eq!(pc.action_for("ctrl-pageup"), Some(Action::PrevTab));
+        assert_eq!(pc.action_for("ctrl-f4"), Some(Action::CloseTab));
+        assert_eq!(pc.action_for("f6"), Some(Action::FocusAddress));
+        assert_eq!(pc.action_for("alt-d"), Some(Action::FocusAddress));
+        assert_eq!(pc.action_for("shift-f5"), Some(Action::Reload));
+        // Menus keep showing the first key.
+        assert_eq!(pc.keystroke_for(Action::Reload), Some("ctrl-r"));
+        assert_eq!(pc.keystroke_for(Action::NextTab), Some("ctrl-tab"));
+        // No key does two things.
+        for keymap in [&mac, &pc] {
+            let mut seen = std::collections::HashSet::new();
+            for b in keymap.bindings() {
+                assert!(seen.insert(b.keystroke.clone()), "{} bound twice", b.keystroke);
+            }
+        }
     }
 
     #[test]
