@@ -321,7 +321,11 @@ pub fn relay_addrs() -> Vec<Multiaddr> {
 /// The node settings every link node and relay check uses:
 /// [`net_config`] over [`relay_addrs`].
 pub fn link_config() -> NodeConfig {
-    NodeConfig { relays: relay_addrs(), ..net_config() }
+    let cfg = NodeConfig { relays: relay_addrs(), ..net_config() };
+    match crate::home::resolve(None).ok().and_then(|home| morph_core::network::load(&home).ok()) {
+        Some(net) => crate::network::apply_to_config(cfg, &net),
+        None => cfg,
+    }
 }
 
 impl Links {

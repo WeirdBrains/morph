@@ -13,6 +13,7 @@ pub mod device_link;
 pub mod home;
 pub mod identity;
 pub mod library;
+pub mod network;
 pub mod profiles;
 pub mod relays;
 
