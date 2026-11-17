@@ -40,6 +40,9 @@ EVENT = re.compile(r'^morph-event tab=(\d+) (\w+)(?:\((.*)\))?')
 # keep the built-in relay.
 LINK_ENV = {}
 LOCAL_RELAY = False
+# With --app-server as well: a Weirdnet app (morph-services' serve-app
+# example) behind the local relay, its peer id once it holds a slot.
+APP_PEER = None
 
 
 class Morph:
@@ -1786,32 +1789,77 @@ def error_page(m, r, win, top):
     r.check("error", "Alt+Left leaves the error page for the page under it", back, f"{m.title(win)} {state(m, tab=2)} {focus_info(m)}")
 
 
+def searched_since(m, since):
+    return [a for t, name, a in m.events()[since:] if name == "UrlChanged" and ("google.com/search" in (a or "") or "duckduckgo.com/?q" in (a or ""))]
+
+
 def own_addresses(m, r, win, top):
     """morph:// and weirdnet-<app>:// addresses never search: an unknown
-    morph:// page shows Morph's page listing the real ones, and a Weirdnet
-    app link shows "App call not supported yet" (weirdnet-net 0.4 has no
-    generic app call); Alt+Left goes back from both."""
+    morph:// page shows Morph's page listing the real ones, a Weirdnet app
+    link whose name finds no one says so (a call over Weirdnet: "alice" has
+    no _weirdnet TXT record), and an invalid app name says that; Alt+Left
+    goes back from each."""
 
-    def searched(since):
-        return [a for t, name, a in m.events()[since:] if name == "UrlChanged" and ("google.com/search" in (a or "") or "duckduckgo.com/?q" in (a or ""))]
-
-    for typed, title, label in [
-        ("morph://nope", "morph://nope is not a Morph page", "an unknown morph:// page shows the list of Morph's pages"),
-        ("weirdnet-muninn://alice/notes?token=x", "App call not supported yet", "a weirdnet-<app>:// link shows \"App call not supported yet\""),
+    for typed, title, label, wait in [
+        ("morph://nope", r"morph://nope is not a Morph page", "an unknown morph:// page shows the list of Morph's pages", 6),
+        (
+            "weirdnet-muninn://alice/notes?token=x",
+            r"Couldn't (find|reach) alice",
+            "a weirdnet-<app>:// link is called over Weirdnet and says it couldn't find alice",
+            60,
+        ),
+        ("weirdnet-no.good://alice/x", r"Not a valid Weirdnet app name", "an invalid app name says so", 6),
     ]:
         m.click(win, 300, top + 300)
         since = len(m.events())
         m.key("ctrl+l", delay=0.6)
         m.type(typed)
         m.key("Return", delay=1.0)
-        shown = wait_for(lambda: m.title(win).startswith(title))
+        shown = wait_for(lambda: re.match(title, m.title(win)), wait)
         r.check("address", label, shown, m.title(win))
         time.sleep(0.5)
-        r.check("address", f"{typed.split('?')[0]} is not searched", not searched(since), str(searched(since)))
+        r.check("address", f"{typed.split('?')[0]} is not searched", not searched_since(m, since), str(searched_since(m, since)))
         m.key("alt+Left", delay=1.0)
-        r.check("address", f"Alt+Left leaves the {typed.split(':')[0]} page", wait_for(lambda: not m.title(win).startswith(title)), m.title(win))
-    called = m.lines(r"morph-event app-call weirdnet-muninn://alice/notes not-supported")
-    r.check("address", "the app link went to the app caller (no query in the log)", called and not m.lines(r"morph-event app-call .*token"), str(m.lines(r"morph-event app-call")[-2:]))
+        r.check("address", f"Alt+Left leaves the {typed.split(':')[0]} page", wait_for(lambda: not re.match(title, m.title(win))), m.title(win))
+    called = m.lines(r"morph-event app-call weirdnet-muninn://alice/notes failed (not_found|unreachable|timed_out)")
+    r.check("address", "the app link went to the app caller (no query in the log)", called and not m.lines(r"morph-event app-call .*token"), str(m.lines(r"morph-event app-call")[-3:]))
+
+
+def app_calls(m, r, win, top):
+    """weirdnet-morph-test://<peer>/… against the serve-app example behind
+    the local relay: the app's HTML, JSON and image answers load in the tab
+    under the app address, and a 404, a refusal and an app the peer doesn't
+    serve each get Morph's page saying so. None is searched."""
+    base = f"weirdnet-morph-test://{APP_PEER}"
+    for path, title, logged, label in [
+        ("/hello?x=1", r"Hello from morph-test", r"ok status=200 kind=html", "an app's HTML page loads through the relay, titled by the app"),
+        ("/data.json", None, r"ok status=200 kind=json", "an app's JSON answer is shown"),
+        ("/pic.png", None, r"ok status=200 kind=image", "an app's image is shown"),
+        ("/missing", r"The app answered 404 Not Found", r"failed status", "a 404 with nothing to show says so"),
+        ("/refuse", r"The app refused the call", r"failed refused", "a refusal says so"),
+    ]:
+        m.click(win, 300, top + 300)
+        since = len(m.events())
+        before = len(m.lines(r"morph-event app-call "))
+        m.key("ctrl+l", delay=0.6)
+        m.type(base + path)
+        m.key("Return", delay=1.0)
+        url = re.escape(base + path.split("?")[0])
+        done = wait_for(lambda: len(m.lines(r"morph-event app-call ")) > before and m.lines(rf"morph-event app-call {url} {logged}"), 45)
+        if title:
+            done = done and wait_for(lambda: re.match(title, m.title(win)), 10)
+        r.check("app", label, done, f"{m.title(win)} {m.lines(r'morph-event app-call')[-2:]}")
+        r.check("app", f"{path.split('?')[0]} is not searched", not searched_since(m, since), str(searched_since(m, since)))
+        if path.startswith("/hello"):
+            shown = [a for t, name, a in m.events()[since:] if name == "UrlChanged"]
+            r.check("app", "the engine got the app's page as a data: address (Morph never hands it the weirdnet- address)", any((a or "").strip("\"").startswith("data:text/html") for a in shown), str([(a or "")[:40] for a in shown]))
+            r.check("app", "the query never reaches the log", not m.lines(r"morph-event app-call .*x=1"), "")
+    m.click(win, 300, top + 300)
+    m.key("ctrl+l", delay=0.6)
+    m.type(f"weirdnet-other-app://{APP_PEER}/")
+    m.key("Return", delay=1.0)
+    r.check("app", "an app the peer doesn't serve says so", wait_for(lambda: m.title(win).startswith(f"{APP_PEER} doesn't serve weirdnet-other-app://"), 45), m.title(win))
+    m.key("alt+Left", delay=1.0)
 
 
 def main():
@@ -1823,14 +1871,38 @@ def main():
     ap.add_argument("--scale", type=float, default=1.0, help="the Wayland output's scale")
     ap.add_argument("--input-bin", help="morph-wl-input (default: next to --bin)")
     ap.add_argument("--local-relay", help="a local relay to link through (weirdnet-device-link's local-relay example)")
+    ap.add_argument("--app-server", help="a Weirdnet app behind the local relay (morph-services' serve-app example)")
     args = ap.parse_args()
     relay = start_local_relay(args.local_relay) if args.local_relay else None
+    app = start_app_server(args.app_server) if relay and args.app_server else None
     try:
         return run(args)
     finally:
-        if relay:
-            relay.stdin.close()
-            relay.terminate()
+        for proc in (app, relay):
+            if proc:
+                proc.stdin.close()
+                proc.terminate()
+
+
+def start_app_server(binary):
+    """Start the test app behind the local relay (it listens on nothing of
+    its own, so Morph reaches it only through a circuit) on a temporary
+    MORPH_HOME, and wait until the relay holds its slot."""
+    global APP_PEER
+    env = dict(os.environ, MORPH_HOME=tempfile.mkdtemp(prefix="morph-xvfb-app-"), MORPH_LINK_RELAYS=LINK_ENV["MORPH_LINK_RELAYS"])
+    proc = subprocess.Popen([binary], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, env=env)
+    peer = None
+    for line in proc.stdout:
+        line = line.strip()
+        if line.startswith("peer "):
+            peer = line.split(" ", 1)[1]
+        if line == "ready":
+            break
+    if not peer:
+        raise SystemExit("the app server did not start")
+    APP_PEER = peer
+    print(f"INFO  app  serving weirdnet-morph-test:// as {peer}", flush=True)
+    return proc
 
 
 def start_local_relay(binary):
@@ -1916,6 +1988,8 @@ def run(args):
         r.check("shell", "Ctrl+W closes the tab (tab 2 shows again)", f'"id":"{tab2}"' in m.title(win), m.title(win))
         error_page(m, r, win, top)
         own_addresses(m, r, win, top)
+        if APP_PEER:
+            app_calls(m, r, win, top)
         if wm:
             w0 = (state(m, tab=2) or {}).get("w", 0)
             m.click(win, 300, top + 300)

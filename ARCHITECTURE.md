@@ -568,7 +568,7 @@ rust-version 1.99.
 |---|---|---|
 | `weirdnet-keys` 0.1.0 | github.com/WeirdBrains/weirdnet-keys | Identity root: `Key32`, 24 BIP39 words, Shamir shards, Argon2id/HKDF, XChaCha20-Poly1305, X25519, envelope keyring (DEK wrap, rotate, rekey, recover). **Phase 1.** |
 | `weirdnet-storage` 0.1.0 | github.com/WeirdBrains/weirdnet-storage | Local store: SQLCipher with a caller-supplied key, migrations, savepoints, snapshots, row change log + three-way merge (`sync`). **Phase 1.** |
-| `weirdnet-net` 0.4.0 (Morph moved from 0.1.0 on 2026-11-17) | github.com/WeirdBrains/weirdnet-net | libp2p 0.57 node (TCP, QUIC, Noise, Yamux, mDNS, Kademlia, relay client + opt-in relay server, DCUtR hole punching, AutoNAT). App-defined CBOR request/response. Signed offers/answers with a 10-digit short code, invitation links, sealed messages, node certs, user cards, link grants, TOFU pinning. **Phase 1.** |
+| `weirdnet-net` 0.5.0 (Morph moved from 0.1.0 to 0.4.0, then 0.5.0, on 2026-11-17) | github.com/WeirdBrains/weirdnet-net | libp2p 0.57 node (TCP, QUIC, Noise, Yamux, mDNS, Kademlia, relay client + opt-in relay server, DCUtR hole punching, AutoNAT). App-defined CBOR request/response. Signed offers/answers with a 10-digit short code, invitation links, sealed messages, node certs, user cards, link grants, TOFU pinning. App calls (0.5: `serve_app`, `resolve_app`, `app_call_via`). **Phase 1.** |
 | `weirdnet-themes` 0.1.0 | github.com/WeirdBrains/weirdnet-themes | TOML themes, 21 colour roles, contrast checks, `to_hex` for Dart. **Phase 2** (turn off `terminal-background` on mobile). |
 | `weirdnet-rules` 0.1.0 | github.com/WeirdBrains/weirdnet-rules | Rules over event history + `every`/cron schedules. Candidate for Researcher/Student triggers. Phase 2. |
 | `weirdnet-pipelines` 0.1.0 | github.com/WeirdBrains/weirdnet-pipelines | DAG runner. Candidate for research pipelines. Phase 2. |
@@ -2794,3 +2794,56 @@ copy (no compact v2 codes, no relay status), so Morph keeps its copy.
 - Phone address sheet: the engine selector left of the URL field, per tab
   with the profile's engine as the default, as the desktop selector.
 
+### 2026-11-17 — weirdnet-net 0.5: app calls
+
+Morph builds on weirdnet-net 0.5.0, which adds app calls: a node serves
+named apps (`Node::serve_app`), any node resolves a locator to the peers
+serving an app (`resolve_app`: a peer id, a user id via its signed peer
+record, or a name via `_weirdnet` TXT) and calls one through a relay
+(`app_call_via`), with a streamed answer and typed `AppError`s.
+
+- **Caller.** `morph_services::app_calls::NetAppCaller` implements
+  `morph_core::app_call::AppCaller`. It starts one node lazily, on the
+  first app link (profile `WEIRDNET` on its own `morph-app-calls` thread,
+  a throwaway key, serving nothing), with the link relays as relays and
+  names servers; a changed relay list restarts it. It resolves, then tries
+  each peer in turn (30 s a call) and keeps the most telling error.
+  Answers are capped at 8 MiB (`app_call::BODY_MAX`).
+- **Shells.** Desktop (`morph-browser`) calls on a `morph-app-call`
+  thread per tab; the tab shows its loading mark and Stop cancels the
+  call. Phone (`morph-bridge::open_app`, async) shows a thin progress line.
+  `app_call::render` turns the answer into one page by content type
+  (HTML with a `<base>` of the app address, images, JSON pretty-printed,
+  text; sniffed when the type is missing; anything else is refused) and
+  hands it to the engine as a `data:text/html;...;morph-app=<token>;base64`
+  URL: the page gets an opaque origin, never the app's scheme, and the
+  token maps it back to the app address for the address bar, history and
+  Reload. Chromium engines cap URLs at 2 MB, so Windows and Android refuse
+  larger pages as too large.
+- **Errors.** Each `AppError` has its own page (`app_call::error_text`):
+  not found, doesn't serve this app, couldn't reach, timed out, refused,
+  too large, garbled, plus an HTTP status with nothing to show, a type
+  Morph can't show, and an invalid app name (checked before anything is
+  sent; at most 55 characters so `weirdnet-<name>` fits a 64-character
+  scheme). None of them falls back to a search.
+- **Relay addresses.** 0.5's `add_relay` dials every address of a relay,
+  so `weirdnet_device_link::reach` no longer connects relays itself before
+  reserving; link nodes start with their relays in the config. The relay
+  check's round trip (a timed names lookup) is unchanged. The link wire
+  format did not change, so alpha.14 and alpha.15 devices still link.
+- **Serving an app today.** Any weirdnet-net 0.5 node that calls
+  `serve_app` and holds a relay reservation. `morph-services`'
+  `serve-app` example serves `morph-test` (`/hello`, `/data.json`,
+  `/pic.png`, `/notes.txt`, `/refuse`) behind `MORPH_LINK_RELAYS` and
+  prints its peer id; open `weirdnet-morph-test://<peer id>/hello`. User-id
+  and name locators need a published peer record or `_weirdnet` TXT.
+- **Checks.** `morph-services` tests call a server through an in-memory
+  relay whose first address goes nowhere (HTML, JSON, 404, refusal, too
+  large, another app, an unknown user). `scripts/xvfb-check.py
+  --app-server` runs `serve-app` behind the local relay and loads its
+  pages in the desktop browser.
+- **Upstream notes.** `Body` is exported as `AppBody`; the
+  `examples/app_call.rs` named in the docs is not in the published crate;
+  `serve_app` accepts 64-character names that can't be linked; and
+  `weirdnet-schemes` 0.1.0 `Link::parse` lowercases the authority, so
+  Morph takes peer-id locators from the raw address.
