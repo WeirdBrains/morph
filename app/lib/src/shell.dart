@@ -121,6 +121,12 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
   final _previews = <int, Uint8List?>{};
   late bool _debugOpen;
   String _canonicalAddress = '';
+
+  /// The search engine new tabs use (the profile's setting) and the ones
+  /// tabs picked with the selector beside the address, as on desktop.
+  String _defaultEngine = 'google';
+  final _tabEngines = <int, String>{};
+  String get _tabEngine => _tabEngines[tabs.activeId] ?? _defaultEngine;
   String? coreVersionLabel;
   String? identityHome;
   bool? homeExists;
@@ -295,6 +301,7 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
           _syncAddressFromActive();
           setState(() {});
         }
+        unawaited(_loadSearchEngine());
         unawaited(_pruneProfileData(catalog));
         unawaited(_loadBookmarks());
         unawaited(_checkIdentity());
@@ -460,9 +467,25 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
     await _submitUrl(url);
   }
 
+  Future<void> _loadSearchEngine() async {
+    final engine = await widget.api.defaultSearchEngine(home: _home);
+    if (mounted) {
+      setState(() => _defaultEngine = engine);
+    }
+  }
+
   Future<void> _submitUrl(String raw) async {
-    final url = widget.api.omniboxTarget(raw);
+    if (morphIsLinkInvite(raw.trim())) {
+      await _openLinkInvite(raw.trim());
+      return;
+    }
+    final url = widget.api.omniboxTargetFor(raw, _tabEngine);
     if (url == null) {
+      return;
+    }
+    final own = widget.api.ownAddress(url);
+    if (own != null) {
+      await _openOwnAddress(url, own);
       return;
     }
     _canonicalAddress = url;
@@ -476,6 +499,48 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
     }
     await webView.loadUrl(url);
     unawaited(_saveCurrentTabs());
+  }
+
+  /// `morph://` pages open Morph's own screens; an unknown one, and a
+  /// `weirdnet-<app>://` link this build cannot call over Weirdnet, cover the
+  /// tab with Morph's error page. None of them is loaded, searched or
+  /// handed to the OS, and the tab keeps its page (Back, Reload).
+  Future<void> _openOwnAddress(String url, OwnAddress own) async {
+    switch (own.page) {
+      case 'bookmarks':
+        return _openLibrary(MorphLibraryTab.bookmarks);
+      case 'history':
+        return _openLibrary(MorphLibraryTab.history);
+      case 'identity':
+        return _openIdentity();
+      case 'profiles' || 'search':
+        // The address sheet holds the profiles and the engine selector.
+        return _openAddressSheet();
+      case 'about' || 'downloads' || 'relays' || 'settings':
+        return _openSettings();
+      case _:
+        break;
+    }
+    if (own.page != null) {
+      return _openSettings();
+    }
+    _canonicalAddress = url;
+    _applyAddressDisplay();
+    setState(() => _visited[tabs.activeId] = true);
+    webView.loadError.value = MorphLoadError(
+      url: url,
+      kind: MorphLoadErrorKind.other,
+      message: own.body,
+    );
+    _ownErrors[tabs.activeId] = (url, own.title, own.body);
+  }
+
+  /// Morph's error pages shown over tabs, by tab: address, title and body.
+  final _ownErrors = <int, (String, String, String)>{};
+
+  (String, String)? _ownErrorText(int tab, MorphLoadError error) {
+    final own = _ownErrors[tab];
+    return own != null && own.$1 == error.url ? (own.$2, own.$3) : null;
   }
 
   // --- Surface self-heal -------------------------------------------------
@@ -1491,6 +1556,10 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
           identityLabel: _identityLabel,
           onIdentity: () => unawaited(_openIdentity()),
           onSubmit: _submitUrl,
+          engines: widget.api.searchEngines(),
+          engine: _tabEngine,
+          onEngineChanged: (id) =>
+              setState(() => _tabEngines[tabs.activeId] = id),
           onBack: () => unawaited(webView.goBack()),
           onForward: () => unawaited(webView.goForward()),
           onReload: () => unawaited(webView.reload()),
@@ -1727,6 +1796,8 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
                   active: tab.id == tabs.activeId,
                   child: MorphLoadErrorGate(
                     controller: _controllerFor(tab.id),
+                    ownText: (error) => _ownErrorText(tab.id, error),
+                    onOwnRetry: (url) => unawaited(_submitUrl(url)),
                     child: MorphWebView(
                       key: Key('web-view-$_profileId-${tab.id}'),
                       controller: _controllerFor(tab.id),

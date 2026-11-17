@@ -8,6 +8,8 @@ pub struct SettingsView {
     pub tab_position: String,
     pub sidebar_collapsed: bool,
     pub sidebar_width: u32,
+    /// The search engine new tabs use (an id from `search_engines`).
+    pub search_engine: String,
 }
 
 impl SettingsView {
@@ -16,6 +18,7 @@ impl SettingsView {
             tab_position: settings.tab_position.as_str().to_string(),
             sidebar_collapsed: settings.sidebar_collapsed,
             sidebar_width: settings.sidebar_width,
+            search_engine: settings.search_engine.clone(),
         }
     }
 }

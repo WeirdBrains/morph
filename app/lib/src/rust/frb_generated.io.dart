@@ -60,6 +60,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   bool dco_decode_bool(dynamic raw);
 
   @protected
+  OwnAddressView dco_decode_box_autoadd_own_address_view(dynamic raw);
+
+  @protected
   ProfileIdentityView dco_decode_box_autoadd_profile_identity_view(dynamic raw);
 
   @protected
@@ -141,7 +144,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<RelayStatusView> dco_decode_list_relay_status_view(dynamic raw);
 
   @protected
+  List<SearchEngineView> dco_decode_list_search_engine_view(dynamic raw);
+
+  @protected
   String? dco_decode_opt_String(dynamic raw);
+
+  @protected
+  OwnAddressView? dco_decode_opt_box_autoadd_own_address_view(dynamic raw);
 
   @protected
   ProfileIdentityView? dco_decode_opt_box_autoadd_profile_identity_view(
@@ -153,6 +162,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<String>? dco_decode_opt_list_String(dynamic raw);
+
+  @protected
+  OwnAddressView dco_decode_own_address_view(dynamic raw);
 
   @protected
   ProfileIdentityView dco_decode_profile_identity_view(dynamic raw);
@@ -168,6 +180,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   RelayStatusView dco_decode_relay_status_view(dynamic raw);
+
+  @protected
+  SearchEngineView dco_decode_search_engine_view(dynamic raw);
 
   @protected
   SettingsView dco_decode_settings_view(dynamic raw);
@@ -215,6 +230,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   bool sse_decode_bool(SseDeserializer deserializer);
+
+  @protected
+  OwnAddressView sse_decode_box_autoadd_own_address_view(
+    SseDeserializer deserializer,
+  );
 
   @protected
   ProfileIdentityView sse_decode_box_autoadd_profile_identity_view(
@@ -320,7 +340,17 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  List<SearchEngineView> sse_decode_list_search_engine_view(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
+
+  @protected
+  OwnAddressView? sse_decode_opt_box_autoadd_own_address_view(
+    SseDeserializer deserializer,
+  );
 
   @protected
   ProfileIdentityView? sse_decode_opt_box_autoadd_profile_identity_view(
@@ -332,6 +362,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<String>? sse_decode_opt_list_String(SseDeserializer deserializer);
+
+  @protected
+  OwnAddressView sse_decode_own_address_view(SseDeserializer deserializer);
 
   @protected
   ProfileIdentityView sse_decode_profile_identity_view(
@@ -349,6 +382,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   RelayStatusView sse_decode_relay_status_view(SseDeserializer deserializer);
+
+  @protected
+  SearchEngineView sse_decode_search_engine_view(SseDeserializer deserializer);
 
   @protected
   SettingsView sse_decode_settings_view(SseDeserializer deserializer);
@@ -409,6 +445,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_bool(bool self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_box_autoadd_own_address_view(
+    OwnAddressView self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_box_autoadd_profile_identity_view(
@@ -546,7 +588,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_search_engine_view(
+    List<SearchEngineView> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_box_autoadd_own_address_view(
+    OwnAddressView? self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_opt_box_autoadd_profile_identity_view(
@@ -559,6 +613,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_opt_list_String(List<String>? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_own_address_view(
+    OwnAddressView self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_profile_identity_view(
@@ -584,6 +644,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_relay_status_view(
     RelayStatusView self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_search_engine_view(
+    SearchEngineView self,
     SseSerializer serializer,
   );
 
