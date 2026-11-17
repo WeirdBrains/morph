@@ -11,6 +11,7 @@
 use std::path::{Path, PathBuf};
 
 use gpui::{App, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyDownEvent, ScrollHandle, SharedString, Window, div, prelude::*, px, rgb};
+use morph_core::network::{self as netprefs, DiscoveryOverride, NetworkSettings};
 use morph_core::search::ENGINES;
 use morph_core::settings::{self, Settings, TabPosition, ThemeChoice};
 use morph_ui::actions::Action;
@@ -101,7 +102,9 @@ impl Section {
             Section::Downloads => "downloads folder save files",
             Section::Privacy => "clear browsing data cookies cache site permissions camera microphone location",
             Section::Identity => "identity backup recovery restore devices link",
-            Section::Relays => "relays relay network weirdnet connected connection reservation slot link devices nat peer",
+            Section::Relays => {
+                "relays relay network weirdnet connected connection reservation slot link devices nat peer discovery mdns dht corporate lan"
+            }
             Section::About => "about version licence license notices",
         }
     }
@@ -137,6 +140,8 @@ pub enum Item {
     ClearData,
     OpenIdentity,
     CheckRelays,
+    Discovery,
+    ManualPeers,
     OpenAbout,
 }
 
@@ -152,12 +157,12 @@ impl Item {
             Item::ChooseDownloads | Item::DefaultDownloads => Section::Downloads,
             Item::ClearData => Section::Privacy,
             Item::OpenIdentity => Section::Identity,
-            Item::CheckRelays => Section::Relays,
+            Item::CheckRelays | Item::Discovery | Item::ManualPeers => Section::Relays,
             Item::OpenAbout => Section::About,
         }
     }
 
-    pub const ALL: [Item; 17] = [
+    pub const ALL: [Item; 19] = [
         Item::OpenBookmarks,
         Item::OpenHistory,
         Item::ClearHistory,
@@ -174,12 +179,14 @@ impl Item {
         Item::ClearData,
         Item::OpenIdentity,
         Item::CheckRelays,
+        Item::Discovery,
+        Item::ManualPeers,
         Item::OpenAbout,
     ];
 
     /// Whether ←/→ change it.
     fn is_choice(self) -> bool {
-        matches!(self, Item::Engine | Item::TabPosition | Item::Theme | Item::SideWidth | Item::Collapsed)
+        matches!(self, Item::Engine | Item::TabPosition | Item::Theme | Item::SideWidth | Item::Collapsed | Item::Discovery)
     }
 }
 
@@ -226,6 +233,8 @@ pub struct SettingsView {
     /// A relay check starting on its own thread.
     relay_check: Option<mpsc::Receiver<Result<(), String>>>,
     relay_note: Option<String>,
+    network: NetworkSettings,
+    peer_input: Entity<TextInput>,
     _subscriptions: Vec<gpui::Subscription>,
 }
 
@@ -235,6 +244,7 @@ impl SettingsView {
     pub fn new(home: &Path, theme: Theme, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let search = cx.new(|cx| TextInput::new("Search settings", theme, cx));
         let home_page = cx.new(|cx| TextInput::new("Blank page", theme, cx));
+        let peer_input = cx.new(|cx| TextInput::new("/ip4/…/tcp/…/p2p/<peer id>", theme, cx));
         let subscriptions = vec![
             cx.subscribe_in(&search, window, |this, _, event, window, cx| match event {
                 TextInputEvent::Changed => {
@@ -267,6 +277,17 @@ impl SettingsView {
                 }
                 TextInputEvent::Changed => {}
             }),
+            cx.subscribe_in(&peer_input, window, |this, input, event, window, cx| match event {
+                TextInputEvent::Submit { .. } => {
+                    let text = input.read(cx).text().trim().to_string();
+                    this.add_peer(text, cx);
+                    window.focus(&this.focus, cx);
+                }
+                TextInputEvent::Tab { .. } | TextInputEvent::Cancel => {
+                    window.focus(&this.focus, cx);
+                }
+                TextInputEvent::Changed => {}
+            }),
         ];
         let mut view = Self {
             home: home.to_path_buf(),
@@ -287,6 +308,8 @@ impl SettingsView {
             relays_read: None,
             relay_check: None,
             relay_note: None,
+            network: netprefs::load(home).unwrap_or_default(),
+            peer_input,
             _subscriptions: subscriptions,
         };
         view.reload_quietly();
@@ -303,6 +326,7 @@ impl SettingsView {
             }
             Err(e) => self.error = Some(format!("Could not read the settings: {e}")),
         }
+        self.network = netprefs::load(&self.home).unwrap_or_default();
     }
 
     /// Read the shown profile's settings again (after a profile switch).
@@ -537,6 +561,11 @@ impl SettingsView {
             }
             Item::OpenIdentity => cx.emit(ShellRequest::Run(Action::ShowIdentity)),
             Item::CheckRelays => self.check_relays(cx),
+            Item::Discovery => self.toggle_discovery(cx),
+            Item::ManualPeers => {
+                window.focus(&self.peer_input.focus_handle(cx), cx);
+                self.peer_input.update(cx, |i, cx| i.select_all(cx));
+            }
             Item::OpenAbout => cx.emit(ShellRequest::Run(Action::ShowAbout)),
         }
         cx.notify();
@@ -553,6 +582,7 @@ impl SettingsView {
             Item::Theme => self.set_theme_choice(cycle(&THEMES, self.settings.theme, forward), cx),
             Item::SideWidth => self.change(if forward { SettingsChange::Wider } else { SettingsChange::Narrower }, cx),
             Item::Collapsed => self.change(SettingsChange::ToggleCollapsed, cx),
+            Item::Discovery => self.set_discovery(forward, cx),
             _ => {}
         }
     }
@@ -655,6 +685,69 @@ impl SettingsView {
             .into_any_element()
     }
 
+    fn toggle_discovery(&mut self, cx: &mut Context<Self>) {
+        if self.network.discovery_locked() {
+            self.note_discovery_lock();
+            cx.notify();
+            return;
+        }
+        self.set_discovery(!self.network.discovery_enabled(), cx);
+    }
+
+    fn set_discovery(&mut self, on: bool, cx: &mut Context<Self>) {
+        if self.network.discovery_locked() {
+            self.note_discovery_lock();
+            cx.notify();
+            return;
+        }
+        match netprefs::set_discovery(&self.home, on) {
+            Ok(next) => {
+                self.network = next;
+                self.error = None;
+                self.note = None;
+                morph_services::app_calls::shared().stop();
+            }
+            Err(e) => self.error = Some(format!("Could not save the network settings: {e}")),
+        }
+        cx.notify();
+    }
+
+    fn note_discovery_lock(&mut self) {
+        self.note = Some(match self.network.discovery_override {
+            Some(DiscoveryOverride::Env) => "Weirdnet discovery is turned off by MORPH_DISABLE_WEIRDNET_DISCOVERY.".into(),
+            Some(DiscoveryOverride::Policy) => "Weirdnet discovery is turned off by a policy file.".into(),
+            None => return,
+        });
+    }
+
+    fn add_peer(&mut self, spec: String, cx: &mut Context<Self>) {
+        if spec.is_empty() {
+            return;
+        }
+        match netprefs::add_peer(&self.home, &spec) {
+            Ok(next) => {
+                self.network = next;
+                self.error = None;
+                self.peer_input.update(cx, |i, cx| i.set_text("", cx));
+                morph_services::app_calls::shared().stop();
+            }
+            Err(e) => self.error = Some(e.to_string()),
+        }
+        cx.notify();
+    }
+
+    fn remove_peer(&mut self, peer_id: String, cx: &mut Context<Self>) {
+        match netprefs::remove_peer(&self.home, &peer_id) {
+            Ok(next) => {
+                self.network = next;
+                self.error = None;
+                morph_services::app_calls::shared().stop();
+            }
+            Err(e) => self.error = Some(format!("Could not save the network settings: {e}")),
+        }
+        cx.notify();
+    }
+
     /// Settings → Relays: the summary with a check button, then each relay.
     fn relay_rows(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
         let t = self.theme;
@@ -714,6 +807,85 @@ impl SettingsView {
                 .child("Morph reaches a relay only while linking a device or during a check (30 s). A reserved slot lets a device on another network reach this one.")
                 .into_any_element(),
         );
+        rows.extend(self.discovery_rows(cx));
+        rows.extend(self.manual_peer_rows(cx));
+        rows
+    }
+
+    fn discovery_rows(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+        let t = self.theme;
+        let locked = self.network.discovery_locked();
+        let on = self.network.discovery_enabled();
+        let chips =
+            div().flex().flex_row().gap(px(6.)).children([("On", true), ("Off", false)].into_iter().enumerate().map(|(i, (label, value))| {
+                let active = on == value;
+                let chip = chip(t, ("settings-discovery", i), label, active);
+                if locked {
+                    chip.opacity(0.6).into_any_element()
+                } else {
+                    chip.on_click(cx.listener(move |this, _, _, cx| this.set_discovery(value, cx))).into_any_element()
+                }
+            }));
+        let help = if locked {
+            match self.network.discovery_override {
+                Some(DiscoveryOverride::Env) => {
+                    "Turned off by MORPH_DISABLE_WEIRDNET_DISCOVERY. Sharing and sync with relays and added peers still work.".to_string()
+                }
+                Some(DiscoveryOverride::Policy) => {
+                    "Turned off by a policy file. Sharing and sync with relays and added peers still work.".to_string()
+                }
+                None => String::new(),
+            }
+        } else {
+            "Find peers on the local network and the DHT. Turn this off on corporate networks. Sharing and sync with relays and added peers still work.".into()
+        };
+        vec![self.row(Item::Discovery, "Weirdnet discovery", Some(help), chips.into_any_element(), cx)]
+    }
+
+    fn manual_peer_rows(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+        let t = self.theme;
+        let input = div().flex().flex_row().items_center().gap(px(8.)).child(div().w(px(280.)).child(self.peer_input.clone())).child(
+            button(t, "settings-peer-add", "Add", false).on_click(cx.listener(|this, _, _, cx| {
+                let text = this.peer_input.read(cx).text().trim().to_string();
+                this.add_peer(text, cx);
+            })),
+        );
+        let mut rows = vec![self.row(
+            Item::ManualPeers,
+            "Manual peers",
+            Some("Add a peer by multiaddr (ending in /p2p/<id>) to sync without discovery. An address is not trust; certificates authorize a node.".into()),
+            input.into_any_element(),
+            cx,
+        )];
+        for (i, peer) in self.network.peers().iter().enumerate() {
+            let id = peer.peer_id.clone();
+            let addrs = peer.addrs.join(", ");
+            rows.push(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(8.))
+                    .px(px(12.))
+                    .py(px(6.))
+                    .rounded(px(8.))
+                    .bg(rgb(t.surface))
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.))
+                            .child(div().text_size(px(13.)).child(id.clone()))
+                            .child(div().text_size(px(11.)).text_color(rgb(t.text_secondary)).child(addrs)),
+                    )
+                    .child(
+                        button(t, ("settings-peer-remove", i), "Remove", false)
+                            .on_click(cx.listener(move |this, _, _, cx| this.remove_peer(id.clone(), cx))),
+                    )
+                    .into_any_element(),
+            );
+        }
         rows
     }
 
@@ -1031,7 +1203,8 @@ mod tests {
         }
         assert!(Section::Browser.app_wide() && Section::Relays.app_wide());
         assert_eq!(Section::ALL.into_iter().filter(|s| s.matches("relay")).collect::<Vec<_>>(), [Section::Relays]);
-        assert_eq!(visible_items("relays"), [Item::CheckRelays]);
+        assert_eq!(visible_items("relays"), [Item::CheckRelays, Item::Discovery, Item::ManualPeers]);
+        assert!(Section::Relays.matches("discovery"));
         for s in [Section::Profile, Section::Search, Section::Layout, Section::Appearance, Section::Downloads, Section::Privacy] {
             assert!(!s.app_wide(), "{s:?} is per profile");
         }

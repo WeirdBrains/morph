@@ -22,6 +22,7 @@ use std::time::Duration;
 
 use futures::StreamExt;
 use morph_core::app_call::{self, AppCallError, AppCaller, AppRequest, AppResponse};
+use morph_core::network::{self as netprefs, NetworkSettings};
 use weirdnet_net::profile::{Profile, WEIRDNET};
 use weirdnet_net::{AppBody, AppError, Multiaddr, Node, NodeConfig, PeerId};
 
@@ -61,12 +62,17 @@ impl weirdnet_net::Handler<(), ()> for NoRequests {
 /// The node in use and the relays it was started with.
 struct Running {
     relays: Vec<Multiaddr>,
+    discovery: bool,
+    peers: Vec<netprefs::PeerEntry>,
     node: Arc<Node<(), ()>>,
 }
 
 /// Calls Weirdnet apps over weirdnet-net (see the module docs).
 pub struct NetAppCaller {
     config: Box<dyn Fn() -> NodeConfig + Send + Sync>,
+    /// Overlay `network.json` (and dial manual peers). Off in tests that
+    /// pass their own [`NetAppCaller::with_config`].
+    use_install_network: bool,
     running: Mutex<Option<Running>>,
 }
 
@@ -80,21 +86,33 @@ impl NetAppCaller {
     /// A caller over the device-link relays (`MORPH_LINK_RELAYS` or the
     /// public relay, with the addresses each advertises).
     pub fn new() -> Self {
-        Self::with_config(|| caller_config(crate::relays::relay_addrs()))
+        let mut s = Self::with_config(|| caller_config(crate::relays::relay_addrs()));
+        s.use_install_network = true;
+        s
     }
 
     /// A caller whose node runs with `config()` (tests: an in-memory network).
     pub fn with_config(config: impl Fn() -> NodeConfig + Send + Sync + 'static) -> Self {
-        Self { config: Box::new(config), running: Mutex::new(None) }
+        Self { config: Box::new(config), use_install_network: false, running: Mutex::new(None) }
+    }
+
+    fn install_network() -> NetworkSettings {
+        crate::home::resolve(None).ok().and_then(|home| netprefs::load(&home).ok()).unwrap_or_default()
     }
 
     /// The running node, started (again) when there is none or the relays
     /// changed.
     fn node(&self) -> Result<Arc<Node<(), ()>>, AppCallError> {
-        let cfg = (self.config)();
+        let mut cfg = (self.config)();
+        let net = if self.use_install_network { Self::install_network() } else { NetworkSettings::default() };
+        if self.use_install_network {
+            cfg = crate::network::apply_to_config(cfg, &net);
+        }
         let mut running = self.running.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(r) = running.as_ref()
             && r.relays == cfg.relays
+            && r.discovery == net.discovery_enabled()
+            && r.peers == net.peers()
             && r.node.running()
         {
             return Ok(r.node.clone());
@@ -103,8 +121,11 @@ impl NetAppCaller {
         let relays = cfg.relays.clone();
         let node = Node::start(&PROFILE, weirdnet_net::Keypair::generate_ed25519(), cfg, Arc::new(NoRequests))
             .map_err(|e| AppCallError::Unreachable(format!("Weirdnet could not start: {e}")))?;
+        if self.use_install_network {
+            crate::network::dial_manual_peers(&node, net.peers());
+        }
         let node = Arc::new(node);
-        *running = Some(Running { relays, node: node.clone() });
+        *running = Some(Running { relays, discovery: net.discovery_enabled(), peers: net.peers().to_vec(), node: node.clone() });
         Ok(node)
     }
 

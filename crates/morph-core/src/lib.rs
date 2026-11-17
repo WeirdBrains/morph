@@ -10,6 +10,7 @@ pub mod app_call;
 pub mod bookmarks;
 pub mod library;
 pub mod library_db;
+pub mod network;
 pub mod omnibox;
 pub mod page_bridge;
 pub mod profiles;
