@@ -104,6 +104,17 @@ fn link_error(e: weirdnet_device_link::Error) -> Error {
     Error::Message(e.to_string())
 }
 
+/// What [`NewDevice::finish`] stored, including the sync types and roster
+/// snapshot that rode on the transfer.
+#[derive(Debug)]
+pub struct LinkedDevice {
+    pub identity: ProfileIdentity,
+    /// Types the existing device opted in (empty if the sender did not fill them).
+    pub sync: Vec<String>,
+    /// JSON snapshot of the roster (certs only, no secrets).
+    pub settings: String,
+}
+
 /// The new device's side of one link. Stops listening when dropped.
 pub struct NewDevice {
     host: HostNode,
@@ -154,7 +165,7 @@ impl NewDevice {
 
     /// Takes the identity that arrived (after [`NewDevice::confirm`]) into
     /// `profile_dir`, sealed under the new `password`. Spends the offer.
-    pub fn finish(&self, profile_dir: &Path, password: &SecretString, now_ms: i64) -> Result<ProfileIdentity> {
+    pub fn finish(&self, profile_dir: &Path, password: &SecretString, now_ms: i64) -> Result<LinkedDevice> {
         // Check everything that could still fail before taking: the offer is
         // single use, so a refused password must not spend it.
         profile_identity::check_password(password)?;
@@ -173,7 +184,7 @@ impl NewDevice {
         let cert = serde_json::to_vec_pretty(&transfer.node_cert).map_err(|e| Error::Message(e.to_string()))?;
         profile_identity::write_private(&node_key_path(profile_dir), &sealed)?;
         profile_identity::write_private(&node_cert_path(profile_dir), &cert)?;
-        Ok(identity)
+        Ok(LinkedDevice { identity, sync: transfer.sync.clone(), settings: transfer.settings.clone() })
     }
 }
 
@@ -225,7 +236,13 @@ impl AddDevice {
 
     /// The codes match: send the identity, once.
     pub fn send(&mut self) -> Result<()> {
-        self.pairing.send(&self.seed, &self.profile_name, "{}").map_err(link_error)
+        self.send_with("{}", &[]).map(|_| ())
+    }
+
+    /// Send the identity with a roster snapshot and the types to sync.
+    /// Returns the new device's `NodeCert`.
+    pub fn send_with(&mut self, settings: &str, sync: &[String]) -> Result<weirdnet_net::user::NodeCert> {
+        self.pairing.send_with(&self.seed, &self.profile_name, settings, sync).map_err(link_error)
     }
 
     /// The codes differ, or the user gave up.
@@ -344,9 +361,9 @@ mod tests {
         assert!(matches!(new.state(), LinkState::Received { .. }));
         let linked = new.finish(&fresh, &pw("new password"), 2).unwrap();
 
-        assert_eq!(linked.user_id, made.identity.user_id);
-        assert_eq!(linked.source, Source::Linked);
-        assert_eq!(load(&fresh).unwrap().unwrap(), linked);
+        assert_eq!(linked.identity.user_id, made.identity.user_id);
+        assert_eq!(linked.identity.source, Source::Linked);
+        assert_eq!(load(&fresh).unwrap().unwrap(), linked.identity);
         assert_eq!(unlock(&fresh, &pw("new password")).unwrap().user_id, made.identity.user_id);
         assert!(unlock(&fresh, &pw("old password")).is_err());
         assert!(has_linked_node(&fresh));
@@ -375,7 +392,7 @@ mod tests {
         add.send().unwrap();
         assert!(new.finish(&fresh, &pw("short"), 2).is_err());
         assert!(matches!(new.state(), LinkState::Received { .. }));
-        assert_eq!(new.finish(&fresh, &pw("long enough"), 2).unwrap().source, Source::Linked);
+        assert_eq!(new.finish(&fresh, &pw("long enough"), 2).unwrap().identity.source, Source::Linked);
     }
 
     #[test]
