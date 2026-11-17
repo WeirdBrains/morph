@@ -1542,13 +1542,15 @@ def identity_link_invite(m, r, binary, display, user_id):
     (4), and after the password and the same code check the new one gets
     the identity."""
     win, w0 = open_identity(m, r, "invite")
+    # Only an invite this Add a device logs (an earlier one is stale).
+    before = len(m.lines(r"morph-event link invite="))
     m.key("a", delay=1.5)
-    invite = wait_for(lambda: [line.split("invite=", 1)[1].strip() for line in m.lines(r"morph-event link invite=")])
+    invite = wait_for(lambda: [line.split("invite=", 1)[1].strip() for line in m.lines(r"morph-event link invite=")[before:]], 20)
     r.check("invite", "Add a device shows a code of its own", invite, "no invite logged")
     if not invite:
         return
     check_qr(r, "invite", "its QR code paints and reads back as its link", m, invite[-1])
-    m4 = Driver(binary, display, tempfile.mkdtemp(prefix="morph-xvfb-invite-"))
+    m4 = Driver(binary, display, tempfile.mkdtemp(prefix="morph-xvfb-invite-"), LINK_ENV)
     try:
         r.check("invite", "a new device (another home) opens", wait_for(lambda: state(m4), 20))
         new_win, _ = open_identity(m4, r, "invite")
