@@ -856,19 +856,35 @@ fn an_unknown_morph_page_gets_morphs_error_page_listing_the_real_ones() {
     assert_eq!(b.cover(), None);
 }
 
+/// Poll until every app call has finished.
+fn settle(b: &mut Browser) {
+    for _ in 0..400 {
+        b.poll();
+        if b.app_loads.is_empty() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!("an app call never finished");
+}
+
 #[test]
-fn a_weirdnet_app_link_says_app_calls_are_not_supported_yet_instead_of_searching() {
+fn a_weirdnet_app_link_without_a_network_says_so_instead_of_searching() {
     for url in ["weirdnet-muninn://home.example.com/notes/a.md?token=x", "Weirdnet-Notes://alice", "weirdnet-morph://peer/site"] {
         let (mut b, fake) = browser("example.com");
         type_into_address(&mut b, url);
         assert_eq!(b.active_url(), url);
+        assert!(b.toolbar().loading, "{url}: the tab loads while the call runs");
+        settle(&mut b);
+        assert!(!b.toolbar().loading);
         let Some(Cover::Failed(error)) = b.cover().cloned() else { panic!("{url}: {:?}", b.cover()) };
         let (title, body) = error_text(&error);
-        assert_eq!(title, "App call not supported yet", "{url}");
+        assert_eq!(title, "App calls aren't available", "{url}");
         assert!(!body.contains("token=x"), "no query on the page");
         assert!(never_loaded(&fake, url), "{url} never reaches the engine (or an OS handler through it)");
         // Reload asks again, still without the engine.
         b.reload();
+        settle(&mut b);
         assert!(matches!(b.cover(), Some(Cover::Failed(_))));
         assert!(never_loaded(&fake, url));
     }
@@ -876,44 +892,153 @@ fn a_weirdnet_app_link_says_app_calls_are_not_supported_yet_instead_of_searching
     type_into_address(&mut b, "weirdnet://internal/x");
     let Some(Cover::Failed(error)) = b.cover().cloned() else { panic!() };
     assert_eq!(error_text(&error).0, "weirdnet:// can't be opened");
+    type_into_address(&mut b, "weirdnet-No.Good://alice/x");
+    let Some(Cover::Failed(error)) = b.cover().cloned() else { panic!("an invalid app name fails at once: {:?}", b.cover()) };
+    assert_eq!(error_text(&error).0, "Not a valid Weirdnet app name");
 }
 
 #[test]
 fn app_links_open_in_new_tabs_and_at_start_without_the_engine() {
     let (mut b, fake) = browser("weirdnet-notes://alice/x");
     assert_eq!(b.active_url(), "weirdnet-notes://alice/x");
+    settle(&mut b);
     assert!(matches!(b.cover(), Some(Cover::Failed(_))));
     b.new_tab("morph://nope");
     assert_eq!(b.active_url(), "morph://nope");
     assert!(matches!(b.cover(), Some(Cover::Failed(_))));
     b.load("weirdnet-notes://bob/");
     assert_eq!(b.active_url(), "weirdnet-notes://bob/");
+    settle(&mut b);
     for url in ["weirdnet-notes://alice/x", "morph://nope", "weirdnet-notes://bob/"] {
         assert!(never_loaded(&fake, url), "{url}");
     }
 }
 
-#[test]
-fn a_plugged_in_app_caller_gets_the_request() {
-    use morph_core::app_call::{AppCallError, AppCaller, AppRequest, AppResponse};
-    use std::sync::{Arc, Mutex};
-    struct Seen(Mutex<Vec<AppRequest>>);
-    impl AppCaller for Seen {
-        fn call(&self, r: AppRequest) -> Result<AppResponse, AppCallError> {
-            self.0.lock().unwrap().push(r);
-            Err(AppCallError::NotFound("alice".into()))
-        }
+/// A caller that records requests and answers from a fixed list.
+struct Scripted {
+    seen: std::sync::Mutex<Vec<morph_core::app_call::AppRequest>>,
+    answer: fn(&morph_core::app_call::AppRequest) -> Result<morph_core::app_call::AppResponse, morph_core::app_call::AppCallError>,
+    /// Held until released, to see a call under way.
+    gate: std::sync::Mutex<()>,
+}
+
+impl morph_core::app_call::AppCaller for Scripted {
+    fn call(&self, r: morph_core::app_call::AppRequest) -> Result<morph_core::app_call::AppResponse, morph_core::app_call::AppCallError> {
+        self.seen.lock().unwrap().push(r.clone());
+        let _open = self.gate.lock().unwrap();
+        (self.answer)(&r)
     }
-    let seen = Arc::new(Seen(Mutex::new(vec![])));
+}
+
+/// Pages the browser recorded in history: (address, title).
+type Visits = Rc<RefCell<Vec<(String, String)>>>;
+
+fn with_caller(
+    start: &str,
+    answer: fn(&morph_core::app_call::AppRequest) -> Result<morph_core::app_call::AppResponse, morph_core::app_call::AppCallError>,
+) -> (Browser, FakeBackend, std::sync::Arc<Scripted>, Visits) {
+    let caller = std::sync::Arc::new(Scripted { seen: Default::default(), answer, gate: Default::default() });
     let fake = FakeBackend::new();
-    let config = Config { start_url: "example.com".into(), app_caller: Some(seen.clone()), ..Config::default() };
-    let mut b = Browser::new(Box::new(fake.clone()), config).unwrap();
+    let visits: Rc<RefCell<Vec<(String, String)>>> = Rc::default();
+    let sink = visits.clone();
+    let config = Config {
+        start_url: start.into(),
+        app_caller: Some(caller.clone()),
+        history: Some(Box::new(move |u: &str, t: &str| sink.borrow_mut().push((u.into(), t.into())))),
+        ..Config::default()
+    };
+    let b = Browser::new(Box::new(fake.clone()), config).unwrap();
+    (b, fake, caller, visits)
+}
+
+fn html_answer(r: &morph_core::app_call::AppRequest) -> Result<morph_core::app_call::AppResponse, morph_core::app_call::AppCallError> {
+    let body = format!("<html><head><title>Notes of {}</title></head><body>{}</body></html>", r.locator, r.path).into_bytes();
+    Ok(morph_core::app_call::AppResponse {
+        status: 200,
+        headers: vec![("content-type".into(), "text/html".into())],
+        body: Box::new(std::io::Cursor::new(body)),
+    })
+}
+
+#[test]
+fn a_plugged_in_app_caller_gets_the_request_and_its_error_shows() {
+    let (mut b, _, caller, _) = with_caller("example.com", |_| Err(morph_core::app_call::AppCallError::NotFound("alice".into())));
     type_into_address(&mut b, "weirdnet-notes://alice/a?b=1");
-    let r = seen.0.lock().unwrap().pop().unwrap();
+    settle(&mut b);
+    let r = caller.seen.lock().unwrap().pop().unwrap();
     assert_eq!((r.app.as_str(), r.locator.as_str(), r.method.as_str(), r.path.as_str()), ("weirdnet-notes", "alice", "GET", "/a?b=1"));
     let Some(Cover::Failed(error)) = b.cover().cloned() else { panic!() };
-    assert_eq!(error_text(&error).0, "This app couldn't be opened");
-    assert!(error_text(&error).1.contains("could not find alice on Weirdnet"));
+    assert_eq!(error_text(&error).0, "Couldn't find alice");
+    assert!(error_text(&error).1.contains("not sent to a search engine"));
+    assert_eq!(b.active_title(), "Couldn't find alice");
+    b.back();
+    assert_eq!(b.active_url(), "https://example.com", "Back shows the page under it");
+    assert_eq!(b.cover(), None);
+}
+
+#[test]
+fn an_apps_answer_loads_in_the_tab_under_the_app_address() {
+    let (mut b, fake, _, visits) = with_caller("example.com", html_answer);
+    let view = fake.created()[0];
+    type_into_address(&mut b, "weirdnet-notes://Alice/dir/a?x=1");
+    settle(&mut b);
+    let Some(Call::Load(data)) = fake.calls_for(view).into_iter().rev().find(|c| matches!(c, Call::Load(_))) else { panic!() };
+    assert!(data.starts_with("data:text/html;charset=utf-8;morph-app="), "{}", &data[..50]);
+    assert_eq!(b.cover(), None);
+    assert_eq!(b.active_url(), "weirdnet-notes://Alice/dir/a?x=1");
+    assert_eq!(b.active_title(), "Notes of Alice");
+    // The engine reports the data: address; the tab keeps the app's.
+    fake.emit(view, Event::LoadStarted);
+    fake.emit(view, Event::UrlChanged(data.clone()));
+    fake.emit(view, Event::TitleChanged("Notes of Alice".into()));
+    fake.emit(view, Event::LoadFinished);
+    b.poll();
+    assert_eq!(b.active_url(), "weirdnet-notes://Alice/dir/a?x=1");
+    assert_eq!(b.address().text(), "weirdnet-notes://Alice/dir/a?x=1");
+    assert_eq!(
+        visits.borrow().last().cloned(),
+        Some(("weirdnet-notes://Alice/dir/a?x=1".into(), "Notes of Alice".into())),
+        "history has the app address"
+    );
+    // Reload calls the app again rather than reloading the copy.
+    let loads = fake.calls_for(view).iter().filter(|c| matches!(c, Call::Load(_))).count();
+    b.reload();
+    assert!(b.toolbar().loading);
+    settle(&mut b);
+    assert_eq!(fake.calls_for(view).iter().filter(|c| matches!(c, Call::Load(_))).count(), loads + 1);
+    assert!(!fake.calls_for(view).contains(&Call::Reload));
+    // A link on the page to another app address is called too.
+    fake.emit(
+        view,
+        Event::LoadFailed(LoadError { url: "weirdnet-notes://Alice/dir/b".into(), kind: ErrorKind::Other, message: "unsupported".into() }),
+    );
+    b.poll();
+    assert_eq!(b.active_url(), "weirdnet-notes://Alice/dir/b");
+    settle(&mut b);
+    assert_eq!(b.cover(), None);
+    assert_eq!(b.active_title(), "Notes of Alice");
+}
+
+#[test]
+fn stop_and_going_elsewhere_drop_a_call_under_way() {
+    let (mut b, _, caller, _) = with_caller("example.com", html_answer);
+    let held = caller.gate.lock().unwrap();
+    type_into_address(&mut b, "weirdnet-notes://alice/slow");
+    assert_eq!(b.active_url(), "weirdnet-notes://alice/slow");
+    assert!(b.toolbar().loading && b.app_call_progress() == Some(0));
+    b.dispatch(Action::Stop);
+    assert_eq!(b.active_url(), "https://example.com", "Stop puts the address back");
+    assert!(!b.toolbar().loading && b.app_call_progress().is_none());
+    type_into_address(&mut b, "weirdnet-notes://alice/slow");
+    type_into_address(&mut b, "example.org");
+    assert!(b.app_loads.is_empty(), "a new address drops the call");
+    drop(held);
+    for _ in 0..20 {
+        b.poll();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(b.active_url(), "https://example.org");
+    assert_eq!(b.cover(), None);
 }
 
 #[test]

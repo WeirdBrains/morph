@@ -8,6 +8,7 @@
 //! `morph-desktop` calls them directly. Secrets stay in Rust: passwords come
 //! in as [`SecretString`], keys never leave.
 
+pub mod app_calls;
 pub mod device_link;
 pub mod home;
 pub mod identity;
