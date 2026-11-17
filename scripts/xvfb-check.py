@@ -1825,6 +1825,18 @@ def own_addresses(m, r, win, top):
     r.check("address", "the app link went to the app caller (no query in the log)", called and not m.lines(r"morph-event app-call .*token"), str(m.lines(r"morph-event app-call")[-3:]))
 
 
+def go_to_keys(m, win, top, suffix=""):
+    """Load keys.html in the current tab and wait until it reports a fresh
+    state. After navigating away (app-call pages, Morph error pages) later
+    checks still need this page's innerWidth and its window.open button."""
+    since = len(m.events())
+    m.click(win, 300, top + 300)
+    m.key("ctrl+l", delay=0.6)
+    m.type(PAGE.as_uri() + suffix)
+    m.key("Return", delay=1.5)
+    return wait_for(lambda: any(n == "TitleChanged" and "M{" in (a or "") for _, n, a in m.events()[since:]))
+
+
 def app_calls(m, r, win, top):
     """weirdnet-morph-test://<peer>/… against the serve-app example behind
     the local relay: the app's HTML, JSON and image answers load in the tab
@@ -1854,12 +1866,19 @@ def app_calls(m, r, win, top):
             shown = [a for t, name, a in m.events()[since:] if name == "UrlChanged"]
             r.check("app", "the engine got the app's page as a data: address (Morph never hands it the weirdnet- address)", any((a or "").strip("\"").startswith("data:text/html") for a in shown), str([(a or "")[:40] for a in shown]))
             r.check("app", "the query never reaches the log", not m.lines(r"morph-event app-call .*x=1"), "")
+        m.key("alt+Left", delay=1.0)
     m.click(win, 300, top + 300)
     m.key("ctrl+l", delay=0.6)
     m.type(f"weirdnet-other-app://{APP_PEER}/")
     m.key("Return", delay=1.0)
     r.check("app", "an app the peer doesn't serve says so", wait_for(lambda: m.title(win).startswith(f"{APP_PEER} doesn't serve weirdnet-other-app://"), 45), m.title(win))
     m.key("alt+Left", delay=1.0)
+    # The calls leave the tab on an app page. F11, window.open and the
+    # profiles-panel width check all read keys.html's innerWidth (and the
+    # popup click hits a button on that page), so load it again; otherwise
+    # state() keeps the last keys.html title (stale width) and those checks
+    # fail even though the shell itself is fine.
+    r.check("app", "the keys page is showing again after the app calls", go_to_keys(m, win, top, "?after-app"), m.title(win))
 
 
 def main():
@@ -1993,12 +2012,12 @@ def run(args):
         if wm:
             w0 = (state(m, tab=2) or {}).get("w", 0)
             m.click(win, 300, top + 300)
-            m.key("F11", delay=1.5)
-            w1 = (state(m, tab=2) or {}).get("w", 0)
-            r.check("shell", "F11 toggles full screen", w1 > w0, f"{w0} -> {w1}")
-            m.key("F11", delay=1.5)
-            w2 = (state(m, tab=2) or {}).get("w", 0)
-            r.check("shell", "F11 again leaves full screen", w2 < w1, f"{w1} -> {w2}")
+            m.key("F11", delay=0.8)
+            w1 = wait_for(lambda: (state(m, tab=2) or {}).get("w", 0) > w0 and (state(m, tab=2) or {}).get("w"))
+            r.check("shell", "F11 toggles full screen", w1 and w1 > w0, f"{w0} -> {(state(m, tab=2) or {}).get('w')}")
+            m.key("F11", delay=0.8)
+            w2 = wait_for(lambda: (state(m, tab=2) or {}).get("w", 0) < (w1 or 0) and (state(m, tab=2) or {}).get("w"))
+            r.check("shell", "F11 again leaves full screen", w2 and w2 < w1, f"{w1} -> {(state(m, tab=2) or {}).get('w')}")
 
         # Popups: open one from the page and run the same page keys in it.
         m.click(win, 500, top + 18)
