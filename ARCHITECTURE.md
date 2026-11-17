@@ -568,7 +568,7 @@ rust-version 1.99.
 |---|---|---|
 | `weirdnet-keys` 0.1.0 | github.com/WeirdBrains/weirdnet-keys | Identity root: `Key32`, 24 BIP39 words, Shamir shards, Argon2id/HKDF, XChaCha20-Poly1305, X25519, envelope keyring (DEK wrap, rotate, rekey, recover). **Phase 1.** |
 | `weirdnet-storage` 0.1.0 | github.com/WeirdBrains/weirdnet-storage | Local store: SQLCipher with a caller-supplied key, migrations, savepoints, snapshots, row change log + three-way merge (`sync`). **Phase 1.** |
-| `weirdnet-net` 0.1.0 | github.com/WeirdBrains/weirdnet-net | libp2p 0.57 node (TCP, QUIC, Noise, Yamux, mDNS, Kademlia, relay client + opt-in relay server, DCUtR hole punching, AutoNAT). App-defined CBOR request/response. Signed offers/answers with a 10-digit short code, invitation links, sealed messages, node certs, user cards, link grants, TOFU pinning. **Phase 1.** |
+| `weirdnet-net` 0.4.0 (Morph moved from 0.1.0 on 2026-11-17) | github.com/WeirdBrains/weirdnet-net | libp2p 0.57 node (TCP, QUIC, Noise, Yamux, mDNS, Kademlia, relay client + opt-in relay server, DCUtR hole punching, AutoNAT). App-defined CBOR request/response. Signed offers/answers with a 10-digit short code, invitation links, sealed messages, node certs, user cards, link grants, TOFU pinning. **Phase 1.** |
 | `weirdnet-themes` 0.1.0 | github.com/WeirdBrains/weirdnet-themes | TOML themes, 21 colour roles, contrast checks, `to_hex` for Dart. **Phase 2** (turn off `terminal-background` on mobile). |
 | `weirdnet-rules` 0.1.0 | github.com/WeirdBrains/weirdnet-rules | Rules over event history + `every`/cron schedules. Candidate for Researcher/Student triggers. Phase 2. |
 | `weirdnet-pipelines` 0.1.0 | github.com/WeirdBrains/weirdnet-pipelines | DAG runner. Candidate for research pipelines. Phase 2. |
@@ -2717,3 +2717,58 @@ scanner in mnstrapp/mnstrv2. It replaces the Android `QrScanActivity`
 the bundled ML Kit barcode model (`com.google.mlkit:barcode-scanning`, not
 the Play Services download), which is proprietary and adds a few MB per ABI.
 
+### 2026-11-17 — weirdnet-net 0.4
+
+Morph builds on weirdnet-net 0.4.0 (was 0.1.0); libp2p stays 0.57, so the
+libp2p-swarm patch in `third_party/` stays. Device-link wire formats did not
+change: offers and invites are still v2, the link protocols are still
+`/weirdnet/link/1` and the invite one, and alpha.13/14 builds link with this
+one in both directions (checked on 127.0.0.1 and through the public relay).
+The published `weirdnet-device-link` 0.1.0 is older than Morph's in-tree
+copy (no compact v2 codes, no relay status), so Morph keeps its copy.
+
+- **Every relay address.** weirdnet-net reserves a relay slot over the
+  first configured address of a relay only. Link nodes
+  (`weirdnet_device_link::reach`) start with no relays in their config,
+  connect to each relay over all of its addresses at once (libp2p dials
+  them side by side and keeps the first that answers), then ask for the
+  reservation, which rides on that connection. A dialing node first
+  reaches the relay of each circuit in the code the same way. Codes still
+  carry the circuits the relay's reservation names (built from the
+  addresses it announces; the public relay's TCP one is one byte in a v2
+  code), so old builds read them.
+- **WSS.** The relay info document's `addrs` (same peer id, same DNS name,
+  TCP, QUIC or `/tls/ws`) are added to the configured ones at run time
+  (`morph_services::relays::link_config`), so when the relay serves
+  `/dns4/relay.net.weirdbrains.com/tcp/443/tls/ws` (weirdnet-relay 0.2+
+  with `[wss]`, DEPLOY.md step 7) links use it without a Morph update. The
+  deployed relay (`weirdnet-relay/0.1.0`, on weirdnet-net 0.2.0) advertises
+  TCP and QUIC only. It accepts 0.4 clients: connections and reservations
+  over TCP and QUIC and names lookups all work.
+- **Round trip.** weirdnet-net 0.4 does not report ping RTTs. A relay
+  check times a names lookup (`Discover`) sent to the relay over the
+  connection it holds and shows the best of three: one request round trip
+  plus the relay's lookup, about twice the TCP connect time. A relay
+  without a names server shows no round trip.
+- **Limits.** Link nodes take requests up to 256 KiB and answers up to
+  16 KiB and wait 30 s for an answer (`weirdnet_device_link::reach`);
+  weirdnet-net's defaults are 8 MiB, 256 MiB and 60 s.
+- **Checks.** `weirdnet-device-link`'s relay tests link, answer invites and
+  check relays through an in-memory relay whose first address goes
+  nowhere. The `local-relay` example runs a relay on the machine's own
+  address for `scripts/xvfb-check.py --local-relay`, which points the
+  Relays check and the new device's link screen at it (a dead address
+  first) and expects a reserved slot and a round trip. Its address is
+  private, so codes carry no circuit through it (weirdnet-net puts only
+  circuits through routable relays in reachable addresses).
+- **Old dialers through a relay.** A weirdnet-net 0.1 node that reserves on
+  a relay fails to dial through that relay while it is still connecting to
+  it ("Failed to dial the requested peer"; fixed in weirdnet-net 0.3). So an
+  alpha.13/14 device that scans or pastes a code (the dialing side) reaches
+  the other device only on the same network; with this build on the
+  dialing side it also works through the relay.
+- **Identity sync groundwork.** Not built yet. Link nodes already speak the
+  names protocol (`/weirdnet/names/1`) to the relay, which is where signed
+  peer records for a user's devices go; sync data belongs on 0.4 streams
+  (`Node::open_stream`, sealed with the exchange key), not on the link's
+  request-response, whose caps stay small. `Transfer::sync` is still empty.
