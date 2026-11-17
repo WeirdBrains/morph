@@ -55,10 +55,32 @@ class FakeMorphApi implements MorphApi {
             'Morph has these pages:\n${morphPages.map((p) => 'morph://$p').join('\n')}',
       );
     }
-    return const OwnAddress(
-      title: 'App call not supported yet',
-      body: 'It was not sent to a search engine.',
-    );
+    if (scheme == 'weirdnet') {
+      return const OwnAddress(
+        title: "weirdnet:// can't be opened",
+        body: 'weirdnet:// addresses are internal to Weirdnet.',
+      );
+    }
+    return const OwnAddress(app: true);
+  }
+
+  /// The app calls made, by address.
+  final appCalls = <String>[];
+
+  /// What [openApp] answers; by default nothing is found.
+  MorphAppPage Function(String url) appAnswer = (url) => const MorphAppPage(
+    title: "Couldn't find alice",
+    body: 'It was not sent to a search engine.',
+  );
+
+  /// Completes app calls when set (to see one under way).
+  Future<void>? appGate;
+
+  @override
+  Future<MorphAppPage> openApp(String url) async {
+    appCalls.add(url);
+    await appGate;
+    return appAnswer(url);
   }
 
   @override

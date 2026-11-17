@@ -7,7 +7,7 @@ import '../frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `own_address_with`
+// These functions are ignored because they are not marked as `pub`: `open_app_with`
 
 /// What typing `input` into the address bar opens: a web address when the
 /// text looks like one, else a search. `None` for blank input.
@@ -27,13 +27,57 @@ List<SearchEngineView> searchEngines() =>
     RustLib.instance.api.crateApiOmniboxSearchEngines();
 
 /// Whether `url` (as [`omnibox_target_for`] gave it) is Morph's to open,
-/// and how: a `morph://` page, the page listing them for an unknown one, or
-/// for a `weirdnet-<app>://` link the result of calling the app over
-/// Weirdnet (in this build always "App call not supported yet"). `None`
-/// for anything the web view loads. Neither kind is ever a search or handed
-/// to the OS.
+/// and how: a `morph://` page, the page listing them for an unknown one, a
+/// `weirdnet-<app>://` link to call over Weirdnet (`app`; the shell calls
+/// [`open_app`]), or the error page for an app link that can't be called
+/// (`weirdnet://`, an invalid app name). `None` for anything the web view
+/// loads. None of them is ever a search or handed to the OS.
 OwnAddressView? ownAddress({required String url}) =>
     RustLib.instance.api.crateApiOmniboxOwnAddress(url: url);
+
+/// Calls the app a `weirdnet-<app>://` address names over Weirdnet and
+/// renders its answer (HTML, images, JSON, text; at most
+/// `morph_core::app_call::BODY_MAX`). Blocks while the peer is found and
+/// answers, on the bridge's worker thread, never the UI's.
+Future<AppPageView> openApp({required String url}) =>
+    RustLib.instance.api.crateApiOmniboxOpenApp(url: url);
+
+/// An app's answer for the web view, or why there is none.
+class AppPageView {
+  /// The `data:` address to load (marked with a token: the shell shows
+  /// the app address for it), or `None` when the call failed.
+  final String? dataUrl;
+
+  /// The page's title, or the error page's.
+  final String title;
+
+  /// The error page's explanation (empty for a page).
+  final String body;
+
+  /// The app's status (0 when it did not answer).
+  final int status;
+
+  const AppPageView({
+    this.dataUrl,
+    required this.title,
+    required this.body,
+    required this.status,
+  });
+
+  @override
+  int get hashCode =>
+      dataUrl.hashCode ^ title.hashCode ^ body.hashCode ^ status.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AppPageView &&
+          runtimeType == other.runtimeType &&
+          dataUrl == other.dataUrl &&
+          title == other.title &&
+          body == other.body &&
+          status == other.status;
+}
 
 /// What Morph opens itself instead of loading an address.
 class OwnAddressView {
@@ -41,16 +85,25 @@ class OwnAddressView {
   /// `morph_core::address::PAGES` lists them), for the shell to open.
   final String? page;
 
+  /// A `weirdnet-<app>://` address to call over Weirdnet ([`open_app`]).
+  final bool app;
+
   /// Otherwise Morph's error page: its title …
   final String title;
 
   /// … and explanation.
   final String body;
 
-  const OwnAddressView({this.page, required this.title, required this.body});
+  const OwnAddressView({
+    this.page,
+    required this.app,
+    required this.title,
+    required this.body,
+  });
 
   @override
-  int get hashCode => page.hashCode ^ title.hashCode ^ body.hashCode;
+  int get hashCode =>
+      page.hashCode ^ app.hashCode ^ title.hashCode ^ body.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -58,6 +111,7 @@ class OwnAddressView {
       other is OwnAddressView &&
           runtimeType == other.runtimeType &&
           page == other.page &&
+          app == other.app &&
           title == other.title &&
           body == other.body;
 }

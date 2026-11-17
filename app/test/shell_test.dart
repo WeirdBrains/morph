@@ -2383,6 +2383,70 @@ void main() {
     }
   });
 
+  testWidgets('a weirdnet-<app>:// answer loads in the tab under its address', (
+    tester,
+  ) async {
+    final view = tester.view;
+    view.physicalSize = const Size(412, 915);
+    view.devicePixelRatio = 1.0;
+    addTearDown(view.reset);
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      final api = FakeMorphApi();
+      final gate = Completer<void>();
+      api.appGate = gate.future;
+      const page =
+          'data:text/html;charset=utf-8;morph-app=ab12;base64,PHRpdGxlPk5vdGVzPC90aXRsZT4=';
+      api.appAnswer = (url) =>
+          const MorphAppPage(dataUrl: page, title: 'Notes', status: 200);
+      await tester.pumpWidget(
+        MorphApp(
+          api: api,
+          home: '/tmp/morph-does-not-exist',
+          subscribeToTicks: false,
+          loadPageBridgeAsset: false,
+        ),
+      );
+      await _pumpUntilIdentity(tester);
+      await tester.tap(find.byKey(const Key('address-bar')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('address-sheet-url')),
+        'weirdnet-notes://alice/notes',
+      );
+      await tester.testTextInput.receiveAction(TextInputAction.go);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(api.appCalls, ['weirdnet-notes://alice/notes']);
+      expect(
+        find.byKey(const Key('app-call-loading')),
+        findsOneWidget,
+        reason: 'a progress line while the call runs',
+      );
+      gate.complete();
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('app-call-loading')), findsNothing);
+      final history = fakeWebView.lastSession!.history;
+      expect(history.last, page);
+      expect(
+        [
+          ...fakeWebView.loadedUrls,
+          ...history,
+        ].where((u) => u.startsWith('weirdnet-')),
+        isEmpty,
+      );
+      final bar = tester.widget<TextField>(
+        find.byKey(const Key('address-bar')),
+      );
+      expect(bar.controller!.text, contains('alice/notes'));
+      expect(bar.controller!.text, isNot(contains('data:')));
+      expect(morphAppPageToken(page), 'ab12');
+      expect(morphAppPageToken('https://example.com'), isNull);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
   testWidgets('morph:// and weirdnet-<app>:// addresses never search', (
     tester,
   ) async {
@@ -2412,7 +2476,11 @@ void main() {
       expect(searched(), isFalse);
 
       await _enterAndSubmitUrl(tester, 'weirdnet-muninn://alice/notes');
-      expect(find.text('App call not supported yet'), findsOneWidget);
+      expect(find.text("Couldn't find alice"), findsOneWidget);
+      expect(searched(), isFalse);
+
+      await _enterAndSubmitUrl(tester, 'weirdnet://internal/x');
+      expect(find.text("weirdnet:// can't be opened"), findsOneWidget);
       expect(searched(), isFalse);
       expect(
         fakeWebView.loadedUrls.where((u) => u.startsWith('weirdnet-')),

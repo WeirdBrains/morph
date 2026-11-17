@@ -18,10 +18,15 @@ abstract class MorphApi implements MorphRelaySource {
   Future<String> defaultSearchEngine({String? home});
 
   /// What Morph opens itself for [url] (as [omniboxTargetFor] gave it): one
-  /// of its `morph://` pages, or its error page for an unknown one or for a
-  /// `weirdnet-<app>://` link it cannot call yet. Null for web addresses.
-  /// Neither is ever a search or handed to the OS.
+  /// of its `morph://` pages, a `weirdnet-<app>://` link to call over
+  /// Weirdnet ([OwnAddress.app], then [openApp]), or its error page for an
+  /// unknown page or a link that can't be called. Null for web addresses.
+  /// None of them is ever a search or handed to the OS.
   OwnAddress? ownAddress(String url);
+
+  /// Calls the app a `weirdnet-<app>://` address names over Weirdnet (off
+  /// the UI thread) and returns its page, or the error page saying why not.
+  Future<MorphAppPage> openApp(String url);
   Future<IdentityStatusView> identityDirInfo({String? home});
   Stream<int> eventTicks();
   Future<EphemeralUser> newEphemeralUser();
@@ -257,14 +262,63 @@ class SearchEngineOption {
 
 /// Morph's own handling of an address (see [MorphApi.ownAddress]).
 class OwnAddress {
-  const OwnAddress({this.page, this.title = '', this.body = ''});
+  const OwnAddress({
+    this.page,
+    this.app = false,
+    this.title = '',
+    this.body = '',
+  });
 
   /// One of Morph's pages (`settings`, `history`, `relays`, …) to open.
   final String? page;
 
+  /// A `weirdnet-<app>://` address to call ([MorphApi.openApp]).
+  final bool app;
+
   /// Otherwise the error page's title and explanation.
   final String title;
   final String body;
+}
+
+/// A Weirdnet app's answer (see [MorphApi.openApp]).
+class MorphAppPage {
+  const MorphAppPage({
+    this.dataUrl,
+    this.title = '',
+    this.body = '',
+    this.status = 0,
+  });
+
+  /// The `data:` address to load, or null when the call failed.
+  final String? dataUrl;
+
+  /// The page's title, or the error page's.
+  final String title;
+
+  /// The error page's explanation.
+  final String body;
+
+  /// The app's status (0 when it did not answer).
+  final int status;
+}
+
+/// The token marking an app page's `data:` address (the bridge puts
+/// `morph-app=<hex>` among its parameters), or null for any other address.
+/// Read in Dart: the address can be megabytes long.
+String? morphAppPageToken(String url) {
+  if (!url.startsWith('data:')) {
+    return null;
+  }
+  final comma = url.indexOf(',');
+  final head = url.substring(5, comma < 0 ? url.length : comma);
+  for (final part in head.split(';')) {
+    final p = part.trim();
+    if (p.startsWith('morph-app=')) {
+      final token = p.substring('morph-app='.length);
+      return RegExp(r'^[0-9a-fA-F]+$').hasMatch(token) ? token : null;
+    }
+  }
+  return null;
 }
 
 abstract class MorphRelaySource {

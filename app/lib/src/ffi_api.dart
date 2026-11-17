@@ -49,7 +49,23 @@ class FfiMorphApi implements MorphApi {
     if (own == null) {
       return null;
     }
-    return OwnAddress(page: own.page, title: own.title, body: own.body);
+    return OwnAddress(
+      page: own.page,
+      app: own.app,
+      title: own.title,
+      body: own.body,
+    );
+  }
+
+  @override
+  Future<MorphAppPage> openApp(String url) async {
+    final page = await rust_omnibox.openApp(url: url);
+    return MorphAppPage(
+      dataUrl: page.dataUrl,
+      title: page.title,
+      body: page.body,
+      status: page.status,
+    );
   }
 
   @override

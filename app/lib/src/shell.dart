@@ -185,10 +185,11 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
     );
   }
 
-  void _onTabNav(int id, MorphNavigationEvent event) {
+  void _onTabNav(int id, MorphNavigationEvent raw) {
     if (!mounted) {
       return;
     }
+    final event = _shownEvent(raw);
     final hasUrl = event.url.isNotEmpty && event.url != 'about:blank';
     final loadFinished = (_navLoading[id] ?? false) && !event.isLoading;
     _navLoading[id] = event.isLoading;
@@ -475,6 +476,8 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
   }
 
   Future<void> _submitUrl(String raw) async {
+    // A new address drops an app call under way in this tab.
+    _appCalls.remove(tabs.activeId);
     if (morphIsLinkInvite(raw.trim())) {
       await _openLinkInvite(raw.trim());
       return;
@@ -506,6 +509,9 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
   /// tab with Morph's error page. None of them is loaded, searched or
   /// handed to the OS, and the tab keeps its page (Back, Reload).
   Future<void> _openOwnAddress(String url, OwnAddress own) async {
+    if (own.app) {
+      return _openApp(url);
+    }
     switch (own.page) {
       case 'bookmarks':
         return _openLibrary(MorphLibraryTab.bookmarks);
@@ -537,6 +543,86 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
 
   /// Morph's error pages shown over tabs, by tab: address, title and body.
   final _ownErrors = <int, (String, String, String)>{};
+
+  /// Tabs with an app call under way, and the call's number (a newer
+  /// call or address in the tab makes an older call's answer stale).
+  final _appCalls = <int, int>{};
+  int _appCallSeq = 0;
+
+  /// App pages by their `data:` token, and the app address each shows.
+  final _appPages = <String, String>{};
+
+  /// Call the app a `weirdnet-<app>://` address names, over Weirdnet: the
+  /// tab shows the address and a progress line while the bridge finds the
+  /// peer and reads its answer off the UI thread, then the app's page (a
+  /// `data:` address the tab shows as [url]) or Morph's error page saying
+  /// why not. Never a search, never handed to the OS.
+  Future<void> _openApp(String url) async {
+    final tab = tabs.activeId;
+    final call = ++_appCallSeq;
+    _canonicalAddress = url;
+    _applyAddressDisplay();
+    _ownErrors.remove(tab);
+    setState(() {
+      _visited[tab] = true;
+      _appCalls[tab] = call;
+    });
+    final page = await widget.api.openApp(url);
+    if (!mounted || _appCalls[tab] != call) {
+      return;
+    }
+    setState(() => _appCalls.remove(tab));
+    final controller = _controllerFor(tab);
+    final dataUrl = page.dataUrl;
+    if (dataUrl == null) {
+      controller.loadError.value = MorphLoadError(
+        url: url,
+        kind: MorphLoadErrorKind.other,
+        message: page.body,
+      );
+      _ownErrors[tab] = (url, page.title, page.body);
+      return;
+    }
+    final token = morphAppPageToken(dataUrl);
+    if (token != null) {
+      _appPages[token] = url;
+    }
+    tabs.update(tab, url: url, title: page.title);
+    if (controller.rendererFault.value != null) {
+      await controller.recoverFromFault();
+    }
+    await controller.loadUrl(dataUrl);
+  }
+
+  /// [event] with an app page's `data:` address shown as its app address.
+  MorphNavigationEvent _shownEvent(MorphNavigationEvent event) {
+    final token = morphAppPageToken(event.url);
+    final app = token == null ? null : _appPages[token];
+    if (app == null) {
+      return event;
+    }
+    return MorphNavigationEvent(
+      url: app,
+      title: event.title,
+      canGoBack: event.canGoBack,
+      canGoForward: event.canGoForward,
+      isLoading: event.isLoading,
+      progress: event.progress,
+    );
+  }
+
+  /// Reload: an app's page is called again rather than reloaded from its
+  /// `data:` copy.
+  Future<void> _reloadPage() async {
+    final own = _canonicalAddress.isEmpty
+        ? null
+        : widget.api.ownAddress(_canonicalAddress);
+    if (own != null && own.app) {
+      await _submitUrl(_canonicalAddress);
+      return;
+    }
+    await webView.reload();
+  }
 
   (String, String)? _ownErrorText(int tab, MorphLoadError error) {
     final own = _ownErrors[tab];
@@ -1562,7 +1648,7 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
               setState(() => _tabEngines[tabs.activeId] = id),
           onBack: () => unawaited(webView.goBack()),
           onForward: () => unawaited(webView.goForward()),
-          onReload: () => unawaited(webView.reload()),
+          onReload: () => unawaited(_reloadPage()),
           onDesktopSiteChanged: (value) =>
               unawaited(webView.setDesktopSite(value)),
           onShare: _shareUrl,
@@ -1653,7 +1739,13 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _navRow(context, iconStyle: iconStyle),
-        const MorphGlitchRule(),
+        if (_appCalls.containsKey(tabs.activeId))
+          const LinearProgressIndicator(
+            key: Key('app-call-loading'),
+            minHeight: 2,
+          )
+        else
+          const MorphGlitchRule(),
         Expanded(child: content),
         if (_debugOpen) _debugPanel(colors),
       ],
