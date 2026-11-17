@@ -5,10 +5,12 @@
 //! applied to `library.db`.
 use morph_store::{Bookmark, BookmarkSet, Folder, Library, SyncConflict, SyncLogEntry, Tombstone};
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use weirdnet_sync::hlc::Hlc;
 use weirdnet_sync::log::{LogEntry, OpLog};
 use weirdnet_sync::merge::{self, CONFLICT_KEEP_MS, EditOrDelete, Lww, OrSet, folder_cycle, lww};
-use weirdnet_sync::{NodeId, SyncType as typ};
+use weirdnet_sync::{NodeId, Roster, SyncState, SyncType as typ};
 
 /// Default opt-in for this milestone (history and settings come later).
 pub const BOOKMARKS: &str = typ::BOOKMARKS;
@@ -601,6 +603,96 @@ pub fn apply_log(lib: &mut Library, now_ms: i64) -> morph_store::Result<()> {
 
 pub fn conflict_count(lib: &Library) -> morph_store::Result<usize> {
     Ok(lib.sync_conflicts()?.len())
+}
+
+pub const META_SEED: &str = "seed";
+pub const META_NODE_KEY: &str = "node_key";
+pub const META_ROSTER: &str = "roster";
+
+/// JSON carried in `Transfer.settings` at link time (certs only, no secrets).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LinkSettings {
+    #[serde(default)]
+    pub roster: Roster,
+}
+
+pub fn encode_link_settings(roster: &Roster) -> String {
+    serde_json::to_string(&LinkSettings { roster: roster.clone() }).expect("link settings json")
+}
+
+pub fn decode_link_settings(settings: &str) -> LinkSettings {
+    if settings.trim().is_empty() || settings.trim() == "{}" {
+        return LinkSettings::default();
+    }
+    serde_json::from_str(settings).unwrap_or_default()
+}
+
+pub fn load_roster(lib: &Library) -> morph_store::Result<Roster> {
+    Ok(lib.sync_meta(META_ROSTER)?.and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default())
+}
+
+pub fn save_roster(lib: &mut Library, roster: &Roster) -> morph_store::Result<()> {
+    lib.set_sync_meta(META_ROSTER, &serde_json::to_vec(roster).expect("roster json"))
+}
+
+pub fn store_seed(lib: &mut Library, seed: &[u8]) -> morph_store::Result<()> {
+    lib.set_sync_meta(META_SEED, seed)
+}
+
+pub fn load_seed(lib: &Library) -> morph_store::Result<Option<Vec<u8>>> {
+    lib.sync_meta(META_SEED)
+}
+
+pub fn store_node_key(lib: &mut Library, key: &[u8]) -> morph_store::Result<()> {
+    lib.set_sync_meta(META_NODE_KEY, key)
+}
+
+pub fn load_node_key(lib: &Library) -> morph_store::Result<Option<Vec<u8>>> {
+    lib.sync_meta(META_NODE_KEY)
+}
+
+/// Persist this device's seed, node key, roster and default opt-ins, and
+/// backfill existing bookmarks into the log.
+pub fn bind(lib: &mut Library, our_node: &str, seed: &[u8], node_key: &[u8], roster: &Roster, now_ms: i64) -> morph_store::Result<()> {
+    store_seed(lib, seed)?;
+    store_node_key(lib, node_key)?;
+    save_roster(lib, roster)?;
+    enable(lib, our_node, now_ms)
+}
+
+static LIVE: Mutex<Vec<(PathBuf, Arc<Mutex<SyncState>>)>> = Mutex::new(Vec::new());
+
+fn live() -> std::sync::MutexGuard<'static, Vec<(PathBuf, Arc<Mutex<SyncState>>)>> {
+    LIVE.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+/// Keep a running sync node's in-memory log in step with `library.db`.
+pub fn attach_live(profile_dir: PathBuf, state: Arc<Mutex<SyncState>>) {
+    let mut g = live();
+    g.retain(|(p, _)| p != &profile_dir);
+    g.push((profile_dir, state));
+}
+
+pub fn detach_live(profile_dir: &Path) {
+    live().retain(|(p, _)| p != profile_dir);
+}
+
+pub fn refresh_live(profile_dir: &Path, lib: &Library) {
+    let state = live().iter().find(|(p, _)| p == profile_dir).map(|(_, s)| s.clone());
+    let Some(state) = state else { return };
+    let Ok(mut st) = state.lock() else { return };
+    if let Ok(log) = load_log(lib) {
+        st.log = log;
+    }
+    if let Ok(c) = load_clock(lib) {
+        st.clock = c;
+    }
+    if let Ok(t) = types_on(lib) {
+        st.types = t;
+    }
+    if let Ok(r) = load_roster(lib) {
+        st.roster = r;
+    }
 }
 
 #[cfg(test)]

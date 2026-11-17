@@ -173,6 +173,7 @@ fn save(home: &Path, id: &str, file: &mut File, now_ms: i64) -> Result<(), Bookm
         let prev = lib.bookmark_set()?;
         crate::sync::record_local_changes(lib, &prev, &mut set, now_ms)?;
         lib.save_bookmark_set(&set)?;
+        crate::sync::refresh_live(&profiles::profile_dir(home, id), lib);
         Ok(())
     })?
     .is_none()

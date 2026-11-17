@@ -95,7 +95,7 @@ pub fn lock(home: impl AsRef<Path>, id: &str) {
 
 /// Run `f` on `id`'s open database: `Ok(None)` if the library is still
 /// plaintext JSON, `Err(Locked)` if it is encrypted and not unlocked.
-pub(crate) fn with<T>(home: &Path, id: &str, f: impl FnOnce(&mut Library) -> morph_store::Result<T>) -> Result<Option<T>, ProfileError> {
+pub fn with<T>(home: &Path, id: &str, f: impl FnOnce(&mut Library) -> morph_store::Result<T>) -> Result<Option<T>, ProfileError> {
     let dir = profiles::profile_dir(home, id);
     let mut map = open_map();
     match map.get_mut(&dir) {
