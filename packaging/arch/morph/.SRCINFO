@@ -1,6 +1,6 @@
 pkgbase = morph
 	pkgdesc = Distributed web browser with local AI (GPUI desktop shell)
-	pkgver = 0.2.0alpha13
+	pkgver = 0.2.0alpha14
 	pkgrel = 1
 	url = https://github.com/WeirdBrains/morph
 	arch = x86_64
