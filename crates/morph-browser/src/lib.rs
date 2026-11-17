@@ -9,10 +9,12 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
 
 pub mod downloads;
 
-use morph_core::app_call::{self, AppCallError, AppCaller};
+use morph_core::app_call::{self, AppCallError, AppCaller, AppPage};
 use morph_core::tabs::{TabId, TabSet};
 use morph_core::{address, omnibox, search};
 use morph_ui::actions::Action;
@@ -39,9 +41,39 @@ pub struct Config {
     pub log_events: bool,
     /// The search engine new tabs use ([`morph_core::search`] id).
     pub search_engine: String,
-    /// What calls Weirdnet apps for `weirdnet-<app>://` addresses; `None`
-    /// is [`app_call::NotYet`] (this build cannot call them).
-    pub app_caller: Option<std::sync::Arc<dyn AppCaller>>,
+    /// What calls Weirdnet apps for `weirdnet-<app>://` addresses (the
+    /// shells pass weirdnet-net's, `morph_services::app_calls`); `None` is
+    /// [`app_call::NotYet`] (no network: every call says so).
+    pub app_caller: Option<Arc<dyn AppCaller>>,
+}
+
+/// The most of a `data:` address the engine takes. WebView2 refuses
+/// addresses over 2 MB; WebKit has no such limit.
+const DATA_URL_MAX: Option<usize> = if cfg!(windows) { Some(2_000_000) } else { None };
+
+/// A `weirdnet-<app>://` call under way for a tab: it runs on a thread of
+/// its own ([`app_call::fetch`]) and reports here; [`Browser::poll`] picks
+/// the result up. Dropping it stops the call.
+struct AppLoad {
+    url: String,
+    /// The tab's address and title before, put back if the call fails or is
+    /// stopped.
+    before: (String, String),
+    events: mpsc::Receiver<AppLoadEvent>,
+    stop: Arc<AtomicBool>,
+    /// Body bytes read so far.
+    received: u64,
+}
+
+impl Drop for AppLoad {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+}
+
+enum AppLoadEvent {
+    Progress(u64),
+    Done(Result<AppPage, AppCallError>),
 }
 
 /// Per-tab page state beyond `morph_core::tabs::Tab`.
@@ -226,10 +258,12 @@ pub fn error_text(error: &LoadError) -> (String, String) {
         return address::unknown_page_text(&name);
     }
     if address::is_app(&error.url) {
-        return match app_call::request(&error.url) {
-            Err(e) => app_call::error_text(&error.url, &e),
-            Ok(_) if error.message.trim().is_empty() => app_call::error_text(&error.url, &AppCallError::NotSupported),
-            Ok(_) => ("This app couldn't be opened".into(), format!("{}: {}", app_call::describe(&error.url), sentence(&error.message).trim_end())),
+        return match (app_call::request(&error.url), AppCallError::decode(&error.message)) {
+            (Err(e), _) | (Ok(_), Some(e)) => app_call::error_text(&error.url, &e),
+            (Ok(_), None) if error.message.trim().is_empty() => app_call::error_text(&error.url, &AppCallError::NotSupported),
+            (Ok(_), None) => {
+                ("This app couldn't be opened".into(), format!("{}: {}", app_call::describe(&error.url), sentence(&error.message).trim_end()))
+            }
         };
     }
     let host = host(&error.url);
@@ -357,7 +391,11 @@ pub struct Browser {
     /// The shell took the file request (its dialog is open).
     file_asked: bool,
     downloads: downloads::Downloads,
-    app_caller: std::sync::Arc<dyn AppCaller>,
+    app_caller: Arc<dyn AppCaller>,
+    /// App calls under way, by tab.
+    app_loads: HashMap<TabId, AppLoad>,
+    /// The app address each app page (`data:` address, by its token) shows.
+    app_pages: HashMap<String, String>,
 }
 
 /// Whether `url` is an address Morph opens itself (`morph:`,
@@ -388,7 +426,9 @@ impl Browser {
             file_request: None,
             file_asked: false,
             downloads: downloads::Downloads::default(),
-            app_caller: config.app_caller.clone().unwrap_or_else(|| std::sync::Arc::new(app_call::NotYet)),
+            app_caller: config.app_caller.clone().unwrap_or_else(|| Arc::new(app_call::NotYet)),
+            app_loads: HashMap::new(),
+            app_pages: HashMap::new(),
         };
         let first = browser.tabs.active_id();
         let url = config.start_url.trim().to_string();
@@ -746,8 +786,7 @@ impl Browser {
     /// Open one of Morph's own addresses in the active tab: About and
     /// Settings are drawn here, an unknown `morph://` page gets the page
     /// listing the real ones, and a `weirdnet-<app>://` address is called
-    /// through the [`AppCaller`] (today: the "app call not supported yet"
-    /// page). Panel pages (`morph://history`) are the shell's to open
+    /// through the [`AppCaller`] in the background ([`Self::start_app_call`]). Panel pages (`morph://history`) are the shell's to open
     /// ([`Self::submit_address`] hands them back) and are left alone.
     /// Returns whether `url` was one; none of them reaches the engine.
     fn open_own(&mut self, url: &str) -> bool {
@@ -766,20 +805,167 @@ impl Browser {
                 true
             }
             None if address::is_app(url) => {
-                let message = match app_call::open(url, self.app_caller.as_ref()) {
-                    Err(AppCallError::NotSupported) => String::new(),
-                    Err(e) => e.to_string(),
-                    // Showing an app's page is the next step (identity sync
-                    // and app calls); say what came back meanwhile.
-                    Ok(response) => format!("the app answered ({}), but this version cannot show app pages yet", response.status),
-                };
-                if self.log_events {
-                    eprintln!("morph-event app-call {} {}", app_call::describe(url), if message.is_empty() { "not-supported" } else { "failed" });
-                }
-                self.show_notice(url, message);
+                self.start_app_call(self.tabs.active_id(), url);
                 true
             }
             None => false,
+        }
+    }
+
+    fn log_app(&self, url: &str, what: &str) {
+        if self.log_events {
+            // Never the query or fragment: they may carry tokens.
+            eprintln!("morph-event app-call {} {what}", app_call::describe(url));
+        }
+    }
+
+    /// Call the app `url` names for tab `id`, off the UI thread: the tab
+    /// shows `url` and loads while the call runs, then the app's page
+    /// ([`Self::poll`] loads it) or Morph's error page for why it failed.
+    /// An address that is not a valid app link fails at once. Never a
+    /// search, never the engine with `url` itself.
+    fn start_app_call(&mut self, id: TabId, url: &str) {
+        self.app_loads.remove(&id);
+        if let Err(e) = app_call::request(url) {
+            self.log_app(url, &format!("failed {}", e.code()));
+            self.show_notice_on(id, url, e.encode());
+            return;
+        }
+        let Some(current) = self.tabs.tab(id).cloned() else {
+            return;
+        };
+        let (tx, events) = mpsc::channel();
+        let stop = Arc::new(AtomicBool::new(false));
+        let (caller, target, stopping) = (self.app_caller.clone(), url.to_string(), stop.clone());
+        let spawned = std::thread::Builder::new().name("morph-app-call".into()).spawn(move || {
+            let progress = tx.clone();
+            let result = app_call::fetch(&target, caller.as_ref(), &stopping, &mut |n| {
+                let _ = progress.send(AppLoadEvent::Progress(n));
+            });
+            let _ = tx.send(AppLoadEvent::Done(result));
+        });
+        if spawned.is_err() {
+            self.show_notice_on(id, url, AppCallError::Unreachable("Morph could not start the call".into()).encode());
+            return;
+        }
+        if self.tabs.active_id() == id {
+            self.close_menus();
+            self.address_focused = false;
+            self.address.set_text_selected(url);
+        }
+        let _ = self.tabs.update(id, url.to_string(), current.title.clone());
+        if let Some(page) = self.pages.get_mut(&id) {
+            page.loading = true;
+            page.finished = false;
+        }
+        self.log_app(url, "started");
+        self.app_loads.insert(id, AppLoad { url: url.to_string(), before: (current.url, current.title), events, stop, received: 0 });
+    }
+
+    /// Stop tab `id`'s app call, if one runs, and put its address back.
+    /// Returns whether one ran.
+    fn stop_app_call(&mut self, id: TabId) -> bool {
+        let Some(load) = self.app_loads.remove(&id) else {
+            return false;
+        };
+        self.log_app(&load.url, "stopped");
+        let (url, title) = load.before.clone();
+        let _ = self.tabs.update(id, url.clone(), title);
+        if let Some(page) = self.pages.get_mut(&id) {
+            page.loading = false;
+        }
+        if self.tabs.active_id() == id && !self.address_focused {
+            self.address.set_text_selected(&url);
+        }
+        true
+    }
+
+    /// Bytes of the active tab's app answer read so far, while its call
+    /// runs (for a progress line).
+    pub fn app_call_progress(&self) -> Option<u64> {
+        self.app_loads.get(&self.tabs.active_id()).map(|l| l.received)
+    }
+
+    /// Pick up finished app calls: load each app's page, or show why it
+    /// failed. Returns whether anything changed.
+    fn poll_app_calls(&mut self) -> bool {
+        let mut changed = false;
+        let ids: Vec<TabId> = self.app_loads.keys().copied().collect();
+        for id in ids {
+            let Some(load) = self.app_loads.get_mut(&id) else { continue };
+            let mut done = None;
+            loop {
+                match load.events.try_recv() {
+                    Ok(AppLoadEvent::Progress(n)) => {
+                        load.received = n;
+                        changed = true;
+                    }
+                    Ok(AppLoadEvent::Done(result)) => {
+                        done = Some(result);
+                        break;
+                    }
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        done = Some(Err(AppCallError::Unreachable("the call ended without an answer".into())));
+                        break;
+                    }
+                }
+            }
+            if let Some(result) = done
+                && let Some(load) = self.app_loads.remove(&id)
+            {
+                changed = true;
+                self.finish_app_call(id, load, result);
+            }
+        }
+        changed
+    }
+
+    fn finish_app_call(&mut self, id: TabId, load: AppLoad, result: Result<AppPage, AppCallError>) {
+        let result = result.and_then(|page| match DATA_URL_MAX {
+            Some(max) if page.data_url.len() > max => Err(AppCallError::TooLarge),
+            _ => Ok(page),
+        });
+        let page = match result {
+            Ok(page) => page,
+            Err(e) => {
+                self.log_app(&load.url, &format!("failed {}", e.code()));
+                let (url, title) = load.before.clone();
+                let _ = self.tabs.update(id, url, title);
+                self.show_notice_on(id, &load.url, e.encode());
+                return;
+            }
+        };
+        self.log_app(&load.url, &format!("ok status={} kind={} bytes={}", page.status, page.kind, page.bytes));
+        if let Some(token) = app_call::page_token(&page.data_url) {
+            self.app_pages.insert(token.to_string(), load.url.clone());
+        }
+        let active = self.tabs.active_id() == id;
+        let _ = self.tabs.update(id, load.url.clone(), page.title.clone());
+        if active && !self.address_focused {
+            self.address.set_text_selected(&load.url);
+        }
+        let covered = self.pages.get(&id).and_then(|p| p.cover.clone());
+        if covered.as_ref().is_some_and(|c| !matches!(c, Cover::About | Cover::Settings)) {
+            self.set_cover(id, None);
+        }
+        if let Some(p) = self.pages.get_mut(&id) {
+            p.finished = false;
+            p.shown_url = None;
+            p.shown_title = None;
+            let _ = p.view.load_url(&page.data_url);
+            if active && p.cover.is_none() {
+                let _ = p.view.focus();
+            }
+        }
+    }
+
+    /// The address to show for one the engine reports: an app page's
+    /// `data:` address shows as the app address it came from.
+    fn shown_address(&self, url: String) -> String {
+        match app_call::page_token(&url).and_then(|t| self.app_pages.get(t)) {
+            Some(app) => app.clone(),
+            None => url,
         }
     }
 
@@ -787,9 +973,18 @@ impl Browser {
     /// [`error_text`]), as a failed load does: Back returns to the page
     /// under it, Reload tries `url` again.
     fn show_notice(&mut self, url: &str, message: String) {
-        self.close_menus();
-        let id = self.tabs.active_id();
-        let current = self.tabs.active().clone();
+        self.show_notice_on(self.tabs.active_id(), url, message);
+    }
+
+    /// [`Self::show_notice`] on tab `id`.
+    fn show_notice_on(&mut self, id: TabId, url: &str, message: String) {
+        let active = self.tabs.active_id() == id;
+        if active {
+            self.close_menus();
+        }
+        let Some(current) = self.tabs.tab(id).cloned() else {
+            return;
+        };
         let error = LoadError { url: url.to_string(), kind: ErrorKind::Other, message };
         let title = error_text(&error).0;
         if let Some(page) = self.pages.get_mut(&id) {
@@ -802,8 +997,10 @@ impl Browser {
             }
         }
         let _ = self.tabs.update(id, url.to_string(), title);
-        self.address_focused = false;
-        self.address.set_text_selected(url);
+        if active {
+            self.address_focused = false;
+            self.address.set_text_selected(url);
+        }
         self.set_cover(id, Some(Cover::Failed(error)));
     }
 
@@ -816,6 +1013,7 @@ impl Browser {
         }
         self.close_menus();
         let id = self.tabs.active_id();
+        self.stop_app_call(id);
         let title = self.tabs.active().title.clone();
         let _ = self.tabs.update(id, url.to_string(), title);
         self.address_focused = false;
@@ -856,6 +1054,7 @@ impl Browser {
             return;
         }
         self.tab_engines.remove(&id);
+        self.app_loads.remove(&id);
         let Ok(active) = self.tabs.close(id) else {
             return;
         };
@@ -926,7 +1125,9 @@ impl Browser {
             Action::FocusAddress => self.focus_address(),
             Action::Reload => self.reload(),
             Action::Stop => {
-                let _ = self.active_page().view.stop();
+                if !self.stop_app_call(self.tabs.active_id()) {
+                    let _ = self.active_page().view.stop();
+                }
             }
             Action::Back => self.back(),
             Action::Forward => {
@@ -959,6 +1160,13 @@ impl Browser {
         {
             let url = error.url.clone();
             self.open_own(&url);
+            return;
+        }
+        // An app's page (or a call under way) is called again, not reloaded
+        // from its `data:` copy.
+        if self.active_page().cover.is_none() && address::is_app(self.active_url()) {
+            let url = self.active_url().to_string();
+            self.start_app_call(self.tabs.active_id(), &url);
             return;
         }
         let shown = self.shown;
@@ -997,6 +1205,10 @@ impl Browser {
     /// past it.
     pub fn back(&mut self) {
         let id = self.tabs.active_id();
+        if self.stop_app_call(id) {
+            // Back during a call: the call is dropped, the page stays.
+            return;
+        }
         let page = self.pages.get_mut(&id).expect("every tab has a page");
         if matches!(page.cover, Some(Cover::Failed(_) | Cover::About | Cover::Settings)) {
             let url = page.shown_url.take().unwrap_or_default();
@@ -1233,6 +1445,9 @@ impl Browser {
             polled.changed = true;
             self.apply(tab, event);
         }
+        if self.poll_app_calls() {
+            polled.changed = true;
+        }
         polled
     }
 
@@ -1252,8 +1467,17 @@ impl Browser {
             }
             return;
         }
+        // A link on a page to a Weirdnet app: called like a typed one.
+        if let Event::LoadFailed(error) = &event
+            && address::is_app(&error.url)
+        {
+            let url = error.url.clone();
+            self.start_app_call(tab, &url);
+            return;
+        }
         match event {
             Event::UrlChanged(url) => {
+                let url = self.shown_address(url);
                 let _ = self.tabs.update(tab, url.clone(), current.title);
                 if active && !self.address_focused {
                     self.address.set_text_selected(&url);

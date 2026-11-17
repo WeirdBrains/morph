@@ -409,7 +409,7 @@ impl BrowserView {
             history: Some(sink),
             log_events: std::env::var_os("MORPH_LOG_EVENTS").is_some_and(|v| v == "1"),
             search_engine: morph_core::settings::load(home).map(|s| s.search_engine).unwrap_or_default(),
-            app_caller: None,
+            app_caller: Some(morph_services::app_calls::shared()),
         };
         let mut browser = Browser::new(backend, config).map_err(|e| e.to_string())?;
         browser.set_shortcuts(keystrokes);
