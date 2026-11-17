@@ -10032,9 +10032,9 @@ dependencies = [
 
 [[package]]
 name = "weirdnet-net"
-version = "0.5.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c15aed64874dd02b1c8d097cb2a1c40d0d0a87564fd02cd4c24200102269ac7"
+checksum = "0b79247561ce6413a1d4f8ee681b3cba251313ecede42cc545e848eb379b691f"
 dependencies = [
  "base64 0.22.1",
  "blake3",

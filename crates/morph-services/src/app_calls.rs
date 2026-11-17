@@ -121,9 +121,6 @@ impl NetAppCaller {
         let relays = cfg.relays.clone();
         let node = Node::start(&PROFILE, weirdnet_net::Keypair::generate_ed25519(), cfg, Arc::new(NoRequests))
             .map_err(|e| AppCallError::Unreachable(format!("Weirdnet could not start: {e}")))?;
-        if self.use_install_network {
-            crate::network::dial_manual_peers(&node, net.peers());
-        }
         let node = Arc::new(node);
         *running = Some(Running { relays, discovery: net.discovery_enabled(), peers: net.peers().to_vec(), node: node.clone() });
         Ok(node)

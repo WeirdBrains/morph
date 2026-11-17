@@ -8,10 +8,9 @@
 //! `/etc/morph/network.policy.json` on Unix). A locked-off setting is shown
 //! in the UI but cannot be turned back on from there.
 //!
-//! Passing `discovery` and the peer list into `weirdnet-net::NodeConfig`
-//! waits on a published weirdnet-net that has `DiscoveryMode` and `PeerHint`
-//! (see morph-services' network adapter). Adding a peer address is not
-//! trust; the roster and `NodeCert` authorize a node.
+//! `morph-services` copies `discovery` and the peer list onto
+//! `weirdnet-net::NodeConfig` (`DiscoveryMode` and `PeerHint`). Adding a
+//! peer address is not trust; the roster and `NodeCert` authorize a node.
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
