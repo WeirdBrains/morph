@@ -26,6 +26,7 @@ morph-services = { path = "crates/morph-services" }
 morph-os = { path = "crates/morph-os" }
 weirdnet-keys = "=0.1.0"
 weirdnet-net = "=0.6.0"
+weirdnet-sync = "=0.1.0"
 thiserror = "2"
 dirs = "7.0.0"
 zeroize = { version = "1", features = ["derive"] }
