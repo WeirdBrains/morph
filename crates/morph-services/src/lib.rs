@@ -16,6 +16,7 @@ pub mod library;
 pub mod network;
 pub mod profiles;
 pub mod relays;
+pub mod sync;
 
 pub use morph_identity::profile_identity::{SecretString, Zeroizing};
 

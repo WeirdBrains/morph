@@ -47,11 +47,15 @@ pub fn open(home: &Path, profile_id: &str) -> Result<LibraryOpen> {
         return Ok(LibraryOpen::Ready);
     };
     if state(home, profile_id)? == LibraryState::Unlocked {
+        let _ = crate::sync::on_open(home, profile_id);
         return Ok(LibraryOpen::Ready);
     }
     match morph_keystore::load(&dir, &identity.user_id) {
         Ok(Some(key)) => match library_db::unlock(home, profile_id, &key) {
-            Ok(()) => Ok(LibraryOpen::Ready),
+            Ok(()) => {
+                let _ = crate::sync::on_open(home, profile_id);
+                Ok(LibraryOpen::Ready)
+            }
             Err(ProfileError::Store(e)) if e.is_wrong_key() => {
                 let _ = morph_keystore::forget(&dir);
                 Ok(LibraryOpen::NeedsPassword { reason: Some("the saved key no longer opens this library".into()) })
@@ -71,6 +75,7 @@ pub fn unlock(home: &Path, profile_id: &str, password: &SecretString) -> Result<
     let identity = profile_identity::load(&dir).map_err(Error::failed)?.ok_or(Error::NoIdentity)?;
     let key = profile_identity::library_key(&dir, password).map_err(Error::failed)?;
     library_db::unlock(home, profile_id, &key).map_err(Error::failed)?;
+    let _ = crate::sync::on_password(home, profile_id, password);
     Ok(match morph_keystore::save(&dir, &identity.user_id, &key) {
         Ok(()) => Unlocked { remembered: true, reason: None },
         Err(e) => Unlocked { remembered: false, reason: Some(e.to_string()) },
@@ -94,6 +99,7 @@ pub fn adopt_new_identity(home: &Path, profile_id: &str, user_id: &str, key: &Li
 
 /// Close `profile_id`'s library and drop its key from memory until the next unlock.
 pub fn lock(home: &Path, profile_id: &str) {
+    crate::sync::on_lock(home, profile_id);
     library_db::lock(home, profile_id);
 }
 

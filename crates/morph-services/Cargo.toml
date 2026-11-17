@@ -13,10 +13,12 @@ publish = false
 morph-core.workspace = true
 morph-identity.workspace = true
 morph-keystore.workspace = true
+morph-store.workspace = true
 thiserror.workspace = true
 serde_json.workspace = true
 # Weirdnet app calls (`weirdnet-<app>://` addresses): resolve, call, stream.
 weirdnet-net.workspace = true
+weirdnet-sync.workspace = true
 futures = "0.3"
 # A relay's display name from its well-known info (HTTPS, in the background).
 ureq = { version = "3", default-features = false, features = ["rustls"] }
@@ -25,3 +27,4 @@ ureq = { version = "3", default-features = false, features = ["rustls"] }
 # Tests never touch the real OS keystore.
 morph-keystore = { workspace = true, features = ["mock"] }
 tempfile.workspace = true
+weirdnet-device-link.workspace = true
