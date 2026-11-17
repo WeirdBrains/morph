@@ -4,12 +4,22 @@ import 'package:morph/src/incoming_links.dart';
 /// `omnibox::target` (the app calls the Rust one through the bridge), so
 /// widget tests run without the native library. `omnibox_test.dart` holds it
 /// to the same cases as the Rust tests.
-String? omniboxRule(String input) {
+String? omniboxRule(String input, {String? engine}) {
   final text = input.trim();
   if (text.isEmpty) {
     return null;
   }
   final scheme = _scheme.firstMatch(text)?.group(1)?.toLowerCase();
+  if (scheme != null && isOwnScheme(scheme)) {
+    // morph:// and weirdnet-<app>:// are Morph's to open, never a search.
+    return text;
+  }
+  if (engine != null) {
+    final search = _searchFor(engine);
+    final target = omniboxRule(text);
+    final ddg = MorphIncomingLinks.searchUrl(text);
+    return target == ddg ? search(text) : target;
+  }
   if (scheme != null) {
     if (scheme == 'http' || scheme == 'https') {
       final uri = Uri.tryParse(text);
@@ -49,3 +59,34 @@ final _bareHost = RegExp(
   r'^[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,63}\.?(:\d+)?([/?#]\S*)?$',
   caseSensitive: false,
 );
+
+/// `morph` or `weirdnet` / `weirdnet-<app>` (`morph_core::address`).
+bool isOwnScheme(String scheme) {
+  final s = scheme.toLowerCase();
+  return s == 'morph' ||
+      s == 'weirdnet' ||
+      (s.startsWith('weirdnet-') && s.length > 'weirdnet-'.length);
+}
+
+String Function(String) _searchFor(String engine) {
+  if (engine == 'duckduckgo') {
+    return MorphIncomingLinks.searchUrl;
+  }
+  return (q) {
+    final text = q.replaceAll(RegExp(r'\s+'), ' ').trim();
+    return Uri.https('www.google.com', '/search', {'q': text}).toString();
+  };
+}
+
+/// Morph's pages (`morph_core::address::PAGES`).
+const morphPages = [
+  'about',
+  'bookmarks',
+  'downloads',
+  'history',
+  'identity',
+  'profiles',
+  'relays',
+  'search',
+  'settings',
+];

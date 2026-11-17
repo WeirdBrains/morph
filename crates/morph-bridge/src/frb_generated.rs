@@ -39,7 +39,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.13.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -270977597;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1703805897;
 
 // Section: executor
 
@@ -1173,6 +1173,30 @@ fn wire__crate__api__omnibox__omnibox_target_impl(
         },
     )
 }
+fn wire__crate__api__omnibox__omnibox_target_for_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "omnibox_target_for",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe { flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(ptr_, rust_vec_len_, data_len_) };
+            let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_input = <String>::sse_decode(&mut deserializer);
+            let api_engine = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok = Ok::<_, ()>(crate::api::omnibox::omnibox_target_for(api_input, api_engine))?;
+                std::result::Result::Ok(output_ok)
+            })())
+        },
+    )
+}
 fn wire__crate__api__library__open_library_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -1197,6 +1221,29 @@ fn wire__crate__api__library__open_library_impl(
                     std::result::Result::Ok(output_ok)
                 })())
             }
+        },
+    )
+}
+fn wire__crate__api__omnibox__own_address_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "own_address",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe { flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(ptr_, rust_vec_len_, data_len_) };
+            let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_url = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok = Ok::<_, ()>(crate::api::omnibox::own_address(api_url))?;
+                std::result::Result::Ok(output_ok)
+            })())
         },
     )
 }
@@ -1527,6 +1574,28 @@ fn wire__crate__api__library__search_bookmarks_impl(
                     std::result::Result::Ok(output_ok)
                 })())
             }
+        },
+    )
+}
+fn wire__crate__api__omnibox__search_engines_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "search_engines",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe { flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(ptr_, rust_vec_len_, data_len_) };
+            let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok = Ok::<_, ()>(crate::api::omnibox::search_engines())?;
+                std::result::Result::Ok(output_ok)
+            })())
         },
     )
 }
@@ -2187,11 +2256,34 @@ impl SseDecode for Vec<crate::api::relays::RelayStatusView> {
     }
 }
 
+impl SseDecode for Vec<crate::api::omnibox::SearchEngineView> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::omnibox::SearchEngineView>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
 impl SseDecode for Option<String> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         if (<bool>::sse_decode(deserializer)) {
             return Some(<String>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
+impl SseDecode for Option<crate::api::omnibox::OwnAddressView> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<crate::api::omnibox::OwnAddressView>::sse_decode(deserializer));
         } else {
             return None;
         }
@@ -2228,6 +2320,16 @@ impl SseDecode for Option<Vec<String>> {
         } else {
             return None;
         }
+    }
+}
+
+impl SseDecode for crate::api::omnibox::OwnAddressView {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_page = <Option<String>>::sse_decode(deserializer);
+        let mut var_title = <String>::sse_decode(deserializer);
+        let mut var_body = <String>::sse_decode(deserializer);
+        return crate::api::omnibox::OwnAddressView { page: var_page, title: var_title, body: var_body };
     }
 }
 
@@ -2319,16 +2421,28 @@ impl SseDecode for crate::api::relays::RelayStatusView {
     }
 }
 
+impl SseDecode for crate::api::omnibox::SearchEngineView {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_id = <String>::sse_decode(deserializer);
+        let mut var_name = <String>::sse_decode(deserializer);
+        let mut var_mark = <String>::sse_decode(deserializer);
+        return crate::api::omnibox::SearchEngineView { id: var_id, name: var_name, mark: var_mark };
+    }
+}
+
 impl SseDecode for crate::api::settings::SettingsView {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_tabPosition = <String>::sse_decode(deserializer);
         let mut var_sidebarCollapsed = <bool>::sse_decode(deserializer);
         let mut var_sidebarWidth = <u32>::sse_decode(deserializer);
+        let mut var_searchEngine = <String>::sse_decode(deserializer);
         return crate::api::settings::SettingsView {
             tab_position: var_tabPosition,
             sidebar_collapsed: var_sidebarCollapsed,
             sidebar_width: var_sidebarWidth,
+            search_engine: var_searchEngine,
         };
     }
 }
@@ -2406,28 +2520,28 @@ fn pde_ffi_dispatcher_primary_impl(
         38 => wire__crate__api__library__lock_library_impl(port, ptr, rust_vec_len, data_len),
         39 => wire__crate__api__library__move_bookmark_item_impl(port, ptr, rust_vec_len, data_len),
         40 => wire__crate__api__identity__new_ephemeral_user_impl(port, ptr, rust_vec_len, data_len),
-        42 => wire__crate__api__library__open_library_impl(port, ptr, rust_vec_len, data_len),
-        43 => wire__crate__api__identity__profile_identity_impl(port, ptr, rust_vec_len, data_len),
-        44 => wire__crate__api__profiles__profile_paths_impl(port, ptr, rust_vec_len, data_len),
-        45 => wire__crate__api__identity__profile_recovery_words_impl(port, ptr, rust_vec_len, data_len),
-        46 => wire__crate__api__library__record_visit_impl(port, ptr, rust_vec_len, data_len),
-        47 => wire__crate__api__relays__relay_check_start_impl(port, ptr, rust_vec_len, data_len),
-        48 => wire__crate__api__relays__relay_check_stop_impl(port, ptr, rust_vec_len, data_len),
-        50 => wire__crate__api__library__remove_bookmark_impl(port, ptr, rust_vec_len, data_len),
-        51 => wire__crate__api__library__rename_bookmark_folder_impl(port, ptr, rust_vec_len, data_len),
-        52 => wire__crate__api__profiles__rename_profile_impl(port, ptr, rust_vec_len, data_len),
-        53 => wire__crate__api__identity__restore_profile_backup_impl(port, ptr, rust_vec_len, data_len),
-        54 => wire__crate__api__library__search_bookmarks_impl(port, ptr, rust_vec_len, data_len),
-        55 => wire__crate__api__profiles__set_current_profile_impl(port, ptr, rust_vec_len, data_len),
-        56 => wire__crate__api__settings__set_sidebar_collapsed_impl(port, ptr, rust_vec_len, data_len),
-        57 => wire__crate__api__settings__set_sidebar_width_impl(port, ptr, rust_vec_len, data_len),
-        58 => wire__crate__api__settings__set_tab_position_impl(port, ptr, rust_vec_len, data_len),
-        59 => wire__crate__api__control__start_webview_control_impl(port, ptr, rust_vec_len, data_len),
-        60 => wire__crate__api__control__start_webview_control_in_impl(port, ptr, rust_vec_len, data_len),
-        61 => wire__crate__api__control__start_webview_control_loopback_impl(port, ptr, rust_vec_len, data_len),
-        62 => wire__crate__api__control__stop_webview_control_impl(port, ptr, rust_vec_len, data_len),
-        63 => wire__crate__api__library__unlock_library_impl(port, ptr, rust_vec_len, data_len),
-        64 => wire__crate__api__library__update_bookmark_impl(port, ptr, rust_vec_len, data_len),
+        43 => wire__crate__api__library__open_library_impl(port, ptr, rust_vec_len, data_len),
+        45 => wire__crate__api__identity__profile_identity_impl(port, ptr, rust_vec_len, data_len),
+        46 => wire__crate__api__profiles__profile_paths_impl(port, ptr, rust_vec_len, data_len),
+        47 => wire__crate__api__identity__profile_recovery_words_impl(port, ptr, rust_vec_len, data_len),
+        48 => wire__crate__api__library__record_visit_impl(port, ptr, rust_vec_len, data_len),
+        49 => wire__crate__api__relays__relay_check_start_impl(port, ptr, rust_vec_len, data_len),
+        50 => wire__crate__api__relays__relay_check_stop_impl(port, ptr, rust_vec_len, data_len),
+        52 => wire__crate__api__library__remove_bookmark_impl(port, ptr, rust_vec_len, data_len),
+        53 => wire__crate__api__library__rename_bookmark_folder_impl(port, ptr, rust_vec_len, data_len),
+        54 => wire__crate__api__profiles__rename_profile_impl(port, ptr, rust_vec_len, data_len),
+        55 => wire__crate__api__identity__restore_profile_backup_impl(port, ptr, rust_vec_len, data_len),
+        56 => wire__crate__api__library__search_bookmarks_impl(port, ptr, rust_vec_len, data_len),
+        58 => wire__crate__api__profiles__set_current_profile_impl(port, ptr, rust_vec_len, data_len),
+        59 => wire__crate__api__settings__set_sidebar_collapsed_impl(port, ptr, rust_vec_len, data_len),
+        60 => wire__crate__api__settings__set_sidebar_width_impl(port, ptr, rust_vec_len, data_len),
+        61 => wire__crate__api__settings__set_tab_position_impl(port, ptr, rust_vec_len, data_len),
+        62 => wire__crate__api__control__start_webview_control_impl(port, ptr, rust_vec_len, data_len),
+        63 => wire__crate__api__control__start_webview_control_in_impl(port, ptr, rust_vec_len, data_len),
+        64 => wire__crate__api__control__start_webview_control_loopback_impl(port, ptr, rust_vec_len, data_len),
+        65 => wire__crate__api__control__stop_webview_control_impl(port, ptr, rust_vec_len, data_len),
+        66 => wire__crate__api__library__unlock_library_impl(port, ptr, rust_vec_len, data_len),
+        67 => wire__crate__api__library__update_bookmark_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -2443,7 +2557,10 @@ fn pde_ffi_dispatcher_sync_impl(
         9 => wire__crate__api__info__core_version_impl(ptr, rust_vec_len, data_len),
         27 => wire__crate__api__device_link__link_is_invite_impl(ptr, rust_vec_len, data_len),
         41 => wire__crate__api__omnibox__omnibox_target_impl(ptr, rust_vec_len, data_len),
-        49 => wire__crate__api__relays__relay_report_impl(ptr, rust_vec_len, data_len),
+        42 => wire__crate__api__omnibox__omnibox_target_for_impl(ptr, rust_vec_len, data_len),
+        44 => wire__crate__api__omnibox__own_address_impl(ptr, rust_vec_len, data_len),
+        51 => wire__crate__api__relays__relay_report_impl(ptr, rust_vec_len, data_len),
+        57 => wire__crate__api__omnibox__search_engines_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -2704,6 +2821,18 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::device_link::LinkStatusView> 
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::omnibox::OwnAddressView {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [self.page.into_into_dart().into_dart(), self.title.into_into_dart().into_dart(), self.body.into_into_dart().into_dart()].into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::omnibox::OwnAddressView {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::omnibox::OwnAddressView> for crate::api::omnibox::OwnAddressView {
+    fn into_into_dart(self) -> crate::api::omnibox::OwnAddressView {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::identity::ProfileIdentityView {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
@@ -2798,12 +2927,25 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::relays::RelayStatusView> for 
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::omnibox::SearchEngineView {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [self.id.into_into_dart().into_dart(), self.name.into_into_dart().into_dart(), self.mark.into_into_dart().into_dart()].into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::omnibox::SearchEngineView {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::omnibox::SearchEngineView> for crate::api::omnibox::SearchEngineView {
+    fn into_into_dart(self) -> crate::api::omnibox::SearchEngineView {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::settings::SettingsView {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.tab_position.into_into_dart().into_dart(),
             self.sidebar_collapsed.into_into_dart().into_dart(),
             self.sidebar_width.into_into_dart().into_dart(),
+            self.search_engine.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -3137,12 +3279,32 @@ impl SseEncode for Vec<crate::api::relays::RelayStatusView> {
     }
 }
 
+impl SseEncode for Vec<crate::api::omnibox::SearchEngineView> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::omnibox::SearchEngineView>::sse_encode(item, serializer);
+        }
+    }
+}
+
 impl SseEncode for Option<String> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <bool>::sse_encode(self.is_some(), serializer);
         if let Some(value) = self {
             <String>::sse_encode(value, serializer);
+        }
+    }
+}
+
+impl SseEncode for Option<crate::api::omnibox::OwnAddressView> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <crate::api::omnibox::OwnAddressView>::sse_encode(value, serializer);
         }
     }
 }
@@ -3174,6 +3336,15 @@ impl SseEncode for Option<Vec<String>> {
         if let Some(value) = self {
             <Vec<String>>::sse_encode(value, serializer);
         }
+    }
+}
+
+impl SseEncode for crate::api::omnibox::OwnAddressView {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <Option<String>>::sse_encode(self.page, serializer);
+        <String>::sse_encode(self.title, serializer);
+        <String>::sse_encode(self.body, serializer);
     }
 }
 
@@ -3235,12 +3406,22 @@ impl SseEncode for crate::api::relays::RelayStatusView {
     }
 }
 
+impl SseEncode for crate::api::omnibox::SearchEngineView {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.id, serializer);
+        <String>::sse_encode(self.name, serializer);
+        <String>::sse_encode(self.mark, serializer);
+    }
+}
+
 impl SseEncode for crate::api::settings::SettingsView {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.tab_position, serializer);
         <bool>::sse_encode(self.sidebar_collapsed, serializer);
         <u32>::sse_encode(self.sidebar_width, serializer);
+        <String>::sse_encode(self.search_engine, serializer);
     }
 }
 

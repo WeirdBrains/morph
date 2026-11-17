@@ -11,6 +11,7 @@ import 'rust/api/omnibox.dart' as rust_omnibox;
 import 'rust/api/page.dart' as rust_page;
 import 'rust/api/profiles.dart' as rust_profiles;
 import 'rust/api/relays.dart' as rust_relays;
+import 'rust/api/settings.dart' as rust_settings;
 
 /// Production `MorphApi` backed by flutter_rust_bridge.
 class FfiMorphApi implements MorphApi {
@@ -22,6 +23,34 @@ class FfiMorphApi implements MorphApi {
   @override
   String? omniboxTarget(String input) =>
       rust_omnibox.omniboxTarget(input: input);
+
+  @override
+  String? omniboxTargetFor(String input, String engine) =>
+      rust_omnibox.omniboxTargetFor(input: input, engine: engine);
+
+  @override
+  List<SearchEngineOption> searchEngines() => [
+    for (final e in rust_omnibox.searchEngines())
+      SearchEngineOption(id: e.id, name: e.name, mark: e.mark),
+  ];
+
+  @override
+  Future<String> defaultSearchEngine({String? home}) async {
+    try {
+      return (await rust_settings.loadSettings(home: home)).searchEngine;
+    } catch (_) {
+      return searchEngines().first.id;
+    }
+  }
+
+  @override
+  OwnAddress? ownAddress(String url) {
+    final own = rust_omnibox.ownAddress(url: url);
+    if (own == null) {
+      return null;
+    }
+    return OwnAddress(page: own.page, title: own.title, body: own.body);
+  }
 
   @override
   Future<IdentityStatusView> identityDirInfo({String? home}) async {

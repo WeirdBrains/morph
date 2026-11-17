@@ -56,10 +56,18 @@ class MorphLoadErrorGate extends StatelessWidget {
     super.key,
     required this.controller,
     required this.child,
+    this.ownText,
+    this.onOwnRetry,
   });
 
   final MorphWebViewController controller;
   final Widget child;
+
+  /// Title and body when the "failed load" is Morph's own error page (an
+  /// unknown `morph://` page, a `weirdnet-<app>://` link it cannot call):
+  /// those were never loaded, so Try again asks [onOwnRetry], not the page.
+  final (String, String)? Function(MorphLoadError error)? ownText;
+  final ValueChanged<String>? onOwnRetry;
 
   @override
   Widget build(BuildContext context) {
@@ -70,7 +78,16 @@ class MorphLoadErrorGate extends StatelessWidget {
           fit: StackFit.expand,
           children: [
             child,
-            if (error != null)
+            if (error != null && ownText?.call(error) != null)
+              Listener(
+                behavior: HitTestBehavior.opaque,
+                child: MorphPageError(
+                  error: error,
+                  text: ownText!(error),
+                  onRetry: () => onOwnRetry?.call(error.url),
+                ),
+              )
+            else if (error != null)
               Listener(
                 behavior: HitTestBehavior.opaque,
                 child: MorphPageError(
@@ -101,9 +118,13 @@ class MorphPageError extends StatelessWidget {
     required this.error,
     required this.onRetry,
     this.onSearch,
+    this.text,
   });
 
   final MorphLoadError error;
+
+  /// Title and body to show instead of [morphLoadErrorText]'s.
+  final (String, String)? text;
   final VoidCallback onRetry;
   final VoidCallback? onSearch;
 
@@ -111,7 +132,7 @@ class MorphPageError extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
-    final (title, body) = morphLoadErrorText(error);
+    final (title, body) = text ?? morphLoadErrorText(error);
     return Material(
       key: const Key('page-error'),
       color: theme.scaffoldBackgroundColor,
@@ -125,7 +146,9 @@ class MorphPageError extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Icon(
-                    error.kind == MorphLoadErrorKind.certificate
+                    text != null
+                        ? Icons.link_off
+                        : error.kind == MorphLoadErrorKind.certificate
                         ? Icons.gpp_bad_outlined
                         : Icons.cloud_off_outlined,
                     size: 48,

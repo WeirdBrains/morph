@@ -6,6 +6,22 @@ abstract class MorphApi implements MorphRelaySource {
   /// What typing [input] into the address bar opens (`morph-core`'s rule,
   /// shared with the desktop shell): an address, a search, or null if blank.
   String? omniboxTarget(String input);
+
+  /// [omniboxTarget] with phrases sent to the search engine [engine] (an id
+  /// from [searchEngines]).
+  String? omniboxTargetFor(String input, String engine);
+
+  /// The search engines for the selector beside the address, default first.
+  List<SearchEngineOption> searchEngines();
+
+  /// The search engine new tabs use (the profile's setting, as on desktop).
+  Future<String> defaultSearchEngine({String? home});
+
+  /// What Morph opens itself for [url] (as [omniboxTargetFor] gave it): one
+  /// of its `morph://` pages, or its error page for an unknown one or for a
+  /// `weirdnet-<app>://` link it cannot call yet. Null for web addresses.
+  /// Neither is ever a search or handed to the OS.
+  OwnAddress? ownAddress(String url);
   Future<IdentityStatusView> identityDirInfo({String? home});
   Stream<int> eventTicks();
   Future<EphemeralUser> newEphemeralUser();
@@ -224,6 +240,33 @@ abstract class MorphApi implements MorphRelaySource {
 /// The relays device linking uses, and whether Morph is connected to them
 /// now. The state comes from the running link nodes or a relay check (never
 /// guessed); with none running, [MorphRelayReport.nodes] is 0.
+/// One search engine in the address selector.
+class SearchEngineOption {
+  const SearchEngineOption({
+    required this.id,
+    required this.name,
+    required this.mark,
+  });
+
+  final String id;
+  final String name;
+
+  /// Short mark for the selector button (`G`).
+  final String mark;
+}
+
+/// Morph's own handling of an address (see [MorphApi.ownAddress]).
+class OwnAddress {
+  const OwnAddress({this.page, this.title = '', this.body = ''});
+
+  /// One of Morph's pages (`settings`, `history`, `relays`, …) to open.
+  final String? page;
+
+  /// Otherwise the error page's title and explanation.
+  final String title;
+  final String body;
+}
+
 abstract class MorphRelaySource {
   /// The relays now. Cheap; never waits on the network.
   MorphRelayReport relayReport();

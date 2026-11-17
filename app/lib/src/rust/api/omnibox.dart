@@ -7,7 +7,87 @@ import '../frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
+// These functions are ignored because they are not marked as `pub`: `own_address_with`
+
 /// What typing `input` into the address bar opens: a web address when the
 /// text looks like one, else a search. `None` for blank input.
 String? omniboxTarget({required String input}) =>
     RustLib.instance.api.crateApiOmniboxOmniboxTarget(input: input);
+
+/// [`omnibox_target`], with phrases sent to the search engine `engine` (an
+/// id from [`search_engines`]; unknown ids use the default).
+String? omniboxTargetFor({required String input, required String engine}) =>
+    RustLib.instance.api.crateApiOmniboxOmniboxTargetFor(
+      input: input,
+      engine: engine,
+    );
+
+/// The search engines, in menu order; the first is the default.
+List<SearchEngineView> searchEngines() =>
+    RustLib.instance.api.crateApiOmniboxSearchEngines();
+
+/// Whether `url` (as [`omnibox_target_for`] gave it) is Morph's to open,
+/// and how: a `morph://` page, the page listing them for an unknown one, or
+/// for a `weirdnet-<app>://` link the result of calling the app over
+/// Weirdnet (in this build always "App call not supported yet"). `None`
+/// for anything the web view loads. Neither kind is ever a search or handed
+/// to the OS.
+OwnAddressView? ownAddress({required String url}) =>
+    RustLib.instance.api.crateApiOmniboxOwnAddress(url: url);
+
+/// What Morph opens itself instead of loading an address.
+class OwnAddressView {
+  /// One of Morph's pages (`settings`, `history`, … as
+  /// `morph_core::address::PAGES` lists them), for the shell to open.
+  final String? page;
+
+  /// Otherwise Morph's error page: its title …
+  final String title;
+
+  /// … and explanation.
+  final String body;
+
+  const OwnAddressView({this.page, required this.title, required this.body});
+
+  @override
+  int get hashCode => page.hashCode ^ title.hashCode ^ body.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is OwnAddressView &&
+          runtimeType == other.runtimeType &&
+          page == other.page &&
+          title == other.title &&
+          body == other.body;
+}
+
+/// One search engine for the selector beside the address.
+class SearchEngineView {
+  /// Stable id (`google`).
+  final String id;
+
+  /// Name shown in the menu.
+  final String name;
+
+  /// A short mark for the selector button (`G`).
+  final String mark;
+
+  const SearchEngineView({
+    required this.id,
+    required this.name,
+    required this.mark,
+  });
+
+  @override
+  int get hashCode => id.hashCode ^ name.hashCode ^ mark.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SearchEngineView &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          name == other.name &&
+          mark == other.mark;
+}

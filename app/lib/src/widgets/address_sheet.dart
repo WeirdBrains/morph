@@ -1,6 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 
+import '../api.dart';
 import '../theme/morph_theme.dart';
 
 /// Firefox-mobile-style address and actions sheet (no VPN row).
@@ -30,6 +31,9 @@ class MorphAddressSheet extends StatefulWidget {
     this.onIdentity,
     this.identityLabel,
     this.profiles,
+    this.engines = const [],
+    this.engine,
+    this.onEngineChanged,
   });
 
   final String initialUrl;
@@ -54,6 +58,12 @@ class MorphAddressSheet extends StatefulWidget {
   /// Optional profiles section, listed under the actions.
   final Widget? profiles;
 
+  /// The search engines for the selector left of the address (as on
+  /// desktop), the one this tab searches with, and what picking one does.
+  final List<SearchEngineOption> engines;
+  final String? engine;
+  final ValueChanged<String>? onEngineChanged;
+
   @override
   State<MorphAddressSheet> createState() => _MorphAddressSheetState();
 }
@@ -62,11 +72,13 @@ class _MorphAddressSheetState extends State<MorphAddressSheet> {
   late final TextEditingController _url;
   final _focus = FocusNode();
   late bool _desktop;
+  String? _engine;
 
   @override
   void initState() {
     super.initState();
     _desktop = widget.desktopSite;
+    _engine = widget.engine;
     _url = TextEditingController(text: widget.initialUrl);
     _url.selection = TextSelection(
       baseOffset: 0,
@@ -108,6 +120,69 @@ class _MorphAddressSheetState extends State<MorphAddressSheet> {
         .showSnackBar(SnackBar(content: Text('$feature is coming soon')));
   }
 
+  Widget _urlField(ColorScheme colors) {
+    return TextField(
+      key: const Key('address-sheet-url'),
+      controller: _url,
+      focusNode: _focus,
+      autofocus: true,
+      keyboardType: TextInputType.url,
+      textInputAction: TextInputAction.go,
+      style: MorphTheme.monoStyle(color: colors.onSurface, size: 14),
+      decoration: const InputDecoration(hintText: 'Enter an address'),
+      onTap: () {
+        _url.selection = TextSelection(
+          baseOffset: 0,
+          extentOffset: _url.text.length,
+        );
+      },
+      onSubmitted: (value) {
+        // Close first: what the address opens (a page, or for morph://
+        // addresses a panel of its own) must not be what this pop closes.
+        final submit = widget.onSubmit;
+        Navigator.of(context).pop();
+        submit?.call(value);
+      },
+    );
+  }
+
+  /// The engine phrases typed here go to, left of the address.
+  Widget _engineSelector(ColorScheme colors) {
+    final current = widget.engines.firstWhere(
+      (e) => e.id == _engine,
+      orElse: () => widget.engines.first,
+    );
+    return PopupMenuButton<String>(
+      key: const Key('address-sheet-engine'),
+      tooltip: 'Search with ${current.name}',
+      initialValue: current.id,
+      onSelected: (id) {
+        setState(() => _engine = id);
+        widget.onEngineChanged?.call(id);
+        _focus.requestFocus();
+      },
+      itemBuilder: (context) => [
+        for (final e in widget.engines)
+          PopupMenuItem<String>(
+            key: Key('address-sheet-engine-${e.id}'),
+            value: e.id,
+            child: Text(e.name),
+          ),
+      ],
+      child: Padding(
+        padding: const EdgeInsets.only(right: 8),
+        child: CircleAvatar(
+          radius: 16,
+          backgroundColor: colors.surfaceContainerHighest,
+          child: Text(
+            current.mark,
+            style: MorphTheme.monoStyle(color: colors.onSurface, size: 14),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
@@ -137,30 +212,11 @@ class _MorphAddressSheetState extends State<MorphAddressSheet> {
                     ),
                   ),
                 ),
-                TextField(
-                  key: const Key('address-sheet-url'),
-                  controller: _url,
-                  focusNode: _focus,
-                  autofocus: true,
-                  keyboardType: TextInputType.url,
-                  textInputAction: TextInputAction.go,
-                  style: MorphTheme.monoStyle(
-                    color: colors.onSurface,
-                    size: 14,
-                  ),
-                  decoration: const InputDecoration(
-                    hintText: 'Enter an address',
-                  ),
-                  onTap: () {
-                    _url.selection = TextSelection(
-                      baseOffset: 0,
-                      extentOffset: _url.text.length,
-                    );
-                  },
-                  onSubmitted: (value) {
-                    widget.onSubmit?.call(value);
-                    Navigator.of(context).maybePop();
-                  },
+                Row(
+                  children: [
+                    if (widget.engines.isNotEmpty) _engineSelector(colors),
+                    Expanded(child: _urlField(colors)),
+                  ],
                 ),
                 const SizedBox(height: 12),
                 Row(

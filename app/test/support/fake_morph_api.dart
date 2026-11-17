@@ -13,6 +13,55 @@ class FakeMorphApi implements MorphApi {
   String? omniboxTarget(String input) => omniboxRule(input);
 
   @override
+  String? omniboxTargetFor(String input, String engine) =>
+      omniboxRule(input, engine: engine);
+
+  @override
+  List<SearchEngineOption> searchEngines() => const [
+    SearchEngineOption(id: 'google', name: 'Google', mark: 'G'),
+    SearchEngineOption(id: 'duckduckgo', name: 'DuckDuckGo', mark: 'D'),
+  ];
+
+  String searchEngine = 'google';
+
+  @override
+  Future<String> defaultSearchEngine({String? home}) async => searchEngine;
+
+  /// The Dart copy of `morph-bridge`'s `own_address`.
+  @override
+  OwnAddress? ownAddress(String url) {
+    final match = RegExp(
+      r'^([a-z][a-z0-9+.\-]*):',
+      caseSensitive: false,
+    ).firstMatch(url.trim());
+    final scheme = match?.group(1)?.toLowerCase();
+    if (scheme == null || !isOwnScheme(scheme)) {
+      return null;
+    }
+    if (scheme == 'morph') {
+      final name = url
+          .trim()
+          .substring(6)
+          .replaceAll(RegExp(r'^/+'), '')
+          .split(RegExp(r'[?#]'))
+          .first
+          .replaceAll(RegExp(r'/+$'), '');
+      if (morphPages.contains(name.toLowerCase())) {
+        return OwnAddress(page: name.toLowerCase());
+      }
+      return OwnAddress(
+        title: 'morph://$name is not a Morph page',
+        body:
+            'Morph has these pages:\n${morphPages.map((p) => 'morph://$p').join('\n')}',
+      );
+    }
+    return const OwnAddress(
+      title: 'App call not supported yet',
+      body: 'It was not sent to a search engine.',
+    );
+  }
+
+  @override
   Future<IdentityStatusView> identityDirInfo({String? home}) async {
     return IdentityStatusView(
       home: home ?? '/tmp/morph-fake',

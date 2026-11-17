@@ -42,15 +42,22 @@ class SettingsView {
   final bool sidebarCollapsed;
   final int sidebarWidth;
 
+  /// The search engine new tabs use (an id from `search_engines`).
+  final String searchEngine;
+
   const SettingsView({
     required this.tabPosition,
     required this.sidebarCollapsed,
     required this.sidebarWidth,
+    required this.searchEngine,
   });
 
   @override
   int get hashCode =>
-      tabPosition.hashCode ^ sidebarCollapsed.hashCode ^ sidebarWidth.hashCode;
+      tabPosition.hashCode ^
+      sidebarCollapsed.hashCode ^
+      sidebarWidth.hashCode ^
+      searchEngine.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -59,5 +66,6 @@ class SettingsView {
           runtimeType == other.runtimeType &&
           tabPosition == other.tabPosition &&
           sidebarCollapsed == other.sidebarCollapsed &&
-          sidebarWidth == other.sidebarWidth;
+          sidebarWidth == other.sidebarWidth &&
+          searchEngine == other.searchEngine;
 }

@@ -2334,6 +2334,99 @@ void main() {
       }
     },
   );
+
+  testWidgets('phone sheet sends phrases to the engine picked beside the URL', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      await tester.pumpWidget(
+        MorphApp(
+          api: FakeMorphApi(),
+          home: '/tmp/morph-does-not-exist',
+          subscribeToTicks: false,
+          loadPageBridgeAsset: false,
+        ),
+      );
+      await _pumpUntilIdentity(tester);
+      await _openSheet(tester);
+      final selector = find.byKey(const Key('address-sheet-engine'));
+      expect(selector, findsOneWidget);
+      final field = tester.getRect(find.byKey(const Key('address-sheet-url')));
+      final engine = tester.getRect(selector);
+      expect(engine.right, lessThanOrEqualTo(field.left + 0.5));
+      expect((engine.center.dy - field.center.dy).abs(), lessThan(12));
+      expect(
+        find.descendant(of: selector, matching: find.text('G')),
+        findsOneWidget,
+        reason: 'Google by default, as on desktop',
+      );
+      await tester.tap(selector);
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const Key('address-sheet-engine-duckduckgo')),
+      );
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('address-sheet-url')),
+        'rust gpui',
+      );
+      await tester.testTextInput.receiveAction(TextInputAction.go);
+      await tester.pumpAndSettle();
+      await _pumpUntilWebViewAttached(tester, fakeWebView);
+      expect(
+        fakeWebView.lastSession!.history,
+        contains('https://duckduckgo.com/?q=rust+gpui'),
+      );
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('morph:// and weirdnet-<app>:// addresses never search', (
+    tester,
+  ) async {
+    final view = tester.view;
+    view.physicalSize = const Size(412, 915);
+    view.devicePixelRatio = 1.0;
+    addTearDown(view.reset);
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      await tester.pumpWidget(
+        MorphApp(
+          api: FakeMorphApi(),
+          home: '/tmp/morph-does-not-exist',
+          subscribeToTicks: false,
+          loadPageBridgeAsset: false,
+        ),
+      );
+      await _pumpUntilIdentity(tester);
+      bool searched() => fakeWebView.loadedUrls.any(
+        (u) => u.contains('google.com/search') || u.contains('duckduckgo.com'),
+      );
+
+      await _enterAndSubmitUrl(tester, 'morph://nope');
+      expect(find.byKey(const Key('page-error')), findsOneWidget);
+      expect(find.text('morph://nope is not a Morph page'), findsOneWidget);
+      expect(find.textContaining('morph://relays'), findsOneWidget);
+      expect(searched(), isFalse);
+
+      await _enterAndSubmitUrl(tester, 'weirdnet-muninn://alice/notes');
+      expect(find.text('App call not supported yet'), findsOneWidget);
+      expect(searched(), isFalse);
+      expect(
+        fakeWebView.loadedUrls.where((u) => u.startsWith('weirdnet-')),
+        isEmpty,
+        reason: 'never handed to the web view or the OS',
+      );
+
+      await _enterAndSubmitUrl(tester, 'morph://settings');
+      expect(find.byKey(const Key('settings-page')), findsOneWidget);
+      expect(searched(), isFalse);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
 }
 
 Future<void> _sendChord(
