@@ -1,6 +1,6 @@
 # Library sync
 
-Status: design only, 2026-11-17. Product rules are in
+Status: design, 2026-11-17; generic protocol moves into `weirdnet-sync` (not yet published). Product rules are in
 `docs/identity-recovery.md` section 5. This file is the Morph implementation
 plan for that section: bookmarks, folders, tags and history first, then
 settings, between a user's own linked devices, end-to-end encrypted, over
@@ -262,8 +262,9 @@ share it. Wire sealing uses the new `weirdnet-sync/v1/…` info strings only.
 
 Prefer Rust tests that do not need a GUI.
 
-- **Merge unit tests** in `morph-store` / `morph-core`: LWW title vs move,
-  OR-set tags, concurrent edit vs delete, folder cycle break, history
+- **Merge unit tests** for the primitives live in `weirdnet-sync`. Morph
+  tests record-level apply in `morph-store` / `morph-core`: LWW title vs
+  move, OR-set tags, concurrent edit vs delete, folder cycle break, history
   delete-by-URL and clear-all vs a later visit, cap-5000 trim not
   resurrecting, two `MORPH_HOME`s in one process with a fake transport.
 - **Link then sync** in `morph-services`: two temp homes, `local-relay`
@@ -279,27 +280,40 @@ Prefer Rust tests that do not need a GUI.
 
 ## Crate split
 
-Propose a **`weirdnet-sync`** crate (formats `weirdnet-sync/v1`), not a
-Morph-only protocol, so Muninn can share it later, as
-`docs/identity-recovery.md` already sketched. It would own: HLC, the pull
-messages, page sealing, roster and revocation checks, cursors. It would
-*not* own bookmark or history types.
+Generic protocol and merge primitives live in **`weirdnet-sync`**
+(`WeirdBrains/weirdnet-sync`, formats `weirdnet-sync/v1`), not in Morph, so
+Muninn can share them, as `docs/identity-recovery.md` already sketched. That
+crate owns: HLC, the op log, LWW and OR-set merge, tombstone GC, page sealing
+(`SyncKey` derivation), roster / self-cert / revocation, cursors, and the
+pull/hello protocol over `weirdnet-net`. It does *not* own bookmark, folder,
+history or settings types.
 
-Do not create or publish that crate in this pass. Implement first as
-`crates/morph-sync` in this workspace, keep the `weirdnet-sync/v1` tag on
-the wire, and move the crate out unchanged when Muninn needs it. If
-`weirdnet-storage` later grows a `sync` module that covers the log, wrap
-it instead of forking. Morph wiring stays in `morph-services` (when to
-start, opt-ins, enrollment) and in a small GPUI / Flutter panel
-(conflicts, devices, last synced).
+Morph keeps only Morph-specific record types, the `morph-store` schema
+migration, and wiring (when to start, opt-ins, enrollment) plus a small
+GPUI / Flutter panel (conflicts, devices, last synced).
+
+`weirdnet-storage` already has a `sync` module: a SQL row change log with a
+three-way take/keep/conflict decision. That is not this protocol. Wrap it
+later if it grows to cover the HLC log, rather than forking it.
+
+`weirdnet-sync` is not on crates.io yet, and the GitHub repo still has to be
+created. Morph releases cannot take a git or path dependency (they pin
+published crates.io versions). Until 0.1.0 is published, Morph can land the
+schema migration and this document only; do not wire `weirdnet-sync` into
+Morph's `Cargo.toml`.
 
 ## Milestones
 
-1. **Schema and merge, no network.** Migration, HLC, `sync_log`, history
-   ids and tombstones, in-process merge tests. Self-certify a `NodeCert` on
+1. **`weirdnet-sync` crate, Morph schema only.** HLC, op log, merge
+   primitives, sealing, roster, protocol and tests in the Weirdnet crate.
+   In Morph: history row ids and tombstones, and `hlc` / `node_id` columns
+   on bookmarks, folders and tombstones. Self-certify a `NodeCert` on
    create / import / restore as well as on link, and persist a roster of
-   one. No user-visible sync yet.
-2. **Wire + two homes.** `morph-sync` pull/hello over `weirdnet-net` 0.5,
+   one, once that helper exists in `weirdnet-device-link` or can be called
+   without a new unpublished dependency. No user-visible sync yet, and no
+   Morph git/path dep on `weirdnet-sync`.
+2. **Wire + two homes** (after `weirdnet-sync` is published). Morph wires
+   the crates.io crate, pull/hello over `weirdnet-net` 0.5,
    sealed pages, local-relay integration test. Fill `Transfer.sync` and the
    roster snapshot at link time.
 3. **Bookmarks, folders, tags** in the GPUI and mobile shells, default on
@@ -325,8 +339,9 @@ start, opt-ins, enrollment) and in a small GPUI / Flutter panel
 3. **Sync reply cap:** 256 KiB pages, requested above the 16 KiB link
    answer cap. Exact number can move; it must stay under weirdnet-net's
    default 8 MiB.
-4. **Extract `weirdnet-sync`:** when Muninn is ready, not before. Wire
-   names are already `weirdnet-sync/v1`.
+4. **Publish `weirdnet-sync`:** a new `WeirdBrains/weirdnet-sync` repo and
+   a crates.io 0.1.0 release are required before Morph can wire the
+   protocol. Wire names are already `weirdnet-sync/v1`.
 5. **Official relay storage:** no. Only a user-run node may keep sealed
    pages for catch-up.
 6. **Re-link vs automatic roster:** this plan tries hello-based discovery
