@@ -23,12 +23,12 @@ pub use weirdnet_net::Multiaddr;
 pub use weirdnet_net::node::NodeConfig;
 pub use weirdnet_net::node::Status as NetStatus;
 
-use crate::profile_identity::{self, ProfileIdentity, Source, identity_dir};
+use crate::profile_identity::{self, ProfileIdentity, Source};
 use crate::{Error, Result};
 
 /// The link scheme Morph shows and accepts.
 pub const SCHEME: &str = "weirdnet-morph://";
-const NODE_AAD: &[u8] = b"morph/identity/node-key/v1";
+use crate::profile_identity::NODE_AAD;
 
 /// The official WeirdBrains Weirdnet relay, built in on every platform: TCP
 /// first (UDP is often blocked), then QUIC. Links dial both at once and keep
@@ -178,11 +178,11 @@ impl NewDevice {
 }
 
 pub fn node_key_path(profile_dir: &Path) -> PathBuf {
-    identity_dir(profile_dir).join("node.key")
+    profile_identity::node_key_path(profile_dir)
 }
 
 pub fn node_cert_path(profile_dir: &Path) -> PathBuf {
-    identity_dir(profile_dir).join("node.cert.json")
+    profile_identity::node_cert_path(profile_dir)
 }
 
 /// The existing device's side: paired with a scanned link, holding the
@@ -355,7 +355,7 @@ mod tests {
         assert_eq!(new.state(), LinkState::Done);
         // Spent: a second take fails, and nothing secret is in the clear.
         assert!(new.finish(&tmp.path().join("again"), &pw("new password"), 3).is_err());
-        for entry in fs::read_dir(identity_dir(&fresh)).unwrap() {
+        for entry in fs::read_dir(profile_identity::identity_dir(&fresh)).unwrap() {
             let body = fs::read_to_string(entry.unwrap().path()).unwrap();
             assert!(!body.contains(made.words.as_str()));
             assert!(!body.contains("new password"));
