@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- `weirdnet-<app>://` links open: Morph calls the app over Weirdnet
+  (weirdnet-net 0.5.0, from 0.4.0), finding the peers that serve it by
+  peer id, user id or name and reaching them through the relays. The tab
+  shows it is loading (Stop cancels; on the phone, a thin progress line)
+  and then the app's answer under the app's address: HTML pages, images,
+  JSON (pretty-printed) and text, up to 8 MiB (2 MB on Windows and
+  Android). Each failure has its own page: no one found, the peer doesn't
+  serve that app, couldn't reach it, no answer in time, refused, too
+  large, garbled, an error status, a type Morph can't show, or an invalid
+  app name. None of them searches.
+
+- Device linking and relay checks rely on weirdnet-net 0.5 to reach a
+  relay over all of its addresses; Morph's own dialing workaround is gone.
+  Round trips in Settings still show. Codes are unchanged, and alpha.14 and
+  alpha.15 builds still link with this one.
+
+- Checks: app-call tests through an in-memory relay (pages, errors, an
+  unknown user), a `serve-app` example serving `morph-test`, and an Xvfb
+  and Wayland check (`--app-server`) that loads its pages through the
+  local relay.
+
 ## [0.2.0-alpha.15] - 2026-11-17
 
 - Weirdnet networking moves to weirdnet-net 0.4.0 (from 0.1.0). Codes are
