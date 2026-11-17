@@ -20,8 +20,10 @@ use morph_identity::profile_identity::LibraryKey;
 use weirdnet_storage::rusqlite::{self, Connection, params};
 
 mod model;
+mod sync_store;
 
 pub use model::{Bookmark, BookmarkSet, Folder, HistoryEntry, Tombstone};
+pub use sync_store::{SyncConflict, SyncLogEntry, SyncOrSetRow, SyncLwwRow};
 
 /// File name inside the profile directory.
 pub const FILE_NAME: &str = "library.db";
@@ -83,6 +85,53 @@ CREATE TABLE history_tombstones (
     deleted_ms INTEGER NOT NULL,
     hlc TEXT NOT NULL DEFAULT '',
     node_id TEXT NOT NULL DEFAULT ''
+);
+",
+    "
+-- Op log, cursors and merge state for library sync. Never edit a shipped
+-- migration; this one is appended.
+CREATE TABLE sync_log (
+    node_id TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    hlc TEXT NOT NULL,
+    typ TEXT NOT NULL,
+    record_id TEXT NOT NULL,
+    op BLOB NOT NULL,
+    PRIMARY KEY (node_id, seq)
+);
+CREATE TABLE sync_cursor (
+    node_id TEXT PRIMARY KEY NOT NULL,
+    last_seq INTEGER NOT NULL
+);
+CREATE TABLE sync_meta (
+    key TEXT PRIMARY KEY NOT NULL,
+    value BLOB NOT NULL
+);
+CREATE TABLE sync_lww (
+    record_id TEXT NOT NULL,
+    field TEXT NOT NULL,
+    hlc TEXT NOT NULL,
+    value TEXT,
+    PRIMARY KEY (record_id, field)
+);
+CREATE TABLE sync_orset (
+    record_id TEXT NOT NULL,
+    elem TEXT NOT NULL,
+    added_hlc TEXT,
+    removed_hlc TEXT,
+    PRIMARY KEY (record_id, elem)
+);
+CREATE TABLE sync_deleted (
+    record_id TEXT PRIMARY KEY NOT NULL,
+    hlc TEXT NOT NULL
+);
+CREATE TABLE sync_conflict (
+    id TEXT PRIMARY KEY NOT NULL,
+    typ TEXT NOT NULL,
+    record_id TEXT NOT NULL,
+    hlc TEXT NOT NULL,
+    op BLOB NOT NULL,
+    kept_until_ms INTEGER NOT NULL
 );
 ",
 ];

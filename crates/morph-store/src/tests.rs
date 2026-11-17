@@ -150,3 +150,24 @@ fn import_fills_only_an_empty_database_all_at_once() {
     assert!(!lib.import(&BookmarkSet::default(), &[visit("z", 9)], 0).unwrap(), "never over existing records");
     assert_eq!(lib.history().unwrap().len(), 2);
 }
+
+#[test]
+fn sync_log_and_meta_round_trip() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut lib = Library::open(tmp.path(), &key(1)).unwrap();
+    assert_eq!(lib.schema_version().unwrap(), 3);
+    lib.set_sync_meta("node_id", b"peer-a").unwrap();
+    assert_eq!(lib.sync_meta("node_id").unwrap(), Some(b"peer-a".to_vec()));
+    let e = SyncLogEntry {
+        node_id: "peer-a".into(),
+        seq: 1,
+        hlc: "h".into(),
+        typ: "bookmarks".into(),
+        record_id: "b1".into(),
+        op: b"{}".to_vec(),
+    };
+    lib.insert_sync_log(&e).unwrap();
+    lib.set_sync_cursor("peer-a", 1).unwrap();
+    assert_eq!(lib.sync_log().unwrap(), vec![e]);
+    assert_eq!(lib.sync_cursors().unwrap(), vec![("peer-a".into(), 1)]);
+}
