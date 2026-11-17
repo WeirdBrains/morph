@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0-alpha.15] - 2026-11-17
+
 - Weirdnet networking moves to weirdnet-net 0.4.0 (from 0.1.0). Codes are
   unchanged (v2), and builds from alpha.13 and alpha.14 still link with
   this one in either direction.
