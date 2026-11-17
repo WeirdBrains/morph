@@ -431,7 +431,14 @@ impl SettingsView {
         if self.relays.as_ref() != Some(&next) {
             if std::env::var_os("MORPH_LOG_EVENTS").is_some_and(|v| v == "1") {
                 let state = next.relays.first().map_or("none", |r| next.status(r).as_str());
-                println!("morph-event relays nodes={} checking={} state={state} count={}", next.nodes, next.checking, next.relays.len());
+                let rtt = next.relays.first().and_then(|r| r.rtt_ms).map_or("none".to_string(), |ms| ms.to_string());
+                let addrs = next.relays.first().map_or(0, |r| r.addrs.len());
+                println!(
+                    "morph-event relays nodes={} checking={} state={state} count={} rtt={rtt} addrs={addrs}",
+                    next.nodes,
+                    next.checking,
+                    next.relays.len()
+                );
             }
             self.relays = Some(next);
             cx.notify();
