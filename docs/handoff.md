@@ -662,6 +662,27 @@ unfinished alpha.10 work is parked on branch `wip/alpha10`, not built).
   `<desktop>-mimeapps.list` itself (xdg-settings failed on Hyprland), then
   checks each type with `xdg-mime`.
 
+## Release and TAUR (alpha.15)
+
+- Pre-release `v0.2.0-alpha.15` (tag at `f8aeff6`, cut from `1253118`):
+  https://github.com/WeirdBrains/morph/releases/tag/v0.2.0-alpha.15. It
+  brings weirdnet-net 0.4 (relays reached over all their addresses, with a
+  round trip in Settings), `morph://` pages, `weirdnet-<app>://` links that
+  never search (App call not supported yet), and the phone search-engine
+  selector beside the URL. All 12 assets come from CI run 44090441120
+  (`f8aeff6`, all green; iOS 44090441192 green), and `... assets
+  0.2.0-alpha.15` passed.
+- `app/pubspec.yaml` `0.2.0-alpha.15+10404`. The APK reports versionName
+  0.2.0-alpha.15 and versionCode 10404, and is signed by the fixed test key
+  (certificate SHA-256
+  `c2af967c4775c926f6db7f051be293821f7b8c4c5b3596c3745ae72fbc8bba51`).
+- `morph-bin` 0.2.0alpha15-1: tarball sha256
+  `131730c5a79b77c65bd9007aefe06c2946ad181e39dc18e1018bb3f92409aedf` (matches
+  the release's SHA256SUMS). Both `.SRCINFO` files match the script's
+  generator, and `taur_check` is clean. The archive
+  `/workspace/dist/morph-bin-0.2.0alpha15.tar.gz` was made with `taur_pack`.
+  It was not uploaded (no taurctl).
+
 ## Release and TAUR (alpha.14)
 
 - Pre-release `v0.2.0-alpha.14` (tag at `1f6f148`, cut from `4d52abb`):
