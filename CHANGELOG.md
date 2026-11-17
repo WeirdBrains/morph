@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Weirdnet networking moves to weirdnet-net 0.4.0 (from 0.1.0). Codes are
+  unchanged (v2), and builds from alpha.13 and alpha.14 still link with
+  this one in either direction.
+
+- Device linking and relay checks reach a relay over all of its addresses
+  at once (TCP, QUIC, and WebSocket over TLS on 443 once the relay serves
+  it) and keep whichever answers first; weirdnet-net alone reserves a slot
+  over a relay's first address only. The addresses a relay advertises in
+  its info document (same peer id and host) are added to the built-in ones,
+  so a relay that starts serving WSS for HTTPS-only networks is used
+  without an update. The device that scans or pastes a code reaches the
+  relay over every address it knows before dialing through it.
+
+- Relays in Settings show a round trip after Check now: the best of three
+  names lookups sent to the relay (weirdnet-net does not report ping
+  times), e.g. "connected, slot reserved (21 ms)".
+
+- Link nodes cap requests at 256 KiB and answers at 16 KiB, and wait 30 s
+  for an answer (weirdnet-net's defaults are 8 MiB, 256 MiB and 60 s).
+
+- Checks: link, invite and relay-check tests through an in-memory relay
+  whose first address goes nowhere, and a `local-relay` example that the
+  Xvfb and Wayland checks point the Relays check and a new device's link
+  screen at (`--local-relay`, a dead address first), expecting a reserved
+  slot and a round trip.
+
 ## [0.2.0-alpha.14] - 2026-11-16
 
 - Pages no longer lag on Linux (Gmail's background requests, Compose
