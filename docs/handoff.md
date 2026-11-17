@@ -662,6 +662,27 @@ unfinished alpha.10 work is parked on branch `wip/alpha10`, not built).
   `<desktop>-mimeapps.list` itself (xdg-settings failed on Hyprland), then
   checks each type with `xdg-mime`.
 
+## Release and TAUR (alpha.14)
+
+- Pre-release `v0.2.0-alpha.14` (tag at `1f6f148`, cut from `4d52abb`):
+  https://github.com/WeirdBrains/morph/releases/tag/v0.2.0-alpha.14. It
+  brings compact v2 QR invites (110 bytes, QR v9), the page lag fixes
+  (select-theming and favicon scripts, link nodes off the UI thread, QR
+  encoded once), the address bar clip and the phone scanner improvements.
+  CPU page drawing on Wayland is opt-in (`MORPH_PAGE_CPU=1`). All 12 assets
+  come from CI run 43995632824 (`1f6f148`, all green; iOS 43995632872
+  green), and `... assets 0.2.0-alpha.14` passed.
+- `app/pubspec.yaml` `0.2.0-alpha.14+10403`. The APK reports versionName
+  0.2.0-alpha.14 and versionCode 10403, and is signed by the fixed test key
+  (certificate SHA-256
+  `c2af967c4775c926f6db7f051be293821f7b8c4c5b3596c3745ae72fbc8bba51`).
+- `morph-bin` 0.2.0alpha14-1: tarball sha256
+  `2d536fa65d0ef652665ec7bb467f98758e0d0d19a144aa5a83b1032d09bfd48f` (matches
+  the release's SHA256SUMS). Both `.SRCINFO` files match the script's
+  generator, and `taur_check` is clean. The archive
+  `/workspace/dist/morph-bin-0.2.0alpha14.tar.gz` was made with `taur_pack`.
+  It was not uploaded (no taurctl).
+
 ## Release and TAUR (alpha.13)
 
 - Pre-release `v0.2.0-alpha.13` (tag at `0c679c5`, cut from `1b1471d`):
