@@ -28,6 +28,7 @@ pub fn create(home: &Path, profile_id: &str, password: &SecretString) -> Result<
     let dir = profile_dir(home, profile_id)?;
     let created = profile_identity::create(&dir, password, now_ms()).map_err(Error::failed)?;
     adopt_new_identity(home, profile_id, &created.identity.user_id, &created.library_key);
+    let _ = crate::sync::on_password(home, profile_id, password);
     Ok(NewIdentity { identity: created.identity, words: created.words })
 }
 
@@ -36,6 +37,7 @@ pub fn import(home: &Path, profile_id: &str, words: &str, password: &SecretStrin
     let dir = profile_dir(home, profile_id)?;
     let (identity, key) = profile_identity::import_unlocked(&dir, words, password, now_ms()).map_err(Error::failed)?;
     adopt_new_identity(home, profile_id, &identity.user_id, &key);
+    let _ = crate::sync::on_password(home, profile_id, password);
     Ok(identity)
 }
 
@@ -52,6 +54,7 @@ pub fn restore_backup(
     let dir = profile_dir(home, profile_id)?;
     let (identity, key) = morph_identity::backup::restore(&dir, contents, backup_password, password, now_ms()).map_err(Error::failed)?;
     adopt_new_identity(home, profile_id, &identity.user_id, &key);
+    let _ = crate::sync::on_password(home, profile_id, password);
     Ok(identity)
 }
 

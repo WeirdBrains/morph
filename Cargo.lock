@@ -5520,11 +5520,14 @@ dependencies = [
  "morph-core",
  "morph-identity",
  "morph-keystore",
+ "morph-store",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
  "ureq",
+ "weirdnet-device-link",
  "weirdnet-net",
+ "weirdnet-sync",
 ]
 
 [[package]]

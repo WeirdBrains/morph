@@ -40,6 +40,7 @@ pub struct Links {
     next: AtomicU64,
     hosts: Mutex<HashMap<u64, NewDevice>>,
     pairings: Mutex<HashMap<u64, AddDevice>>,
+    pairing_ctx: Mutex<HashMap<u64, (std::path::PathBuf, String)>>,
     invites: Mutex<HashMap<u64, Invite>>,
     /// A running relay check and when it stops ([`crate::relays`]).
     probe: Mutex<Option<(RelayProbe, Instant)>>,
@@ -113,16 +114,19 @@ impl Links {
     /// on success.
     pub fn new_device_finish(&self, home: &Path, profile_id: &str, session: u64, password: &SecretString) -> Result<ProfileIdentity> {
         let dir = profile_dir(home, profile_id)?;
-        let identity = {
+        let linked = {
             let mut hosts = guard(&self.hosts);
-            let identity = hosts.get(&session).ok_or(Error::LinkGone)?.finish(&dir, password, now_ms()).map_err(Error::failed)?;
+            let linked = hosts.get(&session).ok_or(Error::LinkGone)?.finish(&dir, password, now_ms()).map_err(Error::failed)?;
             hosts.remove(&session);
-            identity
+            linked
         };
+        let identity = linked.identity;
         match profile_identity::library_key(&dir, password) {
             Ok(key) => crate::library::adopt_new_identity(home, profile_id, &identity.user_id, &key),
             Err(e) => eprintln!("Morph: library key for linked profile {profile_id}: {e}"),
         }
+        let _ = crate::sync::on_password(home, profile_id, password);
+        let _ = crate::sync::apply_link_snapshot(home, profile_id, &linked.sync, &linked.settings);
         Ok(identity)
     }
 
@@ -142,17 +146,27 @@ impl Links {
         let pairing = AddDevice::start(&dir, profile_name, password, link, crate::relays::link_config()).map_err(Error::failed)?;
         let view = Pairing { session: self.next_id(), sas: pairing.sas().to_string(), device: pairing.device().to_string() };
         guard(&self.pairings).insert(view.session, pairing);
+        guard(&self.pairing_ctx).insert(view.session, (home.to_path_buf(), profile_id.to_string()));
         Ok(view)
     }
 
     /// Existing device: the codes match; send the identity and end the session.
     pub fn add_device_send(&self, session: u64) -> Result<()> {
         let mut pairing = guard(&self.pairings).remove(&session).ok_or(Error::LinkGone)?;
-        pairing.send().map_err(Error::failed)
+        let ctx = guard(&self.pairing_ctx).remove(&session);
+        if let Some((home, profile_id)) = ctx {
+            let (settings, sync) = crate::sync::link_payload(&home, &profile_id).unwrap_or_else(|_| ("{}".into(), vec!["bookmarks".into()]));
+            let cert = pairing.send_with(&settings, &sync).map_err(Error::failed)?;
+            let _ = crate::sync::adopt_peer_cert(&home, &profile_id, cert);
+            Ok(())
+        } else {
+            pairing.send().map_err(Error::failed)
+        }
     }
 
     /// Existing device: the codes differ, or the user gave up.
     pub fn add_device_cancel(&self, session: u64) {
+        guard(&self.pairing_ctx).remove(&session);
         let pairing = guard(&self.pairings).remove(&session);
         if let Some(pairing) = pairing {
             drop_later(move || {
