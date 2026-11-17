@@ -23,7 +23,7 @@ mod model;
 mod sync_store;
 
 pub use model::{Bookmark, BookmarkSet, Folder, HistoryEntry, Tombstone};
-pub use sync_store::{SyncConflict, SyncLogEntry, SyncOrSetRow, SyncLwwRow};
+pub use sync_store::{SyncConflict, SyncLogEntry, SyncLwwRow, SyncOrSetRow};
 
 /// File name inside the profile directory.
 pub const FILE_NAME: &str = "library.db";

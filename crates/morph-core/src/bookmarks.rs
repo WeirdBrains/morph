@@ -244,9 +244,7 @@ fn normalize(file: &mut File) {
 /// parents look like the root, without rewriting the stored id.
 fn display_parent(file: &File, id: &str, parent: Option<&str>) -> Option<String> {
     let ids: HashSet<&str> = file.folders.iter().map(|f| f.id.as_str()).collect();
-    let Some(start) = parent.filter(|p| ids.contains(*p) && *p != id) else {
-        return None;
-    };
+    let start = parent.filter(|p| ids.contains(*p) && *p != id)?;
     let mut seen = HashSet::new();
     seen.insert(id);
     let mut at = Some(start);
