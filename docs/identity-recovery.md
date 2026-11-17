@@ -3,7 +3,7 @@
 Status: design, 2026-11-12. Section 4 (login over QR) is built; see
 `qr-login.md`. Identity backups and restore from a file (a subset of
 sections 1 and 2, below) are built since 2026-11-13; plain paper shards
-(3 of 5) since 2026-11-15. Dark shards have design notes in `dark-shards.md`. The rest is not built yet. Decisions are recorded
+(3 of 5) since 2026-11-15. Dark shards have design notes in `dark-shards.md`. The rest is not built yet. The Morph implementation plan for section 5 is `docs/library-sync.md`. Decisions are recorded
 in ARCHITECTURE.md (section 5, "Identity recovery and sync").
 
 Every Morph profile has its own Weirdnet identity: a 32-byte seed, shown as
@@ -193,6 +193,8 @@ both:         erase e_N, e_E, k; the QR is now dead
 
 Profile data syncs end-to-end encrypted between devices that share the
 profile's identity, peer to peer over Weirdnet.
+
+Morph implementation plan: [`docs/library-sync.md`](library-sync.md).
 
 **What syncs (opt-in per data type, per profile):** bookmarks (with folders
 and tags), history, open tabs (shown as "tabs on your other devices", not
