@@ -585,24 +585,29 @@ fn words_grid(t: Theme, words: &str) -> gpui::Div {
         .child(column(&list[half..]))
 }
 
-/// A QR code drawn dark on white with a 4-module quiet zone, each module a
-/// whole number of pixels (5 or more for an invite) so a phone camera reads
-/// it off the screen; one quad per run of dark modules in a row.
+/// A QR code drawn dark on white with a 4-module quiet zone, as wide as the
+/// panel allows (up to [`QR_SIDE`]) and each module a whole number of
+/// pixels (5 for an invite in the usual panel) so a phone camera reads it
+/// off the screen; one quad per run of dark modules in a row.
 fn qr(m: Rc<QrModules>) -> gpui::AnyElement {
     let cells = m.width + 2 * QUIET;
-    let cell = (QR_SIDE / cells as f32).floor().clamp(3., 8.);
-    let side = cell * cells as f32;
     div()
         .flex_none()
-        .w(px(side))
-        .h(px(side))
+        .w_full()
+        .max_w(px(QR_SIDE))
+        .aspect_square()
         .bg(rgb(0xffffff))
         .child(
             canvas(
                 |_, _, _| {},
                 move |bounds, _, window, _| {
+                    let side = f32::from(bounds.size.width.min(bounds.size.height));
+                    let cell = (side / cells as f32).floor().max(1.);
+                    // Centred, so the quiet zone is even on every side.
+                    let pad = ((side - cell * cells as f32) / 2.).floor();
                     for &(x, y, len) in &m.runs {
-                        let origin = point(bounds.origin.x + px((x + QUIET) as f32 * cell), bounds.origin.y + px((y + QUIET) as f32 * cell));
+                        let origin =
+                            point(bounds.origin.x + px(pad + (x + QUIET) as f32 * cell), bounds.origin.y + px(pad + (y + QUIET) as f32 * cell));
                         window.paint_quad(fill(gpui::Bounds::new(origin, size(px(len as f32 * cell), px(cell))), rgb(0x000000)));
                     }
                 },
