@@ -193,7 +193,6 @@ pub fn answer_invite(scheme: &str, invite: &str, offer_link: &str, cfg: NodeConf
     let peer: PeerId = invite.peer.parse().map_err(|_| Error::Invalid("the link is damaged"))?;
     let addrs: Vec<Multiaddr> = invite.addrs.iter().filter_map(|a| format!("{a}/p2p/{peer}").parse().ok()).collect();
     let node = reach::start::<InviteRequest, LinkReply>(&INVITE_PROFILE, Keypair::generate_ed25519(), cfg, Arc::new(NoAnswers))?;
-    node.reach_relays_of(&addrs);
     let reply = node.node.request(peer, &addrs, InviteRequest::Offer { token: invite.token, link: offer_link.to_string() });
     node.node.halt();
     match reply? {

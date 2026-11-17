@@ -136,7 +136,6 @@ impl Pairing {
         let offer = decode_link(scheme, link)?;
         let (sender, hello) = Sender::start(offer, now_ms())?;
         let node = reach::start(&LINK_PROFILE, Keypair::generate_ed25519(), cfg, Arc::new(NoRequests))?;
-        node.reach_relays_of(&sender.offer().dial_addrs());
         let pairing = Pairing { node, sender, sent: false };
         pairing.ask(hello)?;
         Ok(pairing)

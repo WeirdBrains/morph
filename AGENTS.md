@@ -31,7 +31,7 @@ overrides a rule and gives a reason.
 ## Identity and data
 
 - A person has one Weirdnet user key across apps. Morph uses `Profile::WEIRDNET`
-  and `weirdnet-keys` 0.1.0 / `weirdnet-net` 0.4.0 so an install can later link to an
+  and `weirdnet-keys` 0.1.0 / `weirdnet-net` 0.5.0 so an install can later link to an
   existing Muninn identity. Morph never creates a second identity for someone
   who already has one.
 - Full first-run keyring, store unlock and device linking is milestone M3.

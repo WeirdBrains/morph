@@ -5431,6 +5431,7 @@ dependencies = [
 name = "morph-core"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "morph-identity",
  "morph-store",
  "serde",
@@ -5514,6 +5515,7 @@ dependencies = [
 name = "morph-services"
 version = "0.1.0"
 dependencies = [
+ "futures",
  "morph-core",
  "morph-identity",
  "morph-keystore",
@@ -5521,6 +5523,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "ureq",
+ "weirdnet-net",
 ]
 
 [[package]]
@@ -10028,12 +10031,13 @@ dependencies = [
 
 [[package]]
 name = "weirdnet-net"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b537d30de206ca142bea783830262614dfad13924d49450b94a1b39fe04ed40"
+checksum = "3c15aed64874dd02b1c8d097cb2a1c40d0d0a87564fd02cd4c24200102269ac7"
 dependencies = [
  "base64 0.22.1",
  "blake3",
+ "cbor4ii",
  "chacha20poly1305",
  "futures",
  "hex",
