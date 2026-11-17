@@ -168,9 +168,21 @@ fn load(home: &Path, id: &str) -> Result<File, BookmarkError> {
 fn save(home: &Path, id: &str, file: &mut File, now_ms: i64) -> Result<(), BookmarkError> {
     file.version = VERSION;
     file.deleted.retain(|t| now_ms - t.deleted_ms < TOMBSTONE_MS);
-    let set = || BookmarkSet { bookmarks: file.bookmarks.clone(), folders: file.folders.clone(), deleted: file.deleted.clone() };
-    if library_db::with(home, id, |lib| lib.save_bookmark_set(&set()))?.is_none() {
+    let mut set = BookmarkSet { bookmarks: file.bookmarks.clone(), folders: file.folders.clone(), deleted: file.deleted.clone() };
+    if library_db::with(home, id, |lib| {
+        let prev = lib.bookmark_set()?;
+        crate::sync::record_local_changes(lib, &prev, &mut set, now_ms)?;
+        lib.save_bookmark_set(&set)?;
+        Ok(())
+    })?
+    .is_none()
+    {
         write(&bookmarks_path(home, id), file)?;
+    } else {
+        // Pick up HLCs stamped for sync so a later load matches what we wrote.
+        file.bookmarks = set.bookmarks;
+        file.folders = set.folders;
+        file.deleted = set.deleted;
     }
     Ok(())
 }
@@ -183,37 +195,17 @@ pub(crate) fn json_set(home: &Path, id: &str) -> Result<BookmarkSet, ProfileErro
     Ok(BookmarkSet { bookmarks: file.bookmarks, folders: file.folders, deleted: file.deleted })
 }
 
-/// Fills in what older files lack: ids, update times, order keys, and moves
-/// anything whose folder is gone to the root.
+/// Fills in what older files lack: ids, update times, and order keys.
+/// Missing or cyclic parents are left as stored; [`sorted`] shows those
+/// items at the root until the folder arrives, so a later save does not
+/// persist a root move.
 fn normalize(file: &mut File) {
-    let folder_ids: HashSet<String> = file.folders.iter().map(|f| f.id.clone()).collect();
-    for folder in &mut file.folders {
-        if folder.parent_id.as_ref().is_some_and(|p| !folder_ids.contains(p) || *p == folder.id) {
-            folder.parent_id = None;
-        }
-    }
-    // Break any parent cycles a bad merge could leave.
-    let parents: BTreeMap<String, Option<String>> = file.folders.iter().map(|f| (f.id.clone(), f.parent_id.clone())).collect();
-    for folder in &mut file.folders {
-        let mut seen = HashSet::new();
-        let mut at = folder.parent_id.clone();
-        while let Some(p) = at {
-            if !seen.insert(p.clone()) || p == folder.id {
-                folder.parent_id = None;
-                break;
-            }
-            at = parents.get(&p).cloned().flatten();
-        }
-    }
     for bookmark in &mut file.bookmarks {
         if bookmark.id.is_empty() {
             bookmark.id = legacy_id(&bookmark.url, bookmark.added_ms);
         }
         if bookmark.updated_ms == 0 {
             bookmark.updated_ms = bookmark.added_ms;
-        }
-        if bookmark.folder_id.as_ref().is_some_and(|f| !folder_ids.contains(f)) {
-            bookmark.folder_id = None;
         }
     }
     // Old files had no order: keep their newest-first look.
@@ -247,10 +239,43 @@ fn normalize(file: &mut File) {
     }
 }
 
+/// The parent used for display and sibling order: missing and cyclic
+/// parents look like the root, without rewriting the stored id.
+fn display_parent(file: &File, id: &str, parent: Option<&str>) -> Option<String> {
+    let ids: HashSet<&str> = file.folders.iter().map(|f| f.id.as_str()).collect();
+    let Some(start) = parent.filter(|p| ids.contains(*p) && *p != id) else {
+        return None;
+    };
+    let mut seen = HashSet::new();
+    seen.insert(id);
+    let mut at = Some(start);
+    while let Some(p) = at {
+        if !seen.insert(p) {
+            return None;
+        }
+        at = file.folders.iter().find(|f| f.id == p).and_then(|f| f.parent_id.as_deref()).filter(|n| ids.contains(n));
+    }
+    Some(start.to_string())
+}
+
+fn display_folder_parent(file: &File, folder: &Folder) -> Option<String> {
+    display_parent(file, &folder.id, folder.parent_id.as_deref())
+}
+
+fn display_bookmark_folder(file: &File, bookmark: &Bookmark) -> Option<String> {
+    display_parent(file, &bookmark.id, bookmark.folder_id.as_deref())
+}
+
 fn sorted(file: &File) -> Tree {
     let mut folders = file.folders.clone();
+    for f in &mut folders {
+        f.parent_id = display_folder_parent(file, f);
+    }
     folders.sort_by(|a, b| (a.parent_id.as_deref(), &a.order, &a.id).cmp(&(b.parent_id.as_deref(), &b.order, &b.id)));
     let mut bookmarks = file.bookmarks.clone();
+    for b in &mut bookmarks {
+        b.folder_id = display_bookmark_folder(file, b);
+    }
     bookmarks.sort_by(|a, b| (a.folder_id.as_deref(), &a.order, &a.id).cmp(&(b.folder_id.as_deref(), &b.order, &b.id)));
     Tree { folders, bookmarks }
 }
@@ -260,9 +285,9 @@ fn sibling_keys(file: &File, parent: Option<&str>, except: &str) -> Vec<String> 
     let mut keys: Vec<String> = file
         .folders
         .iter()
-        .filter(|f| f.parent_id.as_deref() == parent && f.id != except)
+        .filter(|f| display_folder_parent(file, f).as_deref() == parent && f.id != except)
         .map(|f| f.order.clone())
-        .chain(file.bookmarks.iter().filter(|b| b.folder_id.as_deref() == parent && b.id != except).map(|b| b.order.clone()))
+        .chain(file.bookmarks.iter().filter(|b| display_bookmark_folder(file, b).as_deref() == parent && b.id != except).map(|b| b.order.clone()))
         .collect();
     keys.sort();
     keys.dedup();
@@ -767,6 +792,37 @@ mod tests {
         let t = tree(&home, "default").unwrap();
         assert!(t.bookmarks[0].folder_id.is_none());
         assert!(t.folders.iter().any(|f| f.parent_id.is_none()), "cycle broken");
+    }
+
+    #[test]
+    fn a_missing_parent_is_shown_at_the_root_but_not_written_back() {
+        use morph_identity::profile_identity::LibraryKey;
+        let (_t, home) = home();
+        let id = "default";
+        let key = LibraryKey::from_bytes([3; 32]);
+        crate::library_db::unlock(&home, id, &key).unwrap();
+        let set = morph_store::BookmarkSet {
+            bookmarks: vec![Bookmark {
+                id: "b1".into(),
+                url: "https://x.test/".into(),
+                title: "X".into(),
+                folder_id: Some("later".into()),
+                order: "a".into(),
+                added_ms: 1,
+                updated_ms: 1,
+                ..Default::default()
+            }],
+            folders: vec![],
+            deleted: vec![],
+        };
+        crate::library_db::with(&home, id, |lib| lib.save_bookmark_set(&set)).unwrap().unwrap();
+        let t = tree(&home, id).unwrap();
+        assert!(t.bookmarks[0].folder_id.is_none(), "shown at the root");
+        // An edit must not persist a root move for the still-missing folder.
+        update_bookmark(&home, id, "b1", BookmarkEdit { title: Some("Y".into()), url: None, tags: None }, 2).unwrap();
+        let stored = crate::library_db::with(&home, id, |lib| lib.bookmark_set()).unwrap().unwrap();
+        assert_eq!(stored.bookmarks[0].folder_id.as_deref(), Some("later"));
+        assert_eq!(stored.bookmarks[0].title, "Y");
     }
 
     #[test]
