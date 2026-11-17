@@ -33,6 +33,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   screen at (`--local-relay`, a dead address first), expecting a reserved
   slot and a round trip.
 
+- The address bar never searches for `morph://` or `weirdnet-` addresses,
+  on desktop and phone. `morph://about`, `bookmarks`, `downloads`,
+  `history`, `identity`, `profiles`, `relays`, `search` and `settings` open
+  that page or panel (`relays`, `downloads` and `search` open Settings at
+  that section); any other `morph://` address shows a page listing them.
+  A `weirdnet-<app>://` link (any app) is opened by calling the app over
+  Weirdnet, never a local OS handler; weirdnet-net 0.4 cannot make that
+  call yet, so this build shows "App call not supported yet" instead of a
+  search. `weirdnet://` (internal) says it can't be opened.
+
+- Phone: the search engine selector sits left of the address in the
+  address sheet, as on desktop (Google or DuckDuckGo, per tab, the
+  profile's setting by default). Phrases typed on the phone used to go to
+  DuckDuckGo only.
+
 ## [0.2.0-alpha.14] - 2026-11-16
 
 - Pages no longer lag on Linux (Gmail's background requests, Compose

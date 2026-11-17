@@ -409,6 +409,7 @@ impl BrowserView {
             history: Some(sink),
             log_events: std::env::var_os("MORPH_LOG_EVENTS").is_some_and(|v| v == "1"),
             search_engine: morph_core::settings::load(home).map(|s| s.search_engine).unwrap_or_default(),
+            app_caller: None,
         };
         let mut browser = Browser::new(backend, config).map_err(|e| e.to_string())?;
         browser.set_shortcuts(keystrokes);
@@ -477,6 +478,13 @@ impl BrowserView {
 
     /// Open `url` (from a bookmark or history) in the active tab or a new one.
     pub fn open_url(&mut self, url: &str, new_tab: bool, window: &mut Window, cx: &mut Context<Self>) {
+        // A link to one of Morph's panels opens the panel, not a page.
+        if let Some(internal) = morph_browser::Internal::parse(url)
+            && !matches!(internal, morph_browser::Internal::About | morph_browser::Internal::Settings)
+        {
+            self.open_internal(internal, cx);
+            return;
+        }
         if new_tab {
             self.browser.new_tab(url);
         } else {
@@ -1025,10 +1033,18 @@ impl BrowserView {
         let internal = self.browser.submit_address();
         self.sync_focus(window, cx);
         if let Some(internal) = internal {
-            // morph://bookmarks and the like open the shell's panels.
-            cx.emit(ShellRequest::Run(internal.action()));
+            self.open_internal(internal, cx);
         }
         cx.notify();
+    }
+
+    /// morph://bookmarks and the like open the shell's panels;
+    /// morph://relays and the other parts of Settings open Settings there.
+    fn open_internal(&mut self, internal: morph_browser::Internal, cx: &mut Context<Self>) {
+        match internal.settings_section().and_then(crate::settings_view::Section::named) {
+            Some(section) => cx.emit(ShellRequest::ShowSettingsAt(section)),
+            None => cx.emit(ShellRequest::Run(internal.action())),
+        }
     }
 
     /// The shortcut shown beside each menu entry (`Ctrl+Shift+O`, `⌘⇧O`).

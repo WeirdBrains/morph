@@ -765,7 +765,10 @@ fn a_start_page_keeps_morph_pages_and_links_and_searches_only_phrases() {
     assert_eq!(start_address("example.com", engine), "https://example.com");
     assert_eq!(start_address("  ", engine), "");
     assert!(start_address("rust gpui", engine).starts_with("https://duckduckgo.com/?q=rust+gpui"));
-    assert!(start_address("morph://nope", engine).starts_with("https://duckduckgo.com/?q="), "unknown morph pages are not kept");
+    // Unknown morph:// pages and Weirdnet app links open Morph's error
+    // page, never a search.
+    assert_eq!(start_address("morph://nope", engine), "morph://nope");
+    assert_eq!(start_address("weirdnet-muninn://alice/notes", engine), "weirdnet-muninn://alice/notes");
 }
 
 #[test]
@@ -814,4 +817,120 @@ fn a_tab_with_nothing_in_it_shows_the_start_screen() {
     assert_eq!(b.cover(), None);
     b.dispatch(Action::SelectTab(1));
     assert_eq!(b.cover(), Some(&Cover::Start));
+}
+
+/// The engine never got a load for `url`.
+fn never_loaded(fake: &FakeBackend, url: &str) -> bool {
+    fake.created().iter().all(|v| {
+        fake.calls_for(*v).iter().all(|c| match c {
+            Call::Load(u) => u != url,
+            Call::Create(spec) => spec.url != url,
+            _ => true,
+        })
+    })
+}
+
+#[test]
+fn an_unknown_morph_page_gets_morphs_error_page_listing_the_real_ones() {
+    let (mut b, fake) = browser("example.com");
+    let view = fake.created()[0];
+    fake.emit(view, Event::TitleChanged("Example".into()));
+    b.poll();
+    type_into_address(&mut b, "morph://nope");
+    assert_eq!(b.active_url(), "morph://nope");
+    let Some(Cover::Failed(error)) = b.cover().cloned() else { panic!("{:?}", b.cover()) };
+    let (title, body) = error_text(&error);
+    assert_eq!(title, "morph://nope is not a Morph page");
+    for page in morph_core::address::PAGES {
+        assert!(body.contains(&format!("morph://{}", page.name)), "{}", page.name);
+    }
+    assert_eq!(b.active_title(), title);
+    assert!(never_loaded(&fake, "morph://nope"));
+    assert!(
+        fake.created().iter().all(|v| fake.calls_for(*v).iter().all(|c| !matches!(c, Call::Load(u) if u.contains("duckduckgo")))),
+        "not a search"
+    );
+    b.back();
+    assert_eq!(b.active_url(), "https://example.com", "Back shows the page under it");
+    assert_eq!(b.active_title(), "Example", "with its title");
+    assert_eq!(b.cover(), None);
+}
+
+#[test]
+fn a_weirdnet_app_link_says_app_calls_are_not_supported_yet_instead_of_searching() {
+    for url in ["weirdnet-muninn://home.example.com/notes/a.md?token=x", "Weirdnet-Notes://alice", "weirdnet-morph://peer/site"] {
+        let (mut b, fake) = browser("example.com");
+        type_into_address(&mut b, url);
+        assert_eq!(b.active_url(), url);
+        let Some(Cover::Failed(error)) = b.cover().cloned() else { panic!("{url}: {:?}", b.cover()) };
+        let (title, body) = error_text(&error);
+        assert_eq!(title, "App call not supported yet", "{url}");
+        assert!(!body.contains("token=x"), "no query on the page");
+        assert!(never_loaded(&fake, url), "{url} never reaches the engine (or an OS handler through it)");
+        // Reload asks again, still without the engine.
+        b.reload();
+        assert!(matches!(b.cover(), Some(Cover::Failed(_))));
+        assert!(never_loaded(&fake, url));
+    }
+    let (mut b, _) = browser("example.com");
+    type_into_address(&mut b, "weirdnet://internal/x");
+    let Some(Cover::Failed(error)) = b.cover().cloned() else { panic!() };
+    assert_eq!(error_text(&error).0, "weirdnet:// can't be opened");
+}
+
+#[test]
+fn app_links_open_in_new_tabs_and_at_start_without_the_engine() {
+    let (mut b, fake) = browser("weirdnet-notes://alice/x");
+    assert_eq!(b.active_url(), "weirdnet-notes://alice/x");
+    assert!(matches!(b.cover(), Some(Cover::Failed(_))));
+    b.new_tab("morph://nope");
+    assert_eq!(b.active_url(), "morph://nope");
+    assert!(matches!(b.cover(), Some(Cover::Failed(_))));
+    b.load("weirdnet-notes://bob/");
+    assert_eq!(b.active_url(), "weirdnet-notes://bob/");
+    for url in ["weirdnet-notes://alice/x", "morph://nope", "weirdnet-notes://bob/"] {
+        assert!(never_loaded(&fake, url), "{url}");
+    }
+}
+
+#[test]
+fn a_plugged_in_app_caller_gets_the_request() {
+    use morph_core::app_call::{AppCallError, AppCaller, AppRequest, AppResponse};
+    use std::sync::{Arc, Mutex};
+    struct Seen(Mutex<Vec<AppRequest>>);
+    impl AppCaller for Seen {
+        fn call(&self, r: AppRequest) -> Result<AppResponse, AppCallError> {
+            self.0.lock().unwrap().push(r);
+            Err(AppCallError::NotFound("alice".into()))
+        }
+    }
+    let seen = Arc::new(Seen(Mutex::new(vec![])));
+    let fake = FakeBackend::new();
+    let config = Config { start_url: "example.com".into(), app_caller: Some(seen.clone()), ..Config::default() };
+    let mut b = Browser::new(Box::new(fake.clone()), config).unwrap();
+    type_into_address(&mut b, "weirdnet-notes://alice/a?b=1");
+    let r = seen.0.lock().unwrap().pop().unwrap();
+    assert_eq!((r.app.as_str(), r.locator.as_str(), r.method.as_str(), r.path.as_str()), ("weirdnet-notes", "alice", "GET", "/a?b=1"));
+    let Some(Cover::Failed(error)) = b.cover().cloned() else { panic!() };
+    assert_eq!(error_text(&error).0, "This app couldn't be opened");
+    assert!(error_text(&error).1.contains("could not find alice on Weirdnet"));
+}
+
+#[test]
+fn settings_parts_have_their_own_morph_pages() {
+    let (mut b, _) = browser("example.com");
+    for (text, internal, section) in [
+        ("morph://relays", Internal::Relays, Some("relays")),
+        ("morph://downloads", Internal::Downloads, Some("downloads")),
+        ("morph://search", Internal::Search, Some("search")),
+        ("morph://history", Internal::History, None),
+        ("morph://identity", Internal::Identity, None),
+    ] {
+        b.focus_address();
+        b.address_mut().replace(None, text);
+        assert_eq!(b.submit_address(), Some(internal), "{text}");
+        assert_eq!(internal.settings_section(), section);
+        assert_eq!(internal.url(), text);
+    }
+    assert_eq!(b.active_url(), "https://example.com");
 }

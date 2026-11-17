@@ -27,6 +27,21 @@ use crate::shell::ShellRequest;
 use crate::text_input::{TextInput, TextInputEvent};
 use crate::widgets::{button, chip};
 
+impl Section {
+    /// The section a `morph://` page names
+    /// ([`morph_browser::Internal::settings_section`]).
+    pub fn named(name: &str) -> Option<Section> {
+        Some(match name {
+            "downloads" => Section::Downloads,
+            "relays" => Section::Relays,
+            "search" => Section::Search,
+            "identity" => Section::Identity,
+            "about" => Section::About,
+            _ => return None,
+        })
+    }
+}
+
 /// The parts of the page, in order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Section {

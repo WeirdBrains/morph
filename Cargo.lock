@@ -5438,6 +5438,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "uuid",
+ "weirdnet-schemes",
 ]
 
 [[package]]
@@ -10049,6 +10050,21 @@ dependencies = [
  "uuid",
  "weirdnet-keys",
  "zeroize",
+]
+
+[[package]]
+name = "weirdnet-schemes"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69fb6dab59139dcd4afc00a6bd873c41ce32d35eddf7db8221ebb506c62eebd7"
+dependencies = [
+ "base64 0.22.1",
+ "hex",
+ "libp2p-identity",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
