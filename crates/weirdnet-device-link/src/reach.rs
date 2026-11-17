@@ -1,25 +1,23 @@
 //! How a link node reaches its relays, and the limits it runs with.
 //!
-//! weirdnet-net 0.4 reserves a relay slot over the first configured address
-//! of each relay only (its relay client dials that one address). A relay
-//! usually has several: TCP, QUIC and, where it serves it, WebSocket over TLS
-//! on port 443 for networks that only let HTTPS out. So a link node starts
-//! with no relays in its [`NodeConfig`]; [`start`] connects to each relay
-//! over all of its addresses at once (libp2p dials them side by side and
-//! keeps the first that answers) and only then asks for the reservation,
-//! which rides on that connection. If no address answers, the reservation
-//! is still asked for, and weirdnet-net keeps retrying it as before.
+//! A relay usually has several addresses: TCP, QUIC and, where it serves
+//! it, WebSocket over TLS on port 443 for networks that only let HTTPS out.
+//! weirdnet-net (0.5 on) dials every configured address of a relay at once
+//! and reserves a slot over the first that connects, and a request through
+//! a circuit whose relay is not connected yet dials that relay over every
+//! address it knows for it too. So a link node simply starts with its relays
+//! in its [`NodeConfig`]. (Morph used to connect each relay itself before
+//! reserving, while weirdnet-net 0.4 dialed only the first address.)
 //!
 //! The circuits a node then listens on (and puts in its code) are the ones
 //! the relay's reservation names, built from the addresses the relay
-//! announces, whichever address carried the connection, as before. A code
-//! only says which relay to go through; the other device reaches that relay
-//! over whatever address works on its own network
-//! ([`LinkNode::reach_relays_of`]).
-use std::sync::{Arc, mpsc};
-use std::time::{Duration, Instant};
+//! announces, whichever address carried the connection. A code only says
+//! which relay to go through; the other device reaches that relay over
+//! whatever address works on its own network.
+use std::sync::Arc;
+use std::time::Duration;
 
-use weirdnet_net::addr::{addr_peer, circuit_relay};
+use weirdnet_net::addr::addr_peer;
 use weirdnet_net::node::{Handler, Message, Node, NodeConfig};
 use weirdnet_net::profile::Profile;
 use weirdnet_net::{Keypair, Multiaddr, PeerId};
@@ -37,10 +35,6 @@ pub const RESPONSE_MAX: u64 = 16 * 1024;
 /// (the code check happens between requests, not inside one), so this only
 /// has to cover a slow relayed connection. weirdnet-net's default is 60 s.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-/// How long a dialing node waits to reach the relay of a circuit before it
-/// sends anyway (weirdnet-net then waits on its own dial, as it did before).
-const RELAY_CONNECT_WAIT: Duration = Duration::from_secs(10);
-
 /// `cfg` with the link limits wherever it leaves weirdnet-net's defaults.
 pub fn with_link_limits(cfg: NodeConfig) -> NodeConfig {
     NodeConfig {
@@ -73,65 +67,19 @@ pub(crate) struct LinkNode<Q: Message, R: Message> {
     pub relays: Vec<(PeerId, Vec<Multiaddr>)>,
 }
 
-/// Starts a node with the link limits and reaches every relay in `cfg` over
-/// all of its addresses, then reserves a slot on it (in the background:
-/// this returns once the node listens).
+/// Starts a node with the link limits and the relays in `cfg` (weirdnet-net
+/// reaches each over all of its addresses and reserves a slot in the
+/// background: this returns once the node listens).
 pub(crate) fn start<Q: Message, R: Message>(
     profile: &'static Profile,
     key: Keypair,
     cfg: NodeConfig,
     handler: Arc<dyn Handler<Q, R>>,
 ) -> Result<LinkNode<Q, R>> {
-    let mut cfg = with_link_limits(cfg);
-    let relays = relay_groups(&std::mem::take(&mut cfg.relays));
+    let cfg = with_link_limits(cfg);
+    let relays = relay_groups(&cfg.relays);
     let node = Arc::new(Node::start(profile, key, cfg, handler)?);
-    for (peer, addrs) in &relays {
-        let (n, peer, addrs) = (node.clone(), *peer, addrs.clone());
-        let first = addrs[0].clone();
-        let spawned = std::thread::Builder::new().name("weirdnet-link-relay".into()).spawn(move || {
-            let _ = n.connect(peer, &addrs);
-            let _ = n.add_relay(addrs[0].clone());
-        });
-        if spawned.is_err() {
-            let _ = node.add_relay(first);
-        }
-    }
     Ok(LinkNode { node, relays })
-}
-
-impl<Q: Message, R: Message> LinkNode<Q, R> {
-    /// Before dialing `targets`: connect to the relay of each circuit among
-    /// them over every address this node knows for it (its own
-    /// configuration's and the circuit's), waiting at most
-    /// [`RELAY_CONNECT_WAIT`] in all. Without this weirdnet-net would dial
-    /// the relay over the circuit's one address, which may be the one
-    /// transport this network blocks.
-    pub fn reach_relays_of(&self, targets: &[Multiaddr]) {
-        let mut seen: Vec<PeerId> = vec![];
-        let (tx, rx) = mpsc::channel::<()>();
-        for (relay, raddr) in targets.iter().filter_map(circuit_relay) {
-            if seen.contains(&relay) || relay == self.node.peer_id() {
-                continue;
-            }
-            seen.push(relay);
-            let mut addrs = self.relays.iter().find(|(p, _)| *p == relay).map(|(_, a)| a.clone()).unwrap_or_default();
-            if !addrs.contains(&raddr) {
-                addrs.push(raddr);
-            }
-            let (n, tx) = (self.node.clone(), tx.clone());
-            let _ = std::thread::Builder::new().name("weirdnet-link-relay".into()).spawn(move || {
-                let _ = n.connect(relay, &addrs);
-                let _ = tx.send(());
-            });
-        }
-        drop(tx);
-        let end = Instant::now() + RELAY_CONNECT_WAIT;
-        for _ in 0..seen.len() {
-            if rx.recv_timeout(end.saturating_duration_since(Instant::now())).is_err() {
-                break;
-            }
-        }
-    }
 }
 
 #[cfg(test)]
