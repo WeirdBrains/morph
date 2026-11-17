@@ -9,7 +9,7 @@ use weirdnet_net::{Keypair, PeerId, now_ms};
 
 use crate::offer::has_circuit;
 use crate::reach::{self, LinkNode};
-use crate::session::{Host, HostStatus, Sender, make_transfer};
+use crate::session::{Host, HostStatus, Sender};
 use crate::wire::{LinkReply, LinkRequest, Transfer};
 use crate::{Error, LINK_PROFILE, Result, decode_link, offer_addrs};
 
@@ -170,13 +170,19 @@ impl Pairing {
 
     /// The user confirmed the codes match: send the identity, once.
     pub fn send(&mut self, seed: &Key32, profile_name: &str, settings: &str) -> Result<()> {
+        self.send_with(seed, profile_name, settings, &[]).map(|_| ())
+    }
+
+    /// [`send`], carrying sync opt-ins, and returning the new device's cert.
+    pub fn send_with(&mut self, seed: &Key32, profile_name: &str, settings: &str, sync: &[String]) -> Result<weirdnet_net::user::NodeCert> {
         if self.sent {
             return Err(Error::Invalid("already sent"));
         }
-        let t = make_transfer(seed, profile_name, settings, self.sender.offer(), now_ms())?;
+        let t = crate::session::make_transfer_with(seed, profile_name, settings, sync, self.sender.offer(), now_ms())?;
+        let cert = t.node_cert.clone();
         self.ask(self.sender.transfer(&t)?)?;
         self.sent = true;
-        Ok(())
+        Ok(cert)
     }
 
     /// The codes differ (or the user gave up): tell the new device.

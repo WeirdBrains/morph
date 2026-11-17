@@ -339,6 +339,11 @@ impl Sender {
 /// A transfer for the new device in `offer`: the seed, and a node certificate
 /// for it signed by the user key.
 pub fn make_transfer(seed: &Key32, profile_name: &str, settings: &str, offer: &VerifiedOffer, now_ms: i64) -> Result<Transfer> {
+    make_transfer_with(seed, profile_name, settings, &[], offer, now_ms)
+}
+
+/// [`make_transfer`], filling the types the user opted in to sync.
+pub fn make_transfer_with(seed: &Key32, profile_name: &str, settings: &str, sync: &[String], offer: &VerifiedOffer, now_ms: i64) -> Result<Transfer> {
     let user = user_key(&seed.0)?;
     let uid = user_id(&user.public());
     let node_cert = WEIRDNET.certify(&user, &uid, &offer.peer().to_string(), &offer.offer.hint, now_ms)?;
@@ -349,7 +354,7 @@ pub fn make_transfer(seed: &Key32, profile_name: &str, settings: &str, offer: &V
         profile_name: profile_name.to_string(),
         settings: settings.to_string(),
         node_cert,
-        sync: Vec::new(),
+        sync: sync.to_vec(),
     })
 }
 

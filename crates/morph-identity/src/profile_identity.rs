@@ -193,7 +193,7 @@ pub fn shard_meta(shard: &str) -> Option<(String, usize, u32)> {
     weirdnet_keys::shards::meta(&crate::profile(), shard).ok()
 }
 
-pub(crate) fn open_seed(profile_dir: &Path, password: &SecretString) -> Result<Key32> {
+pub fn open_seed(profile_dir: &Path, password: &SecretString) -> Result<Key32> {
     let identity = load(profile_dir)?.ok_or_else(|| Error::Message("this profile has no identity yet".into()))?;
     let raw = fs::read(sealed_path(profile_dir))?;
     let sealed: PasswordSealed = serde_json::from_slice(&raw).map_err(|e| Error::Message(format!("user.key: {e}")))?;
@@ -253,6 +253,14 @@ fn device_label() -> String {
     let host = std::env::var("HOSTNAME").ok().or_else(|| std::env::var("COMPUTERNAME").ok()).unwrap_or_default();
     let host = host.trim();
     if host.is_empty() { "Morph".into() } else { format!("Morph on {host}") }
+}
+
+/// Open this device's node key, sealed like `user.key`.
+pub fn open_node_key(profile_dir: &Path, password: &SecretString) -> Result<Keypair> {
+    let raw = fs::read(node_key_path(profile_dir))?;
+    let sealed: PasswordSealed = serde_json::from_slice(&raw).map_err(|e| Error::Message(format!("node.key: {e}")))?;
+    let bytes = password_open(password, &sealed, NODE_AAD)?;
+    Keypair::from_protobuf_encoding(&bytes).map_err(|e| Error::Message(format!("node key: {e}")))
 }
 
 pub fn load_node_cert(profile_dir: &Path) -> Result<Option<NodeCert>> {
