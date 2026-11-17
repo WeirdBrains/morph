@@ -38,17 +38,17 @@ type OpenMenu = Rc<RefCell<Option<(webkit2gtk::OptionMenu, Option<u32>)>>>;
 /// shows, and every copy is the whole page at the device scale.
 const MAX_FPS: u32 = 60;
 
-/// Whether pages draw on the CPU: with shared-memory buffers (the only kind
-/// an off-screen window takes on Wayland, see `render_check` in the shell)
-/// a GPU-drawn page is read back from the GPU into memory for every frame,
-/// on WebKit's compositor thread, before this backend copies it again. On an
-/// RTX 3060 (nvidia 615.78, scale 2) that readback kept the web process at
-/// 57% CPU and starved the page's own scripts. Drawn on the CPU, WebKit
-/// paints only what changed straight into the buffer. `MORPH_PAGE_GPU=1`
-/// keeps the GPU.
+/// Whether pages draw on the CPU (`MORPH_PAGE_CPU=1`, off by default): with
+/// shared-memory buffers (the only kind an off-screen window takes on
+/// Wayland, see `render_check` in the shell) a GPU-drawn page is read back
+/// into memory for every frame on WebKit's compositor thread, before this
+/// backend copies it again; drawn on the CPU, WebKit paints only what
+/// changed straight into the buffer. Not the default: switching the policy
+/// on a new off-screen view kept pages from loading at all under headless
+/// sway (CI, 180fd2d).
 pub fn pages_on_cpu() -> bool {
     let set = |k: &str| std::env::var_os(k).is_some_and(|v| v == "1");
-    set("WEBKIT_DMABUF_RENDERER_FORCE_SHM") && !set("MORPH_PAGE_GPU")
+    set("WEBKIT_DMABUF_RENDERER_FORCE_SHM") && set("MORPH_PAGE_CPU")
 }
 
 /// Frame copy counts for `MORPH_FRAME_STATS=1`, printed every few seconds.

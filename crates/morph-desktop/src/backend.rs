@@ -49,10 +49,10 @@ pub fn render_path(user_set: &[(String, String)], chosen: render_check::Env, che
     }
     let base = render_check::describe(chosen);
     let what = match chosen {
-        e if e == render_check::SHARED_MEMORY && std::env::var_os("MORPH_PAGE_GPU").is_some_and(|v| v == "1") => {
-            "shared-memory buffers, pages drawn on the GPU and read back (MORPH_PAGE_GPU=1)"
+        e if e == render_check::SHARED_MEMORY && std::env::var_os("MORPH_PAGE_CPU").is_some_and(|v| v == "1") => {
+            "shared-memory buffers, pages drawn on the CPU (MORPH_PAGE_CPU=1)"
         }
-        e if e == render_check::SHARED_MEMORY => "shared-memory buffers, pages drawn on the CPU",
+        e if e == render_check::SHARED_MEMORY => "shared-memory buffers",
         e if e == render_check::GL_EXPORT => "DMA-BUF without GBM",
         e if e == render_check::CLASSIC => "the classic (non-DMA-BUF) renderer",
         _ => "DMA-BUF (WebKit's default)",
@@ -187,10 +187,7 @@ mod tests {
     #[test]
     fn the_render_path_names_the_choice_or_the_users_variables() {
         assert_eq!(render_path(&[], render_check::AS_IS, true), "DMA-BUF (WebKit's default): WebKit's defaults");
-        assert!(
-            render_path(&[], render_check::SHARED_MEMORY, true)
-                .starts_with("shared-memory buffers, pages drawn on the CPU: WEBKIT_DMABUF_RENDERER_FORCE_SHM=1")
-        );
+        assert!(render_path(&[], render_check::SHARED_MEMORY, true).starts_with("shared-memory buffers: WEBKIT_DMABUF_RENDERER_FORCE_SHM=1"));
         assert!(render_path(&[], render_check::AS_IS, false).ends_with("(no render check)"));
         let mine = vec![("WEBKIT_DISABLE_DMABUF_RENDERER".to_string(), "1".to_string())];
         assert_eq!(render_path(&mine, render_check::SHARED_MEMORY, true), "WEBKIT_DISABLE_DMABUF_RENDERER=1 (set by you)");

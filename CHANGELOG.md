@@ -18,11 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ignores its own writes. The favicon script likewise only looks again when
   the page's icon links change, after they settle, and never posts the same
   picture twice.
-- Off-screen pages (native Wayland): with shared-memory buffers, pages are
-  drawn on the CPU instead of on the GPU and read back every frame on
-  WebKit's compositor thread (the hot thread on an RTX 3060 at scale 2);
-  `MORPH_PAGE_GPU=1` keeps the GPU, and the About page says which. Frames
-  are copied at most 60 times a second. `MORPH_FRAME_STATS=1` logs frames
+- Off-screen pages (native Wayland): `MORPH_PAGE_CPU=1` draws pages on the
+  CPU instead of on the GPU and reading them back every frame on WebKit's
+  compositor thread (the hot thread on an RTX 3060 at scale 2), and the
+  About page says so; it is not the default yet (pages did not load with it
+  under headless sway). Frames are copied at most 60 times a second. `MORPH_FRAME_STATS=1` logs frames
   copied per second, time per copy and frame size (`morph-frames`), and the
   shell's ticks, renders, pointer moves and page bound changes per second
   (`morph-render`).
