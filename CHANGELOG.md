@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0-alpha.14] - 2026-11-16
+
 - Pages no longer lag on Linux (Gmail's background requests, Compose
   taking 20 s, more lag the more the pointer moved). The script that gives
   dark `<select>`s a dark face watched every class and style change in the
@@ -18,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ignores its own writes. The favicon script likewise only looks again when
   the page's icon links change, after they settle, and never posts the same
   picture twice.
+
 - Off-screen pages (native Wayland): `MORPH_PAGE_CPU=1` draws pages on the
   CPU instead of on the GPU and reading them back every frame on WebKit's
   compositor thread (the hot thread on an NVIDIA GPU at scale 2), and the
@@ -26,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   copied per second, time per copy and frame size (`morph-frames`), and the
   shell's ticks, renders, pointer moves and page bound changes per second
   (`morph-render`).
+
 - Device linking: invite and offer codes are v2, about a quarter the size:
   CBOR arrays, the peer id and addresses as binary multiaddrs, the built-in
   relay as one byte that the reader rebuilds from its own list, at most 3
@@ -41,6 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one no longer waits on the UI thread. The phone's scanner asks for
   1920×1080 (Android defaulted to 640×480), zooms by itself and by
   pinching, and focuses where tapped; its own code is encoded once.
+
 - The address bar clips a long address at its edge instead of running it
   under the profile chip, and scrolls to the caret while editing.
 
