@@ -21,7 +21,8 @@ use weirdnet_keys::words::{from_words, to_words};
 use weirdnet_keys::{ExposeSecret, Key32, PasswordSealed, password_open, password_seal};
 use weirdnet_net::Keypair;
 use weirdnet_net::identity::fingerprint;
-use weirdnet_net::user::user_id;
+use weirdnet_net::profile::WEIRDNET;
+use weirdnet_net::user::{NodeCert, user_id};
 
 use crate::{Error, Result, UserIdentity};
 
@@ -32,6 +33,8 @@ pub const FORMAT: &str = "morph-identity/v1";
 /// Shortest password accepted for sealing a profile's user key.
 pub const MIN_PASSWORD_LEN: usize = 8;
 const SEED_AAD: &[u8] = b"morph/identity/user-seed/v1";
+/// Binding for the sealed node key, shared with `device_link`.
+pub(crate) const NODE_AAD: &[u8] = b"morph/identity/node-key/v1";
 
 /// How a profile got its identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -108,6 +111,16 @@ pub(crate) fn sealed_path(profile_dir: &Path) -> PathBuf {
     identity_dir(profile_dir).join("user.key")
 }
 
+/// The device's node key, sealed like `user.key`.
+pub fn node_key_path(profile_dir: &Path) -> PathBuf {
+    identity_dir(profile_dir).join("node.key")
+}
+
+/// The user key's certificate for this device's node (public).
+pub fn node_cert_path(profile_dir: &Path) -> PathBuf {
+    identity_dir(profile_dir).join("node.cert.json")
+}
+
 /// The profile's identity, or `None` before onboarding.
 pub fn load(profile_dir: &Path) -> Result<Option<ProfileIdentity>> {
     let public = match fs::read(public_path(profile_dir)) {
@@ -129,6 +142,7 @@ pub fn load(profile_dir: &Path) -> Result<Option<ProfileIdentity>> {
 pub fn create(profile_dir: &Path, password: &SecretString, now_ms: i64) -> Result<Created> {
     let seed = Key32::random()?;
     let identity = store(profile_dir, &seed, password, Source::Created, now_ms)?;
+    certify_local_node(profile_dir, password, now_ms)?;
     Ok(Created { identity, words: to_words(&seed)?, library_key: LibraryKey::derive(&seed) })
 }
 
@@ -141,6 +155,7 @@ pub fn import(profile_dir: &Path, words: &str, password: &SecretString, now_ms: 
 pub fn import_unlocked(profile_dir: &Path, words: &str, password: &SecretString, now_ms: i64) -> Result<(ProfileIdentity, LibraryKey)> {
     let seed = from_words(words)?;
     let identity = store(profile_dir, &seed, password, Source::Imported, now_ms)?;
+    certify_local_node(profile_dir, password, now_ms)?;
     Ok((identity, LibraryKey::derive(&seed)))
 }
 
@@ -201,6 +216,54 @@ pub(crate) fn check_password(password: &SecretString) -> Result<()> {
         return Err(Error::Message(format!("password must be at least {MIN_PASSWORD_LEN} characters")));
     }
     Ok(())
+}
+
+/// Whether this profile already has a node key and certificate.
+pub fn has_node_cert(profile_dir: &Path) -> bool {
+    node_key_path(profile_dir).is_file() && node_cert_path(profile_dir).is_file()
+}
+
+/// Give this device a node key signed by the profile's user key, if it has
+/// none yet. Local (no networking); discovery being off does not skip it.
+pub fn certify_local_node(profile_dir: &Path, password: &SecretString, now_ms: i64) -> Result<()> {
+    if has_node_cert(profile_dir) {
+        return Ok(());
+    }
+    let user = unlock(profile_dir, password)?;
+    let node = Keypair::generate_ed25519();
+    let peer = node.public().to_peer_id().to_string();
+    let cert = WEIRDNET.certify(&user.keypair, &user.user_id, &peer, &device_label(), now_ms)?;
+    if !WEIRDNET.verify_cert(&user.keypair.public(), &cert) {
+        return Err(Error::Message("could not certify this device".into()));
+    }
+    let raw = node.to_protobuf_encoding().map_err(|e| Error::Message(format!("node key: {e}")))?;
+    let raw = Zeroizing::new(raw);
+    let sealed = password_seal(password, &raw, NODE_AAD)?;
+    let sealed = serde_json::to_vec_pretty(&sealed).map_err(|e| Error::Message(e.to_string()))?;
+    let public = serde_json::to_vec_pretty(&cert).map_err(|e| Error::Message(e.to_string()))?;
+    write_private(&node_key_path(profile_dir), &sealed)?;
+    if let Err(e) = write_private(&node_cert_path(profile_dir), &public) {
+        let _ = fs::remove_file(node_key_path(profile_dir));
+        return Err(e);
+    }
+    Ok(())
+}
+
+fn device_label() -> String {
+    let host = std::env::var("HOSTNAME").ok().or_else(|| std::env::var("COMPUTERNAME").ok()).unwrap_or_default();
+    let host = host.trim();
+    if host.is_empty() { "Morph".into() } else { format!("Morph on {host}") }
+}
+
+pub fn load_node_cert(profile_dir: &Path) -> Result<Option<NodeCert>> {
+    let path = node_cert_path(profile_dir);
+    let raw = match fs::read(&path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    let cert: NodeCert = serde_json::from_slice(&raw).map_err(|e| Error::Message(format!("node.cert.json: {e}")))?;
+    Ok(Some(cert))
 }
 
 pub(crate) fn store(profile_dir: &Path, seed: &Key32, password: &SecretString, source: Source, now_ms: i64) -> Result<ProfileIdentity> {
@@ -285,6 +348,10 @@ mod tests {
         assert_eq!(user.user_id, made.identity.user_id);
         assert_eq!(user.fingerprint(), made.identity.fingerprint);
         assert_eq!(recovery_words(&dir, &pw("correct horse")).unwrap().as_str(), made.words.as_str());
+        let cert = load_node_cert(&dir).unwrap().expect("first-device cert");
+        assert!(WEIRDNET.verify_cert(&user.keypair.public(), &cert));
+        assert_eq!(cert.user_id, user.user_id);
+        assert!(has_node_cert(&dir));
     }
 
     #[test]
