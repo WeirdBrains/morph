@@ -165,7 +165,12 @@ mod tests {
         assert!(!library::bookmarks_path(&home, &id).exists(), "plaintext bookmarks are gone");
         assert!(!library::history_path(&home, &id).exists(), "plaintext history is gone");
         assert_eq!(bookmarks::tree(&home, &id).unwrap(), tree);
-        assert_eq!(library::history(&home, &id, "", 0).unwrap(), history);
+        let imported = library::history(&home, &id, "", 0).unwrap();
+        assert_eq!(imported.len(), history.len());
+        for (got, want) in imported.iter().zip(&history) {
+            assert_eq!((got.url.as_str(), got.title.as_str(), got.visited_ms), (want.url.as_str(), want.title.as_str(), want.visited_ms));
+            assert!(!got.id.is_empty(), "import assigns a history id");
+        }
         assert_eq!(bookmarks::tags(&home, &id).unwrap()[0].name, "later");
 
         let raw = fs::read(morph_store::path(&profiles::profile_dir(&home, &id))).unwrap();

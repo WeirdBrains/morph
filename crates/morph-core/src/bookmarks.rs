@@ -375,6 +375,7 @@ pub fn add_bookmark(home: impl AsRef<Path>, id: &str, url: &str, title: &str, no
                 folder_id: None,
                 order,
                 tags: Vec::new(),
+                ..Default::default()
             });
         }
     }
@@ -389,7 +390,7 @@ pub fn remove_bookmark(home: impl AsRef<Path>, id: &str, url: &str, now_ms: i64)
     let gone: Vec<String> = file.bookmarks.iter().filter(|b| same_page(&b.url, url)).map(|b| b.id.clone()).collect();
     if !gone.is_empty() {
         file.bookmarks.retain(|b| !gone.contains(&b.id));
-        file.deleted.extend(gone.into_iter().map(|id| Tombstone { id, deleted_ms: now_ms }));
+        file.deleted.extend(gone.into_iter().map(|id| Tombstone { id, deleted_ms: now_ms, ..Default::default() }));
         save(home, id, &mut file, now_ms)?;
     }
     bookmarks(home, id)
@@ -443,7 +444,7 @@ pub fn delete_bookmark(home: impl AsRef<Path>, id: &str, item: &str, now_ms: i64
     if file.bookmarks.len() == before {
         return Err(BookmarkError::UnknownItem(item.to_string()));
     }
-    file.deleted.push(Tombstone { id: item.to_string(), deleted_ms: now_ms });
+    file.deleted.push(Tombstone { id: item.to_string(), deleted_ms: now_ms, ..Default::default() });
     save(home, id, &mut file, now_ms)?;
     Ok(sorted(&file))
 }
@@ -465,6 +466,7 @@ pub fn create_folder(home: impl AsRef<Path>, id: &str, name: &str, parent: Optio
         order: key_at(&keys, keys.len()),
         created_ms: now_ms,
         updated_ms: now_ms,
+        ..Default::default()
     };
     let folder_id = folder.id.clone();
     file.folders.push(folder);
@@ -526,7 +528,7 @@ pub fn delete_folder(home: impl AsRef<Path>, id: &str, folder: &str, now_ms: i64
     file.folders.retain(|f| !ids.contains(&f.id));
     file.bookmarks.retain(|b| !b.folder_id.as_ref().is_some_and(|f| ids.contains(f)));
     gone.sort();
-    file.deleted.extend(gone.into_iter().map(|id| Tombstone { id, deleted_ms: now_ms }));
+    file.deleted.extend(gone.into_iter().map(|id| Tombstone { id, deleted_ms: now_ms, ..Default::default() }));
     save(home, id, &mut file, now_ms)?;
     Ok(sorted(&file))
 }
@@ -748,7 +750,7 @@ mod tests {
         assert!(is_bookmarked(&home, "default", "https://alpha.test/").unwrap());
         assert!(delete_bookmark(&home, "default", &id, 4).unwrap().bookmarks.is_empty());
         assert!(delete_bookmark(&home, "default", &id, 5).is_err());
-        assert_eq!(tombstones(&home, "default").unwrap(), [Tombstone { id, deleted_ms: 4 }]);
+        assert_eq!(tombstones(&home, "default").unwrap(), [Tombstone { id, deleted_ms: 4, ..Default::default() }]);
     }
 
     #[test]

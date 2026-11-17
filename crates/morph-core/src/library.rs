@@ -69,7 +69,8 @@ fn record_visit_capped(home: &Path, id: &str, url: &str, title: &str, now_ms: i6
             last.visited_ms = now_ms;
             lib.replace_newest_visit(&last)
         }
-        _ => lib.append_visits(&[HistoryEntry { url: url.trim().to_string(), title: title.to_string(), visited_ms: now_ms }], cap),
+        _ => lib
+            .append_visits(&[HistoryEntry { url: url.trim().to_string(), title: title.to_string(), visited_ms: now_ms, ..Default::default() }], cap),
     })?;
     if in_db.is_some() {
         return Ok(());
@@ -83,7 +84,7 @@ fn record_visit_capped(home: &Path, id: &str, url: &str, title: &str, now_ms: i6
             }
             last.visited_ms = now_ms;
         }
-        _ => file.entries.push(HistoryEntry { url: url.trim().to_string(), title: title.to_string(), visited_ms: now_ms }),
+        _ => file.entries.push(HistoryEntry { url: url.trim().to_string(), title: title.to_string(), visited_ms: now_ms, ..Default::default() }),
     }
     if file.entries.len() > cap {
         let extra = file.entries.len() - cap;
@@ -219,7 +220,9 @@ mod tests {
         let all = history(&home, "default", "", 0).unwrap();
         assert_eq!(all.len(), 3);
         assert_eq!(all[0].visited_ms, 5);
-        assert_eq!(all[2], HistoryEntry { url: "https://a.test/".into(), title: "Alpha".into(), visited_ms: 2 });
+        assert_eq!(all[2].url, "https://a.test/");
+        assert_eq!(all[2].title, "Alpha");
+        assert_eq!(all[2].visited_ms, 2);
         assert_eq!(history(&home, "default", "DOCS", 0).unwrap().len(), 1);
         assert_eq!(history(&home, "default", "", 1).unwrap().len(), 1);
         delete_history_url(&home, "default", "https://a.test").unwrap();

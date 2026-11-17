@@ -5,12 +5,20 @@ fn key(b: u8) -> LibraryKey {
 }
 
 fn visit(url: &str, ms: i64) -> HistoryEntry {
-    HistoryEntry { url: url.into(), title: format!("t{ms}"), visited_ms: ms }
+    HistoryEntry { url: url.into(), title: format!("t{ms}"), visited_ms: ms, ..Default::default() }
 }
 
 fn sample() -> BookmarkSet {
     BookmarkSet {
-        folders: vec![Folder { id: "f1".into(), name: "Work".into(), parent_id: None, order: "V".into(), created_ms: 1, updated_ms: 2 }],
+        folders: vec![Folder {
+            id: "f1".into(),
+            name: "Work".into(),
+            parent_id: None,
+            order: "V".into(),
+            created_ms: 1,
+            updated_ms: 2,
+            ..Default::default()
+        }],
         bookmarks: vec![
             Bookmark {
                 id: "b2".into(),
@@ -21,6 +29,7 @@ fn sample() -> BookmarkSet {
                 folder_id: Some("f1".into()),
                 order: "a".into(),
                 tags: vec!["zeta".into(), "alpha".into()],
+                ..Default::default()
             },
             Bookmark {
                 id: "b1".into(),
@@ -31,9 +40,10 @@ fn sample() -> BookmarkSet {
                 folder_id: None,
                 order: "k".into(),
                 tags: vec![],
+                ..Default::default()
             },
         ],
-        deleted: vec![Tombstone { id: "gone".into(), deleted_ms: 9 }],
+        deleted: vec![Tombstone { id: "gone".into(), deleted_ms: 9, ..Default::default() }],
     }
 }
 
@@ -59,13 +69,21 @@ fn history_appends_caps_replaces_and_deletes() {
     assert_eq!(lib.newest_visit().unwrap(), None);
     lib.append_visits(&[visit("a", 1), visit("b", 2), visit("c", 3)], 0).unwrap();
     lib.append_visits(&[visit("d", 4)], 3).unwrap();
-    assert_eq!(lib.history().unwrap(), vec![visit("d", 4), visit("c", 3), visit("b", 2)], "newest first, oldest dropped");
-    lib.replace_newest_visit(&HistoryEntry { url: "d".into(), title: "D".into(), visited_ms: 5 }).unwrap();
+    let got = lib.history().unwrap();
+    assert_eq!(
+        got.iter().map(|e| (e.url.as_str(), e.visited_ms)).collect::<Vec<_>>(),
+        [("d", 4), ("c", 3), ("b", 2)],
+        "newest first, oldest dropped"
+    );
+    assert!(got.iter().all(|e| e.id.starts_with("h-")), "each visit gets a stable id");
+    assert_eq!(lib.history_tombstones().unwrap().len(), 1, "the capped visit is tombstoned");
+    lib.replace_newest_visit(&HistoryEntry { url: "d".into(), title: "D".into(), visited_ms: 5, ..Default::default() }).unwrap();
     assert_eq!(lib.newest_visit().unwrap().unwrap().title, "D");
     assert_eq!(lib.delete_visits(|e| e.url == "c").unwrap(), 1);
     assert_eq!(lib.history().unwrap().len(), 2);
     lib.clear_history().unwrap();
     assert!(lib.history().unwrap().is_empty());
+    assert!(lib.history_tombstones().unwrap().len() >= 3, "deletes leave history tombstones");
 }
 
 #[test]
@@ -125,7 +143,9 @@ fn import_fills_only_an_empty_database_all_at_once() {
     let visits = [visit("a", 1), visit("b", 2), visit("c", 3)];
     assert!(lib.import(&sample(), &visits, 2).unwrap());
     assert_eq!(lib.bookmark_set().unwrap(), sample());
-    assert_eq!(lib.history().unwrap(), vec![visit("c", 3), visit("b", 2)]);
+    let history = lib.history().unwrap();
+    assert_eq!(history.iter().map(|e| (e.url.as_str(), e.visited_ms)).collect::<Vec<_>>(), [("c", 3), ("b", 2)]);
+    assert!(history.iter().all(|e| !e.id.is_empty()));
     assert!(!lib.is_empty().unwrap());
     assert!(!lib.import(&BookmarkSet::default(), &[visit("z", 9)], 0).unwrap(), "never over existing records");
     assert_eq!(lib.history().unwrap().len(), 2);
