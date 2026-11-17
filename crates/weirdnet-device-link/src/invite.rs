@@ -12,13 +12,14 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::{Deserialize, Serialize};
 use weirdnet_keys::random_bytes;
-use weirdnet_net::node::{Handler, Node, NodeConfig};
+use weirdnet_net::node::{Handler, NodeConfig};
 use weirdnet_net::profile::{Profile, WEIRDNET};
 use weirdnet_net::{Keypair, Multiaddr, PeerId, now_ms};
 
 use crate::compact::{Bytes, pack_addrs, unpack_addrs};
 use crate::net::listen_addrs;
 use crate::offer::{MAX_ADDRS, cbor, older_or_damaged, version_error};
+use crate::reach::{self, LinkNode};
 use crate::wire::LinkReply;
 use crate::{Error, OFFER_TTL_MS, Result, VERSION, decode_link};
 
@@ -132,7 +133,7 @@ impl Handler<InviteRequest, LinkReply> for Inbox {
 /// The existing device, listening for an answer to its invite. Stops when
 /// dropped.
 pub struct InviteHost {
-    node: Node<InviteRequest, LinkReply>,
+    node: LinkNode<InviteRequest, LinkReply>,
     inbox: Arc<Inbox>,
     link: String,
 }
@@ -144,9 +145,9 @@ impl InviteHost {
         let inbox = Arc::new(Inbox { scheme: scheme.to_string(), token: token.to_vec(), expires_ms, offer: Mutex::new(None) });
         let key = Keypair::generate_ed25519();
         let peer = key.public().to_peer_id();
-        let want_relay = !cfg.relays.is_empty();
-        let node = Node::start(&INVITE_PROFILE, key, cfg, inbox.clone())?;
-        let addrs = listen_addrs(&node, want_relay).ok_or_else(|| Error::Net("network: could not listen for the other device".into()))?;
+        let node = reach::start(&INVITE_PROFILE, key, cfg, inbox.clone())?;
+        let addrs =
+            listen_addrs(&node.node, !node.relays.is_empty()).ok_or_else(|| Error::Net("network: could not listen for the other device".into()))?;
         let invite = Invite { v: VERSION, peer: peer.to_string(), addrs, token: token.to_vec(), expires_ms };
         let link = encode_invite(scheme, &invite)?;
         Ok(InviteHost { node, inbox, link })
@@ -173,13 +174,13 @@ impl InviteHost {
 
     /// The node's network status (connections, relay reservations).
     pub fn net_status(&self) -> weirdnet_net::node::Status {
-        self.node.status()
+        self.node.node.status()
     }
 }
 
 impl Drop for InviteHost {
     fn drop(&mut self) {
-        self.node.halt();
+        self.node.node.halt();
     }
 }
 
@@ -191,9 +192,10 @@ pub fn answer_invite(scheme: &str, invite: &str, offer_link: &str, cfg: NodeConf
     }
     let peer: PeerId = invite.peer.parse().map_err(|_| Error::Invalid("the link is damaged"))?;
     let addrs: Vec<Multiaddr> = invite.addrs.iter().filter_map(|a| format!("{a}/p2p/{peer}").parse().ok()).collect();
-    let node = Node::<InviteRequest, LinkReply>::start(&INVITE_PROFILE, Keypair::generate_ed25519(), cfg, Arc::new(NoAnswers))?;
-    let reply = node.request(peer, &addrs, InviteRequest::Offer { token: invite.token, link: offer_link.to_string() });
-    node.halt();
+    let node = reach::start::<InviteRequest, LinkReply>(&INVITE_PROFILE, Keypair::generate_ed25519(), cfg, Arc::new(NoAnswers))?;
+    node.reach_relays_of(&addrs);
+    let reply = node.node.request(peer, &addrs, InviteRequest::Offer { token: invite.token, link: offer_link.to_string() });
+    node.node.halt();
     match reply? {
         LinkReply::Ok => Ok(()),
         LinkReply::Refused { reason } => Err(Error::Refused(reason)),

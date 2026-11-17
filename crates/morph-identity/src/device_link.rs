@@ -16,11 +16,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use weirdnet_device_link::{HostNode, HostStatus, InviteHost, Pairing};
-pub use weirdnet_device_link::{RelayProbe, RelayState, relay_states};
+pub use weirdnet_device_link::{RelayProbe, RelayState, relay_groups, relay_states};
 use weirdnet_keys::{Key32, SecretString, password_seal};
 use weirdnet_net::Keypair;
 pub use weirdnet_net::Multiaddr;
-use weirdnet_net::node::NodeConfig;
+pub use weirdnet_net::node::NodeConfig;
 pub use weirdnet_net::node::Status as NetStatus;
 
 use crate::profile_identity::{self, ProfileIdentity, Source, identity_dir};
@@ -31,7 +31,10 @@ pub const SCHEME: &str = "weirdnet-morph://";
 const NODE_AAD: &[u8] = b"morph/identity/node-key/v1";
 
 /// The official WeirdBrains Weirdnet relay, built in on every platform: TCP
-/// first (UDP is often blocked), then QUIC. Its info:
+/// first (UDP is often blocked), then QUIC. Links dial both at once and keep
+/// whichever answers first. Addresses it
+/// advertises in its info (WebSocket over TLS on 443, once it serves that)
+/// are added at run time, in morph-services:
 /// <https://relay.net.weirdbrains.com/.well-known/weirdnet-relay.json>.
 pub const PUBLIC_RELAYS: &[&str] = &[
     "/dns4/relay.net.weirdbrains.com/tcp/4747/p2p/12D3KooWHp56KezbVCubjuznJGqyn9xTe8PWePfuwv4YQUGxaRBB",
@@ -45,8 +48,15 @@ pub const PUBLIC_RELAYS: &[&str] = &[
 /// mobile data, a guest Wi-Fi that isolates clients) connect through the
 /// relay. `MORPH_LINK_RELAYS` (comma-separated multiaddrs ending in
 /// `/p2p/<relay>`; empty for none) replaces the relay list.
+/// Requests and answers are capped at the link limits
+/// ([`weirdnet_device_link::reach`]), far below weirdnet-net's defaults.
 pub fn net_config() -> NodeConfig {
-    NodeConfig { listen: NodeConfig::default_listen(0), relays: link_relays(), label: "morph-link".into(), ..Default::default() }
+    weirdnet_device_link::with_link_limits(NodeConfig {
+        listen: NodeConfig::default_listen(0),
+        relays: link_relays(),
+        label: "morph-link".into(),
+        ..Default::default()
+    })
 }
 
 /// The relays links use: [`PUBLIC_RELAYS`], or `MORPH_LINK_RELAYS` when set.

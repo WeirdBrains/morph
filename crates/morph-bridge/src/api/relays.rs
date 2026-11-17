@@ -80,7 +80,7 @@ mod tests {
     #[test]
     fn the_view_carries_the_mapped_state() {
         let relays: Vec<Multiaddr> = PUBLIC_RELAYS.iter().map(|a| a.parse().unwrap()).collect();
-        let none: RelayReportView = RelayReport::build(&relays, &[], false, |_, _| None).into();
+        let none: RelayReportView = RelayReport::build(&relays, &[], &[], false, |_, _| None).into();
         assert_eq!(none.nodes, 0);
         assert_eq!(none.relays.len(), 1);
         assert_eq!(none.relays[0].state, "no-node");
@@ -89,7 +89,7 @@ mod tests {
 
         let peer = none.relays[0].peer.clone();
         let up = NetStatus { connected: vec![peer.clone()], reservations: vec![peer], ..Default::default() };
-        let view: RelayReportView = RelayReport::build(&relays, &[up], true, |_, _| Some("WeirdBrains public relay".into())).into();
+        let view: RelayReportView = RelayReport::build(&relays, &[up], &[], true, |_, _| Some("WeirdBrains public relay".into())).into();
         assert_eq!(view.relays[0].state, "reserved");
         assert_eq!(view.relays[0].label, "Connected, slot reserved");
         assert_eq!(view.relays[0].title, "WeirdBrains public relay");

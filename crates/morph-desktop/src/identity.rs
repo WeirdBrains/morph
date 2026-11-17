@@ -851,16 +851,16 @@ mod tests {
     fn the_relay_line_shows_the_least_ready_relay() {
         use morph_identity::device_link::{Multiaddr, NetStatus, PUBLIC_RELAYS};
         let one: Vec<Multiaddr> = PUBLIC_RELAYS.iter().map(|a| a.parse().unwrap()).collect();
-        let (text, state) = relay_line(&RelayReport::build(&one, &[], false, |_, _| None));
+        let (text, state) = relay_line(&RelayReport::build(&one, &[], &[], false, |_, _| None));
         assert_eq!(state, RelayStatus::NoNode);
         assert!(text.starts_with("Not connected"), "{text}");
         let peer = "12D3KooWHp56KezbVCubjuznJGqyn9xTe8PWePfuwv4YQUGxaRBB".to_string();
         let up = NetStatus { connected: vec![peer.clone()], reservations: vec![peer], ..Default::default() };
-        assert_eq!(relay_line(&RelayReport::build(&one, std::slice::from_ref(&up), false, |_, _| None)).1, RelayStatus::Reserved);
+        assert_eq!(relay_line(&RelayReport::build(&one, std::slice::from_ref(&up), &[], false, |_, _| None)).1, RelayStatus::Reserved);
         let mut two = one.clone();
         two.push("/ip4/192.0.2.7/tcp/4001/p2p/12D3KooWEyoppNCUx8Yx66oV9fJnriXwCcXwDDUA2kj6vnc6iDEp".parse().unwrap());
-        assert_eq!(relay_line(&RelayReport::build(&two, &[up], false, |_, _| None)).1, RelayStatus::NotConnected);
-        assert_eq!(relay_line(&RelayReport::build(&[], &[NetStatus::default()], false, |_, _| None)).1, RelayStatus::NoNode);
+        assert_eq!(relay_line(&RelayReport::build(&two, &[up], &[], false, |_, _| None)).1, RelayStatus::NotConnected);
+        assert_eq!(relay_line(&RelayReport::build(&[], &[NetStatus::default()], &[], false, |_, _| None)).1, RelayStatus::NoNode);
     }
 
     fn s(v: &[&str]) -> Vec<String> {
