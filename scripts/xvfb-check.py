@@ -1784,6 +1784,34 @@ def error_page(m, r, win, top):
     r.check("error", "Alt+Left leaves the error page for the page under it", back, f"{m.title(win)} {state(m, tab=2)} {focus_info(m)}")
 
 
+def own_addresses(m, r, win, top):
+    """morph:// and weirdnet-<app>:// addresses never search: an unknown
+    morph:// page shows Morph's page listing the real ones, and a Weirdnet
+    app link shows "App call not supported yet" (weirdnet-net 0.4 has no
+    generic app call); Alt+Left goes back from both."""
+
+    def searched(since):
+        return [a for t, name, a in m.events()[since:] if name == "UrlChanged" and ("google.com/search" in (a or "") or "duckduckgo.com/?q" in (a or ""))]
+
+    for typed, title, label in [
+        ("morph://nope", "morph://nope is not a Morph page", "an unknown morph:// page shows the list of Morph's pages"),
+        ("weirdnet-muninn://alice/notes?token=x", "App call not supported yet", "a weirdnet-<app>:// link shows \"App call not supported yet\""),
+    ]:
+        m.click(win, 300, top + 300)
+        since = len(m.events())
+        m.key("ctrl+l", delay=0.6)
+        m.type(typed)
+        m.key("Return", delay=1.0)
+        shown = wait_for(lambda: m.title(win).startswith(title))
+        r.check("address", label, shown, m.title(win))
+        time.sleep(0.5)
+        r.check("address", f"{typed.split('?')[0]} is not searched", not searched(since), str(searched(since)))
+        m.key("alt+Left", delay=1.0)
+        r.check("address", f"Alt+Left leaves the {typed.split(':')[0]} page", wait_for(lambda: not m.title(win).startswith(title)), m.title(win))
+    called = m.lines(r"morph-event app-call weirdnet-muninn://alice/notes not-supported")
+    r.check("address", "the app link went to the app caller (no query in the log)", called and not m.lines(r"morph-event app-call .*token"), str(m.lines(r"morph-event app-call")[-2:]))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bin", default=str(Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target")) / "release" / "morph"))
@@ -1885,6 +1913,7 @@ def run(args):
         tab2 = (state(m, tab=2) or {}).get("id", "?")
         r.check("shell", "Ctrl+W closes the tab (tab 2 shows again)", f'"id":"{tab2}"' in m.title(win), m.title(win))
         error_page(m, r, win, top)
+        own_addresses(m, r, win, top)
         if wm:
             w0 = (state(m, tab=2) or {}).get("w", 0)
             m.click(win, 300, top + 300)

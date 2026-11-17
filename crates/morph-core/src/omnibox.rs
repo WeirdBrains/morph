@@ -14,8 +14,9 @@ const MAX_QUERY_CHARS: usize = 2000;
 /// Text opens as an address only when it looks like one: http(s) with a host
 /// and no spaces, `about:`, `file:`, `data:`, `view-source:`,
 /// `localhost[:port]`, an IPv4 address, or a bare `host.tld[:port][/path]`.
-/// Everything else, including any phrase and unknown schemes such as
-/// `javascript:`, becomes a search.
+/// `morph:` and `weirdnet-<app>:` addresses are kept as typed for Morph to
+/// open ([`crate::address`]). Everything else, including any phrase and
+/// unknown schemes such as `javascript:`, becomes a search.
 pub fn target(input: &str) -> Option<String> {
     target_with(input, &|q| search_url(q))
 }
@@ -31,6 +32,11 @@ fn target_with(input: &str, search_url: &dyn Fn(&str) -> String) -> Option<Strin
         return None;
     }
     if let Some(scheme) = scheme(text) {
+        // morph://settings and weirdnet-<app>://… are Morph's to open (an
+        // error page if it can't), never a search.
+        if crate::address::is_own_scheme(scheme) {
+            return Some(text.to_string());
+        }
         let scheme = scheme.to_ascii_lowercase();
         if scheme == "http" || scheme == "https" {
             if has_host(text) && !has_whitespace(text) {
@@ -215,6 +221,29 @@ mod tests {
     fn unsafe_or_unknown_schemes_search_instead_of_running() {
         assert_eq!(target("javascript:alert(1)"), ddg("javascript:alert(1)"));
         assert_eq!(target("https://"), ddg("https://"));
+    }
+
+    #[test]
+    fn morph_and_weirdnet_addresses_are_never_searches() {
+        for text in [
+            "morph://settings",
+            "morph:history",
+            "morph://nope",
+            "MORPH://Relays/",
+            "weirdnet-morph://link/ABCD",
+            "weirdnet-muninn://home.example.com/notes/a.md?x=1",
+            "Weirdnet-Notes://alice",
+            "weirdnet://open/x",
+            "weirdnet-notes://a b",
+        ] {
+            assert_eq!(target(text).as_deref(), Some(text), "{text}");
+            let google = crate::search::engine("google");
+            assert_eq!(super::target_for(&format!("  {text} "), google).as_deref(), Some(text), "{text}");
+        }
+        // Not Morph's: a phrase mentioning one, and look-alike schemes.
+        assert_eq!(target("open morph://settings"), ddg("open morph://settings"));
+        assert_eq!(target("morphx://a"), ddg("morphx://a"));
+        assert_eq!(target("weirdnet-://a"), ddg("weirdnet-://a"));
     }
 
     #[test]

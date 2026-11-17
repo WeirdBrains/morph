@@ -2772,3 +2772,25 @@ copy (no compact v2 codes, no relay status), so Morph keeps its copy.
   peer records for a user's devices go; sync data belongs on 0.4 streams
   (`Node::open_stream`, sealed with the exchange key), not on the link's
   request-response, whose caps stay small. `Transfer::sync` is still empty.
+
+### 2026-11-17 — morph:// and weirdnet-<app>:// in the address bar
+
+- `morph_core::omnibox` keeps any `morph:` or `weirdnet`/`weirdnet-<app>:`
+  address as typed (never a search); `morph_core::address` names Morph's
+  pages (`PAGES`, shared by both shells) and the error page for an unknown
+  one. Desktop (`morph-browser`) and phone (`morph-bridge::own_address`)
+  never hand these to the web view, so no engine or OS handler sees them.
+- `weirdnet-<app>://<locator>/<path>` is a call over Weirdnet, behind
+  `morph_core::app_call::AppCaller` (request: app, locator, method, path
+  with query, headers, body; response: status, headers, streamed body).
+  The only caller is `NotYet`: weirdnet-net 0.4's request/response node is
+  typed per protocol and nothing resolves an app locator to a peer, so
+  there is no generic call to make. An upstream request for one is filed
+  with the weirdnet-net owner; when it ships, a caller built on it plugs in via
+  `Config::app_caller` (desktop) and `own_address_with` (bridge) and the
+  shells stay as they are. Links are parsed with `weirdnet-schemes`'
+  `Link`; resolving a scheme to a registered app (its `Registry`) waits for
+  Morph to hold the canonical list.
+- Phone address sheet: the engine selector left of the URL field, per tab
+  with the profile's engine as the default, as the desktop selector.
+

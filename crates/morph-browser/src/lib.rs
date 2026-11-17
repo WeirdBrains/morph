@@ -12,8 +12,9 @@ use std::path::PathBuf;
 
 pub mod downloads;
 
+use morph_core::app_call::{self, AppCallError, AppCaller};
 use morph_core::tabs::{TabId, TabSet};
-use morph_core::{omnibox, search};
+use morph_core::{address, omnibox, search};
 use morph_ui::actions::Action;
 use morph_ui::text::TextField;
 use morph_webview::{Backend, ErrorKind, Event, Frame, Input, LoadError, MenuChoice, PageCursor, Rect, Spec, ViewId, WebView};
@@ -38,6 +39,9 @@ pub struct Config {
     pub log_events: bool,
     /// The search engine new tabs use ([`morph_core::search`] id).
     pub search_engine: String,
+    /// What calls Weirdnet apps for `weirdnet-<app>://` addresses; `None`
+    /// is [`app_call::NotYet`] (this build cannot call them).
+    pub app_caller: Option<std::sync::Arc<dyn AppCaller>>,
 }
 
 /// Per-tab page state beyond `morph_core::tabs::Tab`.
@@ -120,14 +124,18 @@ pub const SETTINGS_URL: &str = "morph://settings";
 /// The address of Morph's About page.
 pub const ABOUT_URL: &str = "morph://about";
 
-/// A `morph://` address: Morph's own pages and panels.
+/// A `morph://` address: Morph's own pages and panels (the list is
+/// [`morph_core::address::PAGES`], shared with the phone app).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Internal {
     About,
     Bookmarks,
+    Downloads,
     History,
     Identity,
     Profiles,
+    Relays,
+    Search,
     Settings,
 }
 
@@ -135,15 +143,16 @@ impl Internal {
     /// The internal page `text` names (`morph://about`, `morph:settings`,
     /// `morph://history/`), if any.
     pub fn parse(text: &str) -> Option<Internal> {
-        let text = text.trim();
-        let rest = text.get(..6).filter(|s| s.eq_ignore_ascii_case("morph:")).map(|_| &text[6..])?;
-        let name = rest.trim_start_matches('/').trim_end_matches('/').to_ascii_lowercase();
-        Some(match name.as_str() {
+        let page = address::page(text)?.ok()?;
+        Some(match page.name {
             "about" => Internal::About,
             "bookmarks" => Internal::Bookmarks,
+            "downloads" => Internal::Downloads,
             "history" => Internal::History,
             "identity" => Internal::Identity,
             "profiles" => Internal::Profiles,
+            "relays" => Internal::Relays,
+            "search" => Internal::Search,
             "settings" => Internal::Settings,
             _ => return None,
         })
@@ -154,10 +163,24 @@ impl Internal {
         match self {
             Internal::About => ABOUT_URL,
             Internal::Bookmarks => "morph://bookmarks",
+            Internal::Downloads => "morph://downloads",
             Internal::History => "morph://history",
             Internal::Identity => "morph://identity",
             Internal::Profiles => "morph://profiles",
+            Internal::Relays => "morph://relays",
+            Internal::Search => "morph://search",
             Internal::Settings => SETTINGS_URL,
+        }
+    }
+
+    /// The settings section it opens (`downloads`, `relays`, `search`), for
+    /// the pages that are a part of Settings.
+    pub fn settings_section(self) -> Option<&'static str> {
+        match self {
+            Internal::Downloads => Some("downloads"),
+            Internal::Relays => Some("relays"),
+            Internal::Search => Some("search"),
+            _ => None,
         }
     }
 
@@ -169,7 +192,8 @@ impl Internal {
             Internal::History => Action::ShowHistory,
             Internal::Identity => Action::ShowIdentity,
             Internal::Profiles => Action::ShowProfiles,
-            Internal::Settings => Action::ShowSettings,
+            Internal::Search => Action::ShowSearchSettings,
+            Internal::Settings | Internal::Downloads | Internal::Relays => Action::ShowSettings,
         }
     }
 }
@@ -195,6 +219,19 @@ pub fn start_address(text: &str, engine: &search::Engine) -> String {
 
 /// Title and explanation for a page that failed to load.
 pub fn error_text(error: &LoadError) -> (String, String) {
+    // Morph's own addresses: an unknown morph:// page, or a Weirdnet app
+    // link this build cannot call ([`Browser::load`] never hands either to
+    // the engine).
+    if let Some(Err(name)) = address::page(&error.url) {
+        return address::unknown_page_text(&name);
+    }
+    if address::is_app(&error.url) {
+        return match app_call::request(&error.url) {
+            Err(e) => app_call::error_text(&error.url, &e),
+            Ok(_) if error.message.trim().is_empty() => app_call::error_text(&error.url, &AppCallError::NotSupported),
+            Ok(_) => ("This app couldn't be opened".into(), format!("{}: {}", app_call::describe(&error.url), sentence(&error.message).trim_end())),
+        };
+    }
     let host = host(&error.url);
     let site = if host.is_empty() { "This site".to_string() } else { host.to_string() };
     match error.kind {
@@ -320,6 +357,13 @@ pub struct Browser {
     /// The shell took the file request (its dialog is open).
     file_asked: bool,
     downloads: downloads::Downloads,
+    app_caller: std::sync::Arc<dyn AppCaller>,
+}
+
+/// Whether `url` is an address Morph opens itself (`morph:`,
+/// `weirdnet-<app>:`), never the engine.
+fn is_own_address(url: &str) -> bool {
+    address::is_morph(url) || address::is_app(url)
 }
 
 impl Browser {
@@ -344,18 +388,14 @@ impl Browser {
             file_request: None,
             file_asked: false,
             downloads: downloads::Downloads::default(),
+            app_caller: config.app_caller.clone().unwrap_or_else(|| std::sync::Arc::new(app_call::NotYet)),
         };
         let first = browser.tabs.active_id();
         let url = config.start_url.trim().to_string();
         // Morph's own pages are drawn by the shell, never loaded or searched.
-        let internal = Internal::parse(&url);
-        browser.attach(first, if internal.is_some() { "" } else { &url })?;
+        browser.attach(first, &url)?;
         browser.after_switch();
-        match internal {
-            Some(Internal::About) => browser.show_own(Cover::About, true),
-            Some(Internal::Settings) => browser.show_own(Cover::Settings, true),
-            _ => {}
-        }
+        browser.open_own(&url);
         Ok(browser)
     }
 
@@ -365,7 +405,8 @@ impl Browser {
     }
 
     fn attach(&mut self, id: TabId, url: &str) -> morph_webview::Result<()> {
-        let target = if url.is_empty() { String::new() } else { omnibox::target_for(url, self.default_engine).unwrap_or_default() };
+        let target =
+            if url.is_empty() || is_own_address(url) { String::new() } else { omnibox::target_for(url, self.default_engine).unwrap_or_default() };
         let active = self.tabs.active_id() == id;
         let view = self.backend.create(Spec {
             url: target.clone(),
@@ -544,6 +585,10 @@ impl Browser {
     /// Open what the address bar holds in the active tab (Enter). Phrases
     /// become a web search. A `morph://` panel address is handed back for
     /// the shell to open (morph://about shows here).
+    ///
+    /// `morph:` and `weirdnet-<app>:` addresses never search: an unknown
+    /// `morph://` page and a Weirdnet app link this build cannot call get
+    /// Morph's error page ([`Self::open_own`]).
     pub fn submit_address(&mut self) -> Option<Internal> {
         if let Some(internal) = Internal::parse(self.address.text()) {
             match internal {
@@ -557,6 +602,10 @@ impl Browser {
             return None;
         }
         let target = omnibox::target_for(self.address.text(), self.tab_engine())?;
+        if is_own_address(&target) {
+            self.open_own(&target);
+            return None;
+        }
         self.load(&target);
         None
     }
@@ -694,8 +743,77 @@ impl Browser {
         self.set_cover(id, Some(cover));
     }
 
+    /// Open one of Morph's own addresses in the active tab: About and
+    /// Settings are drawn here, an unknown `morph://` page gets the page
+    /// listing the real ones, and a `weirdnet-<app>://` address is called
+    /// through the [`AppCaller`] (today: the "app call not supported yet"
+    /// page). Panel pages (`morph://history`) are the shell's to open
+    /// ([`Self::submit_address`] hands them back) and are left alone.
+    /// Returns whether `url` was one; none of them reaches the engine.
+    fn open_own(&mut self, url: &str) -> bool {
+        let url = url.trim();
+        match address::page(url) {
+            Some(Ok(_)) => {
+                match Internal::parse(url) {
+                    Some(Internal::About) => self.show_own(Cover::About, true),
+                    Some(Internal::Settings) => self.show_own(Cover::Settings, true),
+                    _ => {}
+                }
+                true
+            }
+            Some(Err(_)) => {
+                self.show_notice(url, String::new());
+                true
+            }
+            None if address::is_app(url) => {
+                let message = match app_call::open(url, self.app_caller.as_ref()) {
+                    Err(AppCallError::NotSupported) => String::new(),
+                    Err(e) => e.to_string(),
+                    // Showing an app's page is the next step (identity sync
+                    // and app calls); say what came back meanwhile.
+                    Ok(response) => format!("the app answered ({}), but this version cannot show app pages yet", response.status),
+                };
+                if self.log_events {
+                    eprintln!("morph-event app-call {} {}", app_call::describe(url), if message.is_empty() { "not-supported" } else { "failed" });
+                }
+                self.show_notice(url, message);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Cover the active tab with Morph's error page for `url` (see
+    /// [`error_text`]), as a failed load does: Back returns to the page
+    /// under it, Reload tries `url` again.
+    fn show_notice(&mut self, url: &str, message: String) {
+        self.close_menus();
+        let id = self.tabs.active_id();
+        let current = self.tabs.active().clone();
+        let error = LoadError { url: url.to_string(), kind: ErrorKind::Other, message };
+        let title = error_text(&error).0;
+        if let Some(page) = self.pages.get_mut(&id) {
+            page.loading = false;
+            page.finished = false;
+            let under = matches!(page.cover, None | Some(Cover::Crashed | Cover::Unresponsive));
+            if under && !current.url.is_empty() {
+                page.shown_url = Some(current.url.clone());
+                page.shown_title = Some(current.title.clone());
+            }
+        }
+        let _ = self.tabs.update(id, url.to_string(), title);
+        self.address_focused = false;
+        self.address.set_text_selected(url);
+        self.set_cover(id, Some(Cover::Failed(error)));
+    }
+
     /// Load `url` (already an address) in the active tab and focus the page.
+    /// Morph's own addresses never reach the engine ([`Self::open_own`]).
     pub fn load(&mut self, url: &str) {
+        if is_own_address(url) {
+            self.open_own(url);
+            return;
+        }
         self.close_menus();
         let id = self.tabs.active_id();
         let title = self.tabs.active().title.clone();
@@ -721,8 +839,13 @@ impl Browser {
         let id = self.tabs.open(String::new());
         if self.attach(id, url).is_err() {
             let _ = self.tabs.close(id);
+            self.after_switch();
+            return;
         }
         self.after_switch();
+        if is_own_address(url) {
+            self.open_own(url);
+        }
     }
 
     /// Close tab `id`. Closing the last tab asks the shell to quit
@@ -831,6 +954,13 @@ impl Browser {
     /// Reload the active page. After a crash or an error page this brings
     /// the page back; a page that stopped answering is ended first.
     pub fn reload(&mut self) {
+        if let Some(Cover::Failed(error)) = &self.active_page().cover
+            && is_own_address(&error.url)
+        {
+            let url = error.url.clone();
+            self.open_own(&url);
+            return;
+        }
         let shown = self.shown;
         let area = self.page_area;
         let id = self.tabs.active_id();
@@ -870,7 +1000,10 @@ impl Browser {
         let page = self.pages.get_mut(&id).expect("every tab has a page");
         if matches!(page.cover, Some(Cover::Failed(_) | Cover::About | Cover::Settings)) {
             let url = page.shown_url.take().unwrap_or_default();
-            let own = page.cover.as_ref().is_some_and(Cover::is_own);
+            // Morph's own error pages (an unknown morph:// page, an app
+            // link) keep the title of the page under them, as its pages do.
+            let notice = matches!(&page.cover, Some(Cover::Failed(e)) if is_own_address(&e.url));
+            let own = notice || page.cover.as_ref().is_some_and(Cover::is_own);
             let shown_title = page.shown_title.take();
             // Nothing under it (a blank tab): back to the start screen.
             self.set_cover(id, url.is_empty().then_some(Cover::Start));

@@ -126,6 +126,8 @@ pub enum ShellRequest {
     IdentityChanged,
     /// Run a shell action (a button on a page or in a menu).
     Run(Action),
+    /// Show Settings at one section (`morph://relays` and the like).
+    ShowSettingsAt(crate::settings_view::Section),
     /// Change the shown profile's layout settings (the tab bar's buttons).
     Change(morph_ui::chrome::SettingsChange),
     /// Forget the shown profile's history.
@@ -612,6 +614,7 @@ impl Shell {
                 self.last_marked = None;
             }
             ShellRequest::Run(action) => self.run(*action, window, cx),
+            ShellRequest::ShowSettingsAt(section) => self.show_settings(Some(*section), window, cx),
             ShellRequest::Change(change) => {
                 if let Some(settings) = self.settings.clone() {
                     settings.update(cx, |view, cx| view.change(*change, cx));
