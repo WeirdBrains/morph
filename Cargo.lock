@@ -5440,6 +5440,7 @@ dependencies = [
  "thiserror 2.0.21",
  "uuid",
  "weirdnet-schemes",
+ "weirdnet-sync",
 ]
 
 [[package]]
@@ -10081,6 +10082,21 @@ dependencies = [
  "hex",
  "rusqlite",
  "thiserror 2.0.21",
+ "zeroize",
+]
+
+[[package]]
+name = "weirdnet-sync"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12eb6747798319702d7aecb30e02c7881cf16914ce81cccbbf2204bb29e47899"
+dependencies = [
+ "cbor4ii",
+ "hex",
+ "serde",
+ "thiserror 2.0.21",
+ "weirdnet-keys",
+ "weirdnet-net",
  "zeroize",
 ]
 

@@ -17,6 +17,7 @@ pub mod profiles;
 pub mod scheme;
 pub mod search;
 pub mod settings;
+pub mod sync;
 pub mod tabs;
 
 pub use morph_identity::{self, IdentityStatus, MasterBackup, MemoryIdentityStore, Paths, UserIdentity};
