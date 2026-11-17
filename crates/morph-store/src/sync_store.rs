@@ -45,19 +45,10 @@ pub struct SyncOrSetRow {
 
 impl Library {
     pub fn sync_log(&self) -> Result<Vec<SyncLogEntry>> {
-        let mut q = self.conn.prepare(
-            "SELECT node_id, seq, hlc, typ, record_id, op FROM sync_log ORDER BY node_id, seq",
-        )?;
+        let mut q = self.conn.prepare("SELECT node_id, seq, hlc, typ, record_id, op FROM sync_log ORDER BY node_id, seq")?;
         let rows = q
             .query_map([], |r| {
-                Ok(SyncLogEntry {
-                    node_id: r.get(0)?,
-                    seq: r.get(1)?,
-                    hlc: r.get(2)?,
-                    typ: r.get(3)?,
-                    record_id: r.get(4)?,
-                    op: r.get(5)?,
-                })
+                Ok(SyncLogEntry { node_id: r.get(0)?, seq: r.get(1)?, hlc: r.get(2)?, typ: r.get(3)?, record_id: r.get(4)?, op: r.get(5)? })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
@@ -66,9 +57,7 @@ impl Library {
     pub fn save_sync_log(&mut self, entries: &[SyncLogEntry]) -> Result<()> {
         let tx = self.conn.transaction()?;
         tx.execute("DELETE FROM sync_log", [])?;
-        let mut ins = tx.prepare(
-            "INSERT INTO sync_log (node_id, seq, hlc, typ, record_id, op) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        )?;
+        let mut ins = tx.prepare("INSERT INTO sync_log (node_id, seq, hlc, typ, record_id, op) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")?;
         for e in entries {
             ins.execute(params![e.node_id, e.seq, e.hlc, e.typ, e.record_id, e.op])?;
         }
@@ -92,10 +81,7 @@ impl Library {
     }
 
     pub fn set_sync_cursor(&mut self, node_id: &str, last_seq: i64) -> Result<()> {
-        self.conn.execute(
-            "INSERT OR REPLACE INTO sync_cursor (node_id, last_seq) VALUES (?1, ?2)",
-            params![node_id, last_seq],
-        )?;
+        self.conn.execute("INSERT OR REPLACE INTO sync_cursor (node_id, last_seq) VALUES (?1, ?2)", params![node_id, last_seq])?;
         Ok(())
     }
 
@@ -128,9 +114,7 @@ impl Library {
     pub fn sync_lww(&self) -> Result<Vec<SyncLwwRow>> {
         let mut q = self.conn.prepare("SELECT record_id, field, hlc, value FROM sync_lww")?;
         let rows = q
-            .query_map([], |r| {
-                Ok(SyncLwwRow { record_id: r.get(0)?, field: r.get(1)?, hlc: r.get(2)?, value: r.get(3)? })
-            })?
+            .query_map([], |r| Ok(SyncLwwRow { record_id: r.get(0)?, field: r.get(1)?, hlc: r.get(2)?, value: r.get(3)? }))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
@@ -146,14 +130,7 @@ impl Library {
     pub fn sync_orset(&self) -> Result<Vec<SyncOrSetRow>> {
         let mut q = self.conn.prepare("SELECT record_id, elem, added_hlc, removed_hlc FROM sync_orset")?;
         let rows = q
-            .query_map([], |r| {
-                Ok(SyncOrSetRow {
-                    record_id: r.get(0)?,
-                    elem: r.get(1)?,
-                    added_hlc: r.get(2)?,
-                    removed_hlc: r.get(3)?,
-                })
-            })?
+            .query_map([], |r| Ok(SyncOrSetRow { record_id: r.get(0)?, elem: r.get(1)?, added_hlc: r.get(2)?, removed_hlc: r.get(3)? }))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
@@ -183,18 +160,10 @@ impl Library {
     }
 
     pub fn sync_conflicts(&self) -> Result<Vec<SyncConflict>> {
-        let mut q =
-            self.conn.prepare("SELECT id, typ, record_id, hlc, op, kept_until_ms FROM sync_conflict ORDER BY record_id")?;
+        let mut q = self.conn.prepare("SELECT id, typ, record_id, hlc, op, kept_until_ms FROM sync_conflict ORDER BY record_id")?;
         let rows = q
             .query_map([], |r| {
-                Ok(SyncConflict {
-                    id: r.get(0)?,
-                    typ: r.get(1)?,
-                    record_id: r.get(2)?,
-                    hlc: r.get(3)?,
-                    op: r.get(4)?,
-                    kept_until_ms: r.get(5)?,
-                })
+                Ok(SyncConflict { id: r.get(0)?, typ: r.get(1)?, record_id: r.get(2)?, hlc: r.get(3)?, op: r.get(4)?, kept_until_ms: r.get(5)? })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)

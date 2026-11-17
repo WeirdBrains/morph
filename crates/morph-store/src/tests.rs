@@ -158,14 +158,7 @@ fn sync_log_and_meta_round_trip() {
     assert_eq!(lib.schema_version().unwrap(), 3);
     lib.set_sync_meta("node_id", b"peer-a").unwrap();
     assert_eq!(lib.sync_meta("node_id").unwrap(), Some(b"peer-a".to_vec()));
-    let e = SyncLogEntry {
-        node_id: "peer-a".into(),
-        seq: 1,
-        hlc: "h".into(),
-        typ: "bookmarks".into(),
-        record_id: "b1".into(),
-        op: b"{}".to_vec(),
-    };
+    let e = SyncLogEntry { node_id: "peer-a".into(), seq: 1, hlc: "h".into(), typ: "bookmarks".into(), record_id: "b1".into(), op: b"{}".to_vec() };
     lib.insert_sync_log(&e).unwrap();
     lib.set_sync_cursor("peer-a", 1).unwrap();
     assert_eq!(lib.sync_log().unwrap(), vec![e]);

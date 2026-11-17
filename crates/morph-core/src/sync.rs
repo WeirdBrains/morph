@@ -341,7 +341,12 @@ pub fn materialize(lib: &mut Library, now_ms: i64) -> morph_store::Result<()> {
 
     for e in entries {
         let Some(op) = decode_op(&e.op) else { continue };
-        apply_one(&e.record_id, &e.hlc, &op, &mut fields, &mut tags, &mut deleted, &mut kinds, &mut conflicts, now_ms);
+        apply_one(
+            &e.record_id,
+            &e.hlc,
+            &op,
+            &mut Apply { fields: &mut fields, tags: &mut tags, deleted: &mut deleted, kinds: &mut kinds, conflicts: &mut conflicts, now_ms },
+        );
     }
 
     let set = gather_set(&fields, &tags, &deleted, &kinds);
@@ -385,96 +390,95 @@ fn put_field(fields: &mut std::collections::BTreeMap<(String, String), (Hlc, Str
     }
 }
 
-fn apply_one(
-    id: &str,
-    hlc: &Hlc,
-    op: &BookmarksOp,
-    fields: &mut std::collections::BTreeMap<(String, String), (Hlc, String)>,
-    tags: &mut std::collections::BTreeMap<String, OrSet<String>>,
-    deleted: &mut std::collections::BTreeMap<String, Hlc>,
-    kinds: &mut std::collections::BTreeMap<String, Kind>,
-    conflicts: &mut Vec<SyncConflict>,
+struct Apply<'a> {
+    fields: &'a mut std::collections::BTreeMap<(String, String), (Hlc, String)>,
+    tags: &'a mut std::collections::BTreeMap<String, OrSet<String>>,
+    deleted: &'a mut std::collections::BTreeMap<String, Hlc>,
+    kinds: &'a mut std::collections::BTreeMap<String, Kind>,
+    conflicts: &'a mut Vec<SyncConflict>,
     now_ms: i64,
-) {
+}
+
+fn apply_one(id: &str, hlc: &Hlc, op: &BookmarksOp, st: &mut Apply<'_>) {
     match op {
         BookmarksOp::Delete => {
-            if let Some(edit) = fields.iter().filter(|((r, _), _)| r == id).map(|(_, (h, _))| h.clone()).max_by(|a, b| a.cmp_total(b)) {
+            if let Some(edit) = st.fields.iter().filter(|((r, _), _)| r == id).map(|(_, (h, _))| h.clone()).max_by(|a, b| a.cmp_total(b)) {
                 match merge::edit_vs_delete(&edit, hlc) {
                     EditOrDelete::KeepEdit => {
-                        conflicts.push(conflict(id, hlc, op, now_ms));
+                        st.conflicts.push(conflict(id, hlc, op, st.now_ms));
                         return;
                     }
                     EditOrDelete::TakeDelete => {
-                        conflicts.push(conflict(id, &edit, op, now_ms));
+                        st.conflicts.push(conflict(id, &edit, op, st.now_ms));
                     }
                 }
             }
-            deleted.insert(id.to_string(), hlc.clone());
+            st.deleted.insert(id.to_string(), hlc.clone());
         }
         other => {
-            if let Some(del) = deleted.get(id) {
+            if let Some(del) = st.deleted.get(id) {
                 match merge::edit_vs_delete(hlc, del) {
                     EditOrDelete::TakeDelete => {
-                        conflicts.push(conflict(id, hlc, other, now_ms));
+                        st.conflicts.push(conflict(id, hlc, other, st.now_ms));
                         return;
                     }
                     EditOrDelete::KeepEdit => {
-                        conflicts.push(conflict(id, del, &BookmarksOp::Delete, now_ms));
-                        deleted.remove(id);
+                        st.conflicts.push(conflict(id, del, &BookmarksOp::Delete, st.now_ms));
+                        st.deleted.remove(id);
                     }
                 }
             }
             match other {
                 BookmarksOp::PutBookmark { url, title, folder_id, order, added_ms } => {
-                    kinds.insert(id.to_string(), Kind::Bookmark);
-                    put_field(fields, id, "url", hlc, url.clone());
-                    put_field(fields, id, "title", hlc, title.clone());
-                    put_field(fields, id, "folder_id", hlc, opt(folder_id));
-                    put_field(fields, id, "order", hlc, order.clone());
-                    put_field(fields, id, "added_ms", hlc, added_ms.to_string());
+                    st.kinds.insert(id.to_string(), Kind::Bookmark);
+                    put_field(st.fields, id, "url", hlc, url.clone());
+                    put_field(st.fields, id, "title", hlc, title.clone());
+                    put_field(st.fields, id, "folder_id", hlc, opt(folder_id));
+                    put_field(st.fields, id, "order", hlc, order.clone());
+                    put_field(st.fields, id, "added_ms", hlc, added_ms.to_string());
                 }
                 BookmarksOp::SetUrl { url } => {
-                    kinds.insert(id.to_string(), Kind::Bookmark);
-                    put_field(fields, id, "url", hlc, url.clone());
+                    st.kinds.insert(id.to_string(), Kind::Bookmark);
+                    put_field(st.fields, id, "url", hlc, url.clone());
                 }
                 BookmarksOp::SetTitle { title } => {
-                    kinds.insert(id.to_string(), Kind::Bookmark);
-                    put_field(fields, id, "title", hlc, title.clone());
+                    st.kinds.insert(id.to_string(), Kind::Bookmark);
+                    put_field(st.fields, id, "title", hlc, title.clone());
                 }
                 BookmarksOp::SetFolder { folder_id } => {
-                    kinds.insert(id.to_string(), Kind::Bookmark);
-                    put_field(fields, id, "folder_id", hlc, opt(folder_id));
+                    st.kinds.insert(id.to_string(), Kind::Bookmark);
+                    put_field(st.fields, id, "folder_id", hlc, opt(folder_id));
                 }
                 BookmarksOp::SetOrder { order } => {
-                    kinds.insert(id.to_string(), Kind::Bookmark);
-                    put_field(fields, id, "order", hlc, order.clone());
+                    st.kinds.insert(id.to_string(), Kind::Bookmark);
+                    put_field(st.fields, id, "order", hlc, order.clone());
                 }
                 BookmarksOp::AddTag { tag } => {
-                    kinds.insert(id.to_string(), Kind::Bookmark);
-                    tags.entry(id.to_string()).or_default().add(tag.clone(), hlc.clone());
+                    st.kinds.insert(id.to_string(), Kind::Bookmark);
+                    st.tags.entry(id.to_string()).or_default().add(tag.clone(), hlc.clone());
                 }
                 BookmarksOp::RemoveTag { tag } => {
-                    kinds.insert(id.to_string(), Kind::Bookmark);
-                    tags.entry(id.to_string()).or_default().remove(tag.clone(), hlc.clone());
+                    st.kinds.insert(id.to_string(), Kind::Bookmark);
+                    st.tags.entry(id.to_string()).or_default().remove(tag.clone(), hlc.clone());
                 }
                 BookmarksOp::PutFolder { name, parent_id, order, created_ms } => {
-                    kinds.insert(id.to_string(), Kind::Folder);
-                    put_field(fields, id, "name", hlc, name.clone());
-                    put_field(fields, id, "parent_id", hlc, opt(parent_id));
-                    put_field(fields, id, "order", hlc, order.clone());
-                    put_field(fields, id, "created_ms", hlc, created_ms.to_string());
+                    st.kinds.insert(id.to_string(), Kind::Folder);
+                    put_field(st.fields, id, "name", hlc, name.clone());
+                    put_field(st.fields, id, "parent_id", hlc, opt(parent_id));
+                    put_field(st.fields, id, "order", hlc, order.clone());
+                    put_field(st.fields, id, "created_ms", hlc, created_ms.to_string());
                 }
                 BookmarksOp::SetName { name } => {
-                    kinds.insert(id.to_string(), Kind::Folder);
-                    put_field(fields, id, "name", hlc, name.clone());
+                    st.kinds.insert(id.to_string(), Kind::Folder);
+                    put_field(st.fields, id, "name", hlc, name.clone());
                 }
                 BookmarksOp::SetParent { parent_id } => {
-                    kinds.insert(id.to_string(), Kind::Folder);
-                    put_field(fields, id, "parent_id", hlc, opt(parent_id));
+                    st.kinds.insert(id.to_string(), Kind::Folder);
+                    put_field(st.fields, id, "parent_id", hlc, opt(parent_id));
                 }
                 BookmarksOp::SetFolderOrder { order } => {
-                    kinds.insert(id.to_string(), Kind::Folder);
-                    put_field(fields, id, "order", hlc, order.clone());
+                    st.kinds.insert(id.to_string(), Kind::Folder);
+                    put_field(st.fields, id, "order", hlc, order.clone());
                 }
                 BookmarksOp::Delete => unreachable!(),
             }
