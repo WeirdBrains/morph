@@ -1,13 +1,15 @@
 # Library sync
 
-Status: design, 2026-11-17; generic protocol moves into `weirdnet-sync` (not yet published). Product rules are in
+Status: 2026-11-17 — milestones 1–3 (bookmarks, folders and tags) are
+wired on published `weirdnet-sync` 0.1.0 and `weirdnet-net` 0.6.0. History,
+settings and the Devices UI are still ahead. Product rules are in
 `docs/identity-recovery.md` section 5. This file is the Morph implementation
 plan for that section: bookmarks, folders, tags and history first, then
 settings, between a user's own linked devices, end-to-end encrypted, over
-`weirdnet-net` 0.5 and the same relays device linking already uses.
+`weirdnet-net` 0.6 and the same relays device linking already uses.
 
-Nothing here is built yet. Do not treat this as a wire-format freeze until
-milestone 2 ships a versioned `weirdnet-sync/v1` codec with tests.
+`weirdnet-sync/v1` is published (crates.io 0.1.0). Morph keeps only bookmark,
+folder and tag record types plus wiring.
 
 ## Goal
 
@@ -45,9 +47,11 @@ already reads and writes.
   (and `MORPH_LINK_RELAYS`) already dial TCP and QUIC together and fall back
   to a relay circuit. `crates/weirdnet-device-link/examples/local-relay.rs`
   and `scripts/xvfb-check.py --local-relay` are the CI pattern to reuse.
-- **Not in the tree yet:** per-record HLCs or node ids, a change log, history
-  tombstones, history row ids, a device roster or revocation, a self-issued
-  `NodeCert` on the first device, or any sync loop.
+- **Now in the tree:** per-record HLCs and node ids, the op log and cursors in
+  `library.db`, history row ids and tombstones, a self-issued `NodeCert` on the
+  first device, a roster snapshot at link time, and a bookmark sync loop
+  (`morph-services::sync`) with a two-home local-relay test. History, settings
+  and a Devices UI / revocation are still later milestones.
 
 ## Data model
 
@@ -296,11 +300,8 @@ GPUI / Flutter panel (conflicts, devices, last synced).
 three-way take/keep/conflict decision. That is not this protocol. Wrap it
 later if it grows to cover the HLC log, rather than forking it.
 
-`weirdnet-sync` is not on crates.io yet, and the GitHub repo still has to be
-created. Morph releases cannot take a git or path dependency (they pin
-published crates.io versions). Until 0.1.0 is published, Morph can land the
-schema migration and this document only; do not wire `weirdnet-sync` into
-Morph's `Cargo.toml`.
+`weirdnet-sync` 0.1.0 is on crates.io (and depends on `weirdnet-net` 0.6.0).
+Morph pins that published version; it does not take a git or path dependency.
 
 ## Milestones
 
