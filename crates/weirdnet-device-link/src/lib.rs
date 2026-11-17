@@ -17,6 +17,7 @@ pub mod compact;
 pub mod invite;
 pub mod net;
 pub mod offer;
+pub mod reach;
 pub mod relays;
 pub mod session;
 pub mod wire;
@@ -25,6 +26,7 @@ pub use compact::KNOWN_RELAYS;
 pub use invite::{Invite, InviteHost, answer_invite, decode_invite, encode_invite, is_invite};
 pub use net::{HostNode, Pairing};
 pub use offer::{Offer, VerifiedOffer, decode_link, encode_link, offer_addrs};
+pub use reach::{relay_groups, with_link_limits};
 pub use relays::{RelayProbe, RelayState, relay_states};
 pub use session::{Host, HostStatus, Sender};
 pub use wire::{LinkReply, LinkRequest, Transfer};
@@ -72,6 +74,9 @@ impl From<weirdnet_net::NetError> for Error {
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+#[cfg(test)]
+mod relay_tests;
 
 #[cfg(test)]
 mod error_tests {

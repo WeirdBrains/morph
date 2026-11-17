@@ -8,6 +8,7 @@ use weirdnet_net::node::{Handler, Message, Node, NodeConfig};
 use weirdnet_net::{Keypair, PeerId, now_ms};
 
 use crate::offer::has_circuit;
+use crate::reach::{self, LinkNode};
 use crate::session::{Host, HostStatus, Sender, make_transfer};
 use crate::wire::{LinkReply, LinkRequest, Transfer};
 use crate::{Error, LINK_PROFILE, Result, decode_link, offer_addrs};
@@ -54,7 +55,7 @@ impl Handler<LinkRequest, LinkReply> for HostHandler {
 /// The new device: a node on its own key, listening, with the offer it shows.
 /// Stops listening when dropped.
 pub struct HostNode {
-    node: Node<LinkRequest, LinkReply>,
+    node: LinkNode<LinkRequest, LinkReply>,
     host: Arc<Host>,
 }
 
@@ -63,9 +64,9 @@ impl HostNode {
     /// addresses the node ended up on.
     pub fn start(scheme: &str, node_key: Keypair, cfg: NodeConfig, hint: &str) -> Result<Self> {
         let slot = Arc::new(OnceLock::new());
-        let want_relay = !cfg.relays.is_empty();
-        let node = Node::start(&LINK_PROFILE, node_key.clone(), cfg, Arc::new(HostHandler(slot.clone())))?;
-        let addrs = listen_addrs(&node, want_relay).ok_or_else(|| Error::Net("network: could not listen for the other device".into()))?;
+        let node = reach::start(&LINK_PROFILE, node_key.clone(), cfg, Arc::new(HostHandler(slot.clone())))?;
+        let addrs =
+            listen_addrs(&node.node, !node.relays.is_empty()).ok_or_else(|| Error::Net("network: could not listen for the other device".into()))?;
         let host = Arc::new(Host::new(scheme, &node_key, addrs, hint, now_ms())?);
         let _ = slot.set(host.clone());
         Ok(HostNode { node, host })
@@ -96,26 +97,26 @@ impl HostNode {
     }
 
     pub fn peer_id(&self) -> PeerId {
-        self.node.peer_id()
+        self.node.node.peer_id()
     }
 
     /// The node's network status (connections, relay reservations).
     pub fn net_status(&self) -> weirdnet_net::node::Status {
-        self.node.status()
+        self.node.node.status()
     }
 }
 
 impl Drop for HostNode {
     fn drop(&mut self) {
         self.host.cancel();
-        self.node.halt();
+        self.node.node.halt();
     }
 }
 
 /// The existing device, paired with a scanned offer, waiting for the user to
 /// compare codes. Holds a short-lived node on a throwaway key.
 pub struct Pairing {
-    node: Node<LinkRequest, LinkReply>,
+    node: LinkNode<LinkRequest, LinkReply>,
     sender: Sender,
     sent: bool,
 }
@@ -134,7 +135,8 @@ impl Pairing {
     pub fn start(scheme: &str, link: &str, cfg: NodeConfig) -> Result<Self> {
         let offer = decode_link(scheme, link)?;
         let (sender, hello) = Sender::start(offer, now_ms())?;
-        let node = Node::start(&LINK_PROFILE, Keypair::generate_ed25519(), cfg, Arc::new(NoRequests))?;
+        let node = reach::start(&LINK_PROFILE, Keypair::generate_ed25519(), cfg, Arc::new(NoRequests))?;
+        node.reach_relays_of(&sender.offer().dial_addrs());
         let pairing = Pairing { node, sender, sent: false };
         pairing.ask(hello)?;
         Ok(pairing)
@@ -142,7 +144,7 @@ impl Pairing {
 
     fn ask(&self, req: LinkRequest) -> Result<()> {
         let offer = self.sender.offer();
-        match self.node.request(offer.peer(), &offer.dial_addrs(), req)? {
+        match self.node.node.request(offer.peer(), &offer.dial_addrs(), req)? {
             LinkReply::Ok => Ok(()),
             LinkReply::Refused { reason } => Err(Error::Refused(reason)),
         }
@@ -164,7 +166,7 @@ impl Pairing {
 
     /// The node's network status (connections, relay reservations).
     pub fn net_status(&self) -> weirdnet_net::node::Status {
-        self.node.status()
+        self.node.node.status()
     }
 
     /// The user confirmed the codes match: send the identity, once.
@@ -186,7 +188,7 @@ impl Pairing {
 
 impl Drop for Pairing {
     fn drop(&mut self) {
-        self.node.halt();
+        self.node.node.halt();
     }
 }
 
@@ -229,13 +231,12 @@ mod tests {
     #[test]
     #[ignore = "needs the public relay"]
     fn a_link_works_through_the_public_relay_alone() {
-        let relay: weirdnet_net::Multiaddr =
-            "/dns4/relay.net.weirdbrains.com/tcp/4747/p2p/12D3KooWHp56KezbVCubjuznJGqyn9xTe8PWePfuwv4YQUGxaRBB".parse().unwrap();
-        let cfg = NodeConfig { relays: vec![relay], ..Default::default() };
-        let new_device = HostNode::start(SCHEME, Keypair::generate_ed25519(), cfg, "Morph behind NAT").unwrap();
+        let relays: Vec<weirdnet_net::Multiaddr> = crate::KNOWN_RELAYS.iter().map(|a| a.parse().unwrap()).collect();
+        let cfg = NodeConfig { relays: relays.clone(), ..Default::default() };
+        let new_device = HostNode::start(SCHEME, Keypair::generate_ed25519(), cfg.clone(), "Morph behind NAT").unwrap();
         let offer = decode_link(SCHEME, new_device.link()).unwrap();
         assert!(offer.offer.addrs.iter().all(|a| a.contains("/p2p-circuit")), "{:?}", offer.offer.addrs);
-        let mut phone = Pairing::start(SCHEME, new_device.link(), NodeConfig::default()).unwrap();
+        let mut phone = Pairing::start(SCHEME, new_device.link(), cfg).unwrap();
         let HostStatus::Paired { sas } = new_device.status() else { panic!("not paired") };
         assert_eq!(sas, phone.sas());
         new_device.confirm();

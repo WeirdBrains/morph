@@ -11,7 +11,7 @@ use std::time::Instant;
 
 pub use morph_identity::device_link::LinkState;
 pub use morph_identity::device_link::is_invite;
-use morph_identity::device_link::{AddDevice, Invite, NetStatus, NewDevice, RelayProbe, net_config};
+use morph_identity::device_link::{AddDevice, Invite, NetStatus, NewDevice, RelayProbe};
 use morph_identity::profile_identity::{self, ProfileIdentity, SecretString};
 
 use crate::home::{now_ms, profile_dir};
@@ -91,7 +91,7 @@ impl Links {
     /// New device: start listening and make a fresh offer. `device_name` is
     /// shown on the other device.
     pub fn new_device_start(&self, device_name: &str) -> Result<Offer> {
-        let device = NewDevice::start(device_name, net_config()).map_err(Error::failed)?;
+        let device = NewDevice::start(device_name, crate::relays::link_config()).map_err(Error::failed)?;
         let offer = Offer { session: self.next_id(), link: device.link().to_string(), expires_ms: device.expires_ms() };
         guard(&self.hosts).insert(offer.session, device);
         Ok(offer)
@@ -139,7 +139,7 @@ impl Links {
     /// with the new device.
     pub fn add_device_start(&self, home: &Path, profile_id: &str, profile_name: &str, password: &SecretString, link: &str) -> Result<Pairing> {
         let dir = profile_dir(home, profile_id)?;
-        let pairing = AddDevice::start(&dir, profile_name, password, link, net_config()).map_err(Error::failed)?;
+        let pairing = AddDevice::start(&dir, profile_name, password, link, crate::relays::link_config()).map_err(Error::failed)?;
         let view = Pairing { session: self.next_id(), sas: pairing.sas().to_string(), device: pairing.device().to_string() };
         guard(&self.pairings).insert(view.session, pairing);
         Ok(view)
@@ -163,7 +163,7 @@ impl Links {
 
     /// Existing device: listen for a new device that scans this device's QR.
     pub fn invite_start(&self) -> Result<InviteView> {
-        let invite = Invite::start(net_config()).map_err(Error::failed)?;
+        let invite = Invite::start(crate::relays::link_config()).map_err(Error::failed)?;
         let view = InviteView { session: self.next_id(), link: invite.link().to_string(), expires_ms: invite.expires_ms() };
         guard(&self.invites).insert(view.session, invite);
         Ok(view)
@@ -198,7 +198,7 @@ impl Links {
     /// session's offer; pairing then goes on as if it had been scanned.
     pub fn new_device_answer(&self, session: u64, invite: &str) -> Result<()> {
         let link = guard(&self.hosts).get(&session).ok_or(Error::LinkGone)?.link().to_string();
-        morph_identity::device_link::answer_invite(invite, &link, net_config()).map_err(Error::failed)
+        morph_identity::device_link::answer_invite(invite, &link, crate::relays::link_config()).map_err(Error::failed)
     }
 }
 
