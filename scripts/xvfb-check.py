@@ -32,6 +32,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 PAGE = ROOT / "tests" / "xvfb" / "keys.html"
 EVENT = re.compile(r'^morph-event tab=(\d+) (\w+)(?:\((.*)\))?')
+# With a relay of our own (--local-relay): the Relays check and the new
+# device's link screen use it (MORPH_LINK_RELAYS, a dead address first, so
+# the others have to carry the connection) and fetch no relay info. Its
+# address is private, so codes carry no circuit through it (only relays on
+# routable addresses go in codes) and wait 5 s for one; the other homes
+# keep the built-in relay.
+LINK_ENV = {}
+LOCAL_RELAY = False
 
 
 class Morph:
@@ -622,7 +630,13 @@ def relays_section(m, r):
     m.key("Return", delay=1.0)
     started = wait_for(lambda: m.lines(r"morph-event relays nodes=1 checking=true state=(not-connected|connected|reserved)"), 15)
     r.check("settings", "Enter on Relays starts a check: a real node reports the relay's state", started, str(m.lines(r"morph-event relays")[-3:]))
-    time.sleep(3.0)
+    if LOCAL_RELAY:
+        # The local relay's first address goes nowhere: the slot comes over
+        # another one, and the check measures a round trip to it.
+        reserved = wait_for(lambda: m.lines(r"morph-event relays nodes=1 checking=true state=reserved count=1 rtt=\d+ addrs=3"), 20)
+        r.check("settings", "the check reserves a slot on the local relay over its second address and shows the round trip", reserved, str(m.lines(r"morph-event relays")[-3:]))
+    else:
+        time.sleep(3.0)
     last = (m.lines(r"morph-event relays nodes=") or ["none"])[-1]
     print(f"INFO  relays  after the check started: {last}", flush=True)
 
@@ -1571,16 +1585,17 @@ def identity_link(m, r, binary, display, user_id):
     first adds it (a, password, link); both show the same code, Enter on
     each confirms, and the new one chooses its password and gets the
     identity."""
-    m3 = Driver(binary, display, tempfile.mkdtemp(prefix="morph-xvfb-link-"))
+    m3 = Driver(binary, display, tempfile.mkdtemp(prefix="morph-xvfb-link-"), LINK_ENV)
     win, w0 = None, 0
     try:
         r.check("link", "a new device (another home) opens", wait_for(lambda: state(m3), 20))
         new_win, _ = open_identity(m3, r, "link")
         m3.key("4", delay=1.5)
-        offer = wait_for(lambda: [line.split("offer=", 1)[1].strip() for line in m3.lines(r"morph-event link offer=")])
+        offer = wait_for(lambda: [line.split("offer=", 1)[1].strip() for line in m3.lines(r"morph-event link offer=")], 15)
         r.check("link", "4 shows a link (and its QR code)", offer, "no offer logged")
-        relay = wait_for(lambda: m3.lines(r"morph-event link relays state=(not-connected|connected|reserved)"), 10)
-        r.check("link", "the link screen shows the relay status line, from the running node", relay, str(m3.lines(r"morph-event link relays")))
+        want = "reserved" if LOCAL_RELAY else "(not-connected|connected|reserved)"
+        relay = wait_for(lambda: m3.lines(rf"morph-event link relays state={want}"), 15)
+        r.check("link", "the link screen shows the relay status line, from the running node" + (" (a slot on the local relay)" if LOCAL_RELAY else ""), relay, str(m3.lines(r"morph-event link relays")))
         if relay:
             print(f"INFO  link    relay line: {m3.lines(r'morph-event link relays')[-1]}", flush=True)
         if not offer:
@@ -1777,7 +1792,41 @@ def main():
     ap.add_argument("--wayland", action="store_true", help="run on a headless sway (native Wayland) instead of Xvfb")
     ap.add_argument("--scale", type=float, default=1.0, help="the Wayland output's scale")
     ap.add_argument("--input-bin", help="morph-wl-input (default: next to --bin)")
+    ap.add_argument("--local-relay", help="a local relay to link through (weirdnet-device-link's local-relay example)")
     args = ap.parse_args()
+    relay = start_local_relay(args.local_relay) if args.local_relay else None
+    try:
+        return run(args)
+    finally:
+        if relay:
+            relay.stdin.close()
+            relay.terminate()
+
+
+def start_local_relay(binary):
+    """Start the local relay and point every Morph at it: a dead address
+    (port 1 refuses), then its TCP and QUIC addresses."""
+    global LOCAL_RELAY
+    proc = subprocess.Popen([binary], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    addrs = []
+    for line in proc.stdout:
+        line = line.strip()
+        if line == "ready":
+            break
+        if line.startswith("relay "):
+            addrs.append(line.split(" ", 1)[1])
+    tcp = [a for a in addrs if "/tcp/" in a]
+    quic = [a for a in addrs if "/quic-v1" in a]
+    if not tcp or not quic:
+        raise SystemExit(f"the local relay did not listen on TCP and QUIC: {addrs}")
+    peer = tcp[0].rsplit("/p2p/", 1)[1]
+    LINK_ENV.update(MORPH_LINK_RELAYS=",".join([f"/ip4/127.0.0.1/tcp/1/p2p/{peer}", tcp[0], quic[0]]), MORPH_RELAY_INFO="0")
+    LOCAL_RELAY = True
+    print(f"INFO  relays  local relay: {LINK_ENV['MORPH_LINK_RELAYS']}", flush=True)
+    return proc
+
+
+def run(args):
 
     global Driver
     xvfb, wm = None, None
@@ -1793,7 +1842,7 @@ def main():
             wm = subprocess.Popen(["openbox"], env=dict(os.environ, DISPLAY=display), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             time.sleep(1.0)
     home = tempfile.mkdtemp(prefix="morph-xvfb-")
-    m = Driver(args.bin, display, home)
+    m = Driver(args.bin, display, home, LINK_ENV)
     r = Results()
     try:
         win = wait_for(lambda: m.window("Morph"), 20)
@@ -1862,7 +1911,7 @@ def main():
         internal_pages(m, r, win, top)
         w0, h0 = settings_panel(m, r, win, top)
         m.stop()
-        m = Driver(args.bin, display, home)
+        m = Driver(args.bin, display, home, LINK_ENV)
         settings_relaunch(m, r, w0, h0)
         single_instance(m, r, args.bin)
         bridge_round_trip(m, r, args.bin)

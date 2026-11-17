@@ -192,18 +192,22 @@ jobs:
           morph --version
           rpm -qp --requires dist/morph-standalone-*.rpm >/dev/null
           sudo apt-get remove -y morph
+      # A relay on the runner itself, so the relay check and the link
+      # screens have a relay to reserve a slot on (and a round trip to show).
+      - name: Local relay
+        run: cargo build --release --locked -p weirdnet-device-link --example local-relay
       - name: Xvfb checks
         env:
           LIBGL_ALWAYS_SOFTWARE: "1"
           MORPH_REQUIRE_QR: "1"
-        run: python3 scripts/xvfb-check.py --bin target/release/morph --report dist/xvfb-checks.md
+        run: python3 scripts/xvfb-check.py --bin target/release/morph --local-relay target/release/examples/local-relay --report dist/xvfb-checks.md
       - name: Wayland checks (headless sway, the same keys)
         env:
           LIBGL_ALWAYS_SOFTWARE: "1"
           MORPH_REQUIRE_QR: "1"
         run: |
           cargo build --release --locked -p morph-wl-input
-          python3 scripts/xvfb-check.py --wayland --bin target/release/morph --report dist/wayland-checks.md
+          python3 scripts/xvfb-check.py --wayland --bin target/release/morph --local-relay target/release/examples/local-relay --report dist/wayland-checks.md
       - name: Wayland checks at scale 2 (HiDPI)
         env:
           LIBGL_ALWAYS_SOFTWARE: "1"
