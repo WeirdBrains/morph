@@ -5443,7 +5443,7 @@ dependencies = [
 
 [[package]]
 name = "morph-desktop"
-version = "0.2.0-alpha.14"
+version = "0.2.0-alpha.15"
 dependencies = [
  "gpui",
  "gpui_linux",
