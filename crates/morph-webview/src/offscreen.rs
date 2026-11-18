@@ -704,6 +704,10 @@ impl OffscreenView {
 }
 
 impl WebView for OffscreenView {
+    fn evaluate(&self, script: &str, done: crate::ScriptDone) -> bool {
+        crate::wry_evaluate(&self.view, script, done)
+    }
+
     fn id(&self) -> ViewId {
         self.id
     }

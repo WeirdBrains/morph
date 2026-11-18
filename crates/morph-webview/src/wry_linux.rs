@@ -1093,6 +1093,10 @@ struct WryView {
 }
 
 impl WebView for WryView {
+    fn evaluate(&self, script: &str, done: crate::ScriptDone) -> bool {
+        crate::wry_evaluate(&self.view, script, done)
+    }
+
     fn id(&self) -> ViewId {
         self.id
     }

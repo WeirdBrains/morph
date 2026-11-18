@@ -509,6 +509,12 @@ pub trait WebView {
     }
     /// Forget the profile's cookies, cache and site storage (every view of
     /// the same data directory shares them).
+    /// Run `script` in the page's main frame; `done` gets its result as
+    /// JSON (a string result arrives JSON-quoted), or `None` if it failed.
+    /// `false`: this backend can't run scripts (`done` is dropped).
+    fn evaluate(&self, _script: &str, _done: ScriptDone) -> bool {
+        false
+    }
     fn clear_data(&self) -> Result<()> {
         Ok(())
     }
@@ -675,6 +681,27 @@ pub trait Backend {
     fn request_cookies(&mut self, _download: u64, _url: &str) -> bool {
         false
     }
+}
+
+/// What [`WebView::evaluate`] calls with the script's result.
+pub type ScriptDone = Box<dyn FnOnce(Option<String>) + Send>;
+
+/// [`WebView::evaluate`] on a wry view (every real backend).
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+pub(crate) fn wry_evaluate(view: &wry::WebView, script: &str, done: ScriptDone) -> bool {
+    let done = std::sync::Arc::new(std::sync::Mutex::new(Some(done)));
+    let again = done.clone();
+    let ok = view
+        .evaluate_script_with_callback(script, move |result| {
+            if let Some(f) = again.lock().ok().and_then(|mut d| d.take()) {
+                f(Some(result));
+            }
+        })
+        .is_ok();
+    if !ok && let Some(f) = done.lock().ok().and_then(|mut d| d.take()) {
+        f(None);
+    }
+    ok
 }
 
 /// Where a download's bytes go until the user picks the file's place: a
