@@ -8,6 +8,7 @@
 pub mod address;
 pub mod app_call;
 pub mod bookmarks;
+pub mod download_sessions;
 pub mod history_sync;
 pub mod library;
 pub mod library_db;

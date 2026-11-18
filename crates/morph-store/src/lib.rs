@@ -134,6 +134,17 @@ CREATE TABLE sync_conflict (
     kept_until_ms INTEGER NOT NULL
 );
 ",
+    "
+-- The request context (cookies, Referer, User-Agent, validators) saved with a
+-- download so it can resume behind a login. Local only, never synced; a row
+-- goes when its download completes, is cancelled or is cleared. Never edit a
+-- shipped migration; this one is appended.
+CREATE TABLE download_sessions (
+    key TEXT PRIMARY KEY NOT NULL,
+    context TEXT NOT NULL,
+    saved_ms INTEGER NOT NULL
+);
+",
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -277,6 +288,37 @@ impl Library {
         append_visits(&tx, visits, cap)?;
         tx.commit()?;
         Ok(true)
+    }
+
+    // --- Download sessions -----------------------------------------------
+
+    /// Save (or replace) the request context kept for download `key`.
+    pub fn save_download_session(&self, key: &str, context: &str, now_ms: i64) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO download_sessions (key, context, saved_ms) VALUES (?1, ?2, ?3)
+                ON CONFLICT(key) DO UPDATE SET context = excluded.context, saved_ms = excluded.saved_ms",
+            params![key, context, now_ms],
+        )?;
+        Ok(())
+    }
+
+    /// The request context kept for download `key`, if any.
+    pub fn download_session(&self, key: &str) -> Result<Option<String>> {
+        let mut q = self.conn.prepare("SELECT context FROM download_sessions WHERE key = ?1")?;
+        let mut rows = q.query_map(params![key], |r| r.get(0))?;
+        Ok(rows.next().transpose()?)
+    }
+
+    /// Forget download `key`'s request context.
+    pub fn delete_download_session(&self, key: &str) -> Result<()> {
+        self.conn.execute("DELETE FROM download_sessions WHERE key = ?1", params![key])?;
+        Ok(())
+    }
+
+    /// Forget every download's request context.
+    pub fn clear_download_sessions(&self) -> Result<()> {
+        self.conn.execute("DELETE FROM download_sessions", [])?;
+        Ok(())
     }
 
     // --- History ---------------------------------------------------------
