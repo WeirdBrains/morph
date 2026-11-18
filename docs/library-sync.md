@@ -1,7 +1,7 @@
 # Library sync
 
 Status: 2026-11-18 — milestones 1–5 (bookmarks, folders, tags, history and
-settings) are wired on published `weirdnet-sync` 0.1.0 and `weirdnet-net`
+settings) are wired on published `weirdnet-sync` 0.2.0 and `weirdnet-net`
 0.6.0. Milestone 6 is in progress: the desktop lists linked devices
 (Settings > Linked devices) and revokes one; the key-epoch rekey is not
 cryptographic yet (see "Revocation today"). Product rules are in
@@ -10,7 +10,7 @@ plan for that section: bookmarks, folders, tags and history first, then
 settings, between a user's own linked devices, end-to-end encrypted, over
 `weirdnet-net` 0.6 and the same relays device linking already uses.
 
-`weirdnet-sync/v1` is published (crates.io 0.1.0). Morph keeps only its
+`weirdnet-sync/v1` is published (crates.io 0.2.0). Morph keeps only its
 bookmark, folder, tag, history and settings record types plus wiring
 (`morph_core::sync`, `morph_core::history_sync`, `morph_core::settings_sync`,
 `morph_services::sync`).
@@ -133,16 +133,16 @@ wins), `delete-url` (record id `url:<url without trailing slash>`) and
 `clear` (record id `clear`). A visit is gone if a matching delete or the
 latest clear has a later HLC. Deleted ids get a `history_tombstones` row
 with the deleting op's HLC. Existing visits are backfilled into the log
-when history sync turns on. After a pull the node's clock receives the
-newest HLC it now holds, so a visit made after seeing a remote clear
-orders after it.
+when history sync turns on. `weirdnet-sync` 0.2's `pull_from` advances the
+node's clock past the newest HLC it pulled, so a visit made after seeing a
+remote clear orders after it.
 
-History ops go on a separate log stream per device, `<peer id>/history`,
-not the device's bookmarks stream. `weirdnet-sync` 0.1 keeps one pull
-cursor per stream (node id), and `page_for_type` filters a page by type,
-so a bookmarks pull over a mixed stream would move the cursor past history
-ops and a history pull would never see them. Separate streams keep each
-type's cursor exact without any change to the wire.
+History, settings and bookmarks ops share each device's log stream (its
+peer id). `weirdnet-sync` 0.2 keeps a pull position per (stream, type),
+which Morph persists in `sync_meta` (`type_cursors`), so a bookmarks pull
+never moves past history ops. Builds on 0.1 wrote history and settings on
+separate `<peer id>/history` and `<peer id>/settings` streams; those ops
+still pull and merge like any other stream.
 
 `MAX_HISTORY` (5000) remains a local cap applied *after* merge, by
 `visited_ms`, newest first. Trims are not synced as deletes: a visit older
@@ -159,7 +159,7 @@ that section 5 would call cross-device: `search_engine`, `home_page`,
 paths). Default-browser state is already OS-specific and stays out.
 
 As built (`morph_core::settings_sync`): one `set` op per field (record id
-= the field name) on the device's `<peer id>/settings` stream, last writer
+= the field name) on the device's log stream, last writer
 wins by HLC. `settings::save` logs changed synced fields when the library
 is open. On each sync pass, file values the log does not have yet (a first
 enable, or a save while the library was locked) are logged stamped with
@@ -213,10 +213,9 @@ Limits, until Weirdnet grows a real rekey:
   recovery words) can derive later epochs too. What keeps it out is the
   session check, not the key. Locking out a device that knows the words
   means a new identity.
-- On `weirdnet-sync` 0.1.0 a third device that has not seen the revocation
-  is refused by the revoker as `epoch-behind` instead of catching up. The
-  catch-up (roster sent back on `epoch-behind`, merged and retried) is on
-  weirdnet-sync main and needs a release before Morph can pin it.
+- A third device that has not seen the revocation catches up on its next
+  pass: since `weirdnet-sync` 0.2.0 an older-epoch hello gets the roster
+  back, merges it and retries (on 0.1.0 it was refused as `epoch-behind`).
 
 ## Transport and protocol
 
@@ -360,7 +359,7 @@ GPUI / Flutter panel (conflicts, devices, last synced).
 three-way take/keep/conflict decision. That is not this protocol. Wrap it
 later if it grows to cover the HLC log, rather than forking it.
 
-`weirdnet-sync` 0.1.0 is on crates.io (and depends on `weirdnet-net` 0.6.0).
+`weirdnet-sync` 0.2.0 is on crates.io (and depends on `weirdnet-net` 0.6.0).
 Morph pins that published version; it does not take a git or path dependency.
 
 ## Milestones
