@@ -6,8 +6,10 @@
 //! hands it pointer and key input (`page_input`), keeping the shell's own
 //! shortcuts.
 
+mod suggestions;
+
 use std::ops::Range;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use std::collections::HashMap;
@@ -135,6 +137,12 @@ pub struct BrowserView {
     tabs_collapsed: bool,
     /// The menu under the focused address bar.
     address_menu: Option<AddressMenu>,
+    /// Where the address bar's suggestions read history and bookmarks.
+    suggest_source: Option<(PathBuf, String)>,
+    /// History and bookmarks folded for matching, read when typing starts.
+    suggest_index: Option<Rc<morph_core::suggest::Index>>,
+    /// The suggestions under the bar while the user types.
+    suggest: Option<suggestions::Suggestions>,
     /// Keyboard stops of the tab bar's own buttons.
     position_focus: FocusHandle,
     collapse_focus: FocusHandle,
@@ -444,6 +452,9 @@ impl BrowserView {
             profiles: Vec::new(),
             tabs_collapsed: false,
             address_menu: None,
+            suggest_source: None,
+            suggest_index: None,
+            suggest: None,
             // Tab from the address bar: position, collapse, search engine,
             // in every layout (an explicit order: paint order changes with
             // the tab position).
@@ -1117,11 +1128,28 @@ impl BrowserView {
     }
 
     fn edit(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut morph_ui::text::TextField)) {
+        self.edit_with(cx, true, f);
+    }
+
+    /// Edit the address bar; when its text changed, refresh the suggestions
+    /// (and, with `complete`, complete what was typed inline).
+    fn edit_with(&mut self, cx: &mut Context<Self>, complete: bool, f: impl FnOnce(&mut morph_ui::text::TextField)) {
         if let Some(menu) = self.address_menu.as_mut() {
             // Typing or moving the caret leaves the menu's entries.
             menu.highlighted = None;
         }
+        let before = self.browser.address().text().to_string();
+        let typed_before = self.typed_text().len();
         f(self.browser.address_mut());
+        if self.browser.address().text() != before {
+            self.text_changed(typed_before, complete, cx);
+        } else {
+            self.settle_completion();
+        }
+        if log_events() {
+            let field = self.browser.address();
+            println!("morph-event omnibox text={:?} selection={}..{}", field.text(), field.selection().start, field.selection().end);
+        }
         cx.notify();
     }
 
@@ -1156,6 +1184,7 @@ impl BrowserView {
             self.selecting = true;
         } else {
             self.browser.address_mut().move_to(index);
+            self.settle_completion();
             self.selecting = true;
         }
         cx.notify();
@@ -1173,6 +1202,9 @@ impl BrowserView {
     }
 
     fn submit(&mut self, _: &Submit, window: &mut Window, cx: &mut Context<Self>) {
+        if self.open_selected_suggestion(window, cx) {
+            return;
+        }
         if let Some(i) = self.address_menu.as_ref().and_then(|m| m.highlighted) {
             if let Some(item) = address_items(&self.profiles).get(i).cloned() {
                 self.activate_address_item(item, window, cx);
@@ -1366,6 +1398,9 @@ impl BrowserView {
     }
 
     fn cancel(&mut self, _: &Cancel, window: &mut Window, cx: &mut Context<Self>) {
+        if self.dismiss_suggestions(cx) {
+            return;
+        }
         self.close_address_menu(cx);
         self.browser.blur_address();
         self.browser.focus_page();
@@ -1375,7 +1410,7 @@ impl BrowserView {
 
     fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            self.edit(cx, |f| f.replace(None, &text));
+            self.edit_with(cx, false, |f| f.replace(None, &text));
         }
     }
 
@@ -1986,7 +2021,7 @@ impl BrowserView {
             );
         }
         if self.address_menu.is_some() && self.shell_menu.is_none() {
-            out.extend(self.address_menu_overlay(cx));
+            out.extend(if self.suggest.is_some() { self.suggestions_overlay(cx) } else { self.address_menu_overlay(cx) });
         }
         if self.downloads_panel.is_some() && self.shell_menu.is_none() {
             out.extend(self.downloads_overlay(cx));
@@ -2658,6 +2693,9 @@ impl BrowserView {
     }
 
     fn close_address_menu(&mut self, cx: &mut Context<Self>) {
+        self.suggest = None;
+        self.suggest_index = None;
+        self.downloads_logged.borrow_mut().remove("suggestions-box");
         if let Some(menu) = self.address_menu.take() {
             if menu.hid_page && self.shell_menu.as_ref().is_none_or(|m| !m.hid_page) && self.downloads_panel.as_ref().is_none_or(|p| !p.hid_page) {
                 self.show_page_again();
@@ -2667,6 +2705,9 @@ impl BrowserView {
     }
 
     fn step_address_menu(&mut self, down: bool, cx: &mut Context<Self>) {
+        if self.step_suggestions(down, cx) {
+            return;
+        }
         let count = address_items(&self.profiles).len();
         if self.address_menu.is_none() {
             self.open_address_menu();
