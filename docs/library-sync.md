@@ -1,16 +1,17 @@
 # Library sync
 
-Status: 2026-11-18 — milestones 1–4 (bookmarks, folders, tags and history)
-are wired on published `weirdnet-sync` 0.1.0 and `weirdnet-net` 0.6.0.
-Settings and the Devices UI are still ahead. Product rules are in
+Status: 2026-11-18 — milestones 1–5 (bookmarks, folders, tags, history and
+settings) are wired on published `weirdnet-sync` 0.1.0 and `weirdnet-net`
+0.6.0. The Devices UI and revocation are still ahead. Product rules are in
 `docs/identity-recovery.md` section 5. This file is the Morph implementation
 plan for that section: bookmarks, folders, tags and history first, then
 settings, between a user's own linked devices, end-to-end encrypted, over
 `weirdnet-net` 0.6 and the same relays device linking already uses.
 
 `weirdnet-sync/v1` is published (crates.io 0.1.0). Morph keeps only its
-bookmark, folder, tag and history record types plus wiring
-(`morph_core::sync`, `morph_core::history_sync`, `morph_services::sync`).
+bookmark, folder, tag, history and settings record types plus wiring
+(`morph_core::sync`, `morph_core::history_sync`, `morph_core::settings_sync`,
+`morph_services::sync`).
 
 ## Goal
 
@@ -51,9 +52,9 @@ already reads and writes.
 - **Now in the tree:** per-record HLCs and node ids, the op log and cursors in
   `library.db`, history row ids and tombstones, a self-issued `NodeCert` on the
   first device, a roster snapshot at link time, and a bookmark sync loop
-  (`morph-services::sync`) for bookmarks and history with a two-home
-  local-relay test. Settings and a Devices UI / revocation are still later
-  milestones.
+  (`morph-services::sync`) for bookmarks, history and settings with a
+  two-home local-relay test. A Devices UI / revocation is still a later
+  milestone.
 
 ## Data model
 
@@ -146,13 +147,25 @@ than the 5000th is ignored if it arrives later. Reloads that only refresh
 the newest entry stay a local `replace_newest_visit` and one log op, as
 today.
 
-### Settings (later milestone)
+### Settings
 
 `profiles/<id>/settings.json` stays the device file. Sync only the fields
 that section 5 would call cross-device: `search_engine`, `home_page`,
 `theme`. Each is its own LWW record in `library.db`. Leave `tab_position`,
 `sidebar_collapsed`, `sidebar_width` and `downloads_dir` local (layout and
 paths). Default-browser state is already OS-specific and stays out.
+
+As built (`morph_core::settings_sync`): one `set` op per field (record id
+= the field name) on the device's `<peer id>/settings` stream, last writer
+wins by HLC. `settings::save` logs changed synced fields when the library
+is open. On each sync pass, file values the log does not have yet (a first
+enable, or a save while the library was locked) are logged stamped with
+`settings.json`'s modification time rather than now, and default values are
+never pushed, so a freshly linked device adopts the existing device's
+choices. Merged values are written into `settings.json`; an unknown search
+engine id is ignored. Libraries on an older default opt-in list
+(`["bookmarks"]` or `["bookmarks","history"]`) move to all three types once.
+A running shell picks up synced values the next time it reads settings.
 
 Open tabs (`profiles/<id>/tabs.json` is reserved) are out of the first
 milestones. When they come, they are shown as "tabs on your other devices"
