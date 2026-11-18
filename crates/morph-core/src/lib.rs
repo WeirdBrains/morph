@@ -22,6 +22,7 @@ pub mod search;
 pub mod session;
 pub mod settings;
 pub mod settings_sync;
+pub mod suggest;
 pub mod sync;
 pub mod tabs;
 
