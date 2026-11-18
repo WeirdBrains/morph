@@ -807,4 +807,76 @@ class FakeMorphApi implements MorphApi {
 
   @override
   Future<void> relayCheckStop() async {}
+
+  /// What the network settings hold; tests set [networkLock] to `env` or
+  /// `policy` to lock discovery off, as an admin override would.
+  bool discovery = true;
+  String? networkLock;
+  final List<MorphNetworkPeer> networkPeers = [];
+  final List<String> networkCalls = [];
+
+  MorphNetworkSettings _networkNow() {
+    final locked = networkLock != null;
+    return MorphNetworkSettings(
+      discoveryEnabled: discovery && !locked,
+      discoveryLocked: locked,
+      lockSource: networkLock,
+      discoveryHelp: switch (networkLock) {
+        'env' =>
+          'Turned off by MORPH_DISABLE_WEIRDNET_DISCOVERY. Sharing and sync '
+              'with relays and added peers still work.',
+        'policy' =>
+          'Turned off by a policy file. Sharing and sync with relays and '
+              'added peers still work.',
+        _ =>
+          'Find peers on the local network and the DHT. Turn this off on '
+              'corporate networks. Sharing and sync with relays and added '
+              'peers still work.',
+      },
+      peers: List.unmodifiable(networkPeers),
+    );
+  }
+
+  @override
+  Future<MorphNetworkSettings> loadNetwork({String? home}) async =>
+      _networkNow();
+
+  @override
+  Future<MorphNetworkSettings> setDiscovery(
+    bool enabled, {
+    String? home,
+  }) async {
+    networkCalls.add('discovery $enabled');
+    if (networkLock == null) {
+      discovery = enabled;
+    }
+    return _networkNow();
+  }
+
+  /// A small copy of the Rust check: a multiaddr naming its peer.
+  @override
+  Future<MorphNetworkSettings> addNetworkPeer(
+    String spec, {
+    String? home,
+  }) async {
+    networkCalls.add('add $spec');
+    final at = spec.lastIndexOf('/p2p/');
+    if (!spec.startsWith('/') || at < 0) {
+      throw MorphNetworkError('$spec has no /p2p/ peer id');
+    }
+    final id = spec.substring(at + 5);
+    networkPeers.removeWhere((p) => p.peerId == id);
+    networkPeers.add(MorphNetworkPeer(peerId: id, addrs: [spec]));
+    return _networkNow();
+  }
+
+  @override
+  Future<MorphNetworkSettings> removeNetworkPeer(
+    String peerId, {
+    String? home,
+  }) async {
+    networkCalls.add('remove $peerId');
+    networkPeers.removeWhere((p) => p.peerId == peerId);
+    return _networkNow();
+  }
 }

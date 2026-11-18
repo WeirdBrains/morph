@@ -6,6 +6,7 @@ import '../api.dart';
 import '../default_browser.dart';
 import '../theme/morph_theme.dart';
 import 'library_page.dart';
+import 'network_settings.dart';
 import 'relay_status.dart';
 
 /// Morph settings: this profile's data, the default browser, and About.
@@ -19,10 +20,18 @@ class MorphSettingsPage extends StatefulWidget {
     required this.onOpenLibrary,
     this.defaultBrowser,
     this.relays,
+    this.network,
+    this.home,
   });
 
   /// Null hides the Relays section.
   final MorphRelaySource? relays;
+
+  /// Discovery and manual peers in the Relays section; null hides them.
+  final MorphNetworkSource? network;
+
+  /// The Morph home [network] reads (null: the default).
+  final String? home;
 
   /// Null or unsupported hides the Default browser section.
   final MorphDefaultBrowser? defaultBrowser;
@@ -163,9 +172,12 @@ class _MorphSettingsPageState extends State<MorphSettingsPage> {
             const _Header('Browser · all profiles'),
             _defaultBrowserTile(),
           ],
-          if (widget.relays != null) ...[
+          if (widget.relays != null || widget.network != null) ...[
             const _Header('Relays · all profiles'),
-            MorphRelaySection(source: widget.relays!),
+            if (widget.relays != null)
+              MorphRelaySection(source: widget.relays!),
+            if (widget.network != null)
+              MorphNetworkSection(source: widget.network!, home: widget.home),
           ],
           const _Header('About'),
           ListTile(
