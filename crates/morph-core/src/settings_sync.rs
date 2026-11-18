@@ -5,8 +5,8 @@
 //! is one last-writer-wins record. `profiles/<id>/settings.json` stays the
 //! file the shell reads; sync writes those three fields into it.
 //!
-//! Like history, settings ops go on their own stream (`<node>/settings`) so
-//! `weirdnet-sync` 0.1's single per-stream cursor never skips them.
+//! Settings ops share the node's log stream; `weirdnet-sync` 0.2 keeps a
+//! pull position per type. Ops on 0.1-era `<node>/settings` streams still merge.
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -35,11 +35,6 @@ fn encode(op: &SettingsOp) -> Vec<u8> {
 
 fn decode(bytes: &[u8]) -> Option<SettingsOp> {
     serde_json::from_slice(bytes).ok()
-}
-
-/// This device's settings stream id.
-pub fn stream_id(our_node: &str) -> String {
-    format!("{our_node}/{SETTINGS}")
 }
 
 pub fn settings_on(lib: &Library) -> bool {
@@ -92,7 +87,7 @@ fn append(lib: &mut Library, ops: &[(&str, String, Option<Hlc>)], now_ms: i64) -
     if ops.is_empty() {
         return Ok(());
     }
-    let node = NodeId::new(stream_id(&our));
+    let node = NodeId::new(&our);
     let mut clock = load_clock(lib)?;
     let mut log = load_log(lib)?;
     for (field, value, at) in ops {
@@ -199,7 +194,7 @@ mod tests {
 
     fn remote(lib: &mut Library, n: &str, ms: u64, field: &str, value: &str) {
         let mut log = load_log(lib).unwrap();
-        let node = NodeId::new(stream_id(n));
+        let node = NodeId::new(n);
         log.append(node.clone(), Hlc::new(ms, 0, node), SETTINGS, field, encode(&SettingsOp::Set { value: value.into() }));
         persist_log(lib, &log, None).unwrap();
     }
@@ -247,12 +242,12 @@ mod tests {
         let next = Settings { theme: ThemeChoice::Light, sidebar_width: 400, ..Settings::default() };
         record_local_changes(&mut lib, &prev, &next, 11).unwrap();
         let log = load_log(&lib).unwrap();
-        let ours: Vec<_> = log.iter_node(&NodeId::new(stream_id("a"))).collect();
+        let ours: Vec<_> = log.iter_node(&NodeId::new("a")).collect();
         assert_eq!(ours.len(), 1);
         assert_eq!(ours[0].record_id, "theme");
         set_types(&mut lib, &[BOOKMARKS.to_string(), HISTORY.to_string()]).unwrap();
         record_local_changes(&mut lib, &next, &prev, 12).unwrap();
-        assert_eq!(load_log(&lib).unwrap().iter_node(&NodeId::new(stream_id("a"))).count(), 1, "off means not logged");
+        assert_eq!(load_log(&lib).unwrap().iter_node(&NodeId::new("a")).count(), 1, "off means not logged");
     }
 
     #[test]
@@ -261,16 +256,16 @@ mod tests {
         enable(&mut lib, "a", 10).unwrap();
         crate::settings::write_profile(&home, "p1", &Settings::default()).unwrap();
         backfill(&mut lib, &home, "p1").unwrap();
-        assert_eq!(load_log(&lib).unwrap().iter_node(&NodeId::new(stream_id("a"))).count(), 0, "defaults are not pushed");
+        assert_eq!(load_log(&lib).unwrap().iter_node(&NodeId::new("a")).count(), 0, "defaults are not pushed");
 
         crate::settings::write_profile(&home, "p1", &Settings { home_page: "https://mine.example/".into(), ..Settings::default() }).unwrap();
         backfill(&mut lib, &home, "p1").unwrap();
         let log = load_log(&lib).unwrap();
-        let ours: Vec<_> = log.iter_node(&NodeId::new(stream_id("a"))).cloned().collect();
+        let ours: Vec<_> = log.iter_node(&NodeId::new("a")).cloned().collect();
         assert_eq!(ours.len(), 1);
         assert!(ours[0].hlc.physical_ms > 1_000_000, "stamped with the file time");
         backfill(&mut lib, &home, "p1").unwrap();
-        assert_eq!(load_log(&lib).unwrap().iter_node(&NodeId::new(stream_id("a"))).count(), 1, "nothing new");
+        assert_eq!(load_log(&lib).unwrap().iter_node(&NodeId::new("a")).count(), 1, "nothing new");
 
         // A newer remote value beats an older file.
         remote(&mut lib, "b", u64::MAX / 2, "home_page", "https://theirs.example/");
