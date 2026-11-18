@@ -308,10 +308,7 @@ pub fn tick(home: &Path, profile_id: &str) -> Result<usize> {
             merge_back(&mut st, &work);
         }
         let _ = library_db::with(home, profile_id, |lib| {
-            let mut st = state.lock().expect("sync state");
-            if n > 0 {
-                core::observe_remote(&mut st, now_ms().max(0) as u64);
-            }
+            let st = state.lock().expect("sync state");
             core::persist_log(lib, &st.log, st.clock.as_ref())?;
             core::save_roster(lib, &st.roster)?;
             drop(st);
@@ -353,6 +350,11 @@ fn merge_back(st: &mut SyncState, work: &SyncState) {
         }
         if seq > st.log.cursor(&nid) {
             st.log.set_cursor(&nid, seq);
+        }
+    }
+    for ((nid, typ), seq) in work.log.type_cursors() {
+        if seq > st.log.cursor_for(&nid, &typ) {
+            st.log.set_cursor_for(&nid, &typ, seq);
         }
     }
     let key = st.user_key.clone();

@@ -204,6 +204,12 @@ pub fn load_log(lib: &Library) -> morph_store::Result<OpLog> {
     for (n, seq) in lib.sync_cursors()? {
         log.set_cursor(&NodeId::new(n), seq as u64);
     }
+    if let Some(b) = lib.sync_meta(META_TYPE_CURSORS)? {
+        let rows: Vec<(String, String, u64)> = serde_json::from_slice(&b).unwrap_or_default();
+        for (n, t, seq) in rows {
+            log.set_cursor_for(&NodeId::new(n), &t, seq);
+        }
+    }
     Ok(log)
 }
 
@@ -236,6 +242,9 @@ pub fn persist_log(lib: &mut Library, log: &OpLog, clock: Option<&Hlc>) -> morph
     lib.save_sync_log(&entries)?;
     let cur: Vec<(String, i64)> = cursors.into_iter().map(|(n, s)| (n.0, s as i64)).collect();
     lib.save_sync_cursors(&cur)?;
+    let mut typed: Vec<(String, String, u64)> = log.type_cursors().into_iter().map(|((n, t), s)| (n.0, t, s)).collect();
+    typed.sort();
+    lib.set_sync_meta(META_TYPE_CURSORS, &serde_json::to_vec(&typed).expect("type cursors json"))?;
     if let Some(c) = clock {
         save_clock(lib, c)?;
     }
@@ -649,23 +658,6 @@ pub fn apply_log(lib: &mut Library, now_ms: i64) -> morph_store::Result<()> {
     materialize(lib, now_ms)
 }
 
-/// Advance our clock past every op we now hold, so a local write made after
-/// seeing a remote op (a visit after a remote clear) orders after it.
-/// `weirdnet-sync` 0.1's `pull_from` does not do this itself.
-pub fn observe_remote(state: &mut SyncState, wall_ms: u64) {
-    let newest = state
-        .log
-        .cursors()
-        .keys()
-        .filter_map(|n| state.log.iter_node(n).map(|e| &e.hlc).max_by(|a, b| a.cmp_total(b)).cloned())
-        .max_by(|a, b| a.cmp_total(b));
-    if let Some(h) = newest
-        && state.clock.as_ref().is_none_or(|c| h.cmp_total(c).is_gt())
-    {
-        state.clock = Some(Hlc::receive(state.clock.as_ref(), &h, wall_ms, state.our_node.clone()));
-    }
-}
-
 pub fn conflict_count(lib: &Library) -> morph_store::Result<usize> {
     Ok(lib.sync_conflicts()?.len())
 }
@@ -673,6 +665,8 @@ pub fn conflict_count(lib: &Library) -> morph_store::Result<usize> {
 pub const META_SEED: &str = "seed";
 pub const META_NODE_KEY: &str = "node_key";
 pub const META_ROSTER: &str = "roster";
+/// Per-type pull positions (`weirdnet-sync` 0.2), as JSON `[node, type, seq]` rows.
+pub const META_TYPE_CURSORS: &str = "type_cursors";
 
 /// JSON carried in `Transfer.settings` at link time (certs only, no secrets).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -783,6 +777,17 @@ mod tests {
     fn append(log: &mut OpLog, n: &str, ms: u64, ctr: u32, id: &str, op: BookmarksOp) {
         let hlc = Hlc::new(ms, ctr, node(n));
         log.append(node(n), hlc, BOOKMARKS, id, encode_op(&op));
+    }
+
+    #[test]
+    fn per_type_pull_positions_survive_a_reload() {
+        let (_t, mut lib) = open();
+        let mut log = load_log(&lib).unwrap();
+        log.set_cursor_for(&NodeId::new("b"), HISTORY, 7);
+        persist_log(&mut lib, &log, None).unwrap();
+        let back = load_log(&lib).unwrap();
+        assert_eq!(back.cursor_for(&NodeId::new("b"), HISTORY), 7);
+        assert_eq!(back.cursor_for(&NodeId::new("b"), BOOKMARKS), 0);
     }
 
     #[test]
