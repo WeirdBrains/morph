@@ -113,14 +113,20 @@ impl LinkTarget {
     /// alone opens a window, anything else (Ctrl, Cmd, a middle click,
     /// `target=_blank`) a tab.
     pub fn for_click(modifiers: u32, button: u32) -> LinkTarget {
-        const SHIFT: u32 = 1;
-        const CONTROL: u32 = 4;
-        const SUPER: u32 = 1 << 26;
-        const META: u32 = 1 << 28;
-        let shift = modifiers & SHIFT != 0;
-        let tab_key = modifiers & (CONTROL | SUPER | META) != 0;
+        let shift = modifiers & Self::SHIFT != 0;
+        let tab_key = modifiers & Self::TAB_KEYS != 0;
         if shift && !tab_key && button != 2 { LinkTarget::NewWindow } else { LinkTarget::NewTab }
     }
+
+    /// Whether a link click with `modifiers` and `button` opens elsewhere
+    /// (a tab or window) rather than in its own page.
+    pub fn elsewhere(modifiers: u32, button: u32) -> bool {
+        button == 2 || modifiers & (Self::SHIFT | Self::TAB_KEYS) != 0
+    }
+
+    const SHIFT: u32 = 1;
+    /// Control, Super and Meta (Cmd).
+    const TAB_KEYS: u32 = 4 | 1 << 26 | 1 << 28;
 }
 
 /// Something a web view reports. Delivered by [`Backend::poll`].
@@ -792,5 +798,8 @@ mod link_tests {
         assert_eq!(LinkTarget::for_click(1, 2), LinkTarget::NewTab, "Shift+middle click");
         assert_eq!(LinkTarget::for_click(5, 1), LinkTarget::NewTab, "Ctrl+Shift+click");
         assert_eq!(LinkTarget::for_click(0, 1), LinkTarget::NewTab, "a target=_blank link");
+        assert!(!LinkTarget::elsewhere(0, 1), "a plain click stays in the page");
+        assert!(!LinkTarget::elsewhere(8, 1), "Alt+click stays (downloads in some browsers)");
+        assert!(LinkTarget::elsewhere(1, 1) && LinkTarget::elsewhere(4, 1) && LinkTarget::elsewhere(0, 2));
     }
 }
