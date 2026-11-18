@@ -7,13 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- History syncs between linked devices too, on by default: visits,
+  delete-by-URL and clear-all, with a later visit surviving an earlier
+  delete or clear. The 5000-visit cap stays local. The two-home relay
+  test now covers history both ways, deletes and clear-all.
+
 - Bookmarks, folders and tags sync between a user's linked devices over
   `weirdnet-sync` 0.1.0 and `weirdnet-net` 0.6.0. Sync respects the
   discovery toggle, dials only roster-authorized devices (directly or
   through a relay, including manual peers that name a roster member),
   and starts after the library is unlocked. A two-home test through a
   local relay covers both directions, concurrent edits, deletes and
-  folder moves. History, settings and a Devices UI come later.
+  folder moves. Settings and a Devices UI come later.
 
 - `weirdnet-<app>://` links open: Morph calls the app over Weirdnet
   (weirdnet-net 0.5.0, from 0.4.0), finding the peers that serve it by
