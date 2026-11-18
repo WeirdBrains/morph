@@ -169,7 +169,7 @@ fn import_fills_only_an_empty_database_all_at_once() {
 fn sync_log_and_meta_round_trip() {
     let tmp = tempfile::tempdir().unwrap();
     let mut lib = Library::open(tmp.path(), &key(1)).unwrap();
-    assert_eq!(lib.schema_version().unwrap(), 3);
+    assert_eq!(lib.schema_version().unwrap(), MIGRATIONS.len() as i64);
     lib.set_sync_meta("node_id", b"peer-a").unwrap();
     assert_eq!(lib.sync_meta("node_id").unwrap(), Some(b"peer-a".to_vec()));
     let e = SyncLogEntry { node_id: "peer-a".into(), seq: 1, hlc: "h".into(), typ: "bookmarks".into(), record_id: "b1".into(), op: b"{}".to_vec() };
@@ -177,4 +177,27 @@ fn sync_log_and_meta_round_trip() {
     lib.set_sync_cursor("peer-a", 1).unwrap();
     assert_eq!(lib.sync_log().unwrap(), vec![e]);
     assert_eq!(lib.sync_cursors().unwrap(), vec![("peer-a".into(), 1)]);
+}
+
+#[test]
+fn download_sessions_round_trip_encrypted_and_go_away() {
+    let tmp = tempfile::tempdir().unwrap();
+    let lib = Library::open(tmp.path(), &key(1)).unwrap();
+    lib.save_download_session("d1", r#"{"cookie":"sid=secret-session-cookie"}"#, 1).unwrap();
+    lib.save_download_session("d1", r#"{"cookie":"sid=secret-session-cookie-2"}"#, 2).unwrap();
+    lib.save_download_session("d2", "two", 3).unwrap();
+    assert_eq!(lib.download_session("d1").unwrap().as_deref(), Some(r#"{"cookie":"sid=secret-session-cookie-2"}"#));
+    drop(lib);
+    let mut raw = std::fs::read(path(tmp.path())).unwrap();
+    if let Ok(wal) = std::fs::read(tmp.path().join("library.db-wal")) {
+        raw.extend(wal);
+    }
+    let needle = b"secret-session-cookie";
+    assert!(!raw.windows(needle.len()).any(|w| w == needle), "a cookie is readable on disk");
+    let lib = Library::open(tmp.path(), &key(1)).unwrap();
+    lib.delete_download_session("d1").unwrap();
+    assert_eq!(lib.download_session("d1").unwrap(), None);
+    assert_eq!(lib.download_session("d2").unwrap().as_deref(), Some("two"));
+    lib.clear_download_sessions().unwrap();
+    assert_eq!(lib.download_session("d2").unwrap(), None);
 }
