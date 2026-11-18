@@ -1727,6 +1727,57 @@ def suggestions_check(r, binary, display, shots=None):
             m2.stop()
 
 
+def relays_layout(r, binary, display, shots=None):
+    """In Settings → Relays the Weirdnet discovery switch and the manual
+    peer input stay inside their row's card at the default width and at a
+    narrow one (X11: the window is resized), with the help text wrapping and
+    the controls dropping below it when there is no room."""
+    home = tempfile.mkdtemp(prefix="morph-xvfb-relays-layout-")
+    m2 = Driver(binary, display, home, {"MORPH_LOG_LAYOUT": "1"})
+
+    def rect(name):
+        found = m2.lines(rf"^morph-event settings-layout {name} ")
+        return tuple(int(x) for x in found[-1].split()[-4:]) if found else None
+
+    def inside(item):
+        card, controls = rect(f"{item} card"), rect(f"{item} controls")
+        if not (card and controls):
+            return False, f"no layout for {item}: card {card} controls {controls}"
+        # Horizontal containment is what clipped before; the row's height is the card's own (flex).
+        ok = controls[0] >= card[0] and controls[0] + controls[2] <= card[0] + card[2] and controls[1] >= card[1]
+        return ok, f"{item}: controls {controls} in card {card}"
+
+    try:
+        win = wait_for(lambda: m2.own_window(), 20)
+        if not (win and wait_for(lambda: state(m2), 20)):
+            r.check("relays", "a Morph opens with its page", False, "no window or page")
+            return
+        time.sleep(1.0)
+        win = m2.own_window() or win
+        m2.activate(win)
+        m2.key("ctrl+comma", delay=0.8)
+        m2.key("slash", delay=0.4)
+        m2.type("relays")
+        time.sleep(1.5)
+        widths = [("default", None)]
+        if not isinstance(m2, WaylandMorph):
+            widths.append(("narrow", 520))
+        for name, width in widths:
+            if width:
+                m2.xdo("windowsize", win, str(width), "700")
+                time.sleep(1.5)
+                m2.xdo("mousemove", "--window", win, "200", "300")
+            for item in ("Discovery", "ManualPeers"):
+                wait_for(lambda: rect(f"{item} card"), 8)
+                ok, detail = inside(item)
+                r.check("relays", f"the {item} row's controls stay inside its card at the {name} width", ok, detail)
+            if shots:
+                Path(shots).mkdir(parents=True, exist_ok=True)
+                screenshot(m2, Path(shots) / ("relays-layout.png" if name == "default" else f"relays-layout-{name}.png"))
+    finally:
+        m2.stop()
+
+
 def windows_check(r, binary, display, shots=None):
     """Several windows: Ctrl+N opens a second one and Ctrl+W on its only
     tab closes just that window; Shift+click opens a link in a new window;
@@ -2501,7 +2552,7 @@ def main():
     ap.add_argument("--input-bin", help="morph-wl-input (default: next to --bin)")
     ap.add_argument("--local-relay", help="a local relay to link through (weirdnet-device-link's local-relay example)")
     ap.add_argument("--app-server", help="a Weirdnet app behind the local relay (morph-services' serve-app example)")
-    ap.add_argument("--only", choices=["downloads", "windows", "popups", "omnibox"], help="run just this check")
+    ap.add_argument("--only", choices=["downloads", "windows", "popups", "omnibox", "relays"], help="run just this check")
     ap.add_argument("--screenshots", help="save screenshots of checks that take them (X11) here")
     args = ap.parse_args()
     relay = start_local_relay(args.local_relay) if args.local_relay else None
@@ -2580,6 +2631,15 @@ def run(args):
         r = Results()
         try:
             suggestions_check(r, args.bin, display, args.screenshots)
+            return finish(r, args)
+        finally:
+            for proc in (wm, xvfb):
+                if proc and proc.poll() is None:
+                    proc.terminate()
+    if args.only == "relays":
+        r = Results()
+        try:
+            relays_layout(r, args.bin, display, args.screenshots)
             return finish(r, args)
         finally:
             for proc in (wm, xvfb):
@@ -2711,6 +2771,7 @@ def run(args):
         main_menu(r, args.bin, display)
         popup_backing(r, args.bin, display, args.screenshots)
         suggestions_check(r, args.bin, display, args.screenshots)
+        relays_layout(r, args.bin, display, args.screenshots)
         windows_check(r, args.bin, display, args.screenshots)
         last_tab_quits(r, args.bin, display)
         # GPUI draws the frame itself only where the window manager supports
