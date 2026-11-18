@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Morph reopens the windows and tabs that were open when it quit.
 
+- Downloads resume behind JavaScript logins. The Authorization header a download started with is saved with its session (WebKitGTK). If the server still refuses a resume (401/403), Morph reads the site's localStorage and sessionStorage from an open tab of the same origin, or loads that origin in a hidden view. It picks a signed JWT, skipping expired ones and preferring the one the download first used, and tries again with `Authorization: Bearer`. If that fails too, the page is asked to start the download again and the tile takes over the new download. Tokens are never logged and are deleted with the download's session.
+
 ## [0.2.0] - 2026-11-18
 
 - Downloads button left of the ☰ menu (Ctrl+Shift+Y, ⌘⇧J on macOS) opens a downloads panel.
