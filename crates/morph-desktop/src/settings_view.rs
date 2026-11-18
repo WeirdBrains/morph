@@ -22,6 +22,7 @@ use std::sync::mpsc;
 
 use morph_services::device_link::Links;
 use morph_services::relays::{RelayReport, RelayStatus};
+use morph_services::sync::DeviceView;
 
 use crate::default_browser::{self, Status};
 use crate::shell::ShellRequest;
@@ -37,6 +38,7 @@ impl Section {
             "relays" => Section::Relays,
             "search" => Section::Search,
             "identity" => Section::Identity,
+            "devices" => Section::Devices,
             "about" => Section::About,
             _ => return None,
         })
@@ -55,12 +57,13 @@ pub enum Section {
     Downloads,
     Privacy,
     Identity,
+    Devices,
     Relays,
     About,
 }
 
 impl Section {
-    pub const ALL: [Section; 11] = [
+    pub const ALL: [Section; 12] = [
         Section::Profile,
         Section::Browser,
         Section::Search,
@@ -70,6 +73,7 @@ impl Section {
         Section::Downloads,
         Section::Privacy,
         Section::Identity,
+        Section::Devices,
         Section::Relays,
         Section::About,
     ];
@@ -85,6 +89,7 @@ impl Section {
             Section::Downloads => "Downloads",
             Section::Privacy => "Privacy and site data",
             Section::Identity => "Identity and backup",
+            Section::Devices => "Linked devices",
             Section::Relays => "Relays",
             Section::About => "About",
         }
@@ -102,6 +107,7 @@ impl Section {
             Section::Downloads => "downloads folder save files",
             Section::Privacy => "clear browsing data cookies cache site permissions camera microphone location",
             Section::Identity => "identity backup recovery restore devices link",
+            Section::Devices => "devices linked sync revoke remove lost stolen phone laptop",
             Section::Relays => {
                 "relays relay network weirdnet connected connection reservation slot link devices nat peer discovery mdns dht corporate lan"
             }
@@ -139,6 +145,7 @@ pub enum Item {
     DefaultDownloads,
     ClearData,
     OpenIdentity,
+    Devices,
     CheckRelays,
     Discovery,
     ManualPeers,
@@ -157,12 +164,13 @@ impl Item {
             Item::ChooseDownloads | Item::DefaultDownloads => Section::Downloads,
             Item::ClearData => Section::Privacy,
             Item::OpenIdentity => Section::Identity,
+            Item::Devices => Section::Devices,
             Item::CheckRelays | Item::Discovery | Item::ManualPeers => Section::Relays,
             Item::OpenAbout => Section::About,
         }
     }
 
-    pub const ALL: [Item; 19] = [
+    pub const ALL: [Item; 20] = [
         Item::OpenBookmarks,
         Item::OpenHistory,
         Item::ClearHistory,
@@ -178,6 +186,7 @@ impl Item {
         Item::DefaultDownloads,
         Item::ClearData,
         Item::OpenIdentity,
+        Item::Devices,
         Item::CheckRelays,
         Item::Discovery,
         Item::ManualPeers,
@@ -235,6 +244,10 @@ pub struct SettingsView {
     relay_note: Option<String>,
     network: NetworkSettings,
     peer_input: Entity<TextInput>,
+    /// The shown profile's linked devices (its sync roster).
+    devices: Vec<DeviceView>,
+    /// A device whose Revoke was pressed once and waits for Confirm.
+    confirm_revoke: Option<String>,
     _subscriptions: Vec<gpui::Subscription>,
 }
 
@@ -310,6 +323,8 @@ impl SettingsView {
             relay_note: None,
             network: netprefs::load(home).unwrap_or_default(),
             peer_input,
+            devices: Vec::new(),
+            confirm_revoke: None,
             _subscriptions: subscriptions,
         };
         view.reload_quietly();
@@ -327,6 +342,32 @@ impl SettingsView {
             Err(e) => self.error = Some(format!("Could not read the settings: {e}")),
         }
         self.network = netprefs::load(&self.home).unwrap_or_default();
+        self.devices = self.profile_id().and_then(|id| morph_services::sync::devices(&self.home, &id).ok()).unwrap_or_default();
+        self.confirm_revoke = None;
+    }
+
+    fn profile_id(&self) -> Option<String> {
+        morph_core::profiles::current(&self.home).ok().map(|p| p.id)
+    }
+
+    /// First press arms the button, the second revokes.
+    fn revoke(&mut self, peer_id: String, cx: &mut Context<Self>) {
+        if self.confirm_revoke.as_deref() != Some(peer_id.as_str()) {
+            self.confirm_revoke = Some(peer_id);
+            cx.notify();
+            return;
+        }
+        self.confirm_revoke = None;
+        let Some(id) = self.profile_id() else { return };
+        match morph_services::sync::revoke_device(&self.home, &id, &peer_id, morph_services::home::now_ms()) {
+            Ok(()) => {
+                self.note = Some("Device revoked. It no longer syncs with this profile.".into());
+                self.error = None;
+            }
+            Err(e) => self.error = Some(format!("Could not revoke the device: {e}")),
+        }
+        self.devices = morph_services::sync::devices(&self.home, &id).unwrap_or_default();
+        cx.notify();
     }
 
     /// Read the shown profile's settings again (after a profile switch).
@@ -560,6 +601,9 @@ impl SettingsView {
                 self.note = Some("Cookies, cache, site storage and history cleared for this profile.".into());
             }
             Item::OpenIdentity => cx.emit(ShellRequest::Run(Action::ShowIdentity)),
+            Item::Devices => {
+                self.devices = self.profile_id().and_then(|id| morph_services::sync::devices(&self.home, &id).ok()).unwrap_or_default();
+            }
             Item::CheckRelays => self.check_relays(cx),
             Item::Discovery => self.toggle_discovery(cx),
             Item::ManualPeers => {
@@ -746,6 +790,86 @@ impl SettingsView {
             Err(e) => self.error = Some(format!("Could not save the network settings: {e}")),
         }
         cx.notify();
+    }
+
+    /// Settings → Linked devices: the profile's sync roster, with Revoke.
+    fn device_rows(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+        let t = self.theme;
+        let help = if self.devices.is_empty() {
+            "Unlock the library and link a device (Identity) to sync bookmarks, history and settings.".to_string()
+        } else {
+            device_summary(&self.devices)
+        };
+        let mut rows = vec![
+            self.row(
+                Item::Devices,
+                "Devices this profile syncs with",
+                Some(help),
+                button(t, "settings-devices-refresh", "Refresh", false)
+                    .on_click(cx.listener(|this, _, w, cx| this.activate(Item::Devices, w, cx)))
+                    .into_any_element(),
+                cx,
+            ),
+        ];
+        for (i, d) in self.devices.iter().enumerate() {
+            let state = device_state(d);
+            let control = if d.this_device || d.revoked_ms.is_some() {
+                div().into_any_element()
+            } else {
+                let armed = self.confirm_revoke.as_deref() == Some(d.peer_id.as_str());
+                let id = d.peer_id.clone();
+                button(t, ("settings-device-revoke", i), if armed { "Confirm revoke" } else { "Revoke" }, armed)
+                    .on_click(cx.listener(move |this, _, _, cx| this.revoke(id.clone(), cx)))
+                    .into_any_element()
+            };
+            rows.push(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(8.))
+                    .px(px(12.))
+                    .py(px(6.))
+                    .rounded(px(8.))
+                    .bg(rgb(t.surface))
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .gap(px(8.))
+                                    .child(div().text_size(px(13.)).child(if d.label.is_empty() {
+                                        "Unnamed device".to_string()
+                                    } else {
+                                        d.label.clone()
+                                    }))
+                                    .child(
+                                        div()
+                                            .text_size(px(12.))
+                                            .text_color(rgb(if d.revoked_ms.is_some() { t.text_secondary } else { t.accent }))
+                                            .child(state),
+                                    ),
+                            )
+                            .child(div().text_size(px(11.)).text_color(rgb(t.text_secondary)).child(format!("Peer {}", d.peer_id))),
+                    )
+                    .child(control)
+                    .into_any_element(),
+            );
+        }
+        rows.push(
+            div()
+                .px(px(12.))
+                .text_size(px(12.))
+                .text_color(rgb(t.text_secondary))
+                .child("Revoking stops this profile's devices from syncing with that one; the others learn it on their next sync. To lock out a lost device that still knows your recovery words, also make a new identity.")
+                .into_any_element(),
+        );
+        rows
     }
 
     /// Settings → Relays: the summary with a check button, then each relay.
@@ -1082,6 +1206,7 @@ impl SettingsView {
                     cx,
                 ),
             ],
+            Section::Devices => self.device_rows(cx),
             Section::Relays => self.relay_rows(cx),
             Section::About => vec![
                 self.row(
@@ -1177,9 +1302,48 @@ impl Render for SettingsView {
     }
 }
 
+/// "2 devices, 1 revoked" style summary.
+fn device_summary(devices: &[DeviceView]) -> String {
+    let revoked = devices.iter().filter(|d| d.revoked_ms.is_some()).count();
+    let n = devices.len();
+    let mut out = format!("{n} device{}", if n == 1 { "" } else { "s" });
+    if revoked > 0 {
+        out.push_str(&format!(", {revoked} revoked"));
+    }
+    out
+}
+
+fn device_state(d: &DeviceView) -> &'static str {
+    match (d.this_device, d.revoked_ms.is_some()) {
+        (_, true) => "Revoked",
+        (true, false) => "This device",
+        (false, false) => "Linked",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn devices_read_plainly() {
+        let d = |this: bool, revoked: Option<i64>| DeviceView {
+            peer_id: "p".into(),
+            label: "l".into(),
+            issued_ms: 1,
+            revoked_ms: revoked,
+            this_device: this,
+        };
+        assert_eq!(device_summary(&[d(true, None)]), "1 device");
+        assert_eq!(device_summary(&[d(true, None), d(false, Some(5))]), "2 devices, 1 revoked");
+        assert_eq!(
+            (device_state(&d(true, None)), device_state(&d(false, None)), device_state(&d(false, Some(1)))),
+            ("This device", "Linked", "Revoked")
+        );
+        assert_eq!(Section::named("devices"), Some(Section::Devices));
+        assert_eq!(visible_items("revoke"), [Item::Devices]);
+        assert!(!Section::Devices.app_wide());
+    }
 
     #[test]
     fn search_narrows_the_sections_by_title_or_keyword() {
