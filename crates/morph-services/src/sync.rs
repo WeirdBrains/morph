@@ -162,8 +162,17 @@ pub fn link_payload(home: &Path, profile_id: &str) -> Result<(String, Vec<String
     Ok((core::encode_link_settings(&roster), types))
 }
 
+static AUTOSTART: AtomicBool = AtomicBool::new(false);
+
+/// Let unlocks start sync nodes and their periodic passes. The shells call
+/// this once at start-up; library code and other crates' tests never start
+/// a networked node by accident.
+pub fn enable_autostart() {
+    AUTOSTART.store(true, Ordering::Relaxed);
+}
+
 fn autostart() -> bool {
-    !cfg!(test) || std::env::var_os("MORPH_SYNC_TEST").is_some()
+    AUTOSTART.load(Ordering::Relaxed) || std::env::var_os("MORPH_SYNC_TEST").is_some()
 }
 
 /// Start a sync node for an unlocked library, if we have a seed and node key.
@@ -388,8 +397,8 @@ pub fn net_status(home: &Path, profile_id: &str) -> Option<weirdnet_net::Status>
     nodes().iter().find(|(p, _)| p == &dir).map(|(_, r)| r.node.status())
 }
 
-/// Bind after a password unlock; start the node in production (and in tests
-/// that set `MORPH_SYNC_TEST`).
+/// Bind after a password unlock; start the node once [`enable_autostart`]
+/// ran (or in tests that set `MORPH_SYNC_TEST`).
 pub fn on_password(home: &Path, profile_id: &str, password: &SecretString) -> Result<()> {
     prepare_with_password(home, profile_id, password)?;
     if autostart() {
