@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Sync uses `weirdnet-sync` 0.2.0: history and settings share each
+  device's log stream with bookmarks (per-type pull positions), the clock
+  advance after a pull comes from the crate, and a third device that missed
+  a revocation catches up instead of being refused.
+
 - Settings > Linked devices lists the devices a profile syncs with and
   revokes one (press Revoke, then Confirm). The other devices stop syncing
   with it on their next pass. A revoked device that still knows the
