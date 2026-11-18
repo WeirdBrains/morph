@@ -13,6 +13,6 @@ pub mod roster;
 pub mod store;
 
 pub use host::{BrowserHost, FetchedPage, HostError, PageSnapshot, ResearchHost, SearchHit};
-pub use model::{ModelChoice, ModelProvider, Platform};
+pub use model::{ModelChoice, ModelProvider, Platform, UnavailableModels};
 pub use roster::{CompanionProfile, Roster, RosterError};
 pub use store::{AiStore, FileStore, Grants, MemoryStore, StoreError};
