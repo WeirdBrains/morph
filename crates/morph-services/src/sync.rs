@@ -6,7 +6,9 @@
 //! still listens so a later linked node can catch up through a relay.
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
 
 use morph_core::library_db;
 use morph_core::network::NetworkSettings;
@@ -37,7 +39,14 @@ fn configured_relays() -> Vec<Multiaddr> {
 struct Running {
     node: Arc<Node<Vec<u8>, Vec<u8>>>,
     state: Arc<Mutex<SyncState>>,
+    /// Set when the node stops, so its background sync pass ends.
+    stopped: Arc<AtomicBool>,
 }
+
+/// How often a running node runs a sync pass against its roster.
+pub const SYNC_INTERVAL: Duration = Duration::from_secs(30);
+/// First pass after start, once relay reservations had a moment.
+const FIRST_PASS: Duration = Duration::from_secs(3);
 
 static NODES: Mutex<Vec<(PathBuf, Running)>> = Mutex::new(Vec::new());
 
@@ -172,8 +181,36 @@ pub fn start_with(home: &Path, profile_id: &str, cfg: NodeConfig) -> Result<()> 
     };
     let node = start_node(node_key, cfg, state.clone()).map_err(Error::failed)?;
     core::attach_live(dir.clone(), state.clone());
-    nodes().push((dir, Running { node: Arc::new(node), state }));
+    let stopped = Arc::new(AtomicBool::new(false));
+    nodes().push((dir, Running { node: Arc::new(node), state, stopped: stopped.clone() }));
+    if autostart() {
+        spawn_passes(home.to_path_buf(), profile_id.to_string(), stopped);
+    }
     Ok(())
+}
+
+/// Run [`tick`] soon after start and then every [`SYNC_INTERVAL`] until the
+/// node stops. Production only; tests drive `tick` themselves.
+fn spawn_passes(home: PathBuf, profile_id: String, stopped: Arc<AtomicBool>) {
+    let _ = std::thread::Builder::new().name("morph-sync".into()).spawn(move || {
+        let mut wait = FIRST_PASS;
+        loop {
+            let step = Duration::from_millis(250);
+            let mut slept = Duration::ZERO;
+            while slept < wait {
+                if stopped.load(Ordering::Relaxed) {
+                    return;
+                }
+                std::thread::sleep(step);
+                slept += step;
+            }
+            if stopped.load(Ordering::Relaxed) {
+                return;
+            }
+            let _ = tick(&home, &profile_id);
+            wait = SYNC_INTERVAL;
+        }
+    });
 }
 
 fn build_state(lib: &Library) -> Option<(Arc<Mutex<SyncState>>, Keypair)> {
@@ -212,6 +249,7 @@ pub fn stop(home: &Path, profile_id: &str) {
         g.iter().position(|(p, _)| p == &dir).map(|i| g.remove(i).1)
     };
     if let Some(running) = running {
+        running.stopped.store(true, Ordering::Relaxed);
         running.node.halt();
     }
 }
@@ -239,16 +277,26 @@ pub fn tick(home: &Path, profile_id: &str) -> Result<usize> {
     for cert in peers {
         let Ok(peer) = PeerId::from_str(&cert.peer_id) else { continue };
         let addrs = addrs_for(&cert, &net, &relays);
+        // Pull into a copy, not the live state: our handler needs the live
+        // state to answer, and the peer may be pulling from us at the same
+        // time. Holding the lock across the network would stall both sides.
+        let mut work = {
+            let st = state.lock().map_err(|_| Error::failed("sync state"))?;
+            snapshot(&st)
+        };
         let mut n = 0usize;
         for typ in core::SUPPORTED_TYPES {
-            let mut st = state.lock().map_err(|_| Error::failed("sync state"))?;
-            if !st.types.iter().any(|t| t == typ) {
+            if !work.types.iter().any(|t| t == typ) {
                 continue;
             }
-            match pull_from(&mut st, node.as_ref(), peer, &addrs, typ) {
+            match pull_from(&mut work, node.as_ref(), peer, &addrs, typ) {
                 Ok(got) => n += got,
                 Err(e) => eprintln!("morph-sync: {typ} pull from {peer} failed: {e}"),
             }
+        }
+        {
+            let mut st = state.lock().map_err(|_| Error::failed("sync state"))?;
+            merge_back(&mut st, &work);
         }
         let _ = library_db::with(home, profile_id, |lib| {
             let mut st = state.lock().expect("sync state");
@@ -269,6 +317,42 @@ pub fn tick(home: &Path, profile_id: &str) -> Result<usize> {
         applied += n;
     }
     Ok(applied)
+}
+
+fn snapshot(st: &SyncState) -> SyncState {
+    SyncState {
+        seed: st.seed.clone(),
+        user_id: st.user_id.clone(),
+        user_key: st.user_key.clone(),
+        our_cert: st.our_cert.clone(),
+        our_node: st.our_node.clone(),
+        types: st.types.clone(),
+        roster: st.roster.clone(),
+        log: st.log.clone(),
+        clock: st.clock.clone(),
+    }
+}
+
+/// Fold what a pull into a copy learned back into the live state: new log
+/// entries, cursors that moved forward, roster changes (a revocation is never
+/// undone) and the clock.
+fn merge_back(st: &mut SyncState, work: &SyncState) {
+    for (nid, seq) in work.log.cursors() {
+        let ops: Vec<_> = work.log.iter_node(&nid).cloned().collect();
+        if let (Some(first), Some(last)) = (ops.first().map(|e| e.seq), ops.last().map(|e| e.seq)) {
+            st.log.integrate(&weirdnet_sync::LogPage { node_id: nid.clone(), from_seq: first, to_seq: last, ops });
+        }
+        if seq > st.log.cursor(&nid) {
+            st.log.set_cursor(&nid, seq);
+        }
+    }
+    let key = st.user_key.clone();
+    st.roster.merge(&work.roster, &key, &weirdnet_net::WEIRDNET);
+    if let Some(c) = &work.clock
+        && st.clock.as_ref().is_none_or(|l| c.cmp_total(l).is_gt())
+    {
+        st.clock = Some(c.clone());
+    }
 }
 
 /// Addresses we may dial for a roster member: matching manual peers, plus
@@ -474,8 +558,11 @@ mod tests {
     fn tick_until(home_a: &Path, home_b: &Path, pred: impl Fn() -> bool) {
         let end = Instant::now() + Duration::from_secs(30);
         while Instant::now() < end {
-            let _ = tick(home_a, "p1");
-            let _ = tick(home_b, "p1");
+            // Both sides pull at once, as two running devices would.
+            std::thread::scope(|s| {
+                s.spawn(|| tick(home_a, "p1"));
+                s.spawn(|| tick(home_b, "p1"));
+            });
             if pred() {
                 return;
             }
@@ -486,6 +573,56 @@ mod tests {
 
     fn by_url(home: &Path, url: &str) -> morph_core::bookmarks::Bookmark {
         bookmarks::tree(home, "p1").unwrap().bookmarks.into_iter().find(|b| b.url == url).expect(url)
+    }
+
+    #[test]
+    fn a_pull_copy_folds_back_without_undoing_a_revocation() {
+        let user = Keypair::generate_ed25519();
+        let uid = weirdnet_net::user::user_id(&user.public());
+        let me = Keypair::generate_ed25519().public().to_peer_id().to_string();
+        let other = Keypair::generate_ed25519().public().to_peer_id().to_string();
+        let mine = weirdnet_sync::Roster::self_certify(&weirdnet_net::WEIRDNET, &user, &me, "me", 1).unwrap();
+        let theirs = weirdnet_sync::Roster::self_certify(&weirdnet_net::WEIRDNET, &user, &other, "other", 1).unwrap();
+        let mut roster = Roster::new();
+        roster.upsert(mine.clone());
+        roster.upsert(theirs);
+        let mut live = SyncState {
+            seed: vec![1; 32],
+            user_id: uid,
+            user_key: user.public(),
+            our_cert: mine,
+            our_node: weirdnet_sync::NodeId::new(me.clone()),
+            types: vec!["bookmarks".into()],
+            roster,
+            log: weirdnet_sync::OpLog::new(),
+            clock: None,
+        };
+        let mut work = snapshot(&live);
+        // While the copy pulls, the live state revokes `other` and writes locally.
+        live.roster.revoke(&weirdnet_net::WEIRDNET, &user, &other, 5).unwrap();
+        live.local_op(10, "bookmarks", "mine", vec![1]);
+        let peer = weirdnet_sync::NodeId::new(other.clone());
+        work.log.integrate(&weirdnet_sync::LogPage {
+            node_id: peer.clone(),
+            from_seq: 1,
+            to_seq: 1,
+            ops: vec![weirdnet_sync::LogEntry {
+                node_id: peer.clone(),
+                seq: 1,
+                hlc: weirdnet_sync::Hlc::new(50, 0, peer.clone()),
+                typ: "bookmarks".into(),
+                record_id: "theirs".into(),
+                op: vec![2],
+            }],
+        });
+        work.log.set_cursor(&peer, 1);
+        work.clock = Some(weirdnet_sync::Hlc::new(60, 0, live.our_node.clone()));
+        merge_back(&mut live, &work);
+        assert!(live.log.get(&peer, 1).is_some(), "pulled ops land");
+        assert!(live.log.get(&live.our_node, 1).is_some(), "local writes stay");
+        assert_eq!(live.log.cursor(&peer), 1);
+        assert!(!live.roster.get(&other).unwrap().active(), "the revocation stands");
+        assert_eq!(live.clock.as_ref().unwrap().physical_ms, 60);
     }
 
     fn visits(home: &Path) -> Vec<morph_core::library::HistoryEntry> {
