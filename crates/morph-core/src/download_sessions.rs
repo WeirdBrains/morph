@@ -54,6 +54,24 @@ pub struct DownloadContext {
     pub etag: Option<String>,
     #[serde(default)]
     pub last_modified: Option<String>,
+    /// A token read from the site's storage after a refused resume
+    /// ([`crate::download_auth`]), sent as `Authorization: Bearer`.
+    #[serde(default)]
+    pub bearer: Option<BearerToken>,
+}
+
+/// A bearer token and the origin whose storage it came from. Its `Debug`
+/// hides the token.
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BearerToken {
+    pub origin: String,
+    pub token: String,
+}
+
+impl fmt::Debug for BearerToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "BearerToken({}, <{} bytes>)", self.origin, self.token.len())
+    }
 }
 
 impl fmt::Debug for DownloadContext {
@@ -66,6 +84,7 @@ impl fmt::Debug for DownloadContext {
             .field("auth_headers", &self.auth_headers.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>())
             .field("etag", &self.etag)
             .field("last_modified", &self.last_modified)
+            .field("bearer", &self.bearer)
             .finish()
     }
 }
@@ -86,6 +105,12 @@ impl DownloadContext {
     /// The `Cookie` header these cookies make, if any.
     pub fn cookie_header(&self) -> Option<String> {
         (!self.cookies.is_empty()).then(|| self.cookies.iter().map(|c| format!("{}={}", c.name, c.value)).collect::<Vec<_>>().join("; "))
+    }
+
+    /// The bearer token the download first went with (its captured
+    /// `Authorization` header), if any.
+    pub fn captured_bearer(&self) -> Option<&str> {
+        self.auth_headers.iter().find(|(n, _)| n.eq_ignore_ascii_case("authorization")).and_then(|(_, v)| crate::download_auth::bearer_of(v))
     }
 
     /// The `If-Range` validator: a strong `ETag`, else `Last-Modified`
@@ -110,7 +135,13 @@ impl DownloadContext {
         if let Some(ua) = &self.user_agent {
             out.push(("User-Agent".into(), ua.clone()));
         }
-        out.extend(self.auth_headers.iter().filter(|(n, _)| is_auth_header(n)).cloned());
+        let bearer = self.bearer.as_ref().filter(|b| !b.token.is_empty());
+        out.extend(
+            self.auth_headers.iter().filter(|(n, _)| is_auth_header(n) && !(bearer.is_some() && n.eq_ignore_ascii_case("authorization"))).cloned(),
+        );
+        if let Some(b) = bearer {
+            out.push(("Authorization".into(), format!("Bearer {}", b.token)));
+        }
         if let Some(v) = self.if_range() {
             out.push(("If-Range".into(), v.to_string()));
         }
@@ -225,6 +256,7 @@ mod tests {
             auth_headers: vec![("Authorization".into(), "Bearer very-secret-token".into()), ("Accept".into(), "*/*".into())],
             etag: Some("\"v1\"".into()),
             last_modified: Some("Wed, 18 Nov 2026 10:00:00 GMT".into()),
+            bearer: None,
         }
     }
 
@@ -260,6 +292,13 @@ mod tests {
         let weak = DownloadContext { etag: Some("W/\"v1\"".into()), ..context() };
         assert_eq!(weak.if_range(), Some("Wed, 18 Nov 2026 10:00:00 GMT"), "a weak ETag falls back to Last-Modified");
         assert_eq!(DownloadContext::default().resume_headers(), vec![]);
+        assert_eq!(c.captured_bearer(), Some("very-secret-token"));
+        let with_token =
+            DownloadContext { bearer: Some(BearerToken { origin: "https://app.example".into(), token: "fresh-jwt".into() }), ..context() };
+        let h = with_token.resume_headers();
+        let auth: Vec<&str> = h.iter().filter(|(k, _)| k == "Authorization").map(|(_, v)| v.as_str()).collect();
+        assert_eq!(auth, ["Bearer fresh-jwt"], "the storage token replaces the captured header");
+        assert!(!format!("{with_token:?}").contains("fresh-jwt"));
     }
 
     #[test]
