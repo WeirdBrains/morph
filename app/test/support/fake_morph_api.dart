@@ -777,6 +777,49 @@ class FakeMorphApi implements MorphApi {
   Future<void> linkAddDeviceCancel(int session) async =>
       linkCalls.add('pair-cancel $session');
 
+  /// What [linkedDevices] returns; [revokeLinkedDevice] marks one revoked.
+  List<MorphLinkedDevice> devices = [];
+
+  /// What [linkedDeviceRevokeWarning] returns.
+  String? revokeWarning;
+  final List<String> revoked = [];
+
+  @override
+  Future<List<MorphLinkedDevice>> linkedDevices(
+    String profileId, {
+    String? home,
+  }) async => List.of(devices);
+
+  @override
+  Future<String?> linkedDeviceRevokeWarning(
+    String profileId,
+    String peerId, {
+    String? home,
+  }) async => revokeWarning;
+
+  @override
+  Future<List<MorphLinkedDevice>> revokeLinkedDevice(
+    String profileId,
+    String peerId, {
+    String? home,
+  }) async {
+    revoked.add(peerId);
+    devices = [
+      for (final d in devices)
+        d.peerId == peerId
+            ? MorphLinkedDevice(
+                peerId: d.peerId,
+                label: d.label,
+                state: 'Revoked',
+                issuedMs: d.issuedMs,
+                revokedMs: 1,
+                hasKey: d.hasKey,
+              )
+            : d,
+    ];
+    return List.of(devices);
+  }
+
   /// What [relayReport] returns; tests change it to move the state.
   MorphRelayReport relays = const MorphRelayReport(
     nodes: 0,

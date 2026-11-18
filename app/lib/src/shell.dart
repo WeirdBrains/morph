@@ -1287,6 +1287,15 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
               setState(() => _identity = identity);
             }
             Navigator.of(panel).pop();
+            if (identity.imported && mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  key: Key('identity-restored-note'),
+                  duration: Duration(seconds: 10),
+                  content: Text('Identity restored. $morphRestoredNote'),
+                ),
+              );
+            }
           },
           onSkip: () => Navigator.of(panel).pop(),
           linkInvite: _linkInvite,
@@ -1353,7 +1362,8 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
               identity.linked
                   ? 'Linked from another device.'
                   : identity.imported
-                  ? 'Restored from recovery words or a backup.'
+                  ? 'Restored from recovery words or a backup. '
+                        '$morphRestoredNote'
                   : 'Created in this profile.',
             ),
           ],
@@ -1507,6 +1517,8 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
       (panel) => MorphSettingsPage(
         relays: widget.api,
         network: widget.api,
+        devices: widget.api,
+        profileId: _profileId,
         home: _home,
         profileName: _profileName,
         coreVersion: coreVersionLabel ?? '…',
