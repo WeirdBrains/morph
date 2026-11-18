@@ -561,9 +561,14 @@ pub(crate) fn watch_links(engine: &webkit2gtk::WebView, id: ViewId, queue: &Queu
     use webkit2gtk::{NavigationPolicyDecision, NavigationPolicyDecisionExt, NavigationType, PolicyDecisionExt, PolicyDecisionType, URIRequestExt};
     let q = queue.clone();
     engine.connect_decide_policy(move |_, decision, kind| {
-        if kind != PolicyDecisionType::NewWindowAction {
-            return false;
-        }
+        // A `target=_blank` link asks for a new window; a click with a
+        // modifier or the middle button comes as a plain navigation that
+        // carries them (as in Epiphany).
+        let new_window = match kind {
+            PolicyDecisionType::NewWindowAction => true,
+            PolicyDecisionType::NavigationAction => false,
+            _ => return false,
+        };
         let Some(action) = decision.dynamic_cast_ref::<NavigationPolicyDecision>().and_then(|d| d.navigation_action()) else {
             return false;
         };
@@ -573,7 +578,11 @@ pub(crate) fn watch_links(engine: &webkit2gtk::WebView, id: ViewId, queue: &Queu
         let Some(url) = action.request().and_then(|r| r.uri()).map(|u| u.to_string()).filter(|u| !u.is_empty()) else {
             return false;
         };
-        let target = crate::LinkTarget::for_click(action.modifiers(), action.mouse_button());
+        let (modifiers, button) = (action.modifiers(), action.mouse_button());
+        if !new_window && !crate::LinkTarget::elsewhere(modifiers, button) {
+            return false;
+        }
+        let target = crate::LinkTarget::for_click(modifiers, button);
         q.borrow_mut().push((id, Event::OpenLink { url, target }));
         decision.ignore();
         true
