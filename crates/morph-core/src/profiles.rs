@@ -94,7 +94,8 @@ pub fn settings_path(home: impl AsRef<Path>, id: &str) -> PathBuf {
     profile_dir(home, id).join("settings.json")
 }
 
-/// `<home>/profiles/<id>/tabs.json`. Reserved for per-profile tab persistence.
+/// `<home>/profiles/<id>/tabs.json`: the profile's open windows and tabs
+/// ([`crate::session`]).
 pub fn tabs_path(home: impl AsRef<Path>, id: &str) -> PathBuf {
     profile_dir(home, id).join("tabs.json")
 }

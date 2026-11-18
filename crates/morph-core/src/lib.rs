@@ -18,6 +18,7 @@ pub mod page_bridge;
 pub mod profiles;
 pub mod scheme;
 pub mod search;
+pub mod session;
 pub mod settings;
 pub mod settings_sync;
 pub mod sync;
