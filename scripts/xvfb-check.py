@@ -1501,6 +1501,74 @@ def main_menu(r, binary, display):
             m2.stop()
 
 
+def luminance(px):
+    return 0.299 * px[0] + 0.587 * px[1] + 0.114 * px[2]
+
+
+def popup_backing(r, binary, display, shots=None):
+    """Popups never have an opaque black backing: with the ☰ menu or the
+    downloads panel open, the page is still drawn around the popup, and the
+    pixels just outside its rounded bottom-left corner are the page's, not
+    black (on X11 the page's window is hidden under a popup, which once left
+    the whole page area black behind it). Needs Pillow."""
+    try:
+        from PIL import Image
+    except ImportError:
+        r.check("popups", "transparent popup backing (needs Pillow)", True, "skipped: no Pillow")
+        return
+    home = tempfile.mkdtemp(prefix="morph-xvfb-popups-")
+    m2 = Driver(binary, display, home)
+    png = Path(home) / "popup.png"
+
+    def corner(name, width_from_edge, row):
+        """Screenshot, then look for the popup's box on logical row `row`
+        scanning right from the page's middle; true when the page is drawn
+        beside it and the pixel outside its bottom-left corner is light."""
+        screenshot(m2, png)
+        img = Image.open(png).convert("RGB")
+        win = m2.own_window()
+        gx, gy, w, _ = m2.geometry(win)
+        f = img.width / (WaylandMorph.layout[0] if isinstance(m2, WaylandMorph) else img.width)
+        at = lambda x, y: img.getpixel((min(int((gx + x) * f), img.width - 1), min(int((gy + y) * f), img.height - 1)))  # noqa: E731
+        beside = luminance(at(w // 2 - 100, 400))
+        left = next((x for x in range(int(w * 0.42), w) if luminance(at(x, row)) < 120), None)
+        if left is None:
+            return False, f"no popup box found on row {row}; page beside {beside:.0f}"
+        bottom = next((y for y in range(row, row + 800) if luminance(at(left + 6, y)) > 170), None)
+        if bottom is None:
+            return False, "no bottom edge"
+        outside = luminance(at(left + 1, bottom - 1))
+        # The page is white (keys.html) beside and under the popup.
+        ok = beside > 200 and outside > 170
+        if shots:
+            Path(shots).mkdir(parents=True, exist_ok=True)
+            shutil.copy(png, Path(shots) / f"popups-{name}.png")
+        return ok, f"page beside {beside:.0f}, corner outside popup at ({left + 1},{bottom - 1}) {outside:.0f}"
+
+    try:
+        win = wait_for(lambda: m2.own_window(), 20)
+        ok = win and wait_for(lambda: state(m2), 20)
+        r.check("popups", "a Morph opens with its page", bool(ok), "no window or page")
+        if not ok:
+            return
+        time.sleep(1.0)
+        win = m2.own_window() or win
+        m2.activate(win)
+        _, _, width, _ = m2.geometry(win)
+        m2.click(win, width - 23, 55)
+        time.sleep(1.0)
+        ok, detail = corner("menu", 248, 150)
+        r.check("popups", "the ☰ menu floats over the page: no black backing at its corners", ok, detail)
+        m2.key("Escape")
+        time.sleep(0.6)
+        m2.key("ctrl+shift+y")
+        time.sleep(1.0)
+        ok, detail = corner("downloads", 0, 110)
+        r.check("popups", "the downloads panel floats over the page: no black backing", ok, detail)
+    finally:
+        m2.stop()
+
+
 def windows_check(r, binary, display, shots=None):
     """Several windows: Ctrl+N opens a second one and Ctrl+W on its only
     tab closes just that window; Shift+click opens a link in a new window;
@@ -1834,7 +1902,10 @@ def qr_texts(path):
 def screenshot(m, path):
     """The whole screen as a PNG at `path` (grim on Wayland; ImageMagick's
     import, else Pillow, on X11). Nothing is written when neither works."""
-    command = ["grim", str(path)] if isinstance(m, WaylandMorph) else ["import", "-window", "root", str(path)]
+    if isinstance(m, WaylandMorph):
+        command = ["grim", str(path)] if shutil.which("grim") else ["wayshot", str(path)]
+    else:
+        command = ["import", "-window", "root", str(path)]
     try:
         subprocess.run(command, env=m.env, capture_output=True, timeout=20)
         return
@@ -2272,7 +2343,7 @@ def main():
     ap.add_argument("--input-bin", help="morph-wl-input (default: next to --bin)")
     ap.add_argument("--local-relay", help="a local relay to link through (weirdnet-device-link's local-relay example)")
     ap.add_argument("--app-server", help="a Weirdnet app behind the local relay (morph-services' serve-app example)")
-    ap.add_argument("--only", choices=["downloads", "windows"], help="run just this check")
+    ap.add_argument("--only", choices=["downloads", "windows", "popups"], help="run just this check")
     ap.add_argument("--screenshots", help="save screenshots of checks that take them (X11) here")
     args = ap.parse_args()
     relay = start_local_relay(args.local_relay) if args.local_relay else None
@@ -2347,6 +2418,15 @@ def run(args):
         if not args.no_wm and shutil.which("openbox"):
             wm = subprocess.Popen(["openbox"], env=dict(os.environ, DISPLAY=display), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             time.sleep(1.0)
+    if args.only == "popups":
+        r = Results()
+        try:
+            popup_backing(r, args.bin, display, args.screenshots)
+            return finish(r, args)
+        finally:
+            for proc in (wm, xvfb):
+                if proc and proc.poll() is None:
+                    proc.terminate()
     if args.only == "windows":
         r = Results()
         try:
@@ -2462,6 +2542,7 @@ def run(args):
         select_menu(r, args.bin, display, base)
         page_clipboard(r, args.bin, display, base, args.wayland)
         main_menu(r, args.bin, display)
+        popup_backing(r, args.bin, display, args.screenshots)
         windows_check(r, args.bin, display, args.screenshots)
         last_tab_quits(r, args.bin, display)
         # GPUI draws the frame itself only where the window manager supports

@@ -1141,6 +1141,35 @@ impl WebView for WryView {
         self.bounds.set(bounds);
         self.view.set_bounds(wry_rect(bounds)).map_err(backend_err)
     }
+    fn snapshot(&self) -> Option<crate::Frame> {
+        use webkit2gtk::{SnapshotOptions, SnapshotRegion};
+        let slot: Rc<RefCell<Option<Option<gtk::cairo::Surface>>>> = Rc::new(RefCell::new(None));
+        let out = slot.clone();
+        self.view.webview().snapshot(SnapshotRegion::Visible, SnapshotOptions::NONE, gtk::gio::Cancellable::NONE, move |r| {
+            *out.borrow_mut() = Some(r.ok());
+        });
+        // WebKit answers from its own process: run the main loop for the
+        // answer, but never hold the shell up for long.
+        let until = Instant::now() + Duration::from_millis(300);
+        while slot.borrow().is_none() && Instant::now() < until {
+            gtk::main_iteration_do(false);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let surface = slot.borrow_mut().take()??;
+        let image = gtk::cairo::ImageSurface::try_from(surface).ok()?;
+        let (width, height, stride) = (image.width().max(0) as usize, image.height().max(0) as usize, image.stride().max(0) as usize);
+        if width == 0 || height == 0 {
+            return None;
+        }
+        let mut pixels = Vec::with_capacity(width * height * 4);
+        let mut image = image;
+        let data = image.data().ok()?;
+        for row in 0..height {
+            let start = row * stride;
+            pixels.extend_from_slice(&data[start..start + width * 4]);
+        }
+        Some(crate::Frame { width: width as u32, height: height as u32, pixels })
+    }
     fn set_visible(&self, visible: bool) -> Result<()> {
         self.view.set_visible(visible).map_err(backend_err)?;
         if visible {
