@@ -365,6 +365,10 @@ impl Backend for OffscreenBackend {
         self.downloads.cancel(id);
     }
 
+    fn request_cookies(&mut self, download: u64, url: &str) -> bool {
+        crate::wry_linux::request_cookies(&self.downloads, &self.queue, download, url)
+    }
+
     fn set_page_bridge(&mut self, bridge: PageBridge) {
         self.bridge = Some(bridge);
     }

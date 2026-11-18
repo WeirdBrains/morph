@@ -465,6 +465,9 @@ pub(crate) struct DownloadState {
     pub(crate) dir: RefCell<Option<PathBuf>>,
     next: Cell<u64>,
     live: RefCell<HashMap<u64, webkit2gtk::Download>>,
+    /// Each download's profile cookie store, for [`request_cookies`] (kept
+    /// after the engine's download ends: a paused download resumes later).
+    cookie_stores: RefCell<HashMap<u64, webkit2gtk::CookieManager>>,
 }
 
 pub(crate) type Downloads = Rc<DownloadState>;
@@ -484,6 +487,56 @@ impl DownloadState {
         if let Some(download) = self.live.borrow_mut().remove(&id) {
             download.cancel();
         }
+    }
+}
+
+/// [`crate::Backend::request_cookies`] for WebKitGTK: ask download
+/// `download`'s profile cookie store which cookies it sends to `url`; the
+/// answer arrives as [`Event::Cookies`] on `view`'s queue.
+pub(crate) fn request_cookies(downloads: &Downloads, queue: &Queue, download: u64, url: &str) -> bool {
+    use webkit2gtk::CookieManagerExt;
+    let Some(store) = downloads.cookie_stores.borrow().get(&download).cloned() else {
+        return false;
+    };
+    let q = queue.clone();
+    store.cookies(url, None::<&gtk::gio::Cancellable>, move |result| {
+        let cookies = result.ok().map(|list| {
+            list.into_iter()
+                .map(|mut c| crate::Cookie {
+                    name: c.name().map(|v| v.to_string()).unwrap_or_default(),
+                    value: c.value().map(|v| v.to_string()).unwrap_or_default(),
+                    domain: c.domain().map(|v| v.to_string()).unwrap_or_default(),
+                    path: c.path().map(|v| v.to_string()).unwrap_or_default(),
+                    secure: c.is_secure(),
+                })
+                .collect()
+        });
+        q.borrow_mut().push((ViewId(0), Event::Cookies { download, cookies }));
+    });
+    true
+}
+
+/// What WebKit tells about `download`'s request and response.
+fn request_context(download: &webkit2gtk::Download) -> crate::RequestContext {
+    use webkit2gtk::{DownloadExt, SettingsExt, URIRequestExt, URIResponseExt, WebViewExt};
+    let mut headers = Vec::new();
+    if let Some(h) = download.request().and_then(|r| r.http_headers()) {
+        h.foreach(|n, v| headers.push((n.to_string(), v.to_string())));
+    }
+    let header = |name: &str| headers.iter().find(|(n, _)| n.eq_ignore_ascii_case(name)).map(|(_, v)| v.clone());
+    let response = download.response();
+    let response_header = |name: &str| response.as_ref().and_then(|r| r.http_headers()).and_then(|h| h.one(name)).map(|v| v.to_string());
+    let final_url =
+        response.as_ref().and_then(|r| r.uri()).or_else(|| download.request().and_then(|r| r.uri())).map(|u| u.to_string()).unwrap_or_default();
+    let user_agent = header("User-Agent")
+        .or_else(|| download.web_view().and_then(|v| WebViewExt::settings(&v)).and_then(|s| s.user_agent()).map(|ua| ua.to_string()));
+    crate::RequestContext {
+        final_url,
+        referer: header("Referer"),
+        user_agent,
+        etag: response_header("ETag"),
+        last_modified: response_header("Last-Modified"),
+        headers,
     }
 }
 
@@ -565,10 +618,13 @@ pub(crate) fn hook_downloads(
         return;
     };
     let (downloads, queue) = (downloads.clone(), queue.clone());
-    context.connect_download_started(move |_, download| {
+    context.connect_download_started(move |context, download| {
         let n = downloads.next.get() + 1;
         downloads.next.set(n);
         downloads.live.borrow_mut().insert(n, download.clone());
+        if let Some(store) = context.cookie_manager() {
+            downloads.cookie_stores.borrow_mut().insert(n, store);
+        }
         let q = queue.clone();
         let push = Rc::new(move |change: crate::DownloadChange| q.borrow_mut().push((id, Event::Download(crate::Download { id: n, change }))));
         let url = download.request().and_then(|r| r.uri()).map(|u| u.to_string()).unwrap_or_default();
@@ -587,6 +643,7 @@ pub(crate) fn hook_downloads(
                 let name =
                     crate::safe_name(&suggested.unwrap_or_else(|| staged.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()));
                 p(crate::DownloadChange::Started { url: url.clone(), name, staged });
+                p(crate::DownloadChange::Context(request_context(download)));
             })
         };
         let d = downloads.clone();
@@ -919,6 +976,10 @@ impl Backend for WryBackend {
 
     fn cancel_download(&mut self, id: u64) {
         self.downloads.cancel(id);
+    }
+
+    fn request_cookies(&mut self, download: u64, url: &str) -> bool {
+        request_cookies(&self.downloads, &self.queue, download, url)
     }
 
     fn set_scale(&mut self, scale: f64) {
