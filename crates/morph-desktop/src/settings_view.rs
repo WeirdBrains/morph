@@ -10,7 +10,10 @@
 
 use std::path::{Path, PathBuf};
 
-use gpui::{App, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyDownEvent, ScrollHandle, SharedString, Window, div, prelude::*, px, rgb};
+use gpui::{
+    App, Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyDownEvent, ScrollHandle, SharedString, Window, canvas, div, prelude::*,
+    px, rgb,
+};
 use morph_core::network::{self as netprefs, DiscoveryOverride, NetworkSettings};
 use morph_core::search::ENGINES;
 use morph_core::settings::{self, Settings, TabPosition, ThemeChoice};
@@ -687,14 +690,24 @@ impl SettingsView {
 
     /// One setting's row: label and help on the left, controls on the right.
     fn row(&self, item: Item, label: &str, help: Option<String>, controls: gpui::AnyElement, cx: &App) -> gpui::AnyElement {
+        self.row_with(item, label, help, controls, false, cx)
+    }
+
+    /// [`Self::row`] with the controls below the text, for wide ones (an
+    /// input): they get the card's width instead of squeezing the help.
+    fn stacked_row(&self, item: Item, label: &str, help: Option<String>, controls: gpui::AnyElement, cx: &App) -> gpui::AnyElement {
+        self.row_with(item, label, help, controls, true, cx)
+    }
+
+    fn row_with(&self, item: Item, label: &str, help: Option<String>, controls: gpui::AnyElement, stacked: bool, cx: &App) -> gpui::AnyElement {
         let t = self.theme;
         let items = visible_items(&self.query(cx));
         let current = self.current.and_then(|i| items.get(i)) == Some(&item);
         div()
+            .relative()
             .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(16.))
+            .when(stacked, |d| d.flex_col().items_start().gap(px(8.)))
+            .when(!stacked, |d| d.flex_row().items_center().gap(px(16.)))
             .px(px(12.))
             .py(px(8.))
             .rounded(px(8.))
@@ -704,13 +717,17 @@ impl SettingsView {
             .child(
                 div()
                     .flex_1()
+                    .min_w_0()
                     .flex()
                     .flex_col()
                     .gap(px(2.))
                     .child(div().text_size(px(13.)).child(label.to_string()))
                     .children(help.map(|h| div().text_size(px(12.)).text_color(rgb(t.text_secondary)).child(h))),
             )
-            .child(controls)
+            // The text column flexes and wraps; the controls keep their size
+            // and always stay inside the card.
+            .child(div().relative().flex_none().max_w_full().child(controls).child(layout_probe(format!("{item:?} controls"))))
+            .child(layout_probe(format!("{item:?} card")))
             .into_any_element()
     }
 
@@ -953,13 +970,18 @@ impl SettingsView {
 
     fn manual_peer_rows(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
         let t = self.theme;
-        let input = div().flex().flex_row().items_center().gap(px(8.)).child(div().w(px(280.)).child(self.peer_input.clone())).child(
-            button(t, "settings-peer-add", "Add", false).on_click(cx.listener(|this, _, _, cx| {
+        let input = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(8.))
+            .max_w_full()
+            .child(div().w(px(280.)).min_w_0().flex_shrink(1.).child(self.peer_input.clone()))
+            .child(button(t, "settings-peer-add", "Add", false).on_click(cx.listener(|this, _, _, cx| {
                 let text = this.peer_input.read(cx).text().trim().to_string();
                 this.add_peer(text, cx);
-            })),
-        );
-        let mut rows = vec![self.row(
+            })));
+        let mut rows = vec![self.stacked_row(
             Item::ManualPeers,
             "Manual peers",
             Some("Add a peer by multiaddr (ending in /p2p/<id>) to sync without discovery. An address is not trust; certificates authorize a node.".into()),
@@ -1272,6 +1294,7 @@ impl Render for SettingsView {
                 div()
                     .id("settings-content")
                     .flex_1()
+                    .min_w_0()
                     .h_full()
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll)
@@ -1304,6 +1327,38 @@ fn device_state(d: &DeviceView) -> &'static str {
         (true, false) => "This device",
         (false, false) => "Linked",
     }
+}
+
+/// `MORPH_LOG_LAYOUT=1`: an invisible element that logs its bounds when they
+/// change (`morph-event settings-layout <name> x y w h`), for the checks that
+/// the controls of a row stay inside its card.
+fn layout_probe(name: String) -> gpui::AnyElement {
+    canvas(
+        |_, _, _| (),
+        move |bounds: Bounds<gpui::Pixels>, _, _, _| {
+            if !crate::browser_view::log_layout() {
+                return;
+            }
+            static LAST: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+            let line = format!(
+                "{:.0} {:.0} {:.0} {:.0}",
+                f32::from(bounds.origin.x),
+                f32::from(bounds.origin.y),
+                f32::from(bounds.size.width),
+                f32::from(bounds.size.height)
+            );
+            let mut last = LAST.lock().unwrap_or_else(|p| p.into_inner());
+            match last.iter_mut().find(|(n, _)| *n == name) {
+                Some((_, old)) if *old == line => return,
+                Some((_, old)) => *old = line.clone(),
+                None => last.push((name.clone(), line.clone())),
+            }
+            println!("morph-event settings-layout {name} {line}");
+        },
+    )
+    .absolute()
+    .size_full()
+    .into_any_element()
 }
 
 #[cfg(test)]
