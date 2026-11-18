@@ -31,6 +31,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 PAGE = ROOT / "tests" / "xvfb" / "keys.html"
+LINKS = ROOT / "tests" / "xvfb" / "links.html"
 EVENT = re.compile(r'^morph-event tab=(\d+) (\w+)(?:\((.*)\))?')
 # With a relay of our own (--local-relay): the Relays check and the new
 # device's link screen use it (MORPH_LINK_RELAYS, a dead address first, so
@@ -46,11 +47,14 @@ APP_PEER = None
 
 
 class Morph:
-    def __init__(self, binary, display, home, extra_env=None):
+    def __init__(self, binary, display, home, extra_env=None, args=None):
         self.display = display
         self.home = Path(home)
         self.env = self.session_env(display)
-        self.env.update(MORPH_HOME=home, MORPH_LOG_EVENTS="1", **(extra_env or {}))
+        # One window with the page, whatever the last run left open (the
+        # windows check turns restoring back on).
+        self.env.update(MORPH_HOME=str(home), MORPH_LOG_EVENTS="1", MORPH_NO_RESTORE="1")
+        self.env.update(extra_env or {})
         # A desktop of its own for the default-browser check: morph.desktop
         # and a `morph` on PATH (xdg-mime wants both), fresh config.
         xdg = Path(home) / "xdg"
@@ -72,7 +76,7 @@ class Morph:
             self.env.pop(var, None)
         self.log_path = Path(home) / "morph.log"
         self.log = open(self.log_path, "w")
-        self.proc = subprocess.Popen([binary, PAGE.as_uri()], env=self.env, stdout=self.log, stderr=subprocess.STDOUT)
+        self.proc = subprocess.Popen([binary, *([PAGE.as_uri()] if args is None else args)], env=self.env, stdout=self.log, stderr=subprocess.STDOUT)
         self.read_at = 0
 
     @staticmethod
@@ -113,8 +117,23 @@ class Morph:
 
     def own_window(self):
         """This process's visible window (two Morphs share a display)."""
-        ids = self.xdo("search", "--onlyvisible", "--pid", str(self.proc.pid)).split()
+        ids = self.windows()
         return ids[-1] if ids else None
+
+    def windows(self):
+        """This process's visible windows."""
+        return self.xdo("search", "--onlyvisible", "--pid", str(self.proc.pid)).split()
+
+    def click_with(self, win, x, y, mod=None, button=1):
+        """Click with `button` (3: right) while holding `mod` (shift, ctrl)."""
+        self.move(win, x, y)
+        time.sleep(0.15)
+        if mod:
+            self.xdo("keydown", mod)
+        self.xdo("click", str(button))
+        if mod:
+            self.xdo("keyup", mod)
+        time.sleep(0.5)
 
     def geometry(self, win):
         out = self.xdo("getwindowgeometry", "--shell", win)
@@ -235,8 +254,23 @@ class WaylandMorph(Morph):
         return ids[0] if ids else None
 
     def own_window(self):
-        ids = [str(n["id"]) for n in self.tree() if n["pid"] == self.proc.pid]
+        ids = self.windows()
         return ids[-1] if ids else None
+
+    def windows(self):
+        return [str(n["id"]) for n in self.tree() if n["pid"] == self.proc.pid]
+
+    def click_with(self, win, x, y, mod=None, button=1):
+        code = 272 if button == 1 else 273
+        self.move(win, x, y)
+        time.sleep(0.15)
+        if mod:
+            self.press(EVDEV[mod], True)
+        self.send(f"button {code} 1")
+        self.send(f"button {code} 0")
+        if mod:
+            self.press(EVDEV[mod], False)
+        time.sleep(0.5)
 
     def geometry(self, win):
         r = (self.node(win) or {}).get("rect", {})
@@ -1261,7 +1295,7 @@ def page_clipboard(r, binary, display, base, wayland):
         m2.stop()
 
 
-MAIN_MENU = ["New tab", "Find in page", "Bookmarks", "History", "Downloads", "Identity", "Profiles", "Settings", "About Morph", "Quit"]
+MAIN_MENU = ["New tab", "New window", "Find in page", "Bookmarks", "History", "Downloads", "Identity", "Profiles", "Settings", "About Morph", "Quit"]
 MENU_SEPARATED = {"Find in page", "Identity", "About Morph", "Quit"}
 
 
@@ -1305,6 +1339,9 @@ def main_menu(r, binary, display):
             if label == "New tab":
                 ok = wait_for(lambda: any(t == 2 for t, _, _ in m2.events()[before:]))
                 detail = "no tab 2"
+            elif label == "New window":
+                ok = wait_for(lambda: m2.lines(r"^morph-event window opened 2"))
+                detail = str(m2.lines("morph-event window"))
             elif label == "Find in page":
                 ok = wait_for(lambda: st().get("h", h0) < h0)
                 detail = f"page height {h0} -> {st().get('h')}"
@@ -1326,6 +1363,89 @@ def main_menu(r, binary, display):
             r.check("menu", f"☰ → {label} works", ok, detail)
         finally:
             m2.stop()
+
+
+def windows_check(r, binary, display, shots=None):
+    """Several windows: Ctrl+N opens a second one and Ctrl+W on its only
+    tab closes just that window; Shift+click opens a link in a new window;
+    the tab menu's Move to new window takes a tab to a window of its own;
+    a relaunch brings both windows back."""
+    home = tempfile.mkdtemp(prefix="morph-xvfb-windows-")
+    restore = {"MORPH_NO_RESTORE": "0"}
+    m2 = Driver(binary, display, home, restore, args=[LINKS.as_uri()])
+    opened = lambda: len(m2.lines(r"^morph-event window opened")) - len(m2.lines(r"^morph-event window closed"))  # noqa: E731
+    titles = lambda: [m2.title(w) for w in m2.windows()]  # noqa: E731
+
+    def shot(name):
+        if shots:
+            Path(shots).mkdir(parents=True, exist_ok=True)
+            screenshot(m2, Path(shots) / f"windows-{name}.png")
+
+    def other(win):
+        return wait_for(lambda: next((w for w in m2.windows() if w != win), None), 8)
+
+    try:
+        win = wait_for(lambda: m2.own_window(), 20)
+        ok = win and wait_for(lambda: any(t.startswith('L{"links":1}') for t in titles()), 20)
+        r.check("windows", "a Morph opens with the link page", ok, str(titles()))
+        if not ok:
+            return
+        time.sleep(1.0)
+        win = m2.own_window() or win
+        m2.activate(win)
+        m2.key("ctrl+n", delay=1.5)
+        r.check("windows", "Ctrl+N opens a second window", wait_for(lambda: opened() == 2 and len(m2.windows()) == 2), str(m2.lines("morph-event window")))
+        shot("ctrl-n")
+        second = other(win)
+        if second:
+            m2.activate(second)
+            m2.key("ctrl+w", delay=1.5)
+            ok = wait_for(lambda: opened() == 1 and len(m2.windows()) == 1)
+            r.check("windows", "Ctrl+W on its only tab closes that window alone", ok and m2.proc.poll() is None, f"exit {m2.proc.poll()}, {m2.lines('morph-event window')}")
+        if m2.proc.poll() is not None:
+            return
+        m2.activate(win)
+        m2.click_with(win, 300, 400, mod="shift")
+        ok = wait_for(lambda: opened() == 2 and any(t.startswith("M{") for t in titles()), 10)
+        r.check("windows", "Shift+click on a link opens it in a new window", ok, f"{titles()} {m2.lines('morph-event (window|link)')}")
+        shot("shift-click")
+        r.check("windows", "and the link's page stays as it was", any(t.startswith('L{"links":1}') for t in titles()), str(titles()))
+        second = other(win)
+        if second:
+            m2.activate(second)
+            m2.click(second, 300, 400)
+            m2.key("ctrl+w", delay=1.5)
+            wait_for(lambda: opened() == 1)
+        m2.activate(win)
+        before = len(m2.events())
+        m2.click_with(win, 300, 400, mod="ctrl")
+        tab2 = wait_for(lambda: any(t == 2 and n == "TitleChanged" for t, n, _ in m2.events()[before:]), 10)
+        r.check("windows", "Ctrl+click on a link opens it in a new tab", tab2 and opened() == 1, str(m2.events()[before:][-3:]))
+        # The second tab's menu: Move to new window is the fourth entry.
+        m2.click_with(win, 300, 17, button=3)
+        time.sleep(0.8)
+        shot("tab-menu")
+        m2.key("Down", "Down", "Down", "Down", "Return", delay=0.3)
+        ok = wait_for(lambda: m2.lines(r"^morph-event tab moves to a new window") and opened() == 2, 10)
+        r.check("windows", "Move to new window takes the tab to a window of its own", ok, str(m2.lines("morph-event (window|tab moves)")))
+        moved = wait_for(lambda: sorted(t[:2] for t in titles()) == ["L{", "M{"], 10)
+        r.check("windows", "the moved page shows there, the link page stays", moved, str(titles()))
+        shot("moved")
+        tabs_json = Path(home) / "profiles" / "default" / "tabs.json"
+        saved = lambda: json.loads(tabs_json.read_text()) if tabs_json.exists() else {}  # noqa: E731
+        ok = wait_for(lambda: len(saved().get("windows", [])) == 2)
+        r.check("windows", "tabs.json keeps both windows", ok, str(saved()))
+        m2.activate(win)
+        m2.key("ctrl+q", delay=1.0)
+        code = wait_for(lambda: m2.proc.poll() is not None and str(m2.proc.poll()), 8)
+        r.check("windows", "Ctrl+Q quits", code == "0", f"exit {m2.proc.poll()}")
+        m2.stop()
+        m2 = Driver(binary, display, home, restore, args=[])
+        ok = wait_for(lambda: opened() == 2 and sorted(t[:2] for t in titles()) == ["L{", "M{"], 20)
+        r.check("windows", "a relaunch brings both windows back", ok, f"{titles()} {m2.lines('morph-event window')}")
+        shot("restored")
+    finally:
+        m2.stop()
 
 
 def last_tab_quits(r, binary, display):
@@ -2016,7 +2136,7 @@ def main():
     ap.add_argument("--input-bin", help="morph-wl-input (default: next to --bin)")
     ap.add_argument("--local-relay", help="a local relay to link through (weirdnet-device-link's local-relay example)")
     ap.add_argument("--app-server", help="a Weirdnet app behind the local relay (morph-services' serve-app example)")
-    ap.add_argument("--only", choices=["downloads"], help="run just this check")
+    ap.add_argument("--only", choices=["downloads", "windows"], help="run just this check")
     ap.add_argument("--screenshots", help="save screenshots of checks that take them (X11) here")
     args = ap.parse_args()
     relay = start_local_relay(args.local_relay) if args.local_relay else None
@@ -2091,6 +2211,15 @@ def run(args):
         if not args.no_wm and shutil.which("openbox"):
             wm = subprocess.Popen(["openbox"], env=dict(os.environ, DISPLAY=display), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             time.sleep(1.0)
+    if args.only == "windows":
+        r = Results()
+        try:
+            windows_check(r, args.bin, display, args.screenshots)
+            return finish(r, args)
+        finally:
+            for proc in (wm, xvfb):
+                if proc and proc.poll() is None:
+                    proc.terminate()
     if args.only == "downloads":
         r = Results()
         try:
@@ -2192,6 +2321,7 @@ def run(args):
         select_menu(r, args.bin, display, base)
         page_clipboard(r, args.bin, display, base, args.wayland)
         main_menu(r, args.bin, display)
+        windows_check(r, args.bin, display, args.screenshots)
         last_tab_quits(r, args.bin, display)
         # GPUI draws the frame itself only where the window manager supports
         # _GTK_FRAME_EXTENTS and a compositor runs; xfwm4 has both.
