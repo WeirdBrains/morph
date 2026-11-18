@@ -66,6 +66,9 @@ pub const SETTINGS: &str = "morph.settings";
 /// The profile's Weirdnet identity, its backups and device links.
 pub const IDENTITY: &str = "morph.identity";
 
+/// The Companions: named agents beside the pages, in the right-hand slot.
+pub const COMPANIONS: &str = "morph.companions";
+
 /// Kinds that ship with Morph. Later phases add chat, notes and projects
 /// here as they are built.
 pub fn builtin() -> Vec<ComponentKind> {
@@ -75,6 +78,7 @@ pub fn builtin() -> Vec<ComponentKind> {
         ComponentKind::new(PROFILES, "Profiles", "person", &[]),
         ComponentKind::new(SETTINGS, "Settings", "gear", &[]),
         ComponentKind::new(IDENTITY, "Identity", "key", &[Needs::Network]),
+        ComponentKind::new(COMPANIONS, "Companions", "sparkle", &[Needs::Network]),
     ]
 }
 

@@ -16,18 +16,21 @@ pub enum Slot {
     Main,
     Sidebar,
     Bottom,
+    /// The window-level right-hand panel for the Companions. It stays across tabs.
+    Companion,
 }
 
 impl Slot {
-    pub const ALL: [Slot; 3] = [Slot::Main, Slot::Sidebar, Slot::Bottom];
+    pub const ALL: [Slot; 4] = [Slot::Main, Slot::Sidebar, Slot::Bottom, Slot::Companion];
 
-    /// Default size in logical pixels (width for the sidebar, height for the
-    /// bottom panel; the main slot takes what is left).
+    /// Default size in logical pixels (width for the sidebar and the Companion
+    /// panel, height for the bottom panel; the main slot takes what is left).
     fn default_size(self) -> u32 {
         match self {
             Slot::Main => 0,
             Slot::Sidebar => 280,
             Slot::Bottom => 220,
+            Slot::Companion => 360,
         }
     }
 
@@ -36,6 +39,7 @@ impl Slot {
             Slot::Main => (0, 0),
             Slot::Sidebar => (160, 640),
             Slot::Bottom => (120, 600),
+            Slot::Companion => (280, 720),
         }
     }
 }
@@ -230,6 +234,40 @@ mod tests {
         assert!(layout.toggle_kind(Slot::Sidebar, KindId::new("morph.settings")), "another panel takes the slot");
         assert_eq!(layout.shown(Slot::Sidebar).map(KindId::as_str), Some("morph.settings"));
         assert_eq!(layout.shown(Slot::Main).map(KindId::as_str), Some(BROWSER));
+    }
+
+    #[test]
+    fn the_companion_slot_starts_hidden_and_persists_with_its_size() {
+        let mut layout = Layout::default();
+        assert_eq!(layout.shown(Slot::Companion), None);
+        assert_eq!(layout.state(Slot::Companion).size, 360);
+        assert!(layout.toggle_kind(Slot::Companion, KindId::new(crate::component::COMPANIONS)));
+        layout.set_size(Slot::Companion, 100);
+        assert_eq!(layout.state(Slot::Companion).size, 280, "clamped up");
+        layout.set_size(Slot::Companion, 5000);
+        assert_eq!(layout.state(Slot::Companion).size, 720, "clamped down");
+        layout.set_size(Slot::Companion, 400);
+        assert_eq!(layout.shown(Slot::Main).map(KindId::as_str), Some(BROWSER), "tabs stay in the main slot");
+        let tmp = tempfile::tempdir().unwrap();
+        save(tmp.path(), "p", &layout).unwrap();
+        let back = load(tmp.path(), "p");
+        assert_eq!(back.shown(Slot::Companion).map(KindId::as_str), Some(crate::component::COMPANIONS));
+        assert_eq!(back.state(Slot::Companion).size, 400);
+    }
+
+    #[test]
+    fn a_layout_saved_before_the_companion_slot_still_loads() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = layout_path(tmp.path(), "old");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            r#"{"slots":{"main":{"component":"morph.browser","size":0,"visible":true},"sidebar":{"component":null,"size":280,"visible":false},"bottom":{"component":null,"size":220,"visible":false}}}"#,
+        )
+        .unwrap();
+        let mut layout = load(tmp.path(), "old");
+        assert_eq!(layout.shown(Slot::Companion), None);
+        assert!(layout.toggle_kind(Slot::Companion, KindId::new(crate::component::COMPANIONS)));
     }
 
     #[test]

@@ -5474,12 +5474,15 @@ dependencies = [
 name = "morph-desktop"
 version = "0.2.1"
 dependencies = [
+ "async-trait",
  "gpui",
  "gpui_linux",
  "gpui_platform",
  "image",
  "libc",
+ "morph-ai",
  "morph-browser",
+ "morph-companion",
  "morph-core",
  "morph-identity",
  "morph-keystore",
@@ -5491,7 +5494,9 @@ dependencies = [
  "raw-window-handle",
  "rqrr",
  "tempfile",
+ "tokio",
  "unicode-segmentation",
+ "weirdnet-agent",
  "windows-sys 0.61.2",
 ]
 

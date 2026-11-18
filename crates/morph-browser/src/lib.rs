@@ -1322,6 +1322,7 @@ impl Browser {
             | Action::ShowHistory
             | Action::ShowProfiles
             | Action::ShowIdentity
+            | Action::ToggleCompanions
             // The shell's downloads panel.
             | Action::ShowDownloads => {
                 return false;

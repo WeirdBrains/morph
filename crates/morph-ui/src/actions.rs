@@ -44,6 +44,8 @@ pub enum Action {
     ShowSearchSettings,
     /// Open or close the downloads panel (the toolbar's downloads button).
     ShowDownloads,
+    /// Open or close the Companion panel (the right-hand slot).
+    ToggleCompanions,
 }
 
 impl Action {
@@ -76,6 +78,7 @@ impl Action {
             Action::ShowAbout => "shell.show_about".into(),
             Action::ShowSearchSettings => "shell.show_search_settings".into(),
             Action::ShowDownloads => "browser.show_downloads".into(),
+            Action::ToggleCompanions => "shell.toggle_companions".into(),
         }
     }
 
@@ -107,6 +110,7 @@ impl Action {
             Action::ShowAbout,
             Action::ShowSearchSettings,
             Action::ShowDownloads,
+            Action::ToggleCompanions,
         ];
         if let Some(action) = fixed.into_iter().find(|a| a.name() == name) {
             return Some(action);
@@ -159,6 +163,7 @@ impl Default for Keymap {
             ("ctrl-,", Action::ShowSettings),
             ("ctrl-shift-l", Action::ShowIdentity),
             ("ctrl-shift-y", Action::ShowDownloads),
+            ("ctrl-shift-k", Action::ToggleCompanions),
         ];
         let mut bindings: Vec<Binding> = fixed.into_iter().map(|(k, a)| Binding { keystroke: k.into(), action: a }).collect();
         bindings.extend((1..=8).map(|n| Binding { keystroke: format!("ctrl-{n}"), action: Action::SelectTab(n - 1) }));
@@ -322,6 +327,8 @@ mod tests {
         assert_eq!(keys.action_for("ctrl-shift-m"), Some(Action::ShowProfiles));
         assert_eq!(keys.action_for("ctrl-,"), Some(Action::ShowSettings));
         assert_eq!(keys.action_for("ctrl-shift-l"), Some(Action::ShowIdentity));
+        assert_eq!(keys.action_for("ctrl-shift-k"), Some(Action::ToggleCompanions));
+        assert_eq!(Action::ToggleCompanions.name(), "shell.toggle_companions");
         assert_eq!(keys.action_for("ctrl-x"), None);
     }
 
