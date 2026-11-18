@@ -87,6 +87,20 @@ fn history_appends_caps_replaces_and_deletes() {
 }
 
 #[test]
+fn replace_history_rewrites_visits_and_keeps_tombstones() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut lib = Library::open(tmp.path(), &key(1)).unwrap();
+    lib.append_visits(&[visit("old", 1)], 0).unwrap();
+    let a = HistoryEntry { id: "h-a".into(), hlc: "x".into(), node_id: "n".into(), ..visit("a", 2) };
+    let b = HistoryEntry { id: "h-b".into(), ..visit("b", 3) };
+    let stone = Tombstone { id: "h-gone".into(), deleted_ms: 9, hlc: "y".into(), node_id: "n".into() };
+    lib.replace_history(&[a.clone(), b.clone()], std::slice::from_ref(&stone)).unwrap();
+    assert_eq!(lib.history().unwrap(), vec![b, a], "newest first, old rows gone");
+    assert_eq!(lib.history_tombstones().unwrap(), vec![stone]);
+    assert!(new_history_id().starts_with("h-"));
+}
+
+#[test]
 fn the_file_is_encrypted_and_needs_its_key() {
     let tmp = tempfile::tempdir().unwrap();
     let mut lib = Library::open(tmp.path(), &key(1)).unwrap();

@@ -365,6 +365,26 @@ impl Library {
         Ok(())
     }
 
+    /// Replace every visit (oldest first) and add `stones`, in one transaction.
+    /// Sync rebuilds history from its log with this.
+    pub fn replace_history(&mut self, oldest_first: &[HistoryEntry], stones: &[Tombstone]) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        tx.execute("DELETE FROM history", [])?;
+        {
+            let mut add = tx.prepare("INSERT INTO history (id, url, title, visited_ms, hlc, node_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")?;
+            for e in oldest_first {
+                let id = if e.id.is_empty() { new_history_id() } else { e.id.clone() };
+                add.execute(params![id, e.url, e.title, e.visited_ms, e.hlc, e.node_id])?;
+            }
+            let mut stone = tx.prepare("INSERT OR REPLACE INTO history_tombstones (id, deleted_ms, hlc, node_id) VALUES (?1, ?2, ?3, ?4)")?;
+            for t in stones {
+                stone.execute(params![t.id, t.deleted_ms, t.hlc, t.node_id])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Tombstones for deleted history rows, so sync can tell delete from absent.
     pub fn history_tombstones(&self) -> Result<Vec<Tombstone>> {
         Ok(self
@@ -425,7 +445,8 @@ fn backfill_history_ids(tx: &rusqlite::Transaction) -> Result<()> {
     Ok(())
 }
 
-fn new_history_id() -> String {
+/// A fresh stable id for a visit (UUIDv7, `h-` prefix).
+pub fn new_history_id() -> String {
     format!("h-{}", uuid::Uuid::now_v7())
 }
 
