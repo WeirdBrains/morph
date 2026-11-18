@@ -1,0 +1,21 @@
+[package]
+name = "morph-ai"
+description = "Morph's companion roster, grants and allows store, and the model, browser and research interfaces the Companions run on"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+
+[dependencies]
+weirdnet-agent.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
