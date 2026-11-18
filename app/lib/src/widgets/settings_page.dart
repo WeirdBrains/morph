@@ -6,6 +6,7 @@ import '../api.dart';
 import '../default_browser.dart';
 import '../theme/morph_theme.dart';
 import 'library_page.dart';
+import 'linked_devices.dart';
 import 'network_settings.dart';
 import 'relay_status.dart';
 
@@ -21,8 +22,14 @@ class MorphSettingsPage extends StatefulWidget {
     this.defaultBrowser,
     this.relays,
     this.network,
+    this.devices,
+    this.profileId,
     this.home,
   });
+
+  /// Linked devices of [profileId]; null (or no [profileId]) hides them.
+  final MorphDeviceSource? devices;
+  final String? profileId;
 
   /// Null hides the Relays section.
   final MorphRelaySource? relays;
@@ -168,6 +175,15 @@ class _MorphSettingsPageState extends State<MorphSettingsPage> {
             subtitle: Text('Only ${widget.profileName} is affected'),
             onTap: _clearHistory,
           ),
+          if (widget.devices != null && widget.profileId != null) ...[
+            _Header('Linked devices · ${widget.profileName}'),
+            MorphLinkedDevicesSection(
+              key: ValueKey('linked-devices-${widget.profileId}'),
+              source: widget.devices!,
+              profileId: widget.profileId!,
+              home: widget.home,
+            ),
+          ],
           if (widget.defaultBrowser?.supported ?? false) ...[
             const _Header('Browser · all profiles'),
             _defaultBrowserTile(),

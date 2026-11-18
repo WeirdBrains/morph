@@ -4,6 +4,7 @@ import 'dart:io';
 import 'api.dart';
 import 'rust/api/events.dart' as rust_events;
 import 'rust/api/device_link.dart' as rust_link;
+import 'rust/api/devices.dart' as rust_devices;
 import 'rust/api/identity.dart' as rust_identity;
 import 'rust/api/info.dart' as rust_info;
 import 'rust/api/library.dart' as rust_library;
@@ -717,6 +718,55 @@ class FfiMorphApi implements MorphApi {
   @override
   Future<void> linkAddDeviceCancel(int session) =>
       rust_link.linkAddDeviceCancel(session: BigInt.from(session));
+
+  static MorphLinkedDevice _device(rust_devices.LinkedDeviceView d) =>
+      MorphLinkedDevice(
+        peerId: d.peerId,
+        label: d.label,
+        state: d.state,
+        issuedMs: d.issuedMs.toInt(),
+        revokedMs: d.revokedMs?.toInt(),
+        thisDevice: d.thisDevice,
+        note: d.note,
+        hasKey: d.hasKey,
+      );
+
+  @override
+  Future<List<MorphLinkedDevice>> linkedDevices(
+    String profileId, {
+    String? home,
+  }) async => [
+    for (final d in await rust_devices.linkedDevices(
+      home: home,
+      profileId: profileId,
+    ))
+      _device(d),
+  ];
+
+  @override
+  Future<String?> linkedDeviceRevokeWarning(
+    String profileId,
+    String peerId, {
+    String? home,
+  }) => rust_devices.linkedDeviceRevokeWarning(
+    home: home,
+    profileId: profileId,
+    peerId: peerId,
+  );
+
+  @override
+  Future<List<MorphLinkedDevice>> revokeLinkedDevice(
+    String profileId,
+    String peerId, {
+    String? home,
+  }) async => [
+    for (final d in await rust_devices.revokeLinkedDevice(
+      home: home,
+      profileId: profileId,
+      peerId: peerId,
+    ))
+      _device(d),
+  ];
 
   @override
   MorphRelayReport relayReport() {

@@ -1,6 +1,7 @@
 /// The Rust surface the shell needs. Widget tests use a fake so they can run
 /// on the Dart VM without loading generated FFI bindings or `libmorph_bridge.so`.
-abstract class MorphApi implements MorphRelaySource, MorphNetworkSource {
+abstract class MorphApi
+    implements MorphRelaySource, MorphNetworkSource, MorphDeviceSource {
   String coreVersion();
 
   /// What typing [input] into the address bar opens (`morph-core`'s rule,
@@ -330,6 +331,73 @@ abstract class MorphRelaySource {
   Future<void> relayCheckStart();
   Future<void> relayCheckStop();
 }
+
+/// Settings → Linked devices: the profile's devices (`morph-services` sync,
+/// shared with the desktop), their key state after a rotation, and revoking
+/// one. A revoke rotates the sync key, so the revoked device cannot read
+/// anything synced afterwards.
+abstract class MorphDeviceSource {
+  /// This device first. Empty when the profile does not sync yet.
+  Future<List<MorphLinkedDevice>> linkedDevices(
+    String profileId, {
+    String? home,
+  });
+
+  /// What to say before revoking [peerId] (other devices that have not synced
+  /// since updating would be left out of the new key), or null.
+  Future<String?> linkedDeviceRevokeWarning(
+    String profileId,
+    String peerId, {
+    String? home,
+  });
+
+  /// Revoke [peerId]; returns the list after the revoke.
+  Future<List<MorphLinkedDevice>> revokeLinkedDevice(
+    String profileId,
+    String peerId, {
+    String? home,
+  });
+}
+
+/// One linked device in Settings → Linked devices.
+class MorphLinkedDevice {
+  const MorphLinkedDevice({
+    required this.peerId,
+    required this.label,
+    required this.state,
+    this.issuedMs = 0,
+    this.revokedMs,
+    this.thisDevice = false,
+    this.note,
+    this.hasKey = true,
+  });
+
+  final String peerId;
+  final String label;
+
+  /// "This device", "Linked" or "Revoked".
+  final String state;
+  final int issuedMs;
+  final int? revokedMs;
+  final bool thisDevice;
+
+  /// "Needs re-admission from another device" (this device, restored after
+  /// keys rotated) or "Waiting for its first sync" (another device, linked
+  /// here after keys rotated).
+  final String? note;
+
+  /// It has synced since updating Morph (its device key is published).
+  final bool hasKey;
+
+  bool get revoked => revokedMs != null;
+}
+
+/// Shown after restoring an identity from its recovery words or a backup:
+/// the same words as `morph_services::sync::RESTORED_NOTE` on desktop.
+const morphRestoredNote =
+    'If you use this identity on other devices, link this one again from one '
+    'of them so it can read what they sync; until then Linked devices shows '
+    'it waiting for re-admission.';
 
 /// Settings → Relays: Weirdnet discovery and manually added peers for every
 /// profile (`network.json` in the Morph home, the same file the desktop
