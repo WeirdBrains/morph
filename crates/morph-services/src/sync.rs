@@ -17,7 +17,7 @@ use morph_identity::profile_identity::{self, SecretString};
 use morph_store::Library;
 use weirdnet_net::user::NodeCert;
 use weirdnet_net::{Keypair, Multiaddr, Node, NodeConfig, PeerId};
-use weirdnet_sync::{PAGE_MAX, Roster, SyncState, node_config, pull_from, start_node};
+use weirdnet_sync::{Device, KeyStatus, PAGE_MAX, Roster, SyncState, node_config, pull_from, start_node};
 
 use crate::home::{now_ms, profile_dir};
 use crate::{Error, Result};
@@ -113,6 +113,9 @@ pub fn apply_link_snapshot(home: &Path, profile_id: &str, types: &[String], sett
     library_db::with(home, profile_id, |lib| {
         let mut roster = core::load_roster(lib)?;
         roster.epoch = roster.epoch.max(incoming.roster.epoch);
+        // The key chain too, so this device knows whether keys have rotated
+        // and shows that it waits for admission until its first sync.
+        roster.chain.merge(&incoming.roster.chain);
         for c in incoming.roster.certs {
             roster.upsert(c);
         }
@@ -129,11 +132,19 @@ pub fn apply_link_snapshot(home: &Path, profile_id: &str, types: &[String], sett
 }
 
 /// Put the new device's cert on the existing device's roster (after send).
+/// Linking is the user's approval: once keys have rotated, the device is
+/// admitted as soon as its first hello brings its device key.
 pub fn adopt_peer_cert(home: &Path, profile_id: &str, cert: NodeCert) -> Result<()> {
     library_db::with(home, profile_id, |lib| {
-        let mut roster = core::load_roster(lib)?;
-        roster.upsert(cert);
-        core::save_roster(lib, &roster)?;
+        if let Some((mut st, _)) = offline_state(lib) {
+            let _ = st.approve(cert.clone(), now_ms());
+            core::save_roster(lib, &st.roster)?;
+            core::save_epoch_keys(lib, &st.keys)?;
+        } else {
+            let mut roster = core::load_roster(lib)?;
+            roster.upsert(cert);
+            core::save_roster(lib, &roster)?;
+        }
         core::refresh_live(&morph_core::profiles::profile_dir(home, profile_id), lib);
         Ok(())
     })
@@ -248,9 +259,48 @@ fn build_state(lib: &Library) -> Option<(Arc<Mutex<SyncState>>, Keypair)> {
             roster,
             log: core::load_log(lib).ok()?,
             clock: core::load_clock(lib).ok()?,
+            device: Device::from_node_key(&node_key).ok(),
+            keys: core::load_epoch_keys(lib).ok()?,
+            // Start the key chain right after the first link, or once after an
+            // upgrade from seed-only keys (once every device has a device key).
+            auto_first_rotation: true,
         })),
         node_key,
     ))
+    .map(|(st, key)| {
+        if let Ok(mut s) = st.lock() {
+            let _ = s.publish_device_key(now_ms());
+            s.refresh_keys();
+        }
+        (st, key)
+    })
+}
+
+/// The profile's sync state without a running node, for revoking and approving.
+fn offline_state(lib: &Library) -> Option<(SyncState, Keypair)> {
+    let seed = core::load_seed(lib).ok().flatten()?;
+    let node_key = Keypair::from_protobuf_encoding(&core::load_node_key(lib).ok().flatten()?).ok()?;
+    let our = core::node_id(lib).ok().flatten()?;
+    let (user, user_id) = user_from_seed(&seed)?;
+    let roster = core::load_roster(lib).ok()?;
+    let our_cert = roster.get(&our).cloned()?;
+    let mut st = SyncState {
+        seed,
+        user_id,
+        user_key: user.public(),
+        our_cert,
+        our_node: weirdnet_sync::NodeId::new(our),
+        types: core::types_on(lib).ok()?,
+        roster,
+        log: weirdnet_sync::OpLog::new(),
+        clock: None,
+        device: Device::from_node_key(&node_key).ok(),
+        keys: core::load_epoch_keys(lib).ok()?,
+        auto_first_rotation: true,
+    };
+    st.publish_device_key(now_ms()).ok()?;
+    st.refresh_keys();
+    Some((st, user))
 }
 
 /// Stop a running sync node, if any.
@@ -326,6 +376,7 @@ pub fn tick(home: &Path, profile_id: &str) -> Result<usize> {
             let st = state.lock().expect("sync state");
             core::persist_log(lib, &st.log, st.clock.as_ref())?;
             core::save_roster(lib, &st.roster)?;
+            core::save_epoch_keys(lib, &st.keys)?;
             drop(st);
             if n > 0 {
                 core::materialize_all(lib, now_ms())?;
@@ -351,6 +402,9 @@ fn snapshot(st: &SyncState) -> SyncState {
         roster: st.roster.clone(),
         log: st.log.clone(),
         clock: st.clock.clone(),
+        device: st.device.clone(),
+        keys: st.keys.clone(),
+        auto_first_rotation: st.auto_first_rotation,
     }
 }
 
@@ -374,6 +428,9 @@ fn merge_back(st: &mut SyncState, work: &SyncState) {
     }
     let key = st.user_key.clone();
     st.roster.merge(&work.roster, &key, &weirdnet_net::WEIRDNET);
+    // A rotation or admission the copy picked up (or made) comes with its keys.
+    st.take_keys_from(work);
+    st.refresh_keys();
     if let Some(c) = &work.clock
         && st.clock.as_ref().is_none_or(|l| c.cmp_total(l).is_gt())
     {
@@ -446,6 +503,67 @@ pub struct DeviceView {
     pub revoked_ms: Option<i64>,
     /// This install's own node.
     pub this_device: bool,
+    /// This device: keys rotated without it (restored from the recovery words,
+    /// or linked while offline), so another device has to re-admit it.
+    pub needs_admission: bool,
+    /// Another device, linked here after keys rotated: it is admitted on its
+    /// first sync with this one.
+    pub awaiting_first_sync: bool,
+    /// It has published its device key (it runs a Morph with key rotation and
+    /// has synced since). A revoke now leaves devices without one out of the
+    /// new key.
+    pub has_key: bool,
+}
+
+impl DeviceView {
+    /// Its state in Linked devices: "This device", "Linked" or "Revoked".
+    pub fn state_label(&self) -> &'static str {
+        match (self.this_device, self.revoked_ms.is_some()) {
+            (_, true) => "Revoked",
+            (true, false) => "This device",
+            (false, false) => "Linked",
+        }
+    }
+
+    /// One line for the device's state in Linked devices, if it needs one.
+    pub fn key_note(&self) -> Option<&'static str> {
+        if self.revoked_ms.is_some() {
+            None
+        } else if self.needs_admission {
+            Some("Needs re-admission from another device")
+        } else if self.awaiting_first_sync {
+            Some("Waiting for its first sync")
+        } else {
+            None
+        }
+    }
+}
+
+/// After restoring an identity from its recovery words, shards or a backup:
+/// this install has a new node key, so once keys have rotated it reads
+/// nothing until another device admits it (Linked devices shows "Needs
+/// re-admission from another device" meanwhile).
+pub const RESTORED_NOTE: &str = "If you use this identity on other devices, link this one again from one of them so it can read what they sync; until then Linked devices shows it waiting for re-admission.";
+
+/// What to tell the user before revoking `peer_id`: the other active devices
+/// that have not synced since updating Morph are left out of the new key and
+/// will need re-admission (linking them again from a device that has it).
+pub fn revoke_warning(devices: &[DeviceView], peer_id: &str) -> Option<String> {
+    let left_out: Vec<&str> = devices
+        .iter()
+        .filter(|d| d.peer_id != peer_id && !d.this_device && d.revoked_ms.is_none() && !d.has_key)
+        .map(|d| if d.label.is_empty() { "an unnamed device" } else { d.label.as_str() })
+        .collect();
+    if left_out.is_empty() {
+        return None;
+    }
+    let who = left_out.join(", ");
+    let verb = if left_out.len() == 1 { "has" } else { "have" };
+    Some(format!(
+        "{who} {verb} not synced since updating Morph. Revoking now leaves {} out of the new key; link {} again afterwards.",
+        if left_out.len() == 1 { "it" } else { "them" },
+        if left_out.len() == 1 { "it" } else { "them" }
+    ))
 }
 
 /// The profile's linked devices (this one first, then by link time). Empty
@@ -454,6 +572,9 @@ pub fn devices(home: &Path, profile_id: &str) -> Result<Vec<DeviceView>> {
     let listed = library_db::with(home, profile_id, |lib| {
         let ours = core::node_id(lib)?.unwrap_or_default();
         let roster = core::load_roster(lib)?;
+        let st = offline_state(lib).map(|(st, _)| st);
+        let ours_waiting = st.as_ref().is_some_and(|st| st.key_status() == KeyStatus::NeedsAdmission);
+        let chain = st.as_ref().map(|st| &st.roster.chain).unwrap_or(&roster.chain);
         let mut out: Vec<DeviceView> = roster
             .certs
             .iter()
@@ -463,6 +584,9 @@ pub fn devices(home: &Path, profile_id: &str) -> Result<Vec<DeviceView>> {
                 issued_ms: c.issued_at,
                 revoked_ms: c.revoked_at,
                 this_device: c.peer_id == ours,
+                needs_admission: c.peer_id == ours && ours_waiting,
+                awaiting_first_sync: c.peer_id != ours && chain.approved.contains(&c.peer_id),
+                has_key: chain.device(&c.peer_id).is_some(),
             })
             .collect();
         out.sort_by_key(|d| (!d.this_device, d.issued_ms));
@@ -482,19 +606,20 @@ pub fn revoke_device(home: &Path, profile_id: &str, peer_id: &str, now_ms: i64) 
         if core::node_id(lib)?.as_deref() == Some(peer_id) {
             return Ok(Err("this device cannot revoke itself".to_string()));
         }
-        let Some((user, _)) = core::load_seed(lib)?.and_then(|seed| user_from_seed(&seed)) else {
+        let Some((mut st, user)) = offline_state(lib) else {
             return Ok(Err("this profile does not sync yet".to_string()));
         };
-        let mut roster = core::load_roster(lib)?;
-        match roster.get(peer_id) {
+        match st.roster.get(peer_id) {
             None => return Ok(Err("no such device".to_string())),
             Some(c) if !c.active() => return Ok(Ok(())),
             Some(_) => {}
         }
-        if let Err(e) = roster.revoke(&weirdnet_net::WEIRDNET, &user, peer_id, now_ms) {
+        // Revoke and rotate: the revoked device keeps the seed, not the new key.
+        if let Err(e) = st.revoke(&user, peer_id, now_ms) {
             return Ok(Err(e.to_string()));
         }
-        core::save_roster(lib, &roster)?;
+        core::save_roster(lib, &st.roster)?;
+        core::save_epoch_keys(lib, &st.keys)?;
         core::refresh_live(&dir, lib);
         Ok(Ok(()))
     })
@@ -690,6 +815,9 @@ mod tests {
             roster,
             log: weirdnet_sync::OpLog::new(),
             clock: None,
+            device: None,
+            keys: Default::default(),
+            auto_first_rotation: false,
         };
         let mut work = snapshot(&live);
         // While the copy pulls, the live state revokes `other` and writes locally.
@@ -737,8 +865,12 @@ mod tests {
     /// delete by URL, clear-all and a visit after the clear), then settings
     /// (a pre-link theme beats fresh defaults, a change comes back, layout
     /// stays local), then revoking B cuts it off both ways.
+    /// The relay tests share the relay override and the node registry.
+    static RELAY_TESTS: Mutex<()> = Mutex::new(());
+
     #[test]
     fn two_homes_sync_the_library_over_a_local_relay() {
+        let _one = RELAY_TESTS.lock().unwrap_or_else(|p| p.into_inner());
         let relay = start_local_relay();
         set_relays_for_tests(Some(relay.addrs.clone()));
         let cfg = link_cfg(&relay.addrs);
@@ -888,9 +1020,180 @@ mod tests {
         }
         assert!(!has_visit(&a, "https://after-revoke-b.example/"), "a revoked device's changes stay out");
         assert!(!has_visit(&b, "https://after-revoke-a.example/"), "a revoked device stops receiving");
+        // The revoke rotated: A holds a random epoch key, and B (which still has the
+        // seed) was not sealed a copy.
+        let keys_of = |home: &Path| {
+            library_db::with(home, "p1", |lib| Ok(core::load_epoch_keys(lib)?.ids().map(|(id, _)| id.to_string()).collect::<Vec<_>>()))
+                .unwrap()
+                .unwrap()
+        };
+        let head = library_db::with(&a, "p1", |lib| Ok(core::load_roster(lib)?.head_id())).unwrap().unwrap().expect("a rotation");
+        assert!(keys_of(&a).contains(&head));
+        assert!(!keys_of(&b).contains(&head), "the revoked device got no copy of the new key");
+        let a_status = library_db::with(&a, "p1", |lib| Ok(offline_state(lib).map(|(st, _)| st.key_status()))).unwrap().unwrap();
+        assert!(matches!(a_status, Some(KeyStatus::Current { .. })), "{a_status:?}");
 
         stop(&a, "p1");
         stop(&b, "p1");
+        set_relays_for_tests(None);
+    }
+
+    /// Link a new home `b` to `a` through the device-link flow, as the
+    /// Identity screen does on both devices.
+    fn link_home(a: &Path, b: &Path, label: &str, cfg: &NodeConfig) {
+        let new = NewDevice::start(label, cfg.clone()).unwrap();
+        let mut add = AddDevice::start(&morph_core::profiles::profile_dir(a, "p1"), "Work", &pw("old password"), new.link(), cfg.clone()).unwrap();
+        assert!(matches!(
+            wait_link(&new, |s| matches!(s, morph_identity::device_link::LinkState::Paired { .. })),
+            morph_identity::device_link::LinkState::Paired { .. }
+        ));
+        new.confirm();
+        let (settings, types) = link_payload(a, "p1").unwrap();
+        let cert = add.send_with(&settings, &types).unwrap();
+        adopt_peer_cert(a, "p1", cert).unwrap();
+        assert!(matches!(
+            wait_link(&new, |s| matches!(s, morph_identity::device_link::LinkState::Received { .. })),
+            morph_identity::device_link::LinkState::Received { .. }
+        ));
+        let linked = new.finish(&morph_core::profiles::profile_dir(b, "p1"), &pw("new password"), 20).unwrap();
+        drop(new);
+        drop(add);
+        crate::library::adopt_new_identity(
+            b,
+            "p1",
+            &linked.identity.user_id,
+            &morph_identity::profile_identity::library_key(&morph_core::profiles::profile_dir(b, "p1"), &pw("new password")).unwrap(),
+        );
+        on_password(b, "p1", &pw("new password")).unwrap();
+        apply_link_snapshot(b, "p1", &linked.sync, &linked.settings).unwrap();
+    }
+
+    fn tick_all(homes: &[&Path], pred: impl Fn() -> bool) {
+        let end = Instant::now() + Duration::from_secs(90);
+        while Instant::now() < end {
+            std::thread::scope(|s| {
+                for h in homes {
+                    s.spawn(move || tick(h, "p1"));
+                }
+            });
+            if pred() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(150));
+        }
+        for h in homes {
+            let r = library_db::with(h, "p1", |lib| core::load_roster(lib)).unwrap().unwrap();
+            let v = r.chain_view();
+            eprintln!(
+                "DBG head={:?} root={:?} sticky={:?} status={:?} rots={:?} devs={} certs={} appr={:?}",
+                v.head,
+                v.root,
+                r.chain.root,
+                key_status(h),
+                r.chain
+                    .rotations
+                    .iter()
+                    .map(|x| (x.id(), x.epoch, x.parent.clone(), x.by.clone(), x.keys.iter().map(|k| k.peer_id.clone()).collect::<Vec<_>>()))
+                    .collect::<Vec<_>>(),
+                r.chain.devices.len(),
+                r.certs.len(),
+                r.chain.approved
+            );
+        }
+        panic!("sync did not settle in time");
+    }
+
+    fn key_status(home: &Path) -> Option<KeyStatus> {
+        library_db::with(home, "p1", |lib| Ok(offline_state(lib).map(|(st, _)| st.key_status()))).unwrap().flatten()
+    }
+
+    fn head_of(home: &Path) -> Option<String> {
+        library_db::with(home, "p1", |lib| Ok(core::load_roster(lib)?.head_id())).unwrap().flatten()
+    }
+
+    fn view(home: &Path, peer: &str) -> DeviceView {
+        devices(home, "p1").unwrap().into_iter().find(|d| d.peer_id == peer).expect("listed")
+    }
+
+    /// Three linked homes: the first rotation starts by itself; revoking C
+    /// rotates, B catches up and C is shut out; a device linked afterwards
+    /// (as a restored install is) waits for admission, gets it on its first
+    /// sync, and catches up on the whole library.
+    #[test]
+    fn three_homes_rotate_on_revoke_and_re_admit_a_restored_device() {
+        let _one = RELAY_TESTS.lock().unwrap_or_else(|p| p.into_inner());
+        let relay = start_local_relay();
+        set_relays_for_tests(Some(relay.addrs.clone()));
+        let cfg = link_cfg(&relay.addrs);
+        let scfg = sync_cfg(&relay.addrs);
+        let (_ta, a) = home();
+        let (_tb, b) = home();
+        let (_tc, c) = home();
+        crate::identity::create(&a, "p1", &pw("old password")).unwrap();
+        bookmarks::add_bookmark(&a, "p1", "https://before.example/", "Before", 10).unwrap();
+        link_home(&a, &b, "Phone", &cfg);
+        link_home(&a, &c, "Laptop", &cfg);
+        for h in [&a, &b, &c] {
+            start_with(h, "p1", scfg.clone()).unwrap();
+            wait_reserved(h);
+        }
+        // Every device publishes its key on its first sync; then the first
+        // rotation starts once, and all three hold the key.
+        tick_all(&[&a, &b, &c], || {
+            let heads: Vec<_> = [&a, &b, &c].iter().map(|h| head_of(h)).collect();
+            heads[0].is_some()
+                && heads.iter().all(|h| *h == heads[0])
+                && [&a, &b, &c].iter().all(|h| matches!(key_status(h), Some(KeyStatus::Current { .. })))
+                && has_url(&c, "https://before.example/")
+        });
+        let first = head_of(&a).unwrap();
+        assert!([&b, &c].iter().all(|h| head_of(h).as_deref() == Some(first.as_str())));
+
+        let peers: Vec<DeviceView> = devices(&a, "p1").unwrap();
+        let c_peer = peers.iter().find(|d| d.label == "Laptop").unwrap().peer_id.clone();
+        assert!(peers.iter().all(|d| d.has_key), "everyone synced since updating");
+        assert_eq!(revoke_warning(&peers, &c_peer), None);
+        revoke_device(&a, "p1", &c_peer, now_ms()).unwrap();
+        let second = head_of(&a).unwrap();
+        assert_ne!(second, first, "revoking rotated");
+        bookmarks::add_bookmark(&a, "p1", "https://after.example/", "After", 100).unwrap();
+        tick_all(&[&a, &b, &c], || has_url(&b, "https://after.example/") && head_of(&b).as_deref() == Some(second.as_str()));
+        for _ in 0..3 {
+            std::thread::scope(|s| {
+                s.spawn(|| tick(&a, "p1"));
+                s.spawn(|| tick(&b, "p1"));
+                s.spawn(|| tick(&c, "p1"));
+            });
+        }
+        assert!(!has_url(&c, "https://after.example/"), "the revoked device gets nothing new");
+        assert!(matches!(key_status(&b), Some(KeyStatus::Current { .. })));
+        let c_keys = library_db::with(&c, "p1", |lib| Ok(core::load_epoch_keys(lib)?.ids().map(|(id, _)| id.to_string()).collect::<Vec<_>>()))
+            .unwrap()
+            .unwrap();
+        assert!(!c_keys.contains(&second), "the revoked device holds no copy of the new key");
+
+        // A reinstall restored from the recovery words comes back by linking.
+        let (_td, d) = home();
+        link_home(&a, &d, "Phone (restored)", &cfg);
+        let d_peer = devices(&d, "p1").unwrap().into_iter().find(|x| x.this_device).unwrap().peer_id;
+        assert_eq!(key_status(&d), Some(KeyStatus::NeedsAdmission));
+        assert_eq!(view(&d, &d_peer).key_note(), Some("Needs re-admission from another device"));
+        assert_eq!(view(&a, &d_peer).key_note(), Some("Waiting for its first sync"));
+        // Before D's first sync A has no device key for it, so revoking B now
+        // would leave D out of the new key: Linked devices warns first.
+        let b_peer = devices(&a, "p1").unwrap().into_iter().find(|x| x.label == "Phone").unwrap().peer_id;
+        let w = revoke_warning(&devices(&a, "p1").unwrap(), &b_peer).expect("a warning before the revoke");
+        assert!(w.starts_with("Phone (restored) has not synced since updating Morph"), "{w}");
+        start_with(&d, "p1", scfg.clone()).unwrap();
+        wait_reserved(&d);
+        tick_all(&[&a, &b, &d], || has_url(&d, "https://after.example/") && has_url(&d, "https://before.example/"));
+        assert!(matches!(key_status(&d), Some(KeyStatus::Current { .. })));
+        assert_eq!(view(&d, &d_peer).key_note(), None);
+        tick_all(&[&a, &b, &d], || view(&a, &d_peer).key_note().is_none());
+
+        for h in [&a, &b, &c, &d] {
+            stop(h, "p1");
+        }
         set_relays_for_tests(None);
     }
 }
