@@ -29,6 +29,9 @@ pub(crate) struct Job {
     pub url: String,
     pub path: PathBuf,
     pub offset: u64,
+    /// The session's headers ([`morph_core::download_sessions::DownloadContext::resume_headers`]);
+    /// `If-Range` goes only with a `Range`.
+    pub headers: Vec<(String, String)>,
     pub stop: Arc<AtomicU8>,
 }
 
@@ -36,6 +39,11 @@ pub(crate) struct Job {
 pub(crate) enum Change {
     /// The server can't resume: the bytes start over from zero.
     Restarted,
+    /// The response's validators, for the next resume's `If-Range`.
+    Validators {
+        etag: Option<String>,
+        last_modified: Option<String>,
+    },
     Progress {
         received: u64,
         total: Option<u64>,
@@ -81,12 +89,21 @@ fn content_range(value: &str) -> Option<(u64, Option<u64>)> {
 fn transfer(job: &Job, send: &dyn Fn(Change)) -> Result<bool, String> {
     let agent: ureq::Agent = ureq::Agent::config_builder().timeout_connect(Some(Duration::from_secs(30))).http_status_as_error(false).build().into();
     let mut request = agent.get(&job.url);
+    for (name, value) in &job.headers {
+        if job.offset == 0 && name.eq_ignore_ascii_case("if-range") {
+            continue;
+        }
+        request = request.header(name.as_str(), value.as_str());
+    }
     if job.offset > 0 {
         request = request.header("Range", &format!("bytes={}-", job.offset));
     }
     let response = request.call().map_err(|e| e.to_string())?;
     let status = response.status().as_u16();
     let header = |name: &str| response.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_string);
+    if matches!(status, 200 | 206) {
+        send(Change::Validators { etag: header("etag"), last_modified: header("last-modified") });
+    }
     let length: Option<u64> = header("content-length").and_then(|v| v.trim().parse().ok());
     let mut file = std::fs::OpenOptions::new().create(true).write(true).truncate(false).open(&job.path).map_err(|e| e.to_string())?;
     let (mut received, total) = match status {
@@ -107,6 +124,14 @@ fn transfer(job: &Job, send: &dyn Fn(Change)) -> Result<bool, String> {
         }
         // The range starts at the end: every byte is already here.
         416 if job.offset > 0 => return Ok(true),
+        401 | 403 => {
+            let session = if job.headers.iter().any(|(n, _)| n.eq_ignore_ascii_case("cookie") || n.eq_ignore_ascii_case("authorization")) {
+                "the sign-in it was saved with no longer works"
+            } else {
+                "no sign-in was saved with it"
+            };
+            return Err(format!("the server refused to resume (HTTP {status}): {session}; sign in again and retry"));
+        }
         _ => return Err(format!("the server answered HTTP {status}")),
     };
     file.seek(SeekFrom::Start(received)).map_err(|e| e.to_string())?;

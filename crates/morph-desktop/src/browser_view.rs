@@ -478,6 +478,9 @@ impl BrowserView {
             app_caller: Some(morph_services::app_calls::shared()),
         };
         let mut browser = Browser::new(backend, config).map_err(|e| e.to_string())?;
+        // Sessions saved with downloads (for resume behind a login) live in
+        // the profile's encrypted library; nothing is kept while it is locked.
+        browser.set_download_sessions(std::sync::Arc::new(morph_core::download_sessions::LibrarySessions::new(home, profile)));
         browser.set_shortcuts(keystrokes);
         Ok(browser)
     }

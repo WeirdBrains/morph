@@ -9,6 +9,14 @@
 //! ([`fetch`], an HTTP `Range` request, starting over when the server can't
 //! resume). A click on a running download opens the file once it is saved.
 //! The speed is smoothed so the time left doesn't jump around.
+//!
+//! Each download keeps the session it started with ([`DownloadContext`]:
+//! cookies, Referer, User-Agent, the address after redirects, validators) in
+//! the profile's encrypted library ([`SessionStore`]), so a resume works
+//! behind a login. A resume asks the engine for fresh cookies first and falls
+//! back to the saved ones; it sends `If-Range` so a file that changed on the
+//! server starts over cleanly. The session goes when the download completes,
+//! is cancelled or is cleared.
 
 mod fetch;
 
@@ -19,7 +27,12 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
+use morph_core::download_sessions::{DownloadContext, SessionCookie, SessionStore, is_auth_header};
 use morph_webview::{Download, DownloadChange};
+
+/// How long a resume waits for the engine's fresh cookies before it goes
+/// with the saved ones.
+const COOKIE_WAIT: Duration = Duration::from_secs(2);
 
 /// How a download stands.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,6 +58,9 @@ enum Transfer {
     EngineStopping,
     /// Morph's own HTTP transfer (after a resume or a retry).
     Own { generation: u64, stop: Arc<AtomicU8> },
+    /// A resume (or retry) asked the engine for fresh cookies and starts
+    /// from `offset` once they come or [`COOKIE_WAIT`] is up.
+    AwaitingCookies { since: Instant, offset: u64 },
     /// Nobody (paused, or all bytes in).
     Idle,
 }
@@ -108,6 +124,10 @@ pub struct DownloadItem {
     complete: bool,
     rate: Rate,
     transfer: Transfer,
+    /// Its row in the [`SessionStore`].
+    session_key: String,
+    /// The session it started with (fresh cookies replace the saved ones).
+    context: DownloadContext,
 }
 
 impl PartialEq for DownloadItem {
@@ -259,12 +279,21 @@ pub struct Downloads {
     fetch_tx: Sender<fetch::Msg>,
     fetch_rx: Receiver<fetch::Msg>,
     generation: u64,
+    /// Where sessions are kept (`None`: in memory only).
+    sessions: Option<Arc<dyn SessionStore>>,
+}
+
+/// A download's row in the session store: unique across runs, so a row a
+/// crash left behind is never mistaken for a new download's.
+fn session_key(id: u64) -> String {
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    format!("dl-{}-{nanos}-{id}", std::process::id())
 }
 
 impl Default for Downloads {
     fn default() -> Self {
         let (fetch_tx, fetch_rx) = channel();
-        Self { items: Vec::new(), asks: VecDeque::new(), folder: None, opens: VecDeque::new(), fetch_tx, fetch_rx, generation: 0 }
+        Self { items: Vec::new(), asks: VecDeque::new(), folder: None, opens: VecDeque::new(), fetch_tx, fetch_rx, generation: 0, sessions: None }
     }
 }
 
@@ -301,6 +330,91 @@ impl Downloads {
 
     fn get_mut(&mut self, id: u64) -> Option<&mut DownloadItem> {
         self.items.iter_mut().find(|d| d.id == id)
+    }
+
+    /// Keep sessions in `store` from now on. Rows left by an earlier run go
+    /// (downloads don't outlive the process).
+    pub fn set_sessions(&mut self, store: Arc<dyn SessionStore>) {
+        store.clear();
+        for d in &self.items {
+            if d.active() {
+                store.save(&d.session_key, &d.context);
+            }
+        }
+        self.sessions = Some(store);
+    }
+
+    /// The URL a resume of `id` fetches and its cookies are asked for: where
+    /// the bytes came from after redirects.
+    pub fn fetch_url(&self, id: u64) -> Option<String> {
+        self.get(id).map(|d| if d.context.final_url.is_empty() { d.url.clone() } else { d.context.final_url.clone() })
+    }
+
+    /// Whether `id` waits for the engine's cookies to resume.
+    pub fn awaiting_cookies(&self, id: u64) -> bool {
+        self.get(id).is_some_and(|d| matches!(d.transfer, Transfer::AwaitingCookies { .. }))
+    }
+
+    /// The engine answered which cookies it sends for `id` now (`None`: it
+    /// could not say). Fresh cookies replace the saved ones; a waiting resume
+    /// starts, with the saved session when no fresh cookies came.
+    pub fn cookies_answered(&mut self, id: u64, cookies: Option<Vec<morph_webview::Cookie>>) {
+        let sessions = self.sessions.clone();
+        let Some(d) = self.get_mut(id) else {
+            return;
+        };
+        let fresh = cookies.filter(|c| !c.is_empty()).map(|list| {
+            list.into_iter()
+                .map(|c| SessionCookie { name: c.name, value: c.value, domain: c.domain, path: c.path, secure: c.secure })
+                .collect::<Vec<_>>()
+        });
+        let got_fresh = fresh.is_some();
+        if let Some(cookies) = fresh {
+            d.context.cookies = cookies;
+            if d.active()
+                && let Some(s) = &sessions
+            {
+                s.save(&d.session_key, &d.context);
+            }
+        }
+        if let Transfer::AwaitingCookies { offset, .. } = d.transfer {
+            self.start_waiting(id, offset, got_fresh);
+        }
+    }
+
+    /// Start waiting resumes whose cookies took too long, with the saved session.
+    fn poll_waits(&mut self, now: Instant) {
+        let late: Vec<(u64, u64)> = self
+            .items
+            .iter()
+            .filter_map(|d| match d.transfer {
+                Transfer::AwaitingCookies { since, offset } if now.duration_since(since) >= COOKIE_WAIT => Some((d.id, offset)),
+                _ => None,
+            })
+            .collect();
+        for (id, offset) in late {
+            self.start_waiting(id, offset, false);
+        }
+    }
+
+    /// Start `id`'s own transfer from `offset`: with the session in memory
+    /// when it has fresh cookies, else with the saved one.
+    fn start_waiting(&mut self, id: u64, offset: u64, fresh: bool) {
+        self.generation += 1;
+        let generation = self.generation;
+        let tx = self.fetch_tx.clone();
+        let sessions = self.sessions.clone();
+        let Some(d) = self.items.iter_mut().find(|d| d.id == id) else {
+            return;
+        };
+        if d.state != DownloadState::Running {
+            d.transfer = Transfer::Idle;
+            return;
+        }
+        if !fresh && let Some(saved) = sessions.as_ref().and_then(|s| s.load(&d.session_key)) {
+            d.context.cookies = saved.cookies;
+        }
+        Self::start_own(d, generation, offset, tx);
     }
 
     /// The downloads folder from the settings (`None`: the system's).
@@ -360,8 +474,27 @@ impl Downloads {
                     complete: false,
                     rate: Rate::default(),
                     transfer: Transfer::Engine,
+                    session_key: session_key(id),
+                    context: DownloadContext::default(),
                 });
                 self.asks.push_back(id);
+                Outcome::Nothing
+            }
+            DownloadChange::Context(engine) => {
+                let sessions = self.sessions.clone();
+                let Some(d) = self.get_mut(id) else {
+                    return Outcome::Nothing;
+                };
+                let c = &mut d.context;
+                c.final_url = engine.final_url;
+                c.referer = engine.referer.or(c.referer.take());
+                c.user_agent = engine.user_agent.or(c.user_agent.take());
+                c.auth_headers = engine.headers.into_iter().filter(|(n, _)| is_auth_header(n)).collect();
+                c.etag = engine.etag;
+                c.last_modified = engine.last_modified;
+                if let Some(s) = sessions {
+                    s.save(&d.session_key, &d.context);
+                }
                 Outcome::Nothing
             }
             DownloadChange::Progress { received, total } => {
@@ -398,7 +531,7 @@ impl Downloads {
                     let _ = std::fs::remove_file(&d.staged);
                     return Outcome::Nothing;
                 }
-                Self::settle(d, &mut self.opens)
+                Self::settle(d, &mut self.opens, self.sessions.as_deref())
             }
             DownloadChange::Failed(why) => {
                 let Some(d) = self.get_mut(id) else {
@@ -428,6 +561,7 @@ impl Downloads {
 
     /// News from Morph's own transfers (resumed downloads).
     pub fn poll_fetches(&mut self) -> Vec<Outcome> {
+        self.poll_waits(Instant::now());
         let mut out = Vec::new();
         while let Ok(msg) = self.fetch_rx.try_recv() {
             out.push(self.apply_fetch(msg, Instant::now()));
@@ -467,10 +601,18 @@ impl Downloads {
                 d.rate.sample(now, received);
                 Outcome::Nothing
             }
+            fetch::Change::Validators { etag, last_modified } => {
+                d.context.etag = etag;
+                d.context.last_modified = last_modified;
+                if let Some(s) = &self.sessions {
+                    s.save(&d.session_key, &d.context);
+                }
+                Outcome::Nothing
+            }
             fetch::Change::Finished => {
                 d.complete = true;
                 d.transfer = Transfer::Idle;
-                Self::settle(d, &mut self.opens)
+                Self::settle(d, &mut self.opens, self.sessions.as_deref())
             }
             fetch::Change::Failed(why) => {
                 d.transfer = Transfer::Idle;
@@ -495,7 +637,11 @@ impl Downloads {
         match path {
             Some(path) => {
                 d.target = Some(path);
-                if d.state == DownloadState::Running { (false, Self::settle(d, &mut self.opens)) } else { (false, Outcome::Nothing) }
+                if d.state == DownloadState::Running {
+                    (false, Self::settle(d, &mut self.opens, self.sessions.as_deref()))
+                } else {
+                    (false, Outcome::Nothing)
+                }
             }
             None => (self.cancel(id), Outcome::Nothing),
         }
@@ -529,6 +675,8 @@ impl Downloads {
                 stop.store(fetch::PAUSE, Ordering::SeqCst);
                 false
             }
+            // Paused before the resume got going: the kept bytes stay put.
+            Transfer::AwaitingCookies { .. } => false,
             other => {
                 d.transfer = other;
                 false
@@ -539,9 +687,6 @@ impl Downloads {
     /// Resume paused `id`: the rest comes over HTTP from where the kept
     /// bytes end (all of it when the server can't resume).
     pub fn resume(&mut self, id: u64) -> Outcome {
-        self.generation += 1;
-        let generation = self.generation;
-        let tx = self.fetch_tx.clone();
         let Some(d) = self.items.iter_mut().find(|d| d.id == id) else {
             return Outcome::Nothing;
         };
@@ -551,7 +696,7 @@ impl Downloads {
         d.state = DownloadState::Running;
         d.rate.restart();
         if d.complete {
-            return Self::settle(d, &mut self.opens);
+            return Self::settle(d, &mut self.opens, self.sessions.as_deref());
         }
         let kept = kept_path(&d.staged);
         if kept.exists() {
@@ -564,7 +709,8 @@ impl Downloads {
         let offset = std::fs::metadata(&d.staged).map(|m| m.len()).unwrap_or(0);
         d.received = offset;
         d.restarted = false;
-        Self::start_own(d, generation, offset, tx);
+        // The caller asks the engine for fresh cookies ([`Self::cookies_answered`]).
+        d.transfer = Transfer::AwaitingCookies { since: Instant::now(), offset };
         Outcome::Nothing
     }
 
@@ -574,13 +720,16 @@ impl Downloads {
         if let Some(dir) = d.staged.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        fetch::spawn(fetch::Job { id: d.id, generation, url: d.url.clone(), path: d.staged.clone(), offset, stop }, tx);
+        let url = if d.context.final_url.is_empty() { d.url.clone() } else { d.context.final_url.clone() };
+        let headers = d.context.resume_headers();
+        fetch::spawn(fetch::Job { id: d.id, generation, url, path: d.staged.clone(), offset, headers, stop }, tx);
     }
 
     /// Cancel `id` and delete its bytes. Returns whether the backend must
     /// stop the engine's download.
     pub fn cancel(&mut self, id: u64) -> bool {
         self.asks.retain(|a| *a != id);
+        let sessions = self.sessions.clone();
         let Some(d) = self.get_mut(id) else {
             return false;
         };
@@ -590,6 +739,7 @@ impl Downloads {
         d.state = DownloadState::Cancelled;
         d.open_when_done = false;
         let _ = std::fs::remove_file(kept_path(&d.staged));
+        Self::forget_session(d, sessions.as_deref());
         match std::mem::replace(&mut d.transfer, Transfer::Idle) {
             // Its bytes go when the engine reports it stopped.
             Transfer::Engine if !d.complete => {
@@ -614,9 +764,6 @@ impl Downloads {
     /// Start failed or cancelled `id` again from its address (Morph's own
     /// transfer; the save dialog asks again when it never answered).
     pub fn retry(&mut self, id: u64) {
-        self.generation += 1;
-        let generation = self.generation;
-        let tx = self.fetch_tx.clone();
         let Some(d) = self.items.iter_mut().find(|d| d.id == id) else {
             return;
         };
@@ -633,7 +780,7 @@ impl Downloads {
             self.asks.push_back(id);
         }
         let d = self.items.iter_mut().find(|d| d.id == id).expect("just found");
-        Self::start_own(d, generation, 0, tx);
+        d.transfer = Transfer::AwaitingCookies { since: Instant::now(), offset: 0 };
     }
 
     /// A click on `id`'s tile: a saved file's path to open now; while it
@@ -652,13 +799,15 @@ impl Downloads {
     }
 
     /// Move the file into place once the bytes and the target are in.
-    fn settle(d: &mut DownloadItem, opens: &mut VecDeque<PathBuf>) -> Outcome {
+    fn settle(d: &mut DownloadItem, opens: &mut VecDeque<PathBuf>, sessions: Option<&dyn SessionStore>) -> Outcome {
         let (true, Some(target)) = (d.complete, d.target.clone()) else {
             return Outcome::Nothing;
         };
         match move_file(&d.staged, &target) {
             Ok(()) => {
                 d.state = DownloadState::Saved(target.clone());
+                // Complete: its session is no longer needed anywhere.
+                Self::forget_session(d, sessions);
                 if std::mem::take(&mut d.open_when_done) {
                     opens.push_back(target.clone());
                 }
@@ -674,9 +823,21 @@ impl Downloads {
         }
     }
 
-    /// Forget the downloads that ended.
+    /// Forget the downloads that ended (and their sessions).
     pub fn clear_done(&mut self) {
+        let sessions = self.sessions.clone();
+        for d in self.items.iter_mut().filter(|d| !d.active()) {
+            Self::forget_session(d, sessions.as_deref());
+        }
         self.items.retain(DownloadItem::active);
+    }
+
+    /// Delete `d`'s session from the store and from memory.
+    fn forget_session(d: &mut DownloadItem, sessions: Option<&dyn SessionStore>) {
+        d.context = DownloadContext::default();
+        if let Some(s) = sessions {
+            s.delete(&d.session_key);
+        }
     }
 }
 
@@ -854,6 +1015,7 @@ mod tests {
         assert!(!d.pause(1), "already paused");
 
         assert_eq!(d.resume(1), Outcome::Nothing);
+        d.cookies_answered(1, None);
         assert!(d.get(1).unwrap().running());
         assert_eq!(settle_own(&mut d, 1), Outcome::Saved(target.clone()));
         assert_eq!(std::fs::read(&target).unwrap(), body);
@@ -876,6 +1038,7 @@ mod tests {
         assert!(d.pause(1));
         d.apply(Download { id: 1, change: DownloadChange::Failed("cancelled".into()) });
         d.resume(1);
+        d.cookies_answered(1, None);
         assert_eq!(settle_own(&mut d, 1), Outcome::Saved(target.clone()));
         assert_eq!(std::fs::read(&target).unwrap(), body, "not the kept bytes twice");
         assert!(d.get(1).unwrap().restarted);
@@ -893,6 +1056,7 @@ mod tests {
         d.pause(1);
         d.apply(Download { id: 1, change: DownloadChange::Failed("cancelled".into()) });
         d.resume(1);
+        d.cookies_answered(1, None);
         // Some bytes in, then pause Morph's own transfer.
         let until = Instant::now() + Duration::from_secs(10);
         while d.get(1).unwrap().received < 20_000 && Instant::now() < until {
@@ -905,6 +1069,7 @@ mod tests {
         let kept = std::fs::metadata(&staged).unwrap().len();
         assert!(kept > 1000 && kept < body.len() as u64, "{kept}");
         d.resume(1);
+        d.cookies_answered(1, None);
         assert_eq!(settle_own(&mut d, 1), Outcome::Saved(target.clone()));
         assert_eq!(std::fs::read(&target).unwrap(), body);
         let seen = seen.lock().unwrap();
@@ -1003,10 +1168,293 @@ mod tests {
         assert!(!staged.exists());
         assert!(d.progress().is_none());
         d.retry(1);
+        d.cookies_answered(1, None);
         assert_eq!(d.progress().map(|p| p.0), Some(1));
         assert_eq!(settle_own(&mut d, 1), Outcome::Saved(target.clone()));
         assert_eq!(std::fs::read(&target).unwrap(), body);
         d.clear_done();
         assert!(d.items().is_empty());
+    }
+
+    // --- Sessions: resume behind a login ---------------------------------
+
+    use morph_core::download_sessions::LibrarySessions;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    /// What a gated server saw in one request.
+    #[derive(Debug, Clone, Default)]
+    struct Seen {
+        cookie: Option<String>,
+        range: Option<String>,
+        if_range: Option<String>,
+        referer: Option<String>,
+        user_agent: Option<String>,
+    }
+
+    /// A server for `body` behind a login: without `Cookie: sid=<sid>` it
+    /// answers 403. It honours `Range` only while `If-Range` (if sent)
+    /// matches its current `ETag` (`etag`, changeable to simulate a new file).
+    fn serve_gated(body: Arc<Mutex<Vec<u8>>>, sid: &str, etag: Arc<Mutex<String>>) -> (String, Arc<Mutex<Vec<Seen>>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/private/file.bin", listener.local_addr().unwrap());
+        let seen: Arc<Mutex<Vec<Seen>>> = Arc::default();
+        let (log, want) = (seen.clone(), format!("sid={sid}"));
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut r = Seen::default();
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                        break;
+                    }
+                    let Some((name, value)) = line.split_once(':') else { continue };
+                    let value = Some(value.trim().to_string());
+                    match name.trim().to_ascii_lowercase().as_str() {
+                        "cookie" => r.cookie = value,
+                        "range" => r.range = value,
+                        "if-range" => r.if_range = value,
+                        "referer" => r.referer = value,
+                        "user-agent" => r.user_agent = value,
+                        _ => {}
+                    }
+                }
+                log.lock().unwrap().push(r.clone());
+                let mut out = stream;
+                if !r.cookie.as_deref().unwrap_or("").split("; ").any(|c| c == want) {
+                    let _ = out.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                    continue;
+                }
+                let body = body.lock().unwrap().clone();
+                let tag = etag.lock().unwrap().clone();
+                let same = r.if_range.as_deref().is_none_or(|v| v == tag);
+                let start: usize =
+                    r.range.as_deref().filter(|_| same).and_then(|v| v.strip_prefix("bytes=")?.trim_end_matches('-').parse().ok()).unwrap_or(0);
+                let head = if start > 0 {
+                    format!(
+                        "HTTP/1.1 206 Partial Content\r\nETag: {tag}\r\nContent-Length: {}\r\nContent-Range: bytes {start}-{}/{}\r\nConnection: close\r\n\r\n",
+                        body.len() - start,
+                        body.len() - 1,
+                        body.len()
+                    )
+                } else {
+                    format!("HTTP/1.1 200 OK\r\nETag: {tag}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len())
+                };
+                let _ = out.write_all(head.as_bytes());
+                let _ = out.write_all(&body[start..]);
+            }
+        });
+        (url, seen)
+    }
+
+    /// A session store in memory that counts what it holds.
+    #[derive(Default)]
+    struct MemStore(Mutex<HashMap<String, DownloadContext>>);
+
+    impl SessionStore for MemStore {
+        fn save(&self, key: &str, context: &DownloadContext) {
+            self.0.lock().unwrap().insert(key.into(), context.clone());
+        }
+        fn load(&self, key: &str) -> Option<DownloadContext> {
+            self.0.lock().unwrap().get(key).cloned()
+        }
+        fn delete(&self, key: &str) {
+            self.0.lock().unwrap().remove(key);
+        }
+        fn clear(&self) {
+            self.0.lock().unwrap().clear();
+        }
+    }
+
+    impl MemStore {
+        fn len(&self) -> usize {
+            self.0.lock().unwrap().len()
+        }
+        fn cookies(&self) -> Vec<String> {
+            self.0.lock().unwrap().values().flat_map(|c| c.cookies.iter().map(|k| format!("{}={}", k.name, k.value))).collect()
+        }
+    }
+
+    fn cookie(name: &str, value: &str) -> morph_webview::Cookie {
+        morph_webview::Cookie { name: name.into(), value: value.into(), domain: "127.0.0.1".into(), path: "/".into(), secure: false }
+    }
+
+    /// The engine's word on the request: Referer, User-Agent, the ETag.
+    fn engine_context(d: &mut Downloads, id: u64, url: &str, etag: &str) {
+        let context = morph_webview::RequestContext {
+            final_url: url.into(),
+            referer: Some("http://app.test/files".into()),
+            user_agent: Some("Morph-Test/1".into()),
+            headers: vec![("Referer".into(), "http://app.test/files".into()), ("Accept".into(), "*/*".into())],
+            etag: Some(etag.into()),
+            last_modified: None,
+        };
+        d.apply(Download { id, change: DownloadChange::Context(context) });
+    }
+
+    /// Start `id` from `url` with `kept` bytes in, answer its dialog, pause it
+    /// and let the engine stop: ready to resume.
+    fn paused_at(d: &mut Downloads, folder: &Path, id: u64, url: &str, kept: &[u8]) -> PathBuf {
+        started_from(d, folder, id, url, kept);
+        let target = folder.join(format!("file-{id}.bin"));
+        d.answer(id, Some(target.clone()));
+        assert!(d.pause(id));
+        d.apply(Download { id, change: DownloadChange::Failed("cancelled".into()) });
+        target
+    }
+
+    fn all_bytes(dir: &Path) -> Vec<u8> {
+        let mut out = Vec::new();
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                out.extend(all_bytes(&p));
+            } else if let Ok(b) = std::fs::read(&p) {
+                out.extend(b);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn a_resume_behind_a_login_uses_the_saved_session_kept_encrypted() {
+        let body = bytes(100_000);
+        let (url, seen) = serve_gated(Arc::new(Mutex::new(body.clone())), "s3cr3t-session-value", Arc::new(Mutex::new("\"v1\"".into())));
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        morph_core::profiles::load_catalog(&home).unwrap();
+        let profile = morph_core::profiles::create(&home, "Work").unwrap().id;
+        morph_core::library_db::unlock(&home, &profile, &morph_core::morph_identity::profile_identity::LibraryKey::from_bytes([3; 32])).unwrap();
+        let store = Arc::new(LibrarySessions::new(&home, &profile));
+        let folder = dir("session");
+        let mut d = Downloads::default();
+        d.set_sessions(store.clone());
+
+        started_from(&mut d, &folder, 1, &url, &body[..30_000]);
+        engine_context(&mut d, 1, &url, "\"v1\"");
+        // At the start the engine says which cookies it sent.
+        d.cookies_answered(1, Some(vec![cookie("sid", "s3cr3t-session-value")]));
+        let key = d.get(1).unwrap().session_key.clone();
+        let saved = store.try_load(&key).unwrap().expect("the session is saved with the download");
+        assert_eq!(saved.cookie_header().as_deref(), Some("sid=s3cr3t-session-value"));
+        assert_eq!(saved.etag.as_deref(), Some("\"v1\""));
+        assert!(saved.auth_headers.is_empty(), "only auth headers are kept");
+        let target = folder.join("file.bin");
+        d.answer(1, Some(target.clone()));
+        assert!(d.pause(1));
+        d.apply(Download { id: 1, change: DownloadChange::Failed("cancelled".into()) });
+        // Nothing on disk shows the cookie: not the library, not the downloads folder.
+        let needle = b"s3cr3t-session-value";
+        let mut disk = all_bytes(&home);
+        disk.extend(all_bytes(&folder));
+        assert!(!disk.windows(needle.len()).any(|w| w == needle), "the cookie is readable on disk");
+
+        // Resume: the engine can't say (a fresh start, its view closed): the saved session goes.
+        d.get_mut(1).unwrap().context.cookies.clear();
+        d.resume(1);
+        assert!(d.awaiting_cookies(1));
+        d.cookies_answered(1, None);
+        assert_eq!(settle_own(&mut d, 1), Outcome::Saved(target.clone()));
+        assert_eq!(std::fs::read(&target).unwrap(), body);
+        let r = seen.lock().unwrap().last().cloned().unwrap();
+        assert_eq!(r.cookie.as_deref(), Some("sid=s3cr3t-session-value"));
+        assert_eq!(r.range.as_deref(), Some("bytes=30000-"));
+        assert_eq!(r.if_range.as_deref(), Some("\"v1\""));
+        assert_eq!(r.referer.as_deref(), Some("http://app.test/files"));
+        assert_eq!(r.user_agent.as_deref(), Some("Morph-Test/1"));
+        assert_eq!(store.try_load(&key).unwrap(), None, "completed: the session is deleted");
+        assert_eq!(d.get(1).unwrap().context, DownloadContext::default(), "and gone from memory");
+    }
+
+    #[test]
+    fn fresh_cookies_from_the_engine_win_over_the_saved_ones() {
+        let body = bytes(60_000);
+        let (url, seen) = serve_gated(Arc::new(Mutex::new(body.clone())), "new", Arc::new(Mutex::new("\"v1\"".into())));
+        let folder = dir("fresh");
+        let store = Arc::new(MemStore::default());
+        let mut d = Downloads::default();
+        d.set_sessions(store.clone());
+        let target = paused_at(&mut d, &folder, 1, &url, &body[..20_000]);
+        engine_context(&mut d, 1, &url, "\"v1\"");
+        d.cookies_answered(1, Some(vec![cookie("sid", "old")]));
+        assert_eq!(store.cookies(), ["sid=old"]);
+        d.resume(1);
+        d.cookies_answered(1, Some(vec![cookie("sid", "new")]));
+        assert_eq!(settle_own(&mut d, 1), Outcome::Saved(target.clone()));
+        assert_eq!(std::fs::read(&target).unwrap(), body);
+        assert_eq!(seen.lock().unwrap().last().unwrap().cookie.as_deref(), Some("sid=new"));
+        assert_eq!(store.len(), 0);
+    }
+
+    #[test]
+    fn without_the_session_a_resume_fails_clearly() {
+        let body = bytes(60_000);
+        let (url, _) = serve_gated(Arc::new(Mutex::new(body.clone())), "only-with-login", Arc::new(Mutex::new("\"v1\"".into())));
+        let folder = dir("nosession");
+        let mut d = Downloads::default();
+        d.set_sessions(Arc::new(MemStore::default()));
+        paused_at(&mut d, &folder, 1, &url, &body[..20_000]);
+        d.resume(1);
+        d.cookies_answered(1, None);
+        let Outcome::Failed(why) = settle_own(&mut d, 1) else { panic!("the resume must fail") };
+        assert!(why.contains("HTTP 403") && why.contains("sign in"), "{why}");
+        assert!(matches!(&d.get(1).unwrap().state, DownloadState::Failed(w) if *w == why));
+
+        // An expired saved session says so too.
+        paused_at(&mut d, &folder, 2, &url, &body[..20_000]);
+        d.cookies_answered(2, Some(vec![cookie("sid", "expired")]));
+        d.resume(2);
+        d.cookies_answered(2, None);
+        let Outcome::Failed(why) = settle_own(&mut d, 2) else { panic!("the resume must fail") };
+        assert!(why.contains("no longer works"), "{why}");
+    }
+
+    #[test]
+    fn a_file_that_changed_on_the_server_restarts_cleanly() {
+        let body = Arc::new(Mutex::new(bytes(50_000)));
+        let etag = Arc::new(Mutex::new("\"v1\"".to_string()));
+        let (url, seen) = serve_gated(body.clone(), "ok", etag.clone());
+        let folder = dir("changed");
+        let mut d = Downloads::default();
+        d.set_sessions(Arc::new(MemStore::default()));
+        let kept = body.lock().unwrap()[..25_000].to_vec();
+        let target = paused_at(&mut d, &folder, 1, &url, &kept);
+        engine_context(&mut d, 1, &url, "\"v1\"");
+        d.cookies_answered(1, Some(vec![cookie("sid", "ok")]));
+        let new: Vec<u8> = (0..70_000).map(|i| (i % 13) as u8).collect();
+        *body.lock().unwrap() = new.clone();
+        *etag.lock().unwrap() = "\"v2\"".into();
+        d.resume(1);
+        d.cookies_answered(1, None);
+        assert_eq!(settle_own(&mut d, 1), Outcome::Saved(target.clone()));
+        assert!(d.get(1).unwrap().restarted, "the tile says it started over");
+        assert_eq!(std::fs::read(&target).unwrap(), new, "no old bytes mixed in");
+        assert_eq!(seen.lock().unwrap().last().unwrap().if_range.as_deref(), Some("\"v1\""));
+    }
+
+    #[test]
+    fn cancel_and_clear_delete_the_session() {
+        let folder = dir("forget");
+        let store = Arc::new(MemStore::default());
+        let mut d = Downloads::default();
+        d.set_sessions(store.clone());
+        started_from(&mut d, &folder, 1, "http://127.0.0.1:9/a", b"x");
+        d.cookies_answered(1, Some(vec![cookie("sid", "a")]));
+        started_from(&mut d, &folder, 2, "http://127.0.0.1:9/b", b"y");
+        d.cookies_answered(2, Some(vec![cookie("sid", "b")]));
+        assert_eq!(store.len(), 2);
+        d.cancel(1);
+        assert_eq!(store.cookies(), ["sid=b"], "cancelled: its session is gone");
+        d.apply(Download { id: 2, change: DownloadChange::Failed("net".into()) });
+        assert_eq!(store.len(), 1, "a failed download keeps it for a retry");
+        d.clear_done();
+        assert_eq!(store.len(), 0, "cleared: gone");
+        // A new store forgets rows an earlier run left.
+        let stale = Arc::new(MemStore::default());
+        stale.save("dl-old", &DownloadContext::default());
+        d.set_sessions(stale.clone());
+        assert_eq!(stale.len(), 0);
     }
 }

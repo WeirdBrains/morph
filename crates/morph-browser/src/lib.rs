@@ -717,6 +717,25 @@ impl Browser {
     pub fn resume_download(&mut self, id: u64) {
         let outcome = self.downloads.resume(id);
         self.log_download(&outcome);
+        self.ask_cookies(id);
+    }
+
+    /// Keep download sessions (cookies, Referer, ...) in `store`, the
+    /// profile's encrypted library, so resumes work behind a login.
+    pub fn set_download_sessions(&mut self, store: Arc<dyn morph_core::download_sessions::SessionStore>) {
+        self.downloads.set_sessions(store);
+    }
+
+    /// A resume or retry of `id` waits for fresh cookies: ask the engine
+    /// (it goes with the saved session when the engine can't say).
+    fn ask_cookies(&mut self, id: u64) {
+        if !self.downloads.awaiting_cookies(id) {
+            return;
+        }
+        let url = self.downloads.fetch_url(id).unwrap_or_default();
+        if !self.backend.request_cookies(id, &url) {
+            self.downloads.cookies_answered(id, None);
+        }
     }
 
     /// Cancel download `id` and delete its bytes.
@@ -729,6 +748,7 @@ impl Browser {
     /// Start failed or cancelled download `id` again.
     pub fn retry_download(&mut self, id: u64) {
         self.downloads.retry(id);
+        self.ask_cookies(id);
     }
 
     /// A click on download `id`: the saved file to open now, or (while it
@@ -1473,11 +1493,28 @@ impl Browser {
                 continue;
             }
             // Downloads belong to the window, not to the page that started them.
+            if let Event::Cookies { download, cookies } = event {
+                if self.log_events {
+                    // Never the values: only how many came.
+                    eprintln!("morph-event tab=0 DownloadCookies({download}, {:?})", cookies.as_ref().map(Vec::len));
+                }
+                self.downloads.cookies_answered(download, cookies);
+                polled.changed = true;
+                continue;
+            }
             if let Event::Download(download) = event {
                 if self.log_events {
                     eprintln!("morph-event tab=0 {:?}", Event::Download(download.clone()));
                 }
+                // Note the cookies it starts with, for a resume behind a login.
+                let started = match &download.change {
+                    morph_webview::DownloadChange::Started { url, .. } => Some((download.id, url.clone())),
+                    _ => None,
+                };
                 let outcome = self.downloads.apply(download);
+                if let Some((id, url)) = started {
+                    self.backend.request_cookies(id, &url);
+                }
                 self.log_download(&outcome);
                 polled.changed = true;
                 continue;
@@ -1651,7 +1688,7 @@ impl Browser {
                     page.view.choose_files(None);
                 }
             }
-            Event::Shortcut(_) | Event::Download(_) => {}
+            Event::Shortcut(_) | Event::Download(_) | Event::Cookies { .. } => {}
         }
         if record {
             let tab = self.tabs.tab(tab).cloned();
