@@ -237,6 +237,7 @@ def main():
         ("Find in page", "browser.find"),
         ("Bookmarks", "library.show_bookmarks"),
         ("History", "library.show_history"),
+        ("Downloads", "browser.show_downloads"),
         ("Identity", "shell.show_identity"),
         ("Profiles", "shell.show_profiles"),
         ("Settings", "shell.show_settings"),
@@ -258,6 +259,7 @@ def main():
     for label, action in entries:
         check(f"menu: {label} runs {action}", f"morph-event action {action}" in text4)
     check("menu: the identity panel opened", "morph-event panel morph.identity" in text4)
+    check("menu: the downloads panel opened", "morph-event downloads panel open" in text4)
     try:
         code = proc4.wait(timeout=15)
     except subprocess.TimeoutExpired:
