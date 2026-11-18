@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- A running sync node now pulls from the other devices on its own: soon
+  after unlock and then every 30 seconds. Two devices can pull from each
+  other at the same time without stalling.
+
 - Search engine, home page and theme sync between linked devices, on by
   default; layout and the downloads folder stay per device. A new device's
   defaults never override a linked device's choices.
