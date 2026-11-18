@@ -4,6 +4,7 @@ pub mod events;
 pub mod identity;
 pub mod info;
 pub mod library;
+pub mod network;
 pub mod omnibox;
 pub mod page;
 pub mod profiles;

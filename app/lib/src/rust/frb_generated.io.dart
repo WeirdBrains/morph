@@ -9,6 +9,7 @@ import 'api/events.dart';
 import 'api/identity.dart';
 import 'api/info.dart';
 import 'api/library.dart';
+import 'api/network.dart';
 import 'api/omnibox.dart';
 import 'api/page.dart';
 import 'api/profiles.dart';
@@ -135,6 +136,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<HistoryEntryView> dco_decode_list_history_entry_view(dynamic raw);
 
   @protected
+  List<NetworkPeerView> dco_decode_list_network_peer_view(dynamic raw);
+
+  @protected
   List<int> dco_decode_list_prim_u_8_loose(dynamic raw);
 
   @protected
@@ -148,6 +152,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<SearchEngineView> dco_decode_list_search_engine_view(dynamic raw);
+
+  @protected
+  NetworkPeerView dco_decode_network_peer_view(dynamic raw);
+
+  @protected
+  NetworkView dco_decode_network_view(dynamic raw);
 
   @protected
   String? dco_decode_opt_String(dynamic raw);
@@ -335,6 +345,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  List<NetworkPeerView> sse_decode_list_network_peer_view(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   List<int> sse_decode_list_prim_u_8_loose(SseDeserializer deserializer);
 
   @protected
@@ -352,6 +367,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<SearchEngineView> sse_decode_list_search_engine_view(
     SseDeserializer deserializer,
   );
+
+  @protected
+  NetworkPeerView sse_decode_network_peer_view(SseDeserializer deserializer);
+
+  @protected
+  NetworkView sse_decode_network_view(SseDeserializer deserializer);
 
   @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
@@ -582,6 +603,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_network_peer_view(
+    List<NetworkPeerView> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_prim_u_8_loose(List<int> self, SseSerializer serializer);
 
   @protected
@@ -607,6 +634,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     List<SearchEngineView> self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_network_peer_view(
+    NetworkPeerView self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_network_view(NetworkView self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);
