@@ -1,15 +1,16 @@
 # Library sync
 
-Status: 2026-11-17 — milestones 1–3 (bookmarks, folders and tags) are
-wired on published `weirdnet-sync` 0.1.0 and `weirdnet-net` 0.6.0. History,
-settings and the Devices UI are still ahead. Product rules are in
+Status: 2026-11-18 — milestones 1–4 (bookmarks, folders, tags and history)
+are wired on published `weirdnet-sync` 0.1.0 and `weirdnet-net` 0.6.0.
+Settings and the Devices UI are still ahead. Product rules are in
 `docs/identity-recovery.md` section 5. This file is the Morph implementation
 plan for that section: bookmarks, folders, tags and history first, then
 settings, between a user's own linked devices, end-to-end encrypted, over
 `weirdnet-net` 0.6 and the same relays device linking already uses.
 
-`weirdnet-sync/v1` is published (crates.io 0.1.0). Morph keeps only bookmark,
-folder and tag record types plus wiring.
+`weirdnet-sync/v1` is published (crates.io 0.1.0). Morph keeps only its
+bookmark, folder, tag and history record types plus wiring
+(`morph_core::sync`, `morph_core::history_sync`, `morph_services::sync`).
 
 ## Goal
 
@@ -50,8 +51,9 @@ already reads and writes.
 - **Now in the tree:** per-record HLCs and node ids, the op log and cursors in
   `library.db`, history row ids and tombstones, a self-issued `NodeCert` on the
   first device, a roster snapshot at link time, and a bookmark sync loop
-  (`morph-services::sync`) with a two-home local-relay test. History, settings
-  and a Devices UI / revocation are still later milestones.
+  (`morph-services::sync`) for bookmarks and history with a two-home
+  local-relay test. Settings and a Devices UI / revocation are still later
+  milestones.
 
 ## Data model
 
@@ -120,6 +122,23 @@ id from `(url, visited_ms)` for existing ones, same idea as
   HLC after the tombstone, are kept.
 - Clear-all writes a single `history_cleared` tombstone; visits with an
   HLC before it stay gone; visits after it survive.
+
+As built (`morph_core::history_sync`): ops are `visit` (record id = the
+visit id; a reload or title refresh rewrites the same id, last writer
+wins), `delete-url` (record id `url:<url without trailing slash>`) and
+`clear` (record id `clear`). A visit is gone if a matching delete or the
+latest clear has a later HLC. Deleted ids get a `history_tombstones` row
+with the deleting op's HLC. Existing visits are backfilled into the log
+when history sync turns on. After a pull the node's clock receives the
+newest HLC it now holds, so a visit made after seeing a remote clear
+orders after it.
+
+History ops go on a separate log stream per device, `<peer id>/history`,
+not the device's bookmarks stream. `weirdnet-sync` 0.1 keeps one pull
+cursor per stream (node id), and `page_for_type` filters a page by type,
+so a bookmarks pull over a mixed stream would move the cursor past history
+ops and a history pull would never see them. Separate streams keep each
+type's cursor exact without any change to the wire.
 
 `MAX_HISTORY` (5000) remains a local cap applied *after* merge, by
 `visited_ms`, newest first. Trims are not synced as deletes: a visit older
