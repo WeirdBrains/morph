@@ -514,7 +514,7 @@ impl Identity {
                 let pw = new_password(v(1), None)?;
                 let identity = morph_services::identity::import(&home, &profile, &words, &pw)
                     .map_err(|e| format!("Those words did not restore an identity: {e}"))?;
-                self.done(identity, "Identity restored from its recovery words.")
+                self.done(identity, &restored("Identity restored from its recovery words."))
             }
             Step::Restore => {
                 let paths = split_paths(v(0));
@@ -531,7 +531,7 @@ impl Identity {
                     let pw = new_password(v(2), None)?;
                     let identity = morph_services::identity::import(&home, &profile, &words, &pw)
                         .map_err(|e| format!("Those shards did not restore an identity: {e}"))?;
-                    return self.done(identity, "Identity restored from its shards.");
+                    return self.done(identity, &restored("Identity restored from its shards."));
                 }
                 if paths.len() > 1 {
                     return Err("Choose one backup file (several files only for shards).".into());
@@ -541,7 +541,7 @@ impl Identity {
                 let pw = new_password(v(2), None)?;
                 let identity = morph_services::identity::restore_backup(&home, &profile, contents, backup_pw.as_ref(), &pw)
                     .map_err(|e| format!("Could not restore the backup: {e}"))?;
-                self.done(identity, "Identity restored from the backup.")
+                self.done(identity, &restored("Identity restored from the backup."))
             }
             Step::Offer { session: 0, .. } => Err("Still getting this device's code ready; a moment.".into()),
             Step::Offer { session, .. } => {
@@ -640,6 +640,11 @@ impl Drop for Identity {
     fn drop(&mut self) {
         self.end_sessions();
     }
+}
+
+/// A restore's notice, with what a restored install needs after keys rotated.
+fn restored(what: &str) -> String {
+    format!("{what} {}", morph_services::sync::RESTORED_NOTE)
 }
 
 /// How an identity came to this profile, for the overview.
