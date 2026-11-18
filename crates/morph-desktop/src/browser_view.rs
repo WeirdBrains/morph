@@ -97,6 +97,11 @@ pub struct BrowserView {
     /// seen (to report modifier keys).
     page_focus: FocusHandle,
     page_image: Option<Arc<RenderImage>>,
+    /// The page as it was when a popup hid its window (X11 child-window
+    /// pages), painted in its place so the popup floats over the page.
+    frozen_page: Option<Arc<RenderImage>>,
+    /// Images to hand back to the window on the next frame.
+    stale_images: Vec<Arc<RenderImage>>,
     /// The address text's scroll (see `address::AddressElement`).
     pub(crate) address_scroll: std::cell::Cell<Pixels>,
     page_buttons: u32,
@@ -414,6 +419,8 @@ impl BrowserView {
             caption_pressed: false,
             page_focus: cx.focus_handle(),
             page_image: None,
+            frozen_page: None,
+            stale_images: Vec::new(),
             address_scroll: std::cell::Cell::new(px(0.)),
             page_buttons: 0,
             page_pointer: false,
@@ -832,6 +839,9 @@ impl BrowserView {
                 self.log_once("toolbar", line);
             }
         }
+        for old in self.stale_images.drain(..) {
+            let _ = window.drop_image(old);
+        }
         // Pages follow the shell's scale on either backend.
         self.browser.set_scale(f64::from(window.scale_factor()));
         if self.browser.draws_pages()
@@ -1213,10 +1223,7 @@ impl BrowserView {
             .collect();
         let mut state = MenuState::new(morph_webview::OptionMenu { items, anchor: Rect::default() });
         state.highlighted = None;
-        let hid_page = !self.browser.draws_pages();
-        if hid_page {
-            self.browser.set_shown(false);
-        }
+        let hid_page = self.hide_page_for_popup();
         let (rows, commands) = entries.into_iter().unzip();
         self.shell_menu = Some(ShellMenu { id, state, rows, commands, at, hid_page });
         self.browser.focus_shell();
@@ -1227,7 +1234,7 @@ impl BrowserView {
     fn close_shell_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(menu) = self.shell_menu.take() {
             if menu.hid_page && self.address_menu.as_ref().is_none_or(|m| !m.hid_page) && self.downloads_panel.as_ref().is_none_or(|p| !p.hid_page) {
-                self.browser.set_shown(self.shell_shown);
+                self.show_page_again();
             }
             if self.shell_menu_focus.is_focused(window) {
                 window.blur(cx);
@@ -2244,6 +2251,8 @@ impl BrowserView {
                     move |bounds, hitbox, window, cx| {
                         if let Some(hitbox) = hitbox {
                             paint_page(&paint_this, bounds, hitbox, window, cx);
+                        } else if let Some(still) = paint_this.read(cx).frozen_page.clone() {
+                            let _ = window.paint_image(bounds, bounds, Corners::default(), still, 0, false);
                         }
                     },
                 )
@@ -2602,6 +2611,33 @@ fn utf16_to_byte(text: &str, utf16: usize) -> usize {
     text.len()
 }
 
+/// Pages in windows of their own, hidden while a popup is open.
+impl BrowserView {
+    /// Hide the page's window for a popup (a child-window page would draw
+    /// over it), leaving a still of the page where it was so the popup floats
+    /// over the page, not over a blank area. Returns whether the page was
+    /// hidden (pages the shell draws never are: popups just draw over them).
+    fn hide_page_for_popup(&mut self) -> bool {
+        if self.browser.draws_pages() {
+            return false;
+        }
+        if let Some(frame) = self.browser.snapshot_page()
+            && let Some(buffer) = image::RgbaImage::from_raw(frame.width, frame.height, frame.pixels)
+        {
+            let image = Arc::new(RenderImage::new(vec![image::Frame::new(buffer)]));
+            self.stale_images.extend(self.frozen_page.replace(image));
+        }
+        self.browser.set_shown(false);
+        true
+    }
+
+    /// Show the page's window again and drop its still.
+    fn show_page_again(&mut self) {
+        self.browser.set_shown(self.shell_shown);
+        self.stale_images.extend(self.frozen_page.take());
+    }
+}
+
 /// The menu under the focused address bar.
 impl BrowserView {
     /// Open the address menu (the address bar was just focused by hand).
@@ -2610,10 +2646,7 @@ impl BrowserView {
             return;
         }
         // Child-window pages draw above the shell: hide the page under it.
-        let hid_page = !self.browser.draws_pages();
-        if hid_page {
-            self.browser.set_shown(false);
-        }
+        let hid_page = self.hide_page_for_popup();
         self.address_menu = Some(AddressMenu { highlighted: None, hid_page });
     }
 
@@ -2627,7 +2660,7 @@ impl BrowserView {
     fn close_address_menu(&mut self, cx: &mut Context<Self>) {
         if let Some(menu) = self.address_menu.take() {
             if menu.hid_page && self.shell_menu.as_ref().is_none_or(|m| !m.hid_page) && self.downloads_panel.as_ref().is_none_or(|p| !p.hid_page) {
-                self.browser.set_shown(self.shell_shown);
+                self.show_page_again();
             }
             cx.notify();
         }
@@ -2837,10 +2870,7 @@ impl BrowserView {
     fn open_downloads(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_shell_menu(window, cx);
         self.close_address_menu(cx);
-        let hid_page = !self.browser.draws_pages();
-        if hid_page {
-            self.browser.set_shown(false);
-        }
+        let hid_page = self.hide_page_for_popup();
         self.downloads_panel = Some(DownloadsPanel { hid_page });
         self.browser.focus_shell();
         window.focus(&self.downloads_focus, cx);
@@ -2853,7 +2883,7 @@ impl BrowserView {
             return;
         };
         if panel.hid_page && self.shell_menu.as_ref().is_none_or(|m| !m.hid_page) && self.address_menu.as_ref().is_none_or(|m| !m.hid_page) {
-            self.browser.set_shown(self.shell_shown);
+            self.show_page_again();
         }
         if self.downloads_focus.is_focused(window) {
             window.blur(cx);

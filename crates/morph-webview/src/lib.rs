@@ -489,6 +489,14 @@ pub trait WebView {
     fn take_frame(&self) -> Option<Frame> {
         None
     }
+    /// A still of the page as it shows now, for backends whose pages are
+    /// windows of their own: the shell paints it where the page was while a
+    /// popup covers the page's window (which hides it), so the popup floats
+    /// over the page and not over a blank area. `None` when the backend
+    /// can't (or the page is hidden).
+    fn snapshot(&self) -> Option<Frame> {
+        None
+    }
     /// Pointer, wheel and key input for the page, for backends whose pages
     /// the shell draws. Coordinates are logical pixels from the page's
     /// top-left corner.

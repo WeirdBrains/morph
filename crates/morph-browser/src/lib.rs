@@ -1504,6 +1504,16 @@ impl Browser {
         page.view.take_frame()
     }
 
+    /// A still of the active page, for painting where its window was while a
+    /// popup hides the window ([`morph_webview::WebView::snapshot`]).
+    pub fn snapshot_page(&self) -> Option<Frame> {
+        let page = self.active_page();
+        if !self.shown || page.cover.is_some() {
+            return None;
+        }
+        page.view.snapshot()
+    }
+
     /// Hand the active page pointer or key input (pages the shell draws).
     pub fn page_input(&self, input: Input) {
         let page = self.active_page();
