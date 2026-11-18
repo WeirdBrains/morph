@@ -48,8 +48,39 @@ pub trait ModelProvider: Send + Sync {
     fn open(&self, choice: &ModelChoice) -> Result<Arc<dyn ModelBackend>, ModelError>;
 }
 
+/// The provider used until an inference crate is wired in: every open fails with a message the
+/// panel shows, so the rest of the Companion panel works end to end.
+pub struct UnavailableModels {
+    reason: String,
+}
+
+impl UnavailableModels {
+    pub fn new(reason: impl Into<String>) -> Self {
+        Self { reason: reason.into() }
+    }
+}
+
+impl Default for UnavailableModels {
+    fn default() -> Self {
+        Self::new("no local model is set up yet")
+    }
+}
+
+impl ModelProvider for UnavailableModels {
+    fn open(&self, choice: &ModelChoice) -> Result<Arc<dyn ModelBackend>, ModelError> {
+        Err(ModelError::Unavailable(format!("{}: {}", choice.label(), self.reason)))
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_stub_provider_says_why_it_cannot_open() {
+        use super::*;
+        let err = UnavailableModels::default().open(&ModelChoice::Gemma4E4B).err().expect("stub never opens");
+        assert_eq!(err, ModelError::Unavailable("Gemma 4 E4B: no local model is set up yet".into()));
+    }
+
     use super::*;
 
     #[test]
