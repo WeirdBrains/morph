@@ -768,6 +768,7 @@ impl BrowserView {
                 path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default(),
                 path.parent().map(|p| p.display().to_string()).unwrap_or_default()
             ),
+            DownloadState::Paused => format!("{} is paused", d.name),
             DownloadState::Failed(why) => format!("Download of {} failed: {why}", d.name),
             DownloadState::Cancelled => return None,
         };
