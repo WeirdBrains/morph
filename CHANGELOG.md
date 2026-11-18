@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- A downloads button sits left of the ☰ menu (also Ctrl+Shift+Y, ⌘⇧J on
+  macOS, and Downloads in the ☰ and address menus). While downloads run it
+  shows their progress under the arrow and how many run. It opens a panel
+  with one tile per download: a progress bar (moving when the size is
+  unknown), the bytes so far, the speed and the time left, smoothed over
+  the last five seconds. Tiles have Pause, Resume, Cancel, Retry and Show in
+  folder, and Clear completed clears the finished ones. A click on a tile
+  opens the file. While it is still downloading, the click marks it to open
+  once saved ("Opens in 12s", or "Opens when done" when there's no
+  estimate), and a second click takes that back. A failed download never
+  opens. Pause stops the engine's download and keeps its bytes; Resume
+  fetches the rest with an HTTP Range request, or starts over and says so
+  when the server can't resume. The bar under the page no longer forgets
+  downloads after ten seconds; it just hides.
+
 - Sync uses `weirdnet-sync` 0.2.0: history and settings share each
   device's log stream with bookmarks (per-type pull positions), the clock
   advance after a pull comes from the crate, and a third device that missed
