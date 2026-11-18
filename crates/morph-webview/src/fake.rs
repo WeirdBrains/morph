@@ -26,6 +26,8 @@ pub enum Call {
     OptionMenu(MenuChoice),
     ChooseFiles(Option<Vec<std::path::PathBuf>>),
     ClearData,
+    /// A script run with [`WebView::evaluate`].
+    Evaluate(String),
     Dropped,
 }
 
@@ -39,6 +41,9 @@ struct Shared {
     draws: bool,
     keyboard: Option<ViewId>,
     frames: Vec<(ViewId, Frame)>,
+    /// What [`WebView::evaluate`] answers in pages whose address starts with
+    /// the key (else `None`).
+    script_answers: Vec<(String, String)>,
 }
 
 /// The fake backend. Clone it to keep a handle for assertions after handing
@@ -110,6 +115,23 @@ impl FakeBackend {
         self.shared.borrow().calls.iter().filter(|(_, c)| matches!(c, Call::Create(_))).map(|(v, _)| *v).collect()
     }
 
+    /// Scripts run in pages whose address starts with `url_prefix` answer
+    /// `result` from now on.
+    pub fn answer_scripts(&self, url_prefix: &str, result: &str) {
+        self.shared.borrow_mut().script_answers.push((url_prefix.into(), result.into()));
+    }
+
+    /// Scripts run in `id`, oldest first.
+    pub fn scripts(&self, id: ViewId) -> Vec<String> {
+        self.calls_for(id)
+            .into_iter()
+            .filter_map(|c| match c {
+                Call::Evaluate(s) => Some(s),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Queue `event` from `id` for the next poll.
     pub fn emit(&self, id: ViewId, event: Event) {
         self.shared.borrow_mut().pending.push((id, event));
@@ -167,6 +189,13 @@ struct FakeView {
 impl WebView for FakeView {
     fn id(&self) -> ViewId {
         self.id
+    }
+    fn evaluate(&self, script: &str, done: crate::ScriptDone) -> bool {
+        self.backend.record(self.id, Call::Evaluate(script.into()));
+        let url = self.url.borrow().clone();
+        let answer = self.backend.shared.borrow().script_answers.iter().rev().find(|(p, _)| url.starts_with(p.as_str())).map(|(_, r)| r.clone());
+        done(answer);
+        true
     }
     fn load_url(&self, url: &str) -> Result<()> {
         self.backend.record(self.id, Call::Load(url.into()));
