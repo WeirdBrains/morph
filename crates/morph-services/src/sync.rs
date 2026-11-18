@@ -37,6 +37,9 @@ fn configured_relays() -> Vec<Multiaddr> {
 }
 
 struct Running {
+    /// The home and profile it started for, so [`restart_all`] can start it again.
+    home: PathBuf,
+    profile_id: String,
     node: Arc<Node<Vec<u8>, Vec<u8>>>,
     state: Arc<Mutex<SyncState>>,
     /// Set when the node stops, so its background sync pass ends.
@@ -191,7 +194,8 @@ pub fn start_with(home: &Path, profile_id: &str, cfg: NodeConfig) -> Result<()> 
     let node = start_node(node_key, cfg, state.clone()).map_err(Error::failed)?;
     core::attach_live(dir.clone(), state.clone());
     let stopped = Arc::new(AtomicBool::new(false));
-    nodes().push((dir, Running { node: Arc::new(node), state, stopped: stopped.clone() }));
+    let running = Running { home: home.to_path_buf(), profile_id: profile_id.to_string(), node: Arc::new(node), state, stopped: stopped.clone() };
+    nodes().push((dir, running));
     if autostart() {
         spawn_passes(home.to_path_buf(), profile_id.to_string(), stopped);
     }
@@ -261,6 +265,17 @@ pub fn stop(home: &Path, profile_id: &str) {
         running.stopped.store(true, Ordering::Relaxed);
         running.node.halt();
     }
+}
+
+/// Start every running sync node under `home` again with [`sync_config`],
+/// so a changed discovery toggle or peer list reaches it. Returns how many
+/// restarted; a node whose library has closed meanwhile stays stopped.
+pub fn restart_all(home: &Path) -> usize {
+    // One restart at a time, so two quick changes never start a profile twice.
+    static RESTART: Mutex<()> = Mutex::new(());
+    let _one = RESTART.lock().unwrap_or_else(|p| p.into_inner());
+    let running: Vec<String> = nodes().iter().filter(|(_, r)| r.home == home).map(|(_, r)| r.profile_id.clone()).collect();
+    running.iter().filter(|profile_id| start(home, profile_id).is_ok() && is_running(home, profile_id)).count()
 }
 
 /// Hello and pull every opted-in type from each other roster member, then rematerialize.
@@ -822,6 +837,13 @@ mod tests {
         // Delete by URL on A, B drops it.
         hist::delete_history_url(&a, "p1", "https://visit-b.example").unwrap();
         tick_until(&a, &b, || !has_visit(&b, "https://visit-b.example/") && visits(&b).len() == 2);
+
+        // A network settings change restarts B's node from network.json
+        // (discovery stays off); it reaches the relay again and keeps syncing.
+        assert_eq!(restart_all(&b), 1);
+        assert_eq!(restart_all(&tempfile::tempdir().unwrap().path().join("none")), 0, "other homes are left alone");
+        assert!(is_running(&b, "p1"));
+        wait_reserved(&b);
 
         // Clear on B, A empties; a later visit on A survives on both.
         hist::clear_history(&b, "p1").unwrap();

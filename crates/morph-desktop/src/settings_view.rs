@@ -744,12 +744,11 @@ impl SettingsView {
             cx.notify();
             return;
         }
-        match netprefs::set_discovery(&self.home, on) {
+        match morph_services::network::set_discovery(&self.home, on) {
             Ok(next) => {
                 self.network = next;
                 self.error = None;
                 self.note = None;
-                morph_services::app_calls::shared().stop();
             }
             Err(e) => self.error = Some(format!("Could not save the network settings: {e}")),
         }
@@ -768,12 +767,11 @@ impl SettingsView {
         if spec.is_empty() {
             return;
         }
-        match netprefs::add_peer(&self.home, &spec) {
+        match morph_services::network::add_peer(&self.home, &spec) {
             Ok(next) => {
                 self.network = next;
                 self.error = None;
                 self.peer_input.update(cx, |i, cx| i.set_text("", cx));
-                morph_services::app_calls::shared().stop();
             }
             Err(e) => self.error = Some(e.to_string()),
         }
@@ -781,11 +779,10 @@ impl SettingsView {
     }
 
     fn remove_peer(&mut self, peer_id: String, cx: &mut Context<Self>) {
-        match netprefs::remove_peer(&self.home, &peer_id) {
+        match morph_services::network::remove_peer(&self.home, &peer_id) {
             Ok(next) => {
                 self.network = next;
                 self.error = None;
-                morph_services::app_calls::shared().stop();
             }
             Err(e) => self.error = Some(format!("Could not save the network settings: {e}")),
         }
@@ -950,19 +947,7 @@ impl SettingsView {
                     chip.on_click(cx.listener(move |this, _, _, cx| this.set_discovery(value, cx))).into_any_element()
                 }
             }));
-        let help = if locked {
-            match self.network.discovery_override {
-                Some(DiscoveryOverride::Env) => {
-                    "Turned off by MORPH_DISABLE_WEIRDNET_DISCOVERY. Sharing and sync with relays and added peers still work.".to_string()
-                }
-                Some(DiscoveryOverride::Policy) => {
-                    "Turned off by a policy file. Sharing and sync with relays and added peers still work.".to_string()
-                }
-                None => String::new(),
-            }
-        } else {
-            "Find peers on the local network and the DHT. Turn this off on corporate networks. Sharing and sync with relays and added peers still work.".into()
-        };
+        let help = morph_services::network::discovery_help(&self.network).to_string();
         vec![self.row(Item::Discovery, "Weirdnet discovery", Some(help), chips.into_any_element(), cx)]
     }
 
