@@ -7,83 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- A downloads button sits left of the ☰ menu (also Ctrl+Shift+Y, ⌘⇧J on
-  macOS, and Downloads in the ☰ and address menus). While downloads run it
-  shows their progress under the arrow and how many run. It opens a panel
-  with one tile per download: a progress bar (moving when the size is
-  unknown), the bytes so far, the speed and the time left, smoothed over
-  the last five seconds. Tiles have Pause, Resume, Cancel, Retry and Show in
-  folder, and Clear completed clears the finished ones. A click on a tile
-  opens the file. While it is still downloading, the click marks it to open
-  once saved ("Opens in 12s", or "Opens when done" when there's no
-  estimate), and a second click takes that back. A failed download never
-  opens. Pause stops the engine's download and keeps its bytes; Resume
-  fetches the rest with an HTTP Range request, or starts over and says so
-  when the server can't resume. The bar under the page no longer forgets
-  downloads after ten seconds; it just hides.
-
-- Downloads resume behind a login. When a download starts, Morph records
-  its session: the cookies the engine sends, Referer, User-Agent, the
-  address after redirects, auth headers, and the ETag/Last-Modified. It's
-  kept in the profile's encrypted library, never in plaintext, and nothing
-  is kept while the library is locked or not yet set up. Resume asks the
-  engine for fresh cookies and falls back to the saved ones. It sends
-  If-Range, so a file that changed on the server starts over cleanly. When
-  the server refuses (401/403), the tile says the sign-in no longer works.
-  The session is deleted when the download completes, is cancelled, or is
-  cleared.
-
-- Sync uses `weirdnet-sync` 0.2.0: history and settings share each
-  device's log stream with bookmarks (per-type pull positions), the clock
-  advance after a pull comes from the crate, and a third device that missed
-  a revocation catches up instead of being refused.
-
-- Settings > Linked devices lists the devices a profile syncs with and
-  revokes one (press Revoke, then Confirm). The other devices stop syncing
-  with it on their next pass. A revoked device that still knows the
-  recovery words is kept out by the session check, not by a new key.
-
-- A running sync node now pulls from the other devices on its own: soon
-  after unlock and then every 30 seconds. Two devices can pull from each
-  other at the same time without stalling.
-
-- Search engine, home page and theme sync between linked devices, on by
-  default; layout and the downloads folder stay per device. A new device's
-  defaults never override a linked device's choices.
-
-- History syncs between linked devices too, on by default: visits,
-  delete-by-URL and clear-all, with a later visit surviving an earlier
-  delete or clear. The 5000-visit cap stays local. The two-home relay
-  test now covers history both ways, deletes and clear-all.
-
-- Bookmarks, folders and tags sync between a user's linked devices over
-  `weirdnet-sync` 0.1.0 and `weirdnet-net` 0.6.0. Sync respects the
-  discovery toggle, dials only roster-authorized devices (directly or
-  through a relay, including manual peers that name a roster member),
-  and starts after the library is unlocked. A two-home test through a
-  local relay covers both directions, concurrent edits, deletes and
-  folder moves.
-
-- `weirdnet-<app>://` links open: Morph calls the app over Weirdnet
-  (weirdnet-net 0.5.0, from 0.4.0), finding the peers that serve it by
-  peer id, user id or name and reaching them through the relays. The tab
-  shows it is loading (Stop cancels; on the phone, a thin progress line)
-  and then the app's answer under the app's address: HTML pages, images,
-  JSON (pretty-printed) and text, up to 8 MiB (2 MB on Windows and
-  Android). Each failure has its own page: no one found, the peer doesn't
-  serve that app, couldn't reach it, no answer in time, refused, too
-  large, garbled, an error status, a type Morph can't show, or an invalid
-  app name. None of them searches.
-
-- Device linking and relay checks rely on weirdnet-net 0.5 to reach a
-  relay over all of its addresses; Morph's own dialing workaround is gone.
-  Round trips in Settings still show. Codes are unchanged, and alpha.14 and
-  alpha.15 builds still link with this one.
-
-- Checks: app-call tests through an in-memory relay (pages, errors, an
-  unknown user), a `serve-app` example serving `morph-test`, and an Xvfb
-  and Wayland check (`--app-server`) that loads its pages through the
-  local relay.
+- Downloads button left of the ☰ menu (Ctrl+Shift+Y, ⌘⇧J on macOS) opens a downloads panel.
+- Download tiles show a progress bar, speed and time left, and have Pause, Resume, Cancel, Retry and Show in folder.
+- Clicking a tile opens the file, or opens it when done ("Opens in 12s") while it is still downloading.
+- Downloads behind a login resume with the page's session, kept encrypted and deleted when the download ends.
+- Bookmarks, folders and tags sync between linked devices over Weirdnet.
+- History (visits, deletes, clear-all) syncs between linked devices.
+- Search engine, home page and theme sync between linked devices.
+- Sync runs on its own soon after unlock and every 30 seconds.
+- Settings > Linked devices lists linked devices and revokes one.
+- Settings > Relays can turn Weirdnet discovery off and add peers by hand, on desktop and the phone app; an admin policy can lock discovery off.
+- `weirdnet-<app>://` links call the app over Weirdnet and show its answer, with a clear page for each failure.
+- Uses weirdnet-net 0.6.0 and weirdnet-sync 0.2.0.
 
 ## [0.2.0-alpha.15] - 2026-11-17
 
