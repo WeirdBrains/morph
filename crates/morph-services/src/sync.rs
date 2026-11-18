@@ -1,4 +1,4 @@
-//! Library sync (bookmarks and history) between a user's linked devices, over `weirdnet-sync`.
+//! Library sync (bookmarks, history and settings) between a user's linked devices, over `weirdnet-sync`.
 //!
 //! The node respects Morph's discovery toggle and only *initiates* pulls
 //! against roster members (and manual peers that name a roster device).
@@ -227,6 +227,7 @@ pub fn tick(home: &Path, profile_id: &str) -> Result<usize> {
         (r.state.clone(), r.node.clone(), r.node.peer_id())
     };
     let _ = library_db::with(home, profile_id, |lib| {
+        morph_core::settings_sync::backfill(lib, home, profile_id)?;
         core::refresh_live(&dir, lib);
         Ok(())
     });
@@ -259,6 +260,9 @@ pub fn tick(home: &Path, profile_id: &str) -> Result<usize> {
             drop(st);
             if n > 0 {
                 core::materialize_all(lib, now_ms())?;
+                if let Err(e) = morph_core::settings_sync::materialize(lib, home, profile_id) {
+                    eprintln!("morph-sync: settings: {e}");
+                }
             }
             Ok(())
         });
@@ -335,6 +339,7 @@ mod tests {
     use morph_core::bookmarks::{self, BookmarkEdit};
     use morph_core::library as hist;
     use morph_core::network::NetworkPrefs;
+    use morph_core::settings::ThemeChoice;
     use morph_identity::device_link::{AddDevice, NewDevice};
     use morph_identity::profile_identity::SecretString;
     use std::time::{Duration, Instant};
@@ -498,9 +503,11 @@ mod tests {
     /// Two Morph homes, discovery off, linked over a local relay, then
     /// bookmarks travel both ways (concurrent title vs folder move, a delete,
     /// a later folder move), then history (a pre-link visit, visits both ways,
-    /// delete by URL, clear-all and a visit after the clear).
+    /// delete by URL, clear-all and a visit after the clear), then settings
+    /// (a pre-link theme beats fresh defaults, a change comes back, layout
+    /// stays local).
     #[test]
-    fn two_homes_sync_bookmarks_and_history_over_a_local_relay() {
+    fn two_homes_sync_the_library_over_a_local_relay() {
         let relay = start_local_relay();
         set_relays_for_tests(Some(relay.addrs.clone()));
         let cfg = link_cfg(&relay.addrs);
@@ -514,6 +521,10 @@ mod tests {
         let (folder, _) = bookmarks::create_folder(&a, "p1", "Work", None, 11).unwrap();
         bookmarks::add_bookmark(&a, "p1", "https://two.example/", "Two", 12).unwrap();
         hist::record_visit(&a, "p1", "https://visit-a.example/", "Visit A", 13).unwrap();
+        let mut prefs = morph_core::settings::load(&a).unwrap();
+        prefs.theme = ThemeChoice::Light;
+        prefs.sidebar_width = 300;
+        morph_core::settings::save(&a, &prefs).unwrap();
 
         let new = NewDevice::start("Morph test phone", cfg.clone()).unwrap();
         let mut add = AddDevice::start(&morph_core::profiles::profile_dir(&a, "p1"), "Work", &pw("old password"), new.link(), cfg).unwrap();
@@ -602,6 +613,21 @@ mod tests {
         hist::record_visit(&a, "p1", "https://after-clear.example/", "After", 120).unwrap();
         tick_until(&a, &b, || has_visit(&b, "https://after-clear.example/") && visits(&b).len() == 1);
         assert_eq!(visits(&a).len(), 1);
+
+        // Settings: A's pre-link theme wins over B's fresh defaults; B's home
+        // page comes back to A; layout stays per device.
+        tick_until(&a, &b, || morph_core::settings::load(&b).unwrap().theme == ThemeChoice::Light);
+        assert_ne!(morph_core::settings::load(&b).unwrap().sidebar_width, 300, "layout does not sync");
+        let mut prefs = morph_core::settings::load(&b).unwrap();
+        prefs.home_page = "https://home.example/".into();
+        prefs.search_engine = "duckduckgo".into();
+        morph_core::settings::save(&b, &prefs).unwrap();
+        tick_until(&a, &b, || {
+            let s = morph_core::settings::load(&a).unwrap();
+            s.home_page == "https://home.example/" && s.search_engine == "duckduckgo"
+        });
+        assert_eq!(morph_core::settings::load(&a).unwrap().theme, ThemeChoice::Light);
+        assert_eq!(morph_core::settings::load(&a).unwrap().sidebar_width, 300);
 
         stop(&a, "p1");
         stop(&b, "p1");
