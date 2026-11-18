@@ -420,6 +420,11 @@ pub struct Browser {
     link_menu: Option<(String, f64, f64)>,
     /// Refused resumes' token searches and re-triggers.
     auth: download_auth::AuthWork,
+    /// Added to tab ids in the event log, so each window's tabs read apart
+    /// (the first window's tab 1 is `tab=1`, the second's `tab=1001`).
+    log_base: u64,
+    /// The pages were closed with their window; nothing is shown or pumped.
+    closed: bool,
 }
 
 /// Whether `url` is an address Morph opens itself (`morph:`,
@@ -456,6 +461,8 @@ impl Browser {
             new_windows: Vec::new(),
             link_menu: None,
             auth: download_auth::AuthWork::default(),
+            log_base: 0,
+            closed: false,
         };
         let first = browser.tabs.active_id();
         let url = config.start_url.trim().to_string();
@@ -1202,6 +1209,27 @@ impl Browser {
         self.select_index(active);
     }
 
+    /// Number this browser's tabs from `base` in the event log (one window
+    /// of several).
+    pub fn set_log_base(&mut self, base: u64) {
+        self.log_base = base;
+    }
+
+    /// Close every page at once, while the window they live in still
+    /// stands (the engine's windows sit inside it and must go first).
+    /// The browser shows and pumps nothing afterwards.
+    pub fn close_pages(&mut self) {
+        self.closed = true;
+        self.by_view.clear();
+        self.pages.clear();
+        let _ = self.backend.poll();
+    }
+
+    /// Whether [`Browser::close_pages`] ran.
+    pub fn is_closed(&self) -> bool {
+        self.closed
+    }
+
     /// Links the user asked to open in new windows since the last call.
     pub fn take_new_windows(&mut self) -> Vec<String> {
         std::mem::take(&mut self.new_windows)
@@ -1286,6 +1314,8 @@ impl Browser {
             Action::ShowAbout => self.show_about(false),
             Action::ShowSettings | Action::ShowSearchSettings => self.show_settings(false),
             Action::ToggleFullscreen
+            // The shell opens windows.
+            | Action::NewWindow
             | Action::Quit
             | Action::Bookmark
             | Action::ShowBookmarks
@@ -1565,6 +1595,9 @@ impl Browser {
     /// Drain the backend's events into tab state.
     pub fn poll(&mut self) -> Polled {
         let mut polled = Polled::default();
+        if self.closed {
+            return polled;
+        }
         for outcome in self.downloads.poll_fetches() {
             self.log_download(&outcome);
             polled.changed = true;
@@ -1613,8 +1646,8 @@ impl Browser {
             if self.log_events {
                 match &event {
                     // The icon's bytes would flood the log.
-                    Event::Favicon(png) => eprintln!("morph-event tab={} Favicon({} bytes)", tab.0, png.len()),
-                    _ => eprintln!("morph-event tab={} {event:?}", tab.0),
+                    Event::Favicon(png) => eprintln!("morph-event tab={} Favicon({} bytes)", self.log_base + tab.0, png.len()),
+                    _ => eprintln!("morph-event tab={} {event:?}", self.log_base + tab.0),
                 }
             }
             polled.changed = true;

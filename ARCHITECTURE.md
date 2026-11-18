@@ -132,6 +132,24 @@ window system, and popups are real windows.
   (`NewWindowResponse::Create`). wry's default (`Allow`) expects a
   `gtk::ApplicationWindow` top level and would panic for a child web view
   (`webkitgtk/mod.rs` unwraps the downcast), so Morph never returns it.
+- **Windows.** Each window is a GPUI window with its own `Shell`, `Browser`
+  and backend (its own tab list); a global list in `shell.rs` tracks them,
+  which is in front (links from later launches open there) and each one's
+  tabs. Ctrl+N (⌘N) and ☰ → New window open a window on the same profile.
+  Links: on Linux WebKit's `decide-policy` turns Shift+click into a new
+  window and Ctrl/middle click or `target=_blank` into a new tab; script
+  `window.open` stays a related popup. The link menu gets Morph's own
+  "Open Link in New Tab/Window" (X11 in WebKit's menu, Wayland in the
+  shell's). The tab menu's Move to new window hands the page's WebKit
+  session (back/forward list) to the new window's first page. Closing a
+  window's last tab closes that window; the last window quits. A window
+  closes its pages before GPUI destroys it (the engine's X11 windows live
+  inside it; GTK aborts on the X error otherwise). Open windows and their
+  tabs (addresses only) go to `profiles/<id>/tabs.json` (`morph_core::session`)
+  and come back at the next launch (`MORPH_NO_RESTORE=1` skips that). Not
+  done: dragging a tab out of the strip; downloads stay with the window that
+  started them; macOS and Windows open links with modifiers as the engine
+  does, and Move to new window reopens the address there.
 - **Profiles.** Each profile's web view uses its own wry `WebContext` with the
   profile's WebKit data directory (`morph_core::profiles::webkit_data_dir`), so
   cookies and storage never mix, as on main.

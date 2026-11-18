@@ -5,6 +5,8 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Action {
     NewTab,
+    /// Open a new browser window (same profile) with a fresh tab.
+    NewWindow,
     CloseTab,
     NextTab,
     PrevTab,
@@ -49,6 +51,7 @@ impl Action {
     pub fn name(self) -> String {
         match self {
             Action::NewTab => "browser.new_tab".into(),
+            Action::NewWindow => "shell.new_window".into(),
             Action::CloseTab => "browser.close_tab".into(),
             Action::NextTab => "browser.next_tab".into(),
             Action::PrevTab => "browser.prev_tab".into(),
@@ -80,6 +83,7 @@ impl Action {
     pub fn from_name(name: &str) -> Option<Action> {
         let fixed = [
             Action::NewTab,
+            Action::NewWindow,
             Action::CloseTab,
             Action::NextTab,
             Action::PrevTab,
@@ -132,6 +136,7 @@ impl Default for Keymap {
     fn default() -> Self {
         let fixed = [
             ("ctrl-t", Action::NewTab),
+            ("ctrl-n", Action::NewWindow),
             ("ctrl-w", Action::CloseTab),
             ("ctrl-tab", Action::NextTab),
             ("ctrl-shift-tab", Action::PrevTab),
@@ -249,6 +254,7 @@ mod tests {
             );
         }
         assert_eq!(mac.action_for("cmd-t"), Some(Action::NewTab));
+        assert_eq!(mac.action_for("cmd-n"), Some(Action::NewWindow));
         assert_eq!(mac.action_for("cmd-shift-l"), Some(Action::ShowIdentity));
         assert_eq!(mac.action_for("cmd-,"), Some(Action::ShowSettings));
         assert_eq!(mac.action_for("cmd-9"), Some(Action::SelectLastTab));
@@ -296,6 +302,7 @@ mod tests {
     fn default_keys_match_the_flutter_shell() {
         let keys = Keymap::default();
         assert_eq!(keys.action_for("ctrl-t"), Some(Action::NewTab));
+        assert_eq!(keys.action_for("ctrl-n"), Some(Action::NewWindow));
         assert_eq!(keys.action_for("ctrl-w"), Some(Action::CloseTab));
         assert_eq!(keys.action_for("ctrl-l"), Some(Action::FocusAddress));
         assert_eq!(keys.action_for("ctrl-r"), Some(Action::Reload));

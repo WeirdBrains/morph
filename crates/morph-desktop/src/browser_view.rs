@@ -324,6 +324,12 @@ pub const TOAST_TIME: std::time::Duration = std::time::Duration::from_millis(350
 enum MenuCommand {
     Run(Action),
     Duplicate(TabId),
+    /// Move the tab into a new window of its own.
+    MoveToWindow(TabId),
+    /// The link menu (pages the shell draws): open the link elsewhere, or
+    /// copy its address.
+    OpenLink(String, morph_webview::LinkTarget),
+    CopyLink(String),
     Reload(TabId),
     Close(TabId),
     CloseOthers(TabId),
@@ -349,8 +355,9 @@ struct ShellMenu {
 /// The main menu: the old Flutter dot menu's entries (Find in page,
 /// Bookmarks, History, Identity, Settings) with New tab, Profiles and
 /// About added.
-pub const MAIN_MENU: [(&str, Action, bool); 10] = [
+pub const MAIN_MENU: [(&str, Action, bool); 11] = [
     ("New tab", Action::NewTab, false),
+    ("New window", Action::NewWindow, false),
     ("Find in page", Action::Find, true),
     ("Bookmarks", Action::ShowBookmarks, false),
     ("History", Action::ShowHistory, false),
@@ -455,7 +462,16 @@ impl BrowserView {
     /// A browser on the real web view backend: child windows of `window`
     /// on X11, pages rendered off screen on Wayland, WKWebView and WebView2
     /// child views on macOS and Windows.
-    pub fn create(home: &Path, profile: &str, start: &str, window: &Window, keystrokes: &[String]) -> Result<Browser, String> {
+    /// The browser for a window of `profile`: its first tab at `start`, or
+    /// from `session` (the history of a tab moved from another window).
+    pub fn create(
+        home: &Path,
+        profile: &str,
+        start: &str,
+        session: Option<Vec<u8>>,
+        window: &Window,
+        keystrokes: &[String],
+    ) -> Result<Browser, String> {
         use raw_window_handle::HasWindowHandle;
         let raw = HasWindowHandle::window_handle(window).map_err(|e| format!("no window handle: {e}"))?.as_raw();
         let mut backend = Self::backend(raw, window)?;
@@ -476,7 +492,7 @@ impl BrowserView {
             log_events: std::env::var_os("MORPH_LOG_EVENTS").is_some_and(|v| v == "1"),
             search_engine: morph_core::settings::load(home).map(|s| s.search_engine).unwrap_or_default(),
             app_caller: Some(morph_services::app_calls::shared()),
-            start_session: None,
+            start_session: session,
         };
         let mut browser = Browser::new(backend, config).map_err(|e| e.to_string())?;
         // Sessions saved with downloads (for resume behind a login) live in
@@ -503,6 +519,10 @@ impl BrowserView {
     fn backend(raw: raw_window_handle::RawWindowHandle, _: &Window) -> Result<Box<dyn morph_webview::Backend>, String> {
         let backend = morph_webview::wry_native::NativeBackend::new(raw).ok_or("the shell's window is not an AppKit or Win32 window")?;
         Ok(Box::new(backend))
+    }
+
+    pub fn close_pages(&mut self) {
+        self.browser.close_pages();
     }
 
     pub fn browser(&self) -> &Browser {
@@ -701,9 +721,13 @@ impl BrowserView {
         let _ = cx;
         // Windows answers its own hit test with the control areas (snap
         // layouts on maximize); elsewhere the clicks do the work.
-        Some(row.child(
-            control("window-close", "×", t.error).window_control_area(gpui::WindowControlArea::Close).on_click(|_, window, _| window.remove_window()),
-        ))
+        Some(
+            row.child(
+                control("window-close", "×", t.error)
+                    .window_control_area(gpui::WindowControlArea::Close)
+                    .on_click(cx.listener(|_, _, _, cx| cx.emit(ShellRequest::CloseWindow))),
+            ),
+        )
     }
 
     /// Show `text` at the bottom for a few seconds, with `action` offered.
@@ -752,6 +776,9 @@ impl BrowserView {
             self.toast = None;
             cx.notify();
         }
+        if self.browser.is_closed() {
+            return Vec::new();
+        }
         self.run_test_menu(window, cx);
         let polled = self.browser.poll();
         if polled.changed {
@@ -760,7 +787,14 @@ impl BrowserView {
             cx.notify();
         }
         if self.browser.take_quit() {
-            cx.emit(ShellRequest::Quit);
+            cx.emit(ShellRequest::CloseWindow);
+        }
+        for url in self.browser.take_new_windows() {
+            log_event("link opens a new window");
+            cx.emit(ShellRequest::NewWindow(crate::shell::WindowStart::Url(url)));
+        }
+        if let Some((url, x, y)) = self.browser.take_link_menu() {
+            self.open_link_menu(url, x, y, window, cx);
         }
         if let Some(multiple) = self.browser.take_file_request() {
             let answer = crate::dialogs::ask(cx, crate::dialogs::Ask::Open { multiple });
@@ -1228,12 +1262,37 @@ impl BrowserView {
             (Row::new("New tab").detail(self.label_for(Action::NewTab)), MenuCommand::Run(Action::NewTab)),
             (Row::new("Reload").separated(), MenuCommand::Reload(tab)),
             (Row::new("Duplicate"), MenuCommand::Duplicate(tab)),
+            (Row { enabled: self.browser.tabs().len() > 1, ..Row::new("Move to new window") }, MenuCommand::MoveToWindow(tab)),
             (Row::new("Close tab").separated().detail(self.label_for(Action::CloseTab)), MenuCommand::Close(tab)),
             (Row::new("Close other tabs"), MenuCommand::CloseOthers(tab)),
             (Row::new("Bookmarks").separated().detail(self.label_for(Action::ShowBookmarks)), MenuCommand::Run(Action::ShowBookmarks)),
             (Row::new("History").detail(self.label_for(Action::ShowHistory)), MenuCommand::Run(Action::ShowHistory)),
         ];
         self.open_shell_menu("tab-menu", entries, at, window, cx);
+    }
+
+    /// A right click on a link in a page the shell draws: open it in a new
+    /// tab or window, or copy its address. (Pages in windows of their own
+    /// show WebKit's menu, with the same entries.)
+    fn open_link_menu(&mut self, url: String, x: f64, y: f64, window: &mut Window, cx: &mut Context<Self>) {
+        use morph_webview::LinkTarget;
+        let area = self.browser.page_area();
+        let entries = vec![
+            (Row::new("Open link in new tab"), MenuCommand::OpenLink(url.clone(), LinkTarget::NewTab)),
+            (Row::new("Open link in new window"), MenuCommand::OpenLink(url.clone(), LinkTarget::NewWindow)),
+            (Row::new("Copy link address").separated(), MenuCommand::CopyLink(url)),
+        ];
+        log_event("link menu open");
+        self.open_shell_menu("link-menu", entries, point(px((area.x + x) as f32), px((area.y + y) as f32)), window, cx);
+    }
+
+    /// Move tab `tab` into a new window (its history goes along where the
+    /// engine allows; otherwise its address opens there).
+    fn move_to_window(&mut self, tab: TabId, cx: &mut Context<Self>) {
+        if let Some(moved) = self.browser.detach_tab(tab) {
+            log_event("tab moves to a new window");
+            cx.emit(ShellRequest::NewWindow(crate::shell::WindowStart::Moved(moved)));
+        }
     }
 
     /// One step of `MORPH_TEST_MENU`: open the main menu, then (next tick)
@@ -1262,6 +1321,10 @@ impl BrowserView {
         match command {
             MenuCommand::Run(action) => cx.emit(ShellRequest::Run(action)),
             MenuCommand::Duplicate(tab) => self.browser.duplicate_tab(tab),
+            MenuCommand::MoveToWindow(tab) => self.move_to_window(tab, cx),
+            MenuCommand::OpenLink(url, morph_webview::LinkTarget::NewTab) => self.browser.open_link_in_tab(&url),
+            MenuCommand::OpenLink(url, morph_webview::LinkTarget::NewWindow) => cx.emit(ShellRequest::NewWindow(crate::shell::WindowStart::Url(url))),
+            MenuCommand::CopyLink(url) => cx.write_to_clipboard(ClipboardItem::new_string(url)),
             MenuCommand::Reload(tab) => self.browser.reload_tab(tab),
             MenuCommand::Close(tab) => self.browser.close_tab(tab),
             MenuCommand::CloseOthers(tab) => self.browser.close_other_tabs(tab),
@@ -2372,6 +2435,10 @@ impl Focusable for BrowserView {
 impl Render for BrowserView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::perf::count(&crate::perf::BROWSER_RENDERS);
+        if self.browser.is_closed() {
+            // The window is going; its pages are already closed.
+            return div().into_any_element();
+        }
         // Keep the model in step when GPUI moved focus away (a click on the
         // shell's own chrome outside the address bar).
         if self.browser.address_focused() && self.mirrored_focus && !self.address_focus.is_focused(window) {
@@ -2429,6 +2496,7 @@ impl Render for BrowserView {
             .on_action(|_: &FocusPreviousStop, window, cx| window.focus_prev(cx))
             .child(body)
             .children(overlays)
+            .into_any_element()
     }
 }
 
