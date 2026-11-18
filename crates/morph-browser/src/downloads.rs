@@ -17,6 +17,13 @@
 //! back to the saved ones; it sends `If-Range` so a file that changed on the
 //! server starts over cleanly. The session goes when the download completes,
 //! is cancelled or is cleared.
+//!
+//! A resume the server refuses (401/403) gets two more tries before it
+//! fails: a bearer token from the site's own storage ([`AuthNeed::Token`],
+//! read by the shell from a page of the same origin, see
+//! [`morph_core::download_auth`]), then the page starting the download again
+//! itself ([`AuthNeed::Retrigger`]); the new engine download is attached to
+//! the same tile.
 
 mod fetch;
 
@@ -27,12 +34,50 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
-use morph_core::download_sessions::{DownloadContext, SessionCookie, SessionStore, is_auth_header};
+use std::collections::HashMap;
+
+use morph_core::download_sessions::{BearerToken, DownloadContext, SessionCookie, SessionStore, is_auth_header};
 use morph_webview::{Download, DownloadChange};
 
 /// How long a resume waits for the engine's fresh cookies before it goes
 /// with the saved ones.
 const COOKIE_WAIT: Duration = Duration::from_secs(2);
+/// How long a refused resume waits for a token from the site's storage.
+const TOKEN_WAIT: Duration = Duration::from_secs(10);
+/// How long a re-triggered download waits for the page to start it again.
+const REATTACH_WAIT: Duration = Duration::from_secs(30);
+
+/// Something the shell must do for a refused resume.
+#[derive(Clone, PartialEq, Eq)]
+pub enum AuthNeed {
+    /// Read the storage of a page at one of `origins` (same profile; a live
+    /// tab, else a hidden view) and answer [`Downloads::token_found`].
+    /// `captured` is the bearer token the download first went with.
+    Token { id: u64, origins: Vec<String>, captured: Option<String> },
+    /// Start `url` again from the page engine download `engine` came from
+    /// (or a new tab); the new download attaches to `id`.
+    Retrigger { id: u64, engine: u64, url: String },
+}
+
+impl std::fmt::Debug for AuthNeed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Token { id, origins, captured } => write!(f, "Token({id}, {origins:?}, captured: {})", captured.is_some()),
+            Self::Retrigger { id, engine, url } => write!(f, "Retrigger({id}, engine {engine}, {url})"),
+        }
+    }
+}
+
+/// How far a refused resume got.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum AuthStep {
+    #[default]
+    Fresh,
+    /// It went with a token from the site's storage.
+    TokenTried,
+    /// The page was asked to start it again.
+    Retriggered,
+}
 
 /// How a download stands.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,6 +106,10 @@ enum Transfer {
     /// A resume (or retry) asked the engine for fresh cookies and starts
     /// from `offset` once they come or [`COOKIE_WAIT`] is up.
     AwaitingCookies { since: Instant, offset: u64 },
+    /// Refused: waits for a token from the site's storage, to go on from `offset`.
+    AwaitingToken { since: Instant, offset: u64 },
+    /// Refused again: waits for the page to start the download anew.
+    Reattaching { since: Instant },
     /// Nobody (paused, or all bytes in).
     Idle,
 }
@@ -128,6 +177,12 @@ pub struct DownloadItem {
     session_key: String,
     /// The session it started with (fresh cookies replace the saved ones).
     context: DownloadContext,
+    /// The engine's id for its current engine download (a re-triggered
+    /// download gets a new one).
+    engine: u64,
+    auth: AuthStep,
+    /// Why the last refusal happened, for the failure if nothing works.
+    refused: Option<String>,
 }
 
 impl PartialEq for DownloadItem {
@@ -281,6 +336,10 @@ pub struct Downloads {
     generation: u64,
     /// Where sessions are kept (`None`: in memory only).
     sessions: Option<Arc<dyn SessionStore>>,
+    /// Engine download id → the download it was attached to.
+    aliases: HashMap<u64, u64>,
+    /// What refused resumes need from the shell.
+    needs: VecDeque<AuthNeed>,
 }
 
 /// A download's row in the session store: unique across runs, so a row a
@@ -293,7 +352,18 @@ fn session_key(id: u64) -> String {
 impl Default for Downloads {
     fn default() -> Self {
         let (fetch_tx, fetch_rx) = channel();
-        Self { items: Vec::new(), asks: VecDeque::new(), folder: None, opens: VecDeque::new(), fetch_tx, fetch_rx, generation: 0, sessions: None }
+        Self {
+            items: Vec::new(),
+            asks: VecDeque::new(),
+            folder: None,
+            opens: VecDeque::new(),
+            fetch_tx,
+            fetch_rx,
+            generation: 0,
+            sessions: None,
+            aliases: HashMap::new(),
+            needs: VecDeque::new(),
+        }
     }
 }
 
@@ -350,6 +420,11 @@ impl Downloads {
         self.get(id).map(|d| if d.context.final_url.is_empty() { d.url.clone() } else { d.context.final_url.clone() })
     }
 
+    /// Whether `id` waits for a token from the site's storage.
+    pub fn awaiting_token(&self, id: u64) -> bool {
+        self.get(id).is_some_and(|d| matches!(d.transfer, Transfer::AwaitingToken { .. }))
+    }
+
     /// Whether `id` waits for the engine's cookies to resume.
     pub fn awaiting_cookies(&self, id: u64) -> bool {
         self.get(id).is_some_and(|d| matches!(d.transfer, Transfer::AwaitingCookies { .. }))
@@ -359,6 +434,7 @@ impl Downloads {
     /// could not say). Fresh cookies replace the saved ones; a waiting resume
     /// starts, with the saved session when no fresh cookies came.
     pub fn cookies_answered(&mut self, id: u64, cookies: Option<Vec<morph_webview::Cookie>>) {
+        let id = self.aliases.get(&id).copied().unwrap_or(id);
         let sessions = self.sessions.clone();
         let Some(d) = self.get_mut(id) else {
             return;
@@ -395,6 +471,105 @@ impl Downloads {
         for (id, offset) in late {
             self.start_waiting(id, offset, false);
         }
+        let token_late: Vec<u64> = self
+            .items
+            .iter()
+            .filter(|d| matches!(d.transfer, Transfer::AwaitingToken { since, .. } if now.duration_since(since) >= TOKEN_WAIT))
+            .map(|d| d.id)
+            .collect();
+        for id in token_late {
+            self.token_found(id, None);
+        }
+        for d in self.items.iter_mut() {
+            if matches!(d.transfer, Transfer::Reattaching { since } if now.duration_since(since) >= REATTACH_WAIT) {
+                Self::refusal_fails(d);
+            }
+        }
+    }
+
+    /// The engine's id for download `id`'s engine download (for
+    /// [`morph_webview::Backend::cancel_download`] and cookie lookups).
+    pub fn engine_id(&self, id: u64) -> u64 {
+        self.get(id).map_or(id, |d| d.engine)
+    }
+
+    /// The next thing a refused resume needs from the shell.
+    pub fn take_auth_need(&mut self) -> Option<AuthNeed> {
+        self.needs.pop_front()
+    }
+
+    /// The shell looked for a token in the site's storage: try again with
+    /// it, or (`None`) have the page start the download again.
+    pub fn token_found(&mut self, id: u64, token: Option<BearerToken>) {
+        let sessions = self.sessions.clone();
+        let Some(d) = self.get_mut(id) else {
+            return;
+        };
+        let Transfer::AwaitingToken { offset, .. } = d.transfer else {
+            return;
+        };
+        match token {
+            Some(token) if d.state == DownloadState::Running => {
+                d.context.bearer = Some(token);
+                d.auth = AuthStep::TokenTried;
+                if let Some(s) = &sessions {
+                    s.save(&d.session_key, &d.context);
+                }
+                self.start_waiting(id, offset, true);
+            }
+            _ => self.retrigger(id),
+        }
+    }
+
+    /// Ask the page to start `id` again; its new engine download attaches.
+    fn retrigger(&mut self, id: u64) {
+        let Some(d) = self.get_mut(id) else {
+            return;
+        };
+        if d.state != DownloadState::Running || d.auth == AuthStep::Retriggered {
+            if let Some(d) = self.get_mut(id) {
+                Self::refusal_fails(d);
+            }
+            return;
+        }
+        d.auth = AuthStep::Retriggered;
+        d.transfer = Transfer::Reattaching { since: Instant::now() };
+        let need = AuthNeed::Retrigger { id, engine: d.engine, url: d.url.clone() };
+        self.needs.push_back(need);
+    }
+
+    /// Nothing got past the refusal: the download fails and says why.
+    fn refusal_fails(d: &mut DownloadItem) -> Outcome {
+        let why = d.refused.clone().unwrap_or_else(|| "the server refused to resume; sign in again and retry".into());
+        d.transfer = Transfer::Idle;
+        if d.state != DownloadState::Running {
+            return Outcome::Nothing;
+        }
+        d.open_when_done = false;
+        d.state = DownloadState::Failed(why.clone());
+        Outcome::Failed(why)
+    }
+
+    /// A new engine download of a re-triggered download's address: it takes
+    /// over that download (same tile, same target). Whether it attached.
+    fn attach(&mut self, engine: u64, url: &str, staged: &Path) -> bool {
+        let Some(d) = self.items.iter_mut().find(|d| {
+            matches!(d.transfer, Transfer::Reattaching { .. }) && (d.url == url || (!d.context.final_url.is_empty() && d.context.final_url == url))
+        }) else {
+            return false;
+        };
+        let _ = std::fs::remove_file(&d.staged);
+        let _ = std::fs::remove_file(kept_path(&d.staged));
+        d.staged = staged.to_path_buf();
+        d.engine = engine;
+        d.complete = false;
+        d.received = 0;
+        d.restarted = true;
+        d.rate.restart();
+        d.transfer = Transfer::Engine;
+        let id = d.id;
+        self.aliases.insert(engine, id);
+        true
     }
 
     /// Start `id`'s own transfer from `offset`: with the session in memory
@@ -456,7 +631,12 @@ impl Downloads {
 
     /// [`Self::apply`] at time `now` (the speed's clock).
     pub fn apply_at(&mut self, event: Download, now: Instant) -> Outcome {
-        let id = event.id;
+        if let DownloadChange::Started { url, staged, .. } = &event.change
+            && self.attach(event.id, url, staged)
+        {
+            return Outcome::Nothing;
+        }
+        let id = self.aliases.get(&event.id).copied().unwrap_or(event.id);
         match event.change {
             DownloadChange::Started { url, name, staged } => {
                 self.items.retain(|d| d.id != id);
@@ -476,6 +656,9 @@ impl Downloads {
                     transfer: Transfer::Engine,
                     session_key: session_key(id),
                     context: DownloadContext::default(),
+                    engine: id,
+                    auth: AuthStep::Fresh,
+                    refused: None,
                 });
                 self.asks.push_back(id);
                 Outcome::Nothing
@@ -609,6 +792,38 @@ impl Downloads {
                 }
                 Outcome::Nothing
             }
+            fetch::Change::Refused { why, .. } => {
+                d.refused = Some(why);
+                match d.auth {
+                    AuthStep::Fresh => {
+                        let offset = std::fs::metadata(&d.staged).map(|m| m.len()).unwrap_or(0);
+                        d.transfer = Transfer::AwaitingToken { since: now, offset };
+                        let mut origins: Vec<String> = Vec::new();
+                        let referer = d.context.referer.as_deref().and_then(morph_core::download_auth::origin_of);
+                        let fetched = if d.context.final_url.is_empty() { &d.url } else { &d.context.final_url };
+                        for o in [referer, morph_core::download_auth::origin_of(fetched), morph_core::download_auth::origin_of(&d.url)]
+                            .into_iter()
+                            .flatten()
+                        {
+                            if !origins.contains(&o) {
+                                origins.push(o);
+                            }
+                        }
+                        let captured = d.context.captured_bearer().map(str::to_string);
+                        let id = d.id;
+                        self.needs.push_back(AuthNeed::Token { id, origins, captured });
+                        Outcome::Nothing
+                    }
+                    AuthStep::TokenTried => {
+                        // That token didn't do either: forget it.
+                        d.context.bearer = None;
+                        let id = d.id;
+                        self.retrigger(id);
+                        Outcome::Nothing
+                    }
+                    AuthStep::Retriggered => Self::refusal_fails(d),
+                }
+            }
             fetch::Change::Finished => {
                 d.complete = true;
                 d.transfer = Transfer::Idle;
@@ -676,7 +891,7 @@ impl Downloads {
                 false
             }
             // Paused before the resume got going: the kept bytes stay put.
-            Transfer::AwaitingCookies { .. } => false,
+            Transfer::AwaitingCookies { .. } | Transfer::AwaitingToken { .. } | Transfer::Reattaching { .. } => false,
             other => {
                 d.transfer = other;
                 false
@@ -711,6 +926,7 @@ impl Downloads {
         d.restarted = false;
         // The caller asks the engine for fresh cookies ([`Self::cookies_answered`]).
         d.transfer = Transfer::AwaitingCookies { since: Instant::now(), offset };
+        d.auth = AuthStep::Fresh;
         Outcome::Nothing
     }
 
@@ -781,6 +997,7 @@ impl Downloads {
         }
         let d = self.items.iter_mut().find(|d| d.id == id).expect("just found");
         d.transfer = Transfer::AwaitingCookies { since: Instant::now(), offset: 0 };
+        d.auth = AuthStep::Fresh;
     }
 
     /// A click on `id`'s tile: a saved file's path to open now; while it
@@ -1398,7 +1615,7 @@ mod tests {
         paused_at(&mut d, &folder, 1, &url, &body[..20_000]);
         d.resume(1);
         d.cookies_answered(1, None);
-        let Outcome::Failed(why) = settle_own(&mut d, 1) else { panic!("the resume must fail") };
+        let why = refused_to_the_end(&mut d, 1);
         assert!(why.contains("HTTP 403") && why.contains("sign in"), "{why}");
         assert!(matches!(&d.get(1).unwrap().state, DownloadState::Failed(w) if *w == why));
 
@@ -1407,8 +1624,186 @@ mod tests {
         d.cookies_answered(2, Some(vec![cookie("sid", "expired")]));
         d.resume(2);
         d.cookies_answered(2, None);
-        let Outcome::Failed(why) = settle_own(&mut d, 2) else { panic!("the resume must fail") };
+        let why = refused_to_the_end(&mut d, 2);
         assert!(why.contains("no longer works"), "{why}");
+    }
+
+    /// Wait for `id`'s resume to be refused; the need it raises.
+    fn refused(d: &mut Downloads, id: u64) -> AuthNeed {
+        let until = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < until {
+            d.wait_fetches(Duration::from_millis(100));
+            if let Some(need) = d.take_auth_need() {
+                return need;
+            }
+        }
+        panic!("download {id} was not refused: {:?}", d.get(id).map(|d| &d.state));
+    }
+
+    /// A refused resume with no token in storage and a page that never
+    /// starts it again: it fails in the end; why.
+    fn refused_to_the_end(d: &mut Downloads, id: u64) -> String {
+        assert!(matches!(refused(d, id), AuthNeed::Token { id: i, .. } if i == id));
+        d.token_found(id, None);
+        assert!(matches!(d.take_auth_need(), Some(AuthNeed::Retrigger { id: i, .. }) if i == id));
+        assert!(d.get(id).unwrap().running(), "still waiting for the page");
+        d.poll_waits(Instant::now() + REATTACH_WAIT + Duration::from_secs(1));
+        match &d.get(id).unwrap().state {
+            DownloadState::Failed(why) => why.clone(),
+            other => panic!("the resume must fail, not {other:?}"),
+        }
+    }
+
+    /// A server for `body` behind a JavaScript login: every request needs
+    /// `Authorization: Bearer <token>` (else 401); it honours `Range`.
+    fn serve_bearer(body: Vec<u8>, token: String) -> (String, Arc<Mutex<Vec<Option<String>>>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/api/export.bin", listener.local_addr().unwrap());
+        let seen: Arc<Mutex<Vec<Option<String>>>> = Arc::default();
+        let log = seen.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let (mut auth, mut range) = (None, None);
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                        break;
+                    }
+                    let Some((name, value)) = line.split_once(':') else { continue };
+                    match name.trim().to_ascii_lowercase().as_str() {
+                        "authorization" => auth = Some(value.trim().to_string()),
+                        "range" => range = Some(value.trim().to_string()),
+                        _ => {}
+                    }
+                }
+                log.lock().unwrap().push(auth.clone());
+                let mut out = stream;
+                if auth.as_deref() != Some(format!("Bearer {token}").as_str()) {
+                    let _ = out.write_all(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                    continue;
+                }
+                let start: usize = range.as_deref().and_then(|v| v.strip_prefix("bytes=")?.trim_end_matches('-').parse().ok()).unwrap_or(0);
+                let head = format!(
+                    "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {start}-{}/{}\r\nConnection: close\r\n\r\n",
+                    body.len() - start,
+                    body.len() - 1,
+                    body.len()
+                );
+                let _ = out.write_all(head.as_bytes());
+                let _ = out.write_all(&body[start..]);
+            }
+        });
+        (url, seen)
+    }
+
+    fn now_s() -> i64 {
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64
+    }
+
+    fn jwt(exp_from_now: i64, sub: &str) -> String {
+        morph_core::download_auth::test_jwt(&format!(r#"{{"sub":"{sub}","exp":{}}}"#, now_s() + exp_from_now))
+    }
+
+    #[test]
+    fn a_refused_resume_goes_on_with_the_sites_jwt() {
+        let body = bytes(80_000);
+        let good = jwt(3600, "me");
+        let (url, seen) = serve_bearer(body.clone(), good.clone());
+        let folder = dir("jwt");
+        let store = Arc::new(MemStore::default());
+        let mut d = Downloads::default();
+        d.set_sessions(store.clone());
+        let target = paused_at(&mut d, &folder, 1, &url, &body[..30_000]);
+        d.resume(1);
+        d.cookies_answered(1, None);
+        let AuthNeed::Token { id, origins, captured } = refused(&mut d, 1) else { panic!("a token search first") };
+        let origin = morph_core::download_auth::origin_of(&url).unwrap();
+        assert_eq!((id, origins.clone(), captured), (1, vec![origin.clone()], None));
+        assert!(!format!("{:?}", AuthNeed::Token { id, origins, captured: Some(good.clone()) }).contains(&good), "a need never shows its token");
+        // What the page keeps: an expired token in localStorage, the live one
+        // inside a JSON blob in sessionStorage.
+        let storage =
+            vec![("old_token".to_string(), jwt(-60, "old")), ("session".to_string(), format!(r#"{{"user":"me","access_token":"{good}"}}"#))];
+        let token = morph_core::download_auth::pick_jwt(&storage, None, now_s()).expect("the live token");
+        assert_eq!(token, good, "the expired one is skipped");
+        d.token_found(1, Some(BearerToken { origin, token }));
+        assert_eq!(settle_own(&mut d, 1), Outcome::Saved(target.clone()));
+        assert_eq!(std::fs::read(&target).unwrap(), body);
+        assert_eq!(seen.lock().unwrap().last().unwrap().as_deref(), Some(format!("Bearer {good}").as_str()));
+        assert_eq!(store.len(), 0, "the token went with the session");
+        assert_eq!(d.get(1).unwrap().context.bearer, None);
+    }
+
+    #[test]
+    fn a_captured_authorization_header_goes_with_the_resume() {
+        let body = bytes(50_000);
+        let token = jwt(3600, "me");
+        let (url, _) = serve_bearer(body.clone(), token.clone());
+        let folder = dir("captured");
+        let mut d = Downloads::default();
+        d.set_sessions(Arc::new(MemStore::default()));
+        let target = paused_at(&mut d, &folder, 1, &url, &body[..10_000]);
+        let context = morph_webview::RequestContext {
+            final_url: url.clone(),
+            headers: vec![("Authorization".into(), format!("Bearer {token}"))],
+            ..Default::default()
+        };
+        d.apply(Download { id: 1, change: DownloadChange::Context(context) });
+        assert_eq!(d.get(1).unwrap().context.captured_bearer(), Some(token.as_str()));
+        d.resume(1);
+        d.cookies_answered(1, None);
+        assert_eq!(settle_own(&mut d, 1), Outcome::Saved(target));
+        assert_eq!(d.take_auth_need(), None, "no search needed");
+    }
+
+    #[test]
+    fn with_only_expired_tokens_the_page_starts_it_again_and_it_attaches() {
+        let body = bytes(40_000);
+        let (url, _) = serve_bearer(body.clone(), jwt(3600, "never-stored"));
+        let folder = dir("retrigger");
+        let mut d = Downloads::default();
+        d.set_sessions(Arc::new(MemStore::default()));
+        let target = paused_at(&mut d, &folder, 1, &url, &body[..10_000]);
+        d.resume(1);
+        d.cookies_answered(1, None);
+        assert!(matches!(refused(&mut d, 1), AuthNeed::Token { .. }));
+        let storage = vec![("token".to_string(), jwt(-5, "me"))];
+        assert_eq!(morph_core::download_auth::pick_jwt(&storage, None, now_s()), None, "expired: skipped");
+        d.token_found(1, None);
+        assert_eq!(d.take_auth_need(), Some(AuthNeed::Retrigger { id: 1, engine: 1, url: url.clone() }));
+        // The page fetched it again with its own session: a new engine download.
+        let staged = morph_webview::download_staging(&folder, "file.bin", 7);
+        std::fs::write(&staged, &body[..5_000]).unwrap();
+        d.apply(Download { id: 7, change: DownloadChange::Started { url: url.clone(), name: "file.bin".into(), staged: staged.clone() } });
+        assert_eq!(d.items().len(), 1, "it took over the same tile");
+        assert_eq!(d.take_ask(), None, "no second save dialog");
+        assert_eq!(d.engine_id(1), 7, "pause and cancel reach the new engine download");
+        let item = d.get(1).unwrap();
+        assert!(item.running() && item.restarted);
+        d.apply(Download { id: 7, change: DownloadChange::Progress { received: 20_000, total: Some(40_000) } });
+        assert_eq!(d.get(1).unwrap().received, 20_000);
+        std::fs::write(&staged, &body).unwrap();
+        assert_eq!(d.apply(Download { id: 7, change: DownloadChange::Finished }), Outcome::Saved(target.clone()));
+        assert_eq!(std::fs::read(&target).unwrap(), body);
+    }
+
+    #[test]
+    fn a_token_that_is_refused_too_falls_back_to_the_page() {
+        let body = bytes(40_000);
+        let (url, _) = serve_bearer(body.clone(), jwt(3600, "right"));
+        let folder = dir("wrongtoken");
+        let mut d = Downloads::default();
+        d.set_sessions(Arc::new(MemStore::default()));
+        paused_at(&mut d, &folder, 1, &url, &body[..10_000]);
+        d.resume(1);
+        d.cookies_answered(1, None);
+        assert!(matches!(refused(&mut d, 1), AuthNeed::Token { .. }));
+        let origin = morph_core::download_auth::origin_of(&url).unwrap();
+        d.token_found(1, Some(BearerToken { origin, token: jwt(3600, "wrong") }));
+        assert!(matches!(refused(&mut d, 1), AuthNeed::Retrigger { id: 1, .. }));
+        assert_eq!(d.get(1).unwrap().context.bearer, None, "the refused token is forgotten");
     }
 
     #[test]

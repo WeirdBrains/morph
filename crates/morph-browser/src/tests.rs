@@ -1130,3 +1130,196 @@ fn own_pages_move_by_address_and_a_saved_window_reopens_in_order() {
     assert_eq!(active, 1);
     assert_eq!(fake.created().len(), 3);
 }
+
+// --- Resume behind a JavaScript login ----------------------------------
+
+mod js_login {
+    use super::*;
+    use crate::downloads::DownloadState;
+    use morph_webview::{Download, DownloadChange};
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    /// A server whose file needs `Authorization: Bearer <token>`; honours
+    /// `Range`. Records each request's Authorization.
+    fn serve_bearer(body: Vec<u8>, token: String) -> (String, Arc<Mutex<Vec<Option<String>>>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let seen: Arc<Mutex<Vec<Option<String>>>> = Arc::default();
+        let log = seen.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let (mut auth, mut range) = (None, None);
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                        break;
+                    }
+                    let Some((name, value)) = line.split_once(':') else { continue };
+                    match name.trim().to_ascii_lowercase().as_str() {
+                        "authorization" => auth = Some(value.trim().to_string()),
+                        "range" => range = Some(value.trim().to_string()),
+                        _ => {}
+                    }
+                }
+                log.lock().unwrap().push(auth.clone());
+                let mut out = stream;
+                if auth.as_deref() != Some(format!("Bearer {token}").as_str()) {
+                    let _ = out.write_all(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                    continue;
+                }
+                let start: usize = range.as_deref().and_then(|v| v.strip_prefix("bytes=")?.trim_end_matches('-').parse().ok()).unwrap_or(0);
+                let head = format!(
+                    "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {start}-{}/{}\r\nConnection: close\r\n\r\n",
+                    body.len() - start,
+                    body.len() - 1,
+                    body.len()
+                );
+                let _ = out.write_all(head.as_bytes());
+                let _ = out.write_all(&body[start..]);
+            }
+        });
+        (origin, seen)
+    }
+
+    fn jwt(exp_from_now: i64, sub: &str) -> String {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+        morph_core::download_auth::test_jwt(&format!(r#"{{"sub":"{sub}","exp":{}}}"#, now + exp_from_now))
+    }
+
+    /// What the page's storage script answers: its origin and entries.
+    fn storage(origin: &str, items: &[(&str, &str)]) -> String {
+        let items: Vec<(String, String)> = items.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        // Engines hand a string result back JSON-quoted.
+        serde_json::to_string(&serde_json::json!({ "origin": origin, "items": items }).to_string()).unwrap()
+    }
+
+    fn bytes(n: usize) -> Vec<u8> {
+        (0..n).map(|i| (i * 7 % 251) as u8).collect()
+    }
+
+    /// Start download `id` of `url` in `view` with `kept` bytes, save it to
+    /// a file in `folder`, pause it and let the engine stop.
+    fn paused(b: &mut Browser, fake: &FakeBackend, view: ViewId, id: u64, url: &str, folder: &std::path::Path, kept: &[u8]) -> std::path::PathBuf {
+        let staged = morph_webview::download_staging(folder, "export.bin", id);
+        std::fs::write(&staged, kept).unwrap();
+        fake.emit(view, Event::Download(Download { id, change: DownloadChange::Started { url: url.into(), name: "export.bin".into(), staged } }));
+        fake.emit(view, Event::Download(Download { id, change: DownloadChange::Progress { received: kept.len() as u64, total: None } }));
+        b.poll();
+        let target = folder.join("export.bin");
+        b.save_download(id, Some(target.clone()));
+        b.pause_download(id);
+        fake.emit(view, Event::Download(Download { id, change: DownloadChange::Failed("cancelled".into()) }));
+        b.poll();
+        target
+    }
+
+    /// Poll until download `id` is no longer running.
+    fn run(b: &mut Browser, id: u64) -> DownloadState {
+        let until = Instant::now() + Duration::from_secs(15);
+        while Instant::now() < until {
+            b.poll();
+            let d = b.downloads().iter().find(|d| d.id == id).unwrap();
+            if !d.running() {
+                return d.state.clone();
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        panic!("download {id} still runs");
+    }
+
+    fn folder(tag: &str) -> tempfile::TempDir {
+        tempfile::Builder::new().prefix(&format!("morph-dl-{tag}-")).tempdir().unwrap()
+    }
+
+    #[test]
+    fn a_refused_resume_reads_the_token_from_a_live_tab_of_the_site() {
+        let body = bytes(60_000);
+        let good = jwt(3600, "me");
+        let (origin, seen) = serve_bearer(body.clone(), good.clone());
+        let page = format!("{origin}/app/files");
+        let (mut b, fake) = browser(&page);
+        let view = fake.created()[0];
+        // The page keeps an expired token in localStorage and the live one in sessionStorage.
+        fake.answer_scripts(&origin, &storage(&origin, &[("token", &jwt(-60, "old")), ("auth", &format!(r#"{{"access_token":"{good}"}}"#))]));
+        let dir = folder("livetab");
+        let target = paused(&mut b, &fake, view, 1, &format!("{origin}/api/export.bin"), dir.path(), &body[..20_000]);
+        b.resume_download(1);
+        assert_eq!(run(&mut b, 1), DownloadState::Saved(target.clone()));
+        assert_eq!(std::fs::read(&target).unwrap(), body);
+        assert!(fake.scripts(view).iter().any(|s| s.contains("localStorage") && s.contains("sessionStorage")), "the tab's storage was read");
+        let auths = seen.lock().unwrap().clone();
+        assert_eq!(auths.first().cloned().flatten(), None, "the first try went without a token");
+        assert_eq!(auths.last().cloned().flatten(), Some(format!("Bearer {good}")));
+        assert_eq!(fake.created().len(), 1, "no hidden view was needed");
+    }
+
+    #[test]
+    fn with_no_tab_of_the_site_a_hidden_view_reads_its_storage() {
+        let body = bytes(40_000);
+        let good = jwt(3600, "me");
+        let (origin, _) = serve_bearer(body.clone(), good.clone());
+        let (mut b, fake) = browser("https://elsewhere.example/");
+        let view = fake.created()[0];
+        fake.answer_scripts(&format!("{origin}/"), &storage(&origin, &[("jwt", &good)]));
+        fake.answer_scripts("https://elsewhere.example", &storage("https://elsewhere.example", &[("jwt", &jwt(3600, "other-site"))]));
+        let dir = folder("hidden");
+        let target = paused(&mut b, &fake, view, 1, &format!("{origin}/api/export.bin"), dir.path(), &body[..10_000]);
+        b.resume_download(1);
+        let until = Instant::now() + Duration::from_secs(10);
+        let hidden = loop {
+            b.poll();
+            if let Some(&v) = fake.created().get(1) {
+                break v;
+            }
+            assert!(Instant::now() < until, "no hidden view");
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        match &fake.calls_for(hidden)[0] {
+            Call::Create(spec) => {
+                assert_eq!(spec.url, format!("{origin}/"));
+                assert!(!spec.visible, "out of sight");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(fake.scripts(view).is_empty(), "another site's tab is never read");
+        fake.emit(hidden, Event::LoadFinished);
+        assert_eq!(run(&mut b, 1), DownloadState::Saved(target.clone()));
+        assert_eq!(std::fs::read(&target).unwrap(), body);
+        assert!(fake.calls_for(hidden).contains(&Call::Dropped), "the hidden view goes once read");
+    }
+
+    #[test]
+    fn with_only_expired_tokens_the_page_starts_the_download_again() {
+        let body = bytes(30_000);
+        let (origin, _) = serve_bearer(body.clone(), jwt(3600, "never-stored"));
+        let page = format!("{origin}/app");
+        let (mut b, fake) = browser(&page);
+        let view = fake.created()[0];
+        fake.answer_scripts(&origin, &storage(&origin, &[("token", &jwt(-5, "me"))]));
+        let dir = folder("retrigger");
+        let url = format!("{origin}/api/export.bin");
+        let target = paused(&mut b, &fake, view, 1, &url, dir.path(), &body[..10_000]);
+        b.resume_download(1);
+        let until = Instant::now() + Duration::from_secs(10);
+        while !fake.scripts(view).iter().any(|s| s.contains("createElement('a')")) {
+            assert!(Instant::now() < until, "the page was not asked to start it again");
+            b.poll();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let script = fake.scripts(view).into_iter().find(|s| s.contains("createElement('a')")).unwrap();
+        assert!(script.contains(&url), "{script}");
+        // The page's own fetch: a new engine download, attached to the same tile.
+        let staged = morph_webview::download_staging(dir.path(), "export.bin", 9);
+        std::fs::write(&staged, &body).unwrap();
+        fake.emit(view, Event::Download(Download { id: 9, change: DownloadChange::Started { url: url.clone(), name: "export.bin".into(), staged } }));
+        fake.emit(view, Event::Download(Download { id: 9, change: DownloadChange::Finished }));
+        b.poll();
+        assert_eq!(b.downloads().len(), 1);
+        assert_eq!(b.downloads()[0].state, DownloadState::Saved(target.clone()));
+        assert_eq!(std::fs::read(&target).unwrap(), body);
+        assert_eq!(b.take_download_ask(), None, "no second save dialog");
+    }
+}

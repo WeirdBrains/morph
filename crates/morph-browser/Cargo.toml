@@ -17,4 +17,5 @@ morph-webview.workspace = true
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 
 [dev-dependencies]
+serde_json = "1"
 tempfile.workspace = true
