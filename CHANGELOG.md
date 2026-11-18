@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Settings > Linked devices lists the devices a profile syncs with and
+  revokes one (press Revoke, then Confirm). The other devices stop syncing
+  with it on their next pass. A revoked device that still knows the
+  recovery words is kept out by the session check, not by a new key.
+
 - A running sync node now pulls from the other devices on its own: soon
   after unlock and then every 30 seconds. Two devices can pull from each
   other at the same time without stalling.
@@ -26,7 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through a relay, including manual peers that name a roster member),
   and starts after the library is unlocked. A two-home test through a
   local relay covers both directions, concurrent edits, deletes and
-  folder moves. A Devices UI comes later.
+  folder moves.
 
 - `weirdnet-<app>://` links open: Morph calls the app over Weirdnet
   (weirdnet-net 0.5.0, from 0.4.0), finding the peers that serve it by
