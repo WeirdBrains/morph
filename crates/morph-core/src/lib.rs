@@ -18,6 +18,7 @@ pub mod profiles;
 pub mod scheme;
 pub mod search;
 pub mod settings;
+pub mod settings_sync;
 pub mod sync;
 pub mod tabs;
 

@@ -12,13 +12,17 @@ use weirdnet_sync::log::{LogEntry, OpLog};
 use weirdnet_sync::merge::{self, CONFLICT_KEEP_MS, EditOrDelete, Lww, OrSet, folder_cycle, lww};
 use weirdnet_sync::{NodeId, Roster, SyncState, SyncType as typ};
 
-/// Default opt-ins after link or first enable (settings come later).
+/// Default opt-ins after link or first enable.
 pub const BOOKMARKS: &str = typ::BOOKMARKS;
 pub const HISTORY: &str = typ::HISTORY;
-pub const DEFAULT_TYPES: &[&str] = &[BOOKMARKS, HISTORY];
+pub const SETTINGS: &str = typ::SETTINGS;
+pub const DEFAULT_TYPES: &[&str] = &[BOOKMARKS, HISTORY, SETTINGS];
 
 /// Record types this build can merge. A pull asks for each one that is on.
-pub const SUPPORTED_TYPES: &[&str] = &[BOOKMARKS, HISTORY];
+pub const SUPPORTED_TYPES: &[&str] = &[BOOKMARKS, HISTORY, SETTINGS];
+
+/// Earlier builds' default opt-ins, upgraded once to [`DEFAULT_TYPES`].
+const OLD_DEFAULTS: &[&[&str]] = &[&[BOOKMARKS], &[BOOKMARKS, HISTORY]];
 
 /// One bookmarks-log mutation. `record_id` lives on the log entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -105,16 +109,17 @@ pub fn enable(lib: &mut Library, our_node: &str, now_ms: i64) -> morph_store::Re
 }
 
 const META_DEFAULTS: &str = "defaults";
-const DEFAULTS_VERSION: &[u8] = b"2";
+const DEFAULTS_VERSION: &[u8] = b"3";
 
-/// Libraries that synced before history existed have opt-ins `["bookmarks"]`
-/// (the old default). Turn history on for them once, like a fresh link.
+/// Libraries that synced before history or settings existed still hold an
+/// older default opt-in list. Move them to today's defaults once, like a
+/// fresh link; a later opt-out sticks.
 fn upgrade_defaults(lib: &mut Library) -> morph_store::Result<()> {
     if lib.sync_meta(META_DEFAULTS)?.as_deref() == Some(DEFAULTS_VERSION) {
         return Ok(());
     }
     let types = types_on(lib)?;
-    if types == [BOOKMARKS] {
+    if OLD_DEFAULTS.iter().any(|old| types.iter().map(String::as_str).eq(old.iter().copied())) {
         set_types(lib, &DEFAULT_TYPES.iter().map(|s| s.to_string()).collect::<Vec<_>>())?;
     }
     if !types.is_empty() {
