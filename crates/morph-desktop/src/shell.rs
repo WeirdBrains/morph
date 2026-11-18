@@ -531,6 +531,7 @@ impl Shell {
                 let view = cx.new(|cx| {
                     let mut view = BrowserView::new(browser, theme, window, cx);
                     view.set_shortcut_labels(labels);
+                    view.set_suggest_source(&home, &profile);
                     view
                 });
                 self.profile_subscriptions.push(cx.subscribe_in(&view, window, |shell, _, request, window, cx| shell.request(request, window, cx)));

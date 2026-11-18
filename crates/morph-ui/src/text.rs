@@ -49,6 +49,17 @@ impl TextField {
         self.marked = None;
     }
 
+    /// Add `suffix` after the text and select it (an inline completion): the
+    /// next typed character replaces it, Backspace removes it, and Right
+    /// moves the caret past it.
+    pub fn append_selected(&mut self, suffix: &str) {
+        let start = self.content.len();
+        self.content.push_str(&single_line(suffix));
+        self.selected = start..self.content.len();
+        self.reversed = false;
+        self.marked = None;
+    }
+
     /// Replace `range` (or the marked text, else the selection) with `text`
     /// and put the caret after it.
     pub fn replace(&mut self, range: Option<Range<usize>>, text: &str) {
@@ -234,6 +245,27 @@ mod tests {
             field.replace(None, &ch.to_string());
         }
         field
+    }
+
+    #[test]
+    fn an_inline_completion_is_selected_and_yields_to_typing_backspace_and_right() {
+        let mut field = typed("git");
+        field.append_selected("hub.com");
+        assert_eq!(field.text(), "github.com");
+        assert_eq!(field.selected_text(), Some("hub.com"));
+        let mut accepted = field.clone();
+        accepted.right();
+        assert_eq!((accepted.text(), accepted.selection()), ("github.com", 10..10), "Right accepts it");
+        let mut typing = field.clone();
+        typing.replace(None, "i");
+        assert_eq!(typing.text(), "giti");
+        let mut back = field;
+        back.backspace();
+        assert_eq!(back.text(), "git");
+        let mut plain = typed("git");
+        plain.left();
+        plain.right();
+        assert_eq!(plain.selection(), 3..3, "no completion: Right is plain cursor movement");
     }
 
     #[test]

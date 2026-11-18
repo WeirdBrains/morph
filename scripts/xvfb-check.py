@@ -1569,6 +1569,164 @@ def popup_backing(r, binary, display, shots=None):
         m2.stop()
 
 
+def suggestions_check(r, binary, display, shots=None):
+    """Typing in the address bar drops a list of suggestions from history
+    and bookmarks below the bar (with a "search for" row last); the top
+    match completes inline as selected text that Right accepts (and that
+    Right leaves alone as plain cursor movement when there is none); Down
+    and Enter open a row, Escape closes the list, a click opens a row."""
+    g = "omnibox"
+    now = int(time.time() * 1000)
+    entries = [
+        {"url": "https://github.com/WeirdBrains/morph", "title": "WeirdBrains/morph", "visited_ms": now - 3_600_000},
+        {"url": "https://github.com/WeirdBrains/morph", "title": "WeirdBrains/morph", "visited_ms": now - 7_200_000},
+        {"url": "https://github.com/WeirdBrains/weirdnet", "title": "WeirdBrains/weirdnet", "visited_ms": now - 86_400_000},
+        {"url": "https://gitlab.com/explore", "title": "Explore GitLab", "visited_ms": now - 40 * 86_400_000},
+        {"url": "https://example.org/", "title": "Example Domain", "visited_ms": now - 5 * 86_400_000},
+    ]
+
+    def launch():
+        home = Path(tempfile.mkdtemp(prefix="morph-xvfb-omnibox-"))
+        prof = home / "profiles" / "default"
+        prof.mkdir(parents=True)
+        (prof / "history.json").write_text(json.dumps({"entries": entries}))
+        m2 = Driver(binary, display, str(home), {"MORPH_LOG_LAYOUT": "1"})
+        win = wait_for(lambda: m2.own_window(), 20)
+        if not (win and wait_for(lambda: state(m2), 20)):
+            m2.stop()
+            return None, None
+        time.sleep(1.0)
+        win = m2.own_window() or win
+        m2.activate(win)
+        return m2, win
+
+    def last(m2, pattern):
+        found = m2.lines(pattern)
+        return found[-1] if found else ""
+
+    def omnibox(m2):
+        mt = re.search(r'omnibox text=("(?:[^"\\]|\\.)*") selection=(\d+)\.\.(\d+)', last(m2, r"^morph-event omnibox "))
+        return (json.loads(mt.group(1)), int(mt.group(2)), int(mt.group(3))) if mt else None
+
+    def box(m2):
+        mt = re.search(r"suggestions-box suggestions box left=(\d+) top=(\d+) width=(\d+) bar_bottom=(\d+) rows=(\d+)", last(m2, r"^morph-event suggestions-box"))
+        return tuple(int(x) for x in mt.groups()) if mt else None
+
+    m2, win = launch()
+    if not m2:
+        r.check(g, "a Morph opens with its page", False, "no window or page")
+        return
+    try:
+        m2.key("ctrl+l")
+        time.sleep(1.5)
+        m2.type("git")
+        time.sleep(0.8)
+        shown = wait_for(lambda: box(m2), 6)
+        r.check(g, "typing shows a list of suggestions", bool(shown), last(m2, r"^morph-event suggestions"))
+        if shown:
+            left, top, width, bar_bottom, rows = shown
+            r.check(g, "the list sits below the address bar", top >= bar_bottom and rows >= 3, f"top {top}, bar bottom {bar_bottom}, rows {rows}")
+            line = last(m2, r"^morph-event suggestions text=")
+            r.check(g, "history ranks the most visited and recent page first, and the last row is the search", 'morph' in line and line.rstrip().endswith('"search"]'), line)
+            if shots:
+                Path(shots).mkdir(parents=True, exist_ok=True)
+                screenshot(m2, Path(shots) / "suggestions-typing.png")
+            # Pixels: the list is drawn under the bar, the page beside and below it.
+            try:
+                from PIL import Image
+
+                png = Path(tempfile.mkdtemp(prefix="morph-xvfb-omnibox-")) / "list.png"
+                screenshot(m2, png)
+                img = Image.open(png).convert("RGB")
+                gx, gy, _, _ = m2.geometry(win)
+                f = img.width / (WaylandMorph.layout[0] if isinstance(m2, WaylandMorph) else img.width)
+                at = lambda x, y: img.getpixel((int((gx + x) * f), int((gy + y) * f)))  # noqa: E731
+                inside = luminance(at(left + width // 2, top + 6))
+                bottom = next((y for y in range(top + 10, top + 600) if luminance(at(left + 6, y)) > 170), None)
+                corner = luminance(at(left + 1, bottom - 1)) if bottom else 0
+                r.check(g, "the list is drawn over the page with no black backing", inside < 120 and corner > 170, f"inside {inside:.0f}, corner {corner:.0f}")
+            except ImportError:
+                pass
+        r.check(g, "the top match completes inline as selected text", omnibox(m2) == ("github.com", 3, 10), str(omnibox(m2)))
+        m2.key("Right")
+        time.sleep(0.4)
+        r.check(g, "Right accepts the completion", omnibox(m2) == ("github.com", 10, 10), str(omnibox(m2)))
+        # No completion: Right is plain cursor movement.
+        m2.key("ctrl+a")
+        m2.type("zzz")
+        time.sleep(0.5)
+        r.check(g, "text that matches nothing has no completion", omnibox(m2) == ("zzz", 3, 3), str(omnibox(m2)))
+        m2.key("Home", "Right")
+        time.sleep(0.4)
+        r.check(g, "Right without a completion moves the cursor", omnibox(m2) == ("zzz", 1, 1), str(omnibox(m2)))
+        # Backspace takes the completion away without completing again.
+        m2.key("ctrl+a")
+        m2.type("gitl")
+        time.sleep(0.6)
+        r.check(g, "a phrase from another site completes too", omnibox(m2) == ("gitlab.com", 4, 10), str(omnibox(m2)))
+        m2.key("BackSpace")
+        time.sleep(0.5)
+        r.check(g, "Backspace deletes the completion and does not complete again", omnibox(m2) == ("gitl", 4, 4), str(omnibox(m2)))
+        # Escape closes the list and keeps the typed text.
+        m2.key("Escape")
+        time.sleep(0.6)
+        r.check(g, "Escape closes the list", bool(m2.lines(r"^morph-event suggestions closed")), "")
+        r.check(g, "Escape keeps the typed text in the bar", (omnibox(m2) or ("",))[0] == "gitl", str(omnibox(m2)))
+    finally:
+        m2.stop()
+
+    # Down and Enter open a row.
+    m2, win = launch()
+    if m2:
+        try:
+            m2.key("ctrl+l")
+            time.sleep(1.5)
+            m2.type("weird")
+            time.sleep(0.8)
+            m2.key("Down", "Down")
+            m2.key("Return")
+            ok = wait_for(lambda: m2.lines(r"^morph-event suggestion opened https://github.com/WeirdBrains/weirdnet"), 6)
+            r.check(g, "Down moves the selection and Enter opens the row", bool(ok), str(m2.lines(r"^morph-event suggestion")))
+        finally:
+            m2.stop()
+
+    # A click opens a row; the search row searches with the configured engine.
+    m2, win = launch()
+    if m2:
+        try:
+            m2.key("ctrl+l")
+            time.sleep(1.5)
+            m2.type("exam")
+            time.sleep(0.8)
+            shown = wait_for(lambda: box(m2), 6)
+            if shown:
+                left, top, width, _, rows = shown
+                m2.click(win, left + 60, top + 4 + 17 + 34 * (rows - 1))
+                ok = wait_for(lambda: m2.lines(r"^morph-event suggestion opened https://\S*[?&]q=exam$"), 6)
+                r.check(g, "clicking the search row searches with the configured engine", bool(ok), str(m2.lines(r"^morph-event suggestion")))
+            else:
+                r.check(g, "clicking the search row searches with the configured engine", False, "no list")
+        finally:
+            m2.stop()
+    m2, win = launch()
+    if m2:
+        try:
+            m2.key("ctrl+l")
+            time.sleep(1.5)
+            m2.type("exam")
+            time.sleep(0.8)
+            shown = wait_for(lambda: box(m2), 6)
+            if shown:
+                left, top, _, _, _ = shown
+                m2.click(win, left + 60, top + 4 + 17)
+                ok = wait_for(lambda: m2.lines(r"^morph-event suggestion opened https://example.org/"), 6)
+                r.check(g, "clicking a row opens it", bool(ok), str(m2.lines(r"^morph-event suggestion")))
+            else:
+                r.check(g, "clicking a row opens it", False, "no list")
+        finally:
+            m2.stop()
+
+
 def windows_check(r, binary, display, shots=None):
     """Several windows: Ctrl+N opens a second one and Ctrl+W on its only
     tab closes just that window; Shift+click opens a link in a new window;
@@ -2343,7 +2501,7 @@ def main():
     ap.add_argument("--input-bin", help="morph-wl-input (default: next to --bin)")
     ap.add_argument("--local-relay", help="a local relay to link through (weirdnet-device-link's local-relay example)")
     ap.add_argument("--app-server", help="a Weirdnet app behind the local relay (morph-services' serve-app example)")
-    ap.add_argument("--only", choices=["downloads", "windows", "popups"], help="run just this check")
+    ap.add_argument("--only", choices=["downloads", "windows", "popups", "omnibox"], help="run just this check")
     ap.add_argument("--screenshots", help="save screenshots of checks that take them (X11) here")
     args = ap.parse_args()
     relay = start_local_relay(args.local_relay) if args.local_relay else None
@@ -2418,6 +2576,15 @@ def run(args):
         if not args.no_wm and shutil.which("openbox"):
             wm = subprocess.Popen(["openbox"], env=dict(os.environ, DISPLAY=display), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             time.sleep(1.0)
+    if args.only == "omnibox":
+        r = Results()
+        try:
+            suggestions_check(r, args.bin, display, args.screenshots)
+            return finish(r, args)
+        finally:
+            for proc in (wm, xvfb):
+                if proc and proc.poll() is None:
+                    proc.terminate()
     if args.only == "popups":
         r = Results()
         try:
@@ -2543,6 +2710,7 @@ def run(args):
         page_clipboard(r, args.bin, display, base, args.wayland)
         main_menu(r, args.bin, display)
         popup_backing(r, args.bin, display, args.screenshots)
+        suggestions_check(r, args.bin, display, args.screenshots)
         windows_check(r, args.bin, display, args.screenshots)
         last_tab_quits(r, args.bin, display)
         # GPUI draws the frame itself only where the window manager supports
