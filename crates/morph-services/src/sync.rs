@@ -1,4 +1,4 @@
-//! Bookmark sync between a user's linked devices, over `weirdnet-sync`.
+//! Library sync (bookmarks and history) between a user's linked devices, over `weirdnet-sync`.
 //!
 //! The node respects Morph's discovery toggle and only *initiates* pulls
 //! against roster members (and manual peers that name a roster device).
@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use morph_core::library_db;
 use morph_core::network::NetworkSettings;
-use morph_core::sync::{self as core, BOOKMARKS, LinkSettings};
+use morph_core::sync::{self as core, LinkSettings};
 use morph_identity::profile_identity::{self, SecretString};
 use morph_store::Library;
 use weirdnet_net::user::NodeCert;
@@ -74,7 +74,7 @@ pub fn sync_config(home: &Path) -> NodeConfig {
 }
 
 /// After a password is in hand: copy the seed and node key into `library.db`
-/// (already encrypted) and enable bookmark sync.
+/// (already encrypted) and enable library sync.
 pub fn prepare_with_password(home: &Path, profile_id: &str, password: &SecretString) -> Result<()> {
     let dir = profile_dir(home, profile_id)?;
     let seed = profile_identity::open_seed(&dir, password).map_err(Error::failed)?;
@@ -180,7 +180,7 @@ fn build_state(lib: &Library) -> Option<(Arc<Mutex<SyncState>>, Keypair)> {
     let seed = core::load_seed(lib).ok().flatten()?;
     let node_bytes = core::load_node_key(lib).ok().flatten()?;
     let our = core::node_id(lib).ok().flatten()?;
-    if !core::bookmarks_on(lib) {
+    if !core::any_on(lib) {
         return None;
     }
     let node_key = Keypair::from_protobuf_encoding(&node_bytes).ok()?;
@@ -216,7 +216,7 @@ pub fn stop(home: &Path, profile_id: &str) {
     }
 }
 
-/// Hello and pull bookmarks from every other roster member, then rematerialize.
+/// Hello and pull every opted-in type from each other roster member, then rematerialize.
 pub fn tick(home: &Path, profile_id: &str) -> Result<usize> {
     let dir = morph_core::profiles::profile_dir(home, profile_id);
     let net = morph_core::network::load(home).unwrap_or_default();
@@ -238,23 +238,27 @@ pub fn tick(home: &Path, profile_id: &str) -> Result<usize> {
     for cert in peers {
         let Ok(peer) = PeerId::from_str(&cert.peer_id) else { continue };
         let addrs = addrs_for(&cert, &net, &relays);
-        let n = {
+        let mut n = 0usize;
+        for typ in core::SUPPORTED_TYPES {
             let mut st = state.lock().map_err(|_| Error::failed("sync state"))?;
-            match pull_from(&mut st, node.as_ref(), peer, &addrs, BOOKMARKS) {
-                Ok(n) => n,
-                Err(e) => {
-                    eprintln!("morph-sync: pull from {peer} failed: {e}");
-                    0
-                }
+            if !st.types.iter().any(|t| t == typ) {
+                continue;
             }
-        };
+            match pull_from(&mut st, node.as_ref(), peer, &addrs, typ) {
+                Ok(got) => n += got,
+                Err(e) => eprintln!("morph-sync: {typ} pull from {peer} failed: {e}"),
+            }
+        }
         let _ = library_db::with(home, profile_id, |lib| {
-            let st = state.lock().expect("sync state");
+            let mut st = state.lock().expect("sync state");
+            if n > 0 {
+                core::observe_remote(&mut st, now_ms().max(0) as u64);
+            }
             core::persist_log(lib, &st.log, st.clock.as_ref())?;
             core::save_roster(lib, &st.roster)?;
             drop(st);
             if n > 0 {
-                core::materialize(lib, now_ms())?;
+                core::materialize_all(lib, now_ms())?;
             }
             Ok(())
         });
@@ -329,6 +333,7 @@ pub fn is_running(home: &Path, profile_id: &str) -> bool {
 mod tests {
     use super::*;
     use morph_core::bookmarks::{self, BookmarkEdit};
+    use morph_core::library as hist;
     use morph_core::network::NetworkPrefs;
     use morph_identity::device_link::{AddDevice, NewDevice};
     use morph_identity::profile_identity::SecretString;
@@ -478,15 +483,24 @@ mod tests {
         bookmarks::tree(home, "p1").unwrap().bookmarks.into_iter().find(|b| b.url == url).expect(url)
     }
 
+    fn visits(home: &Path) -> Vec<morph_core::library::HistoryEntry> {
+        hist::history(home, "p1", "", 0).unwrap()
+    }
+
+    fn has_visit(home: &Path, url: &str) -> bool {
+        visits(home).iter().any(|e| e.url == url)
+    }
+
     fn has_url(home: &Path, url: &str) -> bool {
         bookmarks::tree(home, "p1").unwrap().bookmarks.iter().any(|b| b.url == url)
     }
 
     /// Two Morph homes, discovery off, linked over a local relay, then
-    /// bookmarks travel both ways: concurrent title vs folder move, a delete,
-    /// and a later folder move.
+    /// bookmarks travel both ways (concurrent title vs folder move, a delete,
+    /// a later folder move), then history (a pre-link visit, visits both ways,
+    /// delete by URL, clear-all and a visit after the clear).
     #[test]
-    fn two_homes_sync_bookmarks_over_a_local_relay() {
+    fn two_homes_sync_bookmarks_and_history_over_a_local_relay() {
         let relay = start_local_relay();
         set_relays_for_tests(Some(relay.addrs.clone()));
         let cfg = link_cfg(&relay.addrs);
@@ -499,6 +513,7 @@ mod tests {
         bookmarks::add_bookmark(&a, "p1", "https://one.example/", "One", 10).unwrap();
         let (folder, _) = bookmarks::create_folder(&a, "p1", "Work", None, 11).unwrap();
         bookmarks::add_bookmark(&a, "p1", "https://two.example/", "Two", 12).unwrap();
+        hist::record_visit(&a, "p1", "https://visit-a.example/", "Visit A", 13).unwrap();
 
         let new = NewDevice::start("Morph test phone", cfg.clone()).unwrap();
         let mut add = AddDevice::start(&morph_core::profiles::profile_dir(&a, "p1"), "Work", &pw("old password"), new.link(), cfg).unwrap();
@@ -567,6 +582,26 @@ mod tests {
         tick_until(&a, &b, || {
             has_url(&a, "https://three.example/") && by_url(&a, "https://three.example/").folder_id.as_deref() == Some(other.as_str())
         });
+
+        // History: A's pre-link visit reaches B, then visits go both ways.
+        tick_until(&a, &b, || has_visit(&b, "https://visit-a.example/"));
+        assert_eq!(visits(&b)[0].title, "Visit A");
+        hist::record_visit(&b, "p1", "https://visit-b.example/", "Visit B", 100).unwrap();
+        hist::record_visit(&a, "p1", "https://visit-a2.example/", "Visit A2", 101).unwrap();
+        tick_until(&a, &b, || {
+            has_visit(&a, "https://visit-b.example/") && has_visit(&b, "https://visit-a2.example/") && visits(&a).len() == 3 && visits(&b).len() == 3
+        });
+
+        // Delete by URL on A, B drops it.
+        hist::delete_history_url(&a, "p1", "https://visit-b.example").unwrap();
+        tick_until(&a, &b, || !has_visit(&b, "https://visit-b.example/") && visits(&b).len() == 2);
+
+        // Clear on B, A empties; a later visit on A survives on both.
+        hist::clear_history(&b, "p1").unwrap();
+        tick_until(&a, &b, || visits(&a).is_empty());
+        hist::record_visit(&a, "p1", "https://after-clear.example/", "After", 120).unwrap();
+        tick_until(&a, &b, || has_visit(&b, "https://after-clear.example/") && visits(&b).len() == 1);
+        assert_eq!(visits(&a).len(), 1);
 
         stop(&a, "p1");
         stop(&b, "p1");
