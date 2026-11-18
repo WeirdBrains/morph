@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- New window: Ctrl+N (⌘N on macOS) and ☰ → New window.
+
+- Shift+click opens a link in a new window, Ctrl+click and middle click in a new tab; the link menu has both (Linux).
+
+- Tab menu → Move to new window takes a tab, with its back and forward history on Linux, to a window of its own.
+
+- Closing a window's last tab closes that window; the last window quits.
+
+- Morph reopens the windows and tabs that were open when it quit.
+
 ## [0.2.0] - 2026-11-18
 
 - Downloads button left of the ☰ menu (Ctrl+Shift+Y, ⌘⇧J on macOS) opens a downloads panel.

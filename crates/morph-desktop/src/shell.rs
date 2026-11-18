@@ -28,6 +28,7 @@ actions!(
     morph,
     [
         NewTab,
+        NewWindow,
         CloseTab,
         NextTab,
         PrevTab,
@@ -66,6 +67,7 @@ actions!(
 pub(crate) fn gpui_action(action: Action) -> Box<dyn gpui::Action> {
     match action {
         Action::NewTab => Box::new(NewTab),
+        Action::NewWindow => Box::new(NewWindow),
         Action::CloseTab => Box::new(CloseTab),
         Action::NextTab => Box::new(NextTab),
         Action::PrevTab => Box::new(PrevTab),
@@ -136,8 +138,22 @@ pub enum ShellRequest {
     ClearHistory,
     /// Forget the shown profile's cookies, cache, site storage and history.
     ClearBrowsingData,
-    /// The last tab closed: save and quit.
-    Quit,
+    /// The window's last tab closed: close the window (and quit, saving,
+    /// when it is the last one).
+    CloseWindow,
+    /// Open a new window (same profile) starting with this.
+    NewWindow(WindowStart),
+}
+
+/// What a new window starts with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WindowStart {
+    /// One tab at this address; empty for a blank tab.
+    Url(String),
+    /// A saved window's tabs (session restore).
+    Saved(morph_core::session::WindowSession),
+    /// A tab moved out of another window, with its history.
+    Moved(morph_browser::DetachedTab),
 }
 
 /// Components each profile has its own of; rebuilt on a profile switch.
@@ -171,6 +187,8 @@ pub trait Hosted {
     fn toast(&self, _text: &str, _action: Option<(&'static str, Action)>, _cx: &mut App) {}
     /// Give the component the keyboard (a panel above it closed).
     fn focus_content(&self, _window: &mut Window, _cx: &mut App) {}
+    /// Close the pages it shows now, before its window goes.
+    fn close_pages(&self, _cx: &mut App) {}
     /// The profile's name, for a component that shows it.
     fn set_profile_label(&self, _name: &str, _cx: &mut App) {}
     /// The profile's settings, at start and whenever they change.
@@ -183,6 +201,10 @@ pub trait Hosted {
     fn set_profiles(&self, _profiles: Vec<(String, String, bool)>, _cx: &mut App) {}
     /// Forget the profile's site data (cookies, cache, storage).
     fn clear_site_data(&self, _cx: &mut App) {}
+    /// The window's tabs as the session keeps them.
+    fn session(&self, _cx: &App) -> Option<morph_core::session::WindowSession> {
+        None
+    }
 }
 
 impl Hosted for Entity<BrowserView> {
@@ -239,6 +261,13 @@ impl Hosted for Entity<BrowserView> {
     }
     fn set_caption(&self, caption: Option<WindowButtons>, cx: &mut App) {
         self.update(cx, |view, cx| view.set_caption(caption, cx));
+    }
+    fn close_pages(&self, cx: &mut App) {
+        self.update(cx, |view, _| view.close_pages());
+    }
+    fn session(&self, cx: &App) -> Option<morph_core::session::WindowSession> {
+        let (urls, active) = self.read(cx).browser().tab_urls();
+        morph_core::session::WindowSession::kept(&urls, active)
     }
 }
 
@@ -377,10 +406,13 @@ pub struct Shell {
     /// Actions `MORPH_TEST_ACTIONS` asks for (comma-separated names, run
     /// one per tick from the first), for the smoke tests.
     test_actions: Vec<Action>,
-    /// Later launches' URLs (single instance).
-    listener: Option<crate::single::Listener>,
-    /// weirdnet-morph:// links to route once the window runs.
+    /// URLs from outside (a later launch, weirdnet-morph:// links) to
+    /// route once the window runs.
     pending_links: Vec<String>,
+    /// The tabs as last handed to the session (profile, window).
+    last_session: Option<(String, Option<morph_core::session::WindowSession>)>,
+    /// Where this window's tab numbers start in the event log.
+    log_base: u64,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -389,7 +421,7 @@ impl Shell {
     fn new(
         home: PathBuf,
         profile: String,
-        start: &str,
+        start: WindowStart,
         theme: Theme,
         keymap: Keymap,
         layout: Layout,
@@ -407,10 +439,12 @@ impl Shell {
             cx.subscribe_in(&settings, window, |shell, _, request, window, cx| shell.request(request, window, cx)),
             // Back in front: the default browser may have changed meanwhile.
             cx.observe_window_activation(window, |shell, window, cx| {
-                if window.is_window_active()
-                    && let Some(settings) = &shell.settings
-                {
-                    settings.update(cx, |view, _| view.recheck());
+                if window.is_window_active() {
+                    // Links from outside open in the window in front.
+                    Windows::set_front(cx, window.window_handle());
+                    if let Some(settings) = &shell.settings {
+                        settings.update(cx, |view, _| view.recheck());
+                    }
                 }
             }),
         ];
@@ -446,17 +480,19 @@ impl Shell {
                 .rev()
                 .filter_map(|name| Action::from_name(name.trim()))
                 .collect(),
-            listener: None,
             pending_links: Vec::new(),
+            last_session: None,
+            log_base: 1000 * Windows::opened(cx) as u64,
             _subscriptions: subscriptions,
             profile_subscriptions: Vec::new(),
         };
         // A weirdnet-morph:// link is routed, never loaded as a page.
-        let start = if morph_core::scheme::is_link(start) {
-            shell.pending_links.push(start.to_string());
-            ""
-        } else {
-            start
+        let start = match start {
+            WindowStart::Url(url) if morph_core::scheme::is_link(&url) => {
+                shell.pending_links.push(url);
+                WindowStart::Url(String::new())
+            }
+            start => start,
         };
         shell.build(start, window, cx);
         shell
@@ -464,7 +500,7 @@ impl Shell {
 
     /// Make the profile's own components (browser, library) and show the
     /// library's password prompt if it is locked.
-    fn build(&mut self, start: &str, window: &mut Window, cx: &mut Context<Self>) {
+    fn build(&mut self, start: WindowStart, window: &mut Window, cx: &mut Context<Self>) {
         for c in &self.components {
             if PER_PROFILE.contains(&c.kind().as_str()) {
                 c.set_shown(false, cx);
@@ -474,8 +510,23 @@ impl Shell {
         self.profile_subscriptions.clear();
         let (home, profile, theme) = (self.home.clone(), self.profile.clone(), self.theme);
         let keystrokes = page_shortcuts(&self.keymap);
-        self.error = match BrowserView::create(&home, &profile, start, window, &keystrokes) {
-            Ok(browser) => {
+        let (url, session, more, active, engine) = match start {
+            WindowStart::Url(url) => (url, None, Vec::new(), 0, None),
+            WindowStart::Saved(saved) => {
+                let active = saved.active_index();
+                let mut tabs = saved.tabs.into_iter();
+                (tabs.next().unwrap_or_default(), None, tabs.collect(), active, None)
+            }
+            WindowStart::Moved(tab) => (tab.url, tab.session, Vec::new(), 0, tab.engine),
+        };
+        self.error = match BrowserView::create(&home, &profile, &url, session, window, &keystrokes) {
+            Ok(mut browser) => {
+                // Each window's tabs read apart in the event log.
+                browser.set_log_base(self.log_base);
+                browser.restore_tabs(&more, active);
+                if let Some(engine) = engine {
+                    browser.set_tab_engine(&engine);
+                }
                 let labels = crate::browser_view::shortcut_labels(&self.keymap);
                 let view = cx.new(|cx| {
                     let mut view = BrowserView::new(browser, theme, window, cx);
@@ -573,7 +624,7 @@ impl Shell {
         self.profile = id.to_string();
         crate::library::open_at_launch(&self.home, id);
         self.layout = layout::load(&self.home, id);
-        self.build("", window, cx);
+        self.build(WindowStart::Url(String::new()), window, cx);
         cx.notify();
     }
 
@@ -604,8 +655,15 @@ impl Shell {
             ShellRequest::ProfileRenamed => {
                 self.update_profile_label(cx);
                 self.update_profile_list(cx);
+                let me = window.window_handle();
+                cx.defer(move |cx| Windows::each_other(cx, me, |shell, _, cx| shell.reload_profiles(cx)));
             }
-            ShellRequest::SettingsChanged => self.apply_settings(cx),
+            ShellRequest::SettingsChanged => {
+                self.apply_settings(cx);
+                // Settings are app-wide: the other windows show them too.
+                let me = window.window_handle();
+                cx.defer(move |cx| Windows::each_other(cx, me, |shell, _, cx| shell.reload_settings(cx)));
+            }
             ShellRequest::IdentityChanged => {
                 // The new identity encrypted the library; open it so history
                 // and bookmarks work now.
@@ -629,9 +687,65 @@ impl Shell {
                     c.clear_site_data(cx);
                 }
             }
-            ShellRequest::Quit => self.quit(cx),
+            ShellRequest::CloseWindow => self.close_window(window, cx),
+            ShellRequest::NewWindow(start) => {
+                let (profile, start) = (self.profile.clone(), start.clone());
+                cx.defer(move |cx| open_window(cx, profile, start, None));
+            }
         }
         cx.notify();
+    }
+
+    /// Another window changed the settings: read them again.
+    fn reload_settings(&mut self, cx: &mut Context<Self>) {
+        if let Some(settings) = &self.settings {
+            settings.update(cx, |view, cx| view.reload(cx));
+        }
+        self.apply_settings(cx);
+        cx.notify();
+    }
+
+    /// Another window renamed, added or removed a profile.
+    fn reload_profiles(&mut self, cx: &mut Context<Self>) {
+        self.update_profile_label(cx);
+        self.update_profile_list(cx);
+        cx.notify();
+    }
+
+    /// The window's tabs as the session should keep them, handed to the
+    /// app's window list (and saved) when they changed.
+    fn report_session(&mut self, window: &Window, cx: &mut App) {
+        let now = (self.profile.clone(), self.main().and_then(|m| m.session(cx)));
+        if self.last_session.as_ref() == Some(&now) {
+            return;
+        }
+        let before = self.last_session.replace(now.clone()).map(|(p, _)| p);
+        Windows::update_session(cx, window.window_handle(), now.0, now.1, before);
+    }
+
+    /// Close this window (its last tab closed, Ctrl+W); the last window
+    /// quits instead, keeping its tabs for the next launch.
+    fn close_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if Windows::count(cx) <= 1 {
+            self.quit(window, cx);
+            return;
+        }
+        self.save_layout();
+        Windows::forget(cx, window.window_handle().window_id());
+        if std::env::var_os("MORPH_LOG_EVENTS").is_some_and(|v| v == "1") {
+            println!("morph-event window closed");
+        }
+        self.close_pages(cx);
+        window.remove_window();
+    }
+
+    /// Close every page of the window while it still stands: the engine's
+    /// windows live inside it, and GTK aborts on an X error when the window
+    /// is destroyed under them.
+    fn close_pages(&self, cx: &mut App) {
+        for component in &self.components {
+            component.close_pages(cx);
+        }
     }
 
     fn clear_history(&self, cx: &mut App) {
@@ -646,8 +760,10 @@ impl Shell {
     /// Save what the window shows and quit (the last tab closed, Ctrl+Q,
     /// the menu). Settings are saved as they change; the layout is saved
     /// here once more so a quit never loses it.
-    fn quit(&self, cx: &mut App) {
+    fn quit(&mut self, window: &Window, cx: &mut App) {
         self.save_layout();
+        self.report_session(window, cx);
+        Windows::quitting(cx);
         if std::env::var_os("MORPH_LOG_EVENTS").is_some_and(|v| v == "1") {
             println!("morph-event quit");
         }
@@ -783,7 +899,12 @@ impl Shell {
         }
         match action {
             Action::Quit => {
-                self.quit(cx);
+                self.quit(window, cx);
+                return;
+            }
+            Action::NewWindow => {
+                let profile = self.profile.clone();
+                cx.defer(move |cx| open_window(cx, profile, WindowStart::Url(String::new()), None));
                 return;
             }
             Action::ToggleFullscreen => {
@@ -848,10 +969,16 @@ impl Shell {
         if window.focused(cx).is_none() {
             window.focus(&self.focus, cx);
         }
-        let mut handed = self.listener.as_ref().map(|l| l.take()).unwrap_or_default();
-        // Links the OS handed over directly (Apple Events on macOS) and a
-        // weirdnet-morph:// link Morph was started with.
-        handed.extend(take_opened_urls().into_iter().map(crate::single::Request::Open));
+        // Later launches and the OS (Apple Events on macOS) hand links to the
+        // window that was in front last; a weirdnet-morph:// link Morph was
+        // started with goes to its own window.
+        let mut handed = if Windows::is_front(cx, window.window_handle()) {
+            let mut handed = Windows::take_requests(cx);
+            handed.extend(take_opened_urls().into_iter().map(crate::single::Request::Open));
+            handed
+        } else {
+            Vec::new()
+        };
         handed.extend(self.pending_links.drain(..).map(crate::single::Request::Open));
         for request in handed {
             if let crate::single::Request::Open(url) = &request {
@@ -878,6 +1005,7 @@ impl Shell {
         if let Some(action) = self.test_actions.pop() {
             self.run(action, window, cx);
         }
+        self.report_session(window, cx);
         // Frameless: our own caption and buttons. Tiling window managers
         // draw no frame either, so they get the close button regardless.
         // macOS and Windows hide the system title bar (`appears_transparent`):
@@ -997,6 +1125,7 @@ impl Render for Shell {
             .font_family(".SystemUIFont");
         let root = on_actions!(root, cx, [
             NewTab => Action::NewTab,
+            NewWindow => Action::NewWindow,
             CloseTab => Action::CloseTab,
             NextTab => Action::NextTab,
             PrevTab => Action::PrevTab,
@@ -1135,6 +1264,216 @@ fn take_opened_urls() -> Vec<String> {
     OPENED_URLS.lock().map(|mut urls| std::mem::take(&mut *urls)).unwrap_or_default()
 }
 
+/// Every open window, app-wide: what each shows for the session, which
+/// was in front last (links from outside open there), and the single
+/// instance listener they share.
+struct Windows {
+    home: PathBuf,
+    keymap: Keymap,
+    list: Vec<WindowEntry>,
+    front: Option<gpui::WindowId>,
+    listener: Option<crate::single::Listener>,
+    /// Quitting: windows closing now stay in the session.
+    quitting: bool,
+    /// Windows opened so far, for placing new ones a little apart.
+    opened: usize,
+}
+
+struct WindowEntry {
+    handle: gpui::WindowHandle<Shell>,
+    profile: String,
+    session: Option<morph_core::session::WindowSession>,
+}
+
+impl gpui::Global for Windows {}
+
+impl Windows {
+    /// Windows opened so far (this one not yet counted while it builds).
+    fn opened(cx: &App) -> usize {
+        cx.try_global::<Windows>().map_or(0, |w| w.opened)
+    }
+
+    fn count(cx: &App) -> usize {
+        cx.try_global::<Windows>().map_or(0, |w| w.list.len())
+    }
+
+    fn is_front(cx: &App, window: gpui::AnyWindowHandle) -> bool {
+        cx.try_global::<Windows>().is_some_and(|w| w.front.is_none_or(|f| f == window.window_id()))
+    }
+
+    fn set_front(cx: &mut App, window: gpui::AnyWindowHandle) {
+        if let Some(w) = cx.try_global::<Windows>()
+            && w.front != Some(window.window_id())
+        {
+            cx.global_mut::<Windows>().front = Some(window.window_id());
+        }
+    }
+
+    /// What later launches asked for since the last call.
+    fn take_requests(cx: &App) -> Vec<crate::single::Request> {
+        cx.try_global::<Windows>().and_then(|w| w.listener.as_ref()).map(|l| l.take()).unwrap_or_default()
+    }
+
+    /// The window shows `session` in `profile` now; save the profiles it
+    /// touched (`before`: the profile it showed until now).
+    fn update_session(
+        cx: &mut App,
+        window: gpui::AnyWindowHandle,
+        profile: String,
+        session: Option<morph_core::session::WindowSession>,
+        before: Option<String>,
+    ) {
+        if cx.try_global::<Windows>().is_none() {
+            return;
+        }
+        let windows = cx.global_mut::<Windows>();
+        if windows.quitting {
+            return;
+        }
+        let Some(entry) = windows.list.iter_mut().find(|e| e.handle.window_id() == window.window_id()) else {
+            return;
+        };
+        entry.profile = profile.clone();
+        entry.session = session;
+        windows.save(&profile);
+        if let Some(before) = before.filter(|b| *b != profile) {
+            windows.save(&before);
+        }
+    }
+
+    /// Write `profile`'s windows to its `tabs.json`.
+    fn save(&self, profile: &str) {
+        let windows: Vec<_> = self.list.iter().filter(|e| e.profile == profile).filter_map(|e| e.session.clone()).collect();
+        if let Err(e) = morph_core::session::save(&self.home, profile, &morph_core::session::Session::new(windows)) {
+            eprintln!("morph: could not save the open tabs: {e}");
+        }
+    }
+
+    /// Window `id` closed (or is about to) while others stay open: it
+    /// leaves the session.
+    fn forget(cx: &mut App, id: gpui::WindowId) {
+        if cx.try_global::<Windows>().is_none() {
+            return;
+        }
+        let windows = cx.global_mut::<Windows>();
+        if windows.quitting {
+            return;
+        }
+        let Some(at) = windows.list.iter().position(|e| e.handle.window_id() == id) else {
+            return;
+        };
+        let entry = windows.list.remove(at);
+        if windows.front == Some(id) {
+            windows.front = windows.list.last().map(|e| e.handle.window_id());
+        }
+        windows.save(&entry.profile);
+    }
+
+    /// Morph quits: every window stays in the session as it is.
+    fn quitting(cx: &mut App) {
+        if cx.try_global::<Windows>().is_some() {
+            cx.global_mut::<Windows>().quitting = true;
+        }
+    }
+
+    /// Run `f` on every window but `me`.
+    fn each_other(cx: &mut App, me: gpui::AnyWindowHandle, f: impl Fn(&mut Shell, &mut Window, &mut Context<Shell>)) {
+        let others: Vec<_> = cx
+            .try_global::<Windows>()
+            .map(|w| w.list.iter().map(|e| e.handle).filter(|h| h.window_id() != me.window_id()).collect())
+            .unwrap_or_default();
+        for handle in others {
+            let _ = handle.update(cx, |shell, window, cx| f(shell, window, cx));
+        }
+    }
+}
+
+/// Open a browser window showing `profile`, starting with `start`, at
+/// `origin` (screen coordinates; `None` places it a little apart from the
+/// others).
+pub fn open_window(cx: &mut App, profile: String, start: WindowStart, origin: Option<gpui::Point<gpui::Pixels>>) {
+    let Some(windows) = cx.try_global::<Windows>() else {
+        return;
+    };
+    let (home, keymap, n) = (windows.home.clone(), windows.keymap.clone(), windows.opened);
+    let first = windows.list.is_empty();
+    let saved_layout = layout::load(&home, &profile);
+    let window_size = size(px(1200.), px(800.));
+    let bounds = match origin {
+        Some(origin) => Bounds::new(origin, window_size),
+        None => {
+            let mut b = Bounds::centered(None, window_size, cx);
+            let step = px(32. * (n % 8) as f32);
+            b.origin.x += step;
+            b.origin.y += step;
+            b
+        }
+    };
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        app_id: Some("morph".into()),
+        window_min_size: Some(size(px(480.), px(320.))),
+        // Frameless where the desktop can draw it (a compositor runs):
+        // the tab row is the caption. GPUI keeps server decorations
+        // otherwise. macOS and Windows hide the system title bar: the
+        // top row (tabs, or the toolbar) is the caption, with the traffic
+        // lights inset on macOS and Morph's own buttons on Windows.
+        window_decorations: Some(if cfg!(target_os = "linux") { WindowDecorations::Client } else { WindowDecorations::Server }),
+        titlebar: (!cfg!(target_os = "linux")).then(|| gpui::TitlebarOptions {
+            title: None,
+            appears_transparent: true,
+            traffic_light_position: Some(gpui::point(px(12.), px(11.))),
+        }),
+        ..Default::default()
+    };
+    let opened = cx.open_window(options, |window, cx| {
+        cx.new(|cx| Shell::new(home.clone(), profile.clone(), start, Theme::default(), keymap.clone(), saved_layout, window, cx))
+    });
+    let handle = match opened {
+        Ok(handle) => handle,
+        Err(e) => {
+            eprintln!("morph: cannot open a window: {e:#}");
+            if first {
+                cx.quit();
+            }
+            return;
+        }
+    };
+    {
+        let windows = cx.global_mut::<Windows>();
+        windows.list.push(WindowEntry { handle, profile, session: None });
+        windows.opened += 1;
+        windows.front = Some(handle.window_id());
+    }
+    if std::env::var_os("MORPH_LOG_EVENTS").is_some_and(|v| v == "1") {
+        println!("morph-event window opened {}", Windows::count(cx));
+    }
+    let _ = handle.update(cx, |_, window, cx| {
+        window.set_window_title("Morph");
+        // The desktop's close (title bar, Alt+F4) closes the window the
+        // way Morph's own button does: pages first, then the window.
+        let shell = cx.entity().downgrade();
+        window.on_window_should_close(cx, move |window, cx| shell.update(cx, |shell, cx| shell.close_window(window, cx)).is_err());
+        cx.spawn_in(window, async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_millis(8)).await;
+                if this.update_in(cx, |shell, window, cx| shell.tick(window, cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+        window.activate_window();
+        cx.activate(true);
+    });
+}
+
+/// Whether to bring back the windows of the last run (`MORPH_NO_RESTORE=1`
+/// starts with one window, for checks that need a known start).
+fn restores_session() -> bool {
+    std::env::var_os("MORPH_NO_RESTORE").is_none_or(|v| v != "1")
+}
+
 pub fn run(home: PathBuf, args: Args, listener: Option<crate::single::Listener>) {
     let app = gpui_platform::application();
     app.on_open_urls(|urls| {
@@ -1155,10 +1494,13 @@ pub fn run(home: PathBuf, args: Args, listener: Option<crate::single::Listener>)
             }
         }
         cx.bind_keys(bindings);
-        cx.on_window_closed(|cx, _| {
+        cx.on_window_closed(|cx, id| {
             if cx.windows().is_empty() {
                 cx.quit();
+                return;
             }
+            // Closed from its own button or the window manager.
+            Windows::forget(cx, id);
         })
         .detach();
 
@@ -1173,57 +1515,37 @@ pub fn run(home: PathBuf, args: Args, listener: Option<crate::single::Listener>)
                 morph_core::profiles::DEFAULT_PROFILE_ID.to_string()
             }
         };
-        let saved_layout = layout::load(&home, &profile);
-        let bounds = Bounds::centered(None, size(px(1200.), px(800.)), cx);
-        let options = WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
-            app_id: Some("morph".into()),
-            window_min_size: Some(size(px(480.), px(320.))),
-            // Frameless where the desktop can draw it (a compositor runs):
-            // the tab row is the caption. GPUI keeps server decorations
-            // otherwise. macOS and Windows hide the system title bar: the
-            // top row (tabs, or the toolbar) is the caption, with the traffic
-            // lights inset on macOS and Morph's own buttons on Windows.
-            window_decorations: Some(if cfg!(target_os = "linux") { WindowDecorations::Client } else { WindowDecorations::Server }),
-            titlebar: (!cfg!(target_os = "linux")).then(|| gpui::TitlebarOptions {
-                title: None,
-                appears_transparent: true,
-                traffic_light_position: Some(gpui::point(px(12.), px(11.))),
-            }),
-            ..Default::default()
-        };
-        // A URL on the command line, else Settings' Open at start (blank by default).
-        let start = args.open.clone().unwrap_or_else(|| morph_core::settings::load(&home).map(|s| s.home_page).unwrap_or_default());
-        let mut listener = listener;
-        let opened = cx.open_window(options, |window, cx| {
-            cx.new(|cx| {
-                let mut shell = Shell::new(home.clone(), profile.clone(), &start, Theme::default(), keymap.clone(), saved_layout, window, cx);
-                shell.listener = listener.take();
-                shell
-            })
-        });
-        let window = match opened {
-            Ok(window) => window,
-            Err(e) => {
-                eprintln!("morph: cannot open a window: {e:#}");
-                cx.quit();
-                return;
-            }
-        };
-        let _ = window.update(cx, |shell, window, cx| {
-            window.set_window_title("Morph");
-            let _ = shell;
-            cx.spawn_in(window, async move |this, cx| {
-                loop {
-                    cx.background_executor().timer(Duration::from_millis(8)).await;
-                    if this.update_in(cx, |shell, window, cx| shell.tick(window, cx)).is_err() {
-                        break;
-                    }
+        cx.set_global(Windows { home: home.clone(), keymap, list: Vec::new(), front: None, listener, quitting: false, opened: 0 });
+        // The windows of the last run, the shown profile's first; then a
+        // URL on the command line opens in a new tab of the first. With
+        // none, one window: the URL, else Settings' Open at start (blank by
+        // default).
+        let mut saved: Vec<(String, morph_core::session::WindowSession)> = Vec::new();
+        if restores_session() {
+            let mut profiles = vec![profile.clone()];
+            profiles.extend(morph_core::profiles::list(&home).unwrap_or_default().into_iter().map(|p| p.id).filter(|id| *id != profile));
+            for id in profiles {
+                let session = morph_core::session::load(&home, &id);
+                if !session.windows.is_empty() && id != profile {
+                    crate::library::open_at_launch(&home, &id);
                 }
-            })
-            .detach();
-            cx.activate(true);
-        });
+                saved.extend(session.windows.into_iter().map(|w| (id.clone(), w)));
+            }
+        }
+        if saved.is_empty() {
+            let start = args.open.clone().unwrap_or_else(|| morph_core::settings::load(&home).map(|s| s.home_page).unwrap_or_default());
+            open_window(cx, profile, WindowStart::Url(start), None);
+            return;
+        }
+        for (id, window) in saved {
+            open_window(cx, id, WindowStart::Saved(window), None);
+        }
+        if let (Some(url), Some(first)) = (args.open.clone(), cx.try_global::<Windows>().and_then(|w| w.list.first().map(|e| e.handle))) {
+            let _ = first.update(cx, |shell, window, _| {
+                shell.pending_links.push(url);
+                window.activate_window();
+            });
+        }
     });
 }
 

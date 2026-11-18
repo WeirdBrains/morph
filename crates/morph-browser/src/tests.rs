@@ -1323,3 +1323,16 @@ mod js_login {
         assert_eq!(b.take_download_ask(), None, "no second save dialog");
     }
 }
+
+#[test]
+fn closing_the_pages_with_their_window_drops_every_page_but_keeps_the_tabs() {
+    let (mut b, fake) = browser("https://a.test/");
+    b.new_tab("https://b.test/");
+    b.close_pages();
+    assert!(b.is_closed());
+    for view in fake.created() {
+        assert!(fake.calls_for(view).contains(&Call::Dropped), "page {view:?} still open");
+    }
+    assert_eq!(b.tab_urls().0, ["https://a.test/", "https://b.test/"], "the session still reads the tabs");
+    assert!(!b.poll().changed, "nothing is pumped any more");
+}
