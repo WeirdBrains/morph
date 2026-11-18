@@ -1,0 +1,80 @@
+# Release arm64 APK for an existing tag, built on demand and attached to
+# that tag's GitHub release. Signed by the fixed test key when the
+# ANDROID_TEST_* secrets exist (no Play release key yet), else the debug key.
+name: Android release APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build, e.g. v0.2.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.50.0
+          cache: true
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android-release-arm64
+          workspaces: |
+            crates/morph-bridge -> ../../app/.dart_tool/hooks_runner
+      - run: flutter pub get
+      - name: Test signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_TEST_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_TEST_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_TEST_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_TEST_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "No ANDROID_TEST_* secrets: the debug key signs"
+            exit 0
+          fi
+          ks="$RUNNER_TEMP/morph-test.p12"
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$ks"
+          {
+            echo "MORPH_ANDROID_KEYSTORE=$ks"
+            echo "MORPH_ANDROID_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
+            echo "MORPH_ANDROID_KEY_ALIAS=$KEY_ALIAS"
+            echo "MORPH_ANDROID_KEY_PASSWORD=$KEY_PASSWORD"
+          } >> "$GITHUB_ENV"
+      - run: flutter build apk --release --target-platform android-arm64
+      - name: Check signer and name the APK
+        run: |
+          apksigner="$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)"
+          apk=build/app/outputs/flutter-apk/app-release.apk
+          certs="$("$apksigner" verify --print-certs "$apk")"
+          printf '%s\n' "$certs" | grep -E "certificate (DN|SHA-256 digest)"
+          if [ -n "${MORPH_ANDROID_KEYSTORE:-}" ]; then
+            printf '%s\n' "$certs" | grep -q "c2af967c4775c926f6db7f051be293821f7b8c4c5b3596c3745ae72fbc8bba51"
+          fi
+          tag="${{ inputs.tag }}"
+          cp "$apk" "$RUNNER_TEMP/morph-${tag#v}-android-arm64.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: morph-android-arm64-release
+          path: ${{ runner.temp }}/morph-*-android-arm64.apk
+          if-no-files-found: error
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ inputs.tag }}" "$RUNNER_TEMP"/morph-*-android-arm64.apk --clobber -R "$GITHUB_REPOSITORY"
