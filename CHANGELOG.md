@@ -13,6 +13,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Settings rows no longer run past their card: the text wraps and the switches and inputs always stay visible, in Relays too.
 
+- Revoking a linked device changes the sync key, so that device cannot read anything synced afterwards, even with your recovery words.
+
+- Keys rotate once by themselves after the first link and after updating, when every linked device has synced.
+
+- Linked devices (desktop and phone) shows "Needs re-admission from another device" on a restored install, and "Waiting for its first sync" for a device just linked; linking it again from a device that syncs lets it back in.
+
+- Before a revoke, Linked devices warns about devices that have not synced since updating and would be left out of the new key.
+
+- Phone: Settings has Linked devices (state, key notes, Revoke with a confirmation and the same warning).
+
+- After restoring an identity from its recovery words, shards or a backup, Morph says to link this device again from one of your other devices so it can read what they sync.
+
 ## [0.2.1] - 2026-11-18
 
 - New window: Ctrl+N (⌘N on macOS) and ☰ → New window.

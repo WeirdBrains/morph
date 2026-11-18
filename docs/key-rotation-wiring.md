@@ -1,10 +1,12 @@
 # Key rotation: Morph wiring plan
 
-Status (2026-11-18): weirdnet-sync `main` has real key rotation and re-admission
-(commits 760aaf5, 90394b3, 2ce0b28; unreleased). Morph pins `weirdnet-sync = "=0.2.0"`,
-so the wiring below lands only after a weirdnet-sync release (proposed 0.3.0) and a pin bump.
-A trial of steps 1–5 builds and passes `morph-core` / `morph-services` tests against the
-crate's `main` (kept out of this tree).
+Status (2026-11-18): done. Morph pins weirdnet-sync `=0.3.1` (0.3.0 plus two
+rotation fixes: two first roots made at once merge into one chain, and revoking the
+chain's creator keeps the chain); steps 1–8 are wired, step 6 on desktop and phone
+(`morph-bridge` `api::devices`, `app/lib/src/widgets/linked_devices.dart`). m3talsmith's answers: rotate automatically after the first link
+and on upgrade (wired), leave revoke-by-a-revoked-device for later, and warn before a
+revoke that leaves devices without a key out (wired). Current behavior is described in
+`docs/library-sync.md`.
 
 ## What the crate does
 

@@ -1,10 +1,10 @@
 # Library sync
 
-Status: 2026-11-18 — milestones 1–5 (bookmarks, folders, tags, history and
-settings) are wired on published `weirdnet-sync` 0.2.0 and `weirdnet-net`
-0.6.0. Milestone 6 is in progress: the desktop lists linked devices
-(Settings > Linked devices) and revokes one; the key-epoch rekey is not
-cryptographic yet (see "Revocation today"). Product rules are in
+Status: 2026-11-18. Milestones 1–5 (bookmarks, folders, tags, history and
+settings) are wired on published `weirdnet-sync` 0.3.1 and `weirdnet-net`
+0.6.0. Milestone 6 is wired: Settings > Linked devices (desktop and phone)
+lists devices and revokes one, and a revoke rotates to a random epoch key
+the revoked device never gets (see "Revocation and key rotation"). Product rules are in
 `docs/identity-recovery.md` section 5. This file is the Morph implementation
 plan for that section: bookmarks, folders, tags and history first, then
 settings, between a user's own linked devices, end-to-end encrypted, over
@@ -195,27 +195,40 @@ sync session is accepted only if the peer presents a cert for the same
 Noise (or `weirdnet-net`) channel authenticates the peer id; the cert binds
 that peer id to the user.
 
-Revoking a device (Settings > Devices, once built) signs a revocation with
-the user key, gossips it in the log, and bumps the key epoch so the revoked
-node cannot decrypt later pages even if it still has an old `SyncKey`.
+Revoking a device (Settings > Linked devices) signs a revocation with the
+user key and rotates the sync key, so the revoked node cannot read anything
+synced afterwards, even though it still holds the seed.
 
-### Revocation today
+### Revocation and key rotation
 
-`revoke_device` calls `Roster::revoke` (weirdnet-sync),
-which records the revocation and bumps the roster epoch; the roster rides
-every hello, so other devices merge it on their next sync and refuse the
-revoked node's sessions (`revoked`). Merges never undo a revocation.
+Every device holds the identity seed, so no key derived from it can lock a
+revoked device out. `weirdnet-sync` 0.3 therefore keeps a key chain in the
+roster: each device publishes a device key (X25519, derived from its node key
+and signed by it), and a rotation is a fresh random epoch key sealed to each
+remaining device's key. After a rotation, pages travel only under the newest
+key; old keys stay for history.
 
-Limits, until Weirdnet grows a real rekey:
-
-- The epoch is mixed into `SyncKey`, but every device derives `SyncKey` from
-  the same user seed, so a revoked device that still holds the seed (or the
-  recovery words) can derive later epochs too. What keeps it out is the
-  session check, not the key. Locking out a device that knows the words
-  means a new identity.
-- A third device that has not seen the revocation catches up on its next
-  pass: since `weirdnet-sync` 0.2.0 an older-epoch hello gets the roster
-  back, merges it and retries (on 0.1.0 it was refused as `epoch-behind`).
+- `revoke_device` calls `SyncState::revoke`, which records the revocation and
+  rotates. The roster (with the chain) rides every hello, so the other devices
+  catch up on their next pass and the revoked one is refused and has no key.
+- The first rotation starts by itself while every device is still trusted:
+  right after the first link, and once after updating from 0.2, as soon as
+  every linked device has synced once (so its key is published). The device
+  with the lowest peer id starts it.
+- Linking is admission. `adopt_peer_cert` approves the new device, and its first
+  sync with this one hands it the current and older keys. A reinstall restored
+  from the recovery words gets a new node key and is not a member. Linked devices
+  shows "Needs re-admission from another device" until it is linked again from
+  a device that syncs. On that other device the row reads "Waiting for its
+  first sync" until then.
+- Before a revoke, Linked devices warns about other devices that have not
+  synced since updating (no device key): the new key leaves them out, and they
+  need linking again.
+- Epoch keys are stored in `library.db` (`epoch_keys`), next to the seed; the
+  chain is public and stored with the roster.
+- Limit (left for later): every device can sign with the user key, so a
+  revoked device can still sign revocations of other devices. It cannot read
+  anything, but undoing that needs a new identity.
 
 ## Transport and protocol
 
@@ -233,8 +246,9 @@ Messages:
 
 - `Hello { cert, user_id, epoch, types, our_cursors, our_hlc }` — cursors
   and certs ride inside the sealed body.
-- `HelloOk { cert, epoch, cursors, revocations }` or `Refuse { reason }`
-  (`wrong-user`, `revoked`, `epoch-behind`, `type-off`).
+- `HelloOk { cert, epoch, cursors, revocations, chain }` or `Refuse { reason }`
+  (`wrong-user`, `revoked`, `epoch-behind`, `type-off`, `unknown-key`); a
+  hello under an older key gets `Roster { certs, epoch, chain }` back.
 - `Pull { node_id, after_seq, limit }` — pages of that node's log.
 - `Page { node_id, from_seq, to_seq, ops }` — sealed ops; size stays within
   the link caps already used by `weirdnet_device_link::reach` (256 KiB
@@ -298,7 +312,7 @@ if the first device has no cert and no roster, the user re-opens Add device
 |---|---|
 | Official relay / ingress peer | Peer ids, that a circuit was reserved, encrypted blob sizes and timing. Not URLs, titles, tags, settings, user ids, or certs in the clear (those sit in the sealed channel). |
 | Another Weirdnet user | Nothing. Sessions whose cert is not the same `user_id`, or is revoked, are refused before any page is sent. |
-| A revoked device that kept an old `SyncKey` | Nothing new: its sessions are refused. It could derive later keys from the seed it holds, so this rests on the session check until Weirdnet has a real rekey. |
+| A revoked device that kept the seed and old keys | Nothing written after the revoke: its sessions are refused, and the rotated key was never sealed to it, so it cannot open later pages even with the recovery words. |
 | Logs and `morph-event` lines | Actions, record ids, node ids, seq numbers. Never seeds, words, passwords, `LibraryKey`, `SyncKey`, or page URLs and titles. |
 
 At rest each library remains a SQLCipher file mode 0600, opened only while
@@ -381,9 +395,9 @@ Morph pins that published version; it does not take a git or path dependency.
 4. **History**, including delete-by-URL and clear-all.
 5. **Settings** (`search_engine`, `home_page`, `theme` only).
 6. **Devices UI and revocation** (Settings > Linked devices, key epoch).
-   Listing and revoking are in the desktop; mobile, the 3+-device catch-up
-   release and a cryptographic rekey are still ahead — do not advertise
-   revocation as locking out a device that knows the recovery words.
+   Listing, revoking and the admission states are in the desktop and the
+   phone; a revoke rotates the key (weirdnet-sync 0.3.1), and three devices
+   catch up (`three_homes_rotate_on_revoke_and_re_admit_a_restored_device`).
 7. Later, out of scope here: open tabs on other devices, an optional
    always-on sealed page store, saved passwords (separate opt-in and key).
 
