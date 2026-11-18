@@ -128,6 +128,12 @@ pub trait SessionStore: Send + Sync {
     fn clear(&self);
 }
 
+impl fmt::Debug for dyn SessionStore {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SessionStore")
+    }
+}
+
 /// A profile's encrypted library database as a [`SessionStore`].
 #[derive(Debug, Clone)]
 pub struct LibrarySessions {
