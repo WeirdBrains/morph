@@ -22,6 +22,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when the server can't resume. The bar under the page no longer forgets
   downloads after ten seconds; it just hides.
 
+- Downloads resume behind a login. When a download starts, Morph records
+  its session: the cookies the engine sends, Referer, User-Agent, the
+  address after redirects, auth headers, and the ETag/Last-Modified. It's
+  kept in the profile's encrypted library, never in plaintext, and nothing
+  is kept while the library is locked or not yet set up. Resume asks the
+  engine for fresh cookies and falls back to the saved ones. It sends
+  If-Range, so a file that changed on the server starts over cleanly. When
+  the server refuses (401/403), the tile says the sign-in no longer works.
+  The session is deleted when the download completes, is cancelled, or is
+  cleared.
+
 - Sync uses `weirdnet-sync` 0.2.0: history and settings share each
   device's log stream with bookmarks (per-type pull positions), the clock
   advance after a pull comes from the crate, and a third device that missed
