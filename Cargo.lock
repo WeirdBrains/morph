@@ -5403,6 +5403,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "morph-ai"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "weirdnet-agent",
+]
+
+[[package]]
 name = "morph-bridge"
 version = "0.1.0"
 dependencies = [
@@ -5427,6 +5439,19 @@ dependencies = [
  "serde_json",
  "tempfile",
  "ureq",
+]
+
+[[package]]
+name = "morph-companion"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "morph-ai",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "weirdnet-agent",
 ]
 
 [[package]]
@@ -9991,6 +10016,19 @@ name = "weezl"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
+
+[[package]]
+name = "weirdnet-agent"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d10c86a8b6441a57b7c492825b4fc247cef6f10b1ddd6351d30723757cfd890"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+]
 
 [[package]]
 name = "weirdnet-device-link"

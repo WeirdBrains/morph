@@ -1,0 +1,23 @@
+[package]
+name = "morph-companion"
+description = "Morph's Companion sessions: runs tasks and turns agent events into view models for the Companion panel"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+
+[dependencies]
+weirdnet-agent.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+morph-ai.workspace = true
+tokio = { version = "1", features = ["sync", "macros", "rt"] }
+
+[dev-dependencies]
+weirdnet-agent = { workspace = true, features = ["testing"] }

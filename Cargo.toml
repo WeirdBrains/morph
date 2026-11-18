@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["crates/morph-core", "crates/morph-identity", "crates/morph-store", "crates/morph-keystore", "crates/morph-bridge", "crates/morph-webview-control", "crates/weirdnet-device-link", "crates/morph-ui", "crates/morph-webview", "crates/morph-browser", "crates/morph-services", "crates/morph-desktop", "crates/morph-wl-input", "crates/morph-os"]
-default-members = ["crates/morph-core", "crates/morph-identity", "crates/morph-store", "crates/morph-keystore", "crates/morph-bridge", "crates/morph-webview-control", "crates/weirdnet-device-link", "crates/morph-ui", "crates/morph-webview", "crates/morph-browser", "crates/morph-services", "crates/morph-desktop", "crates/morph-wl-input", "crates/morph-os"]
+members = ["crates/morph-core", "crates/morph-identity", "crates/morph-store", "crates/morph-keystore", "crates/morph-bridge", "crates/morph-webview-control", "crates/weirdnet-device-link", "crates/morph-ui", "crates/morph-webview", "crates/morph-browser", "crates/morph-services", "crates/morph-desktop", "crates/morph-wl-input", "crates/morph-os", "crates/morph-ai", "crates/morph-companion"]
+default-members = ["crates/morph-core", "crates/morph-identity", "crates/morph-store", "crates/morph-keystore", "crates/morph-bridge", "crates/morph-webview-control", "crates/weirdnet-device-link", "crates/morph-ui", "crates/morph-webview", "crates/morph-browser", "crates/morph-services", "crates/morph-desktop", "crates/morph-wl-input", "crates/morph-os", "crates/morph-ai", "crates/morph-companion"]
 
 [workspace.package]
 version = "0.1.0"
@@ -24,9 +24,13 @@ morph-webview = { path = "crates/morph-webview" }
 morph-browser = { path = "crates/morph-browser" }
 morph-services = { path = "crates/morph-services" }
 morph-os = { path = "crates/morph-os" }
+morph-ai = { path = "crates/morph-ai" }
+morph-companion = { path = "crates/morph-companion" }
 weirdnet-keys = "=0.1.0"
 weirdnet-net = "=0.6.0"
 weirdnet-sync = "=0.2.0"
+weirdnet-agent = "=0.1.0"
+async-trait = "0.1"
 thiserror = "2"
 dirs = "7.0.0"
 zeroize = { version = "1", features = ["derive"] }
