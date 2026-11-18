@@ -8,6 +8,7 @@
 
 import 'api/control.dart';
 import 'api/device_link.dart';
+import 'api/devices.dart';
 import 'api/events.dart';
 import 'api/identity.dart';
 import 'api/info.dart';
@@ -64,6 +65,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   bool dco_decode_bool(dynamic raw);
+
+  @protected
+  PlatformInt64 dco_decode_box_autoadd_i_64(dynamic raw);
 
   @protected
   OwnAddressView dco_decode_box_autoadd_own_address_view(dynamic raw);
@@ -123,6 +127,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   LinkStatusView dco_decode_link_status_view(dynamic raw);
 
   @protected
+  LinkedDeviceView dco_decode_linked_device_view(dynamic raw);
+
+  @protected
   List<String> dco_decode_list_String(dynamic raw);
 
   @protected
@@ -136,6 +143,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<HistoryEntryView> dco_decode_list_history_entry_view(dynamic raw);
+
+  @protected
+  List<LinkedDeviceView> dco_decode_list_linked_device_view(dynamic raw);
 
   @protected
   List<NetworkPeerView> dco_decode_list_network_peer_view(dynamic raw);
@@ -163,6 +173,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   String? dco_decode_opt_String(dynamic raw);
+
+  @protected
+  PlatformInt64? dco_decode_opt_box_autoadd_i_64(dynamic raw);
 
   @protected
   OwnAddressView? dco_decode_opt_box_autoadd_own_address_view(dynamic raw);
@@ -253,6 +266,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   bool sse_decode_bool(SseDeserializer deserializer);
 
   @protected
+  PlatformInt64 sse_decode_box_autoadd_i_64(SseDeserializer deserializer);
+
+  @protected
   OwnAddressView sse_decode_box_autoadd_own_address_view(
     SseDeserializer deserializer,
   );
@@ -324,6 +340,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   LinkStatusView sse_decode_link_status_view(SseDeserializer deserializer);
 
   @protected
+  LinkedDeviceView sse_decode_linked_device_view(SseDeserializer deserializer);
+
+  @protected
   List<String> sse_decode_list_String(SseDeserializer deserializer);
 
   @protected
@@ -343,6 +362,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<HistoryEntryView> sse_decode_list_history_entry_view(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<LinkedDeviceView> sse_decode_list_linked_device_view(
     SseDeserializer deserializer,
   );
 
@@ -378,6 +402,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
+
+  @protected
+  PlatformInt64? sse_decode_opt_box_autoadd_i_64(SseDeserializer deserializer);
 
   @protected
   OwnAddressView? sse_decode_opt_box_autoadd_own_address_view(
@@ -485,6 +512,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_bool(bool self, SseSerializer serializer);
 
   @protected
+  void sse_encode_box_autoadd_i_64(
+    PlatformInt64 self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_own_address_view(
     OwnAddressView self,
     SseSerializer serializer,
@@ -578,6 +611,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_linked_device_view(
+    LinkedDeviceView self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_String(List<String> self, SseSerializer serializer);
 
   @protected
@@ -601,6 +640,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_history_entry_view(
     List<HistoryEntryView> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_linked_device_view(
+    List<LinkedDeviceView> self,
     SseSerializer serializer,
   );
 
@@ -648,6 +693,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_box_autoadd_i_64(
+    PlatformInt64? self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_opt_box_autoadd_own_address_view(
