@@ -420,6 +420,74 @@ pub fn on_lock(home: &Path, profile_id: &str) {
     stop(home, profile_id);
 }
 
+/// One linked device, from the profile's roster.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceView {
+    pub peer_id: String,
+    pub label: String,
+    pub issued_ms: i64,
+    pub revoked_ms: Option<i64>,
+    /// This install's own node.
+    pub this_device: bool,
+}
+
+/// The profile's linked devices (this one first, then by link time). Empty
+/// when the library is locked or the profile does not sync yet.
+pub fn devices(home: &Path, profile_id: &str) -> Result<Vec<DeviceView>> {
+    let listed = library_db::with(home, profile_id, |lib| {
+        let ours = core::node_id(lib)?.unwrap_or_default();
+        let roster = core::load_roster(lib)?;
+        let mut out: Vec<DeviceView> = roster
+            .certs
+            .iter()
+            .map(|c| DeviceView {
+                peer_id: c.peer_id.clone(),
+                label: c.label.clone(),
+                issued_ms: c.issued_at,
+                revoked_ms: c.revoked_at,
+                this_device: c.peer_id == ours,
+            })
+            .collect();
+        out.sort_by_key(|d| (!d.this_device, d.issued_ms));
+        Ok(out)
+    })
+    .map_err(Error::failed)?;
+    Ok(listed.unwrap_or_default())
+}
+
+/// Revoke a linked device: sign its revocation with the user key (from the
+/// unlocked library), bump the roster epoch, and stop answering it at once.
+/// Other devices learn the revocation on their next sync pass with this one.
+/// This device cannot revoke itself.
+pub fn revoke_device(home: &Path, profile_id: &str, peer_id: &str, now_ms: i64) -> Result<()> {
+    let dir = morph_core::profiles::profile_dir(home, profile_id);
+    let outcome = library_db::with(home, profile_id, |lib| {
+        if core::node_id(lib)?.as_deref() == Some(peer_id) {
+            return Ok(Err("this device cannot revoke itself".to_string()));
+        }
+        let Some((user, _)) = core::load_seed(lib)?.and_then(|seed| user_from_seed(&seed)) else {
+            return Ok(Err("this profile does not sync yet".to_string()));
+        };
+        let mut roster = core::load_roster(lib)?;
+        match roster.get(peer_id) {
+            None => return Ok(Err("no such device".to_string())),
+            Some(c) if !c.active() => return Ok(Ok(())),
+            Some(_) => {}
+        }
+        if let Err(e) = roster.revoke(&weirdnet_net::WEIRDNET, &user, peer_id, now_ms) {
+            return Ok(Err(e.to_string()));
+        }
+        core::save_roster(lib, &roster)?;
+        core::refresh_live(&dir, lib);
+        Ok(Ok(()))
+    })
+    .map_err(Error::failed)?;
+    match outcome {
+        None => Err(Error::failed("the library is locked")),
+        Some(r) => r.map_err(Error::failed),
+    }
+}
+
 /// Whether a sync node is running for this profile (tests).
 pub fn is_running(home: &Path, profile_id: &str) -> bool {
     let dir = morph_core::profiles::profile_dir(home, profile_id);
@@ -651,7 +719,7 @@ mod tests {
     /// a later folder move), then history (a pre-link visit, visits both ways,
     /// delete by URL, clear-all and a visit after the clear), then settings
     /// (a pre-link theme beats fresh defaults, a change comes back, layout
-    /// stays local).
+    /// stays local), then revoking B cuts it off both ways.
     #[test]
     fn two_homes_sync_the_library_over_a_local_relay() {
         let relay = start_local_relay();
@@ -774,6 +842,28 @@ mod tests {
         });
         assert_eq!(morph_core::settings::load(&a).unwrap().theme, ThemeChoice::Light);
         assert_eq!(morph_core::settings::load(&a).unwrap().sidebar_width, 300);
+
+        // Devices: both list each other; A revokes B, and B's later changes
+        // no longer reach A, nor A's reach B.
+        let listed = devices(&a, "p1").unwrap();
+        assert_eq!(listed.len(), 2);
+        assert!(listed[0].this_device && !listed[1].this_device);
+        let b_peer = listed[1].peer_id.clone();
+        assert!(revoke_device(&a, "p1", &listed[0].peer_id, 200).is_err(), "no self-revocation");
+        revoke_device(&a, "p1", &b_peer, 200).unwrap();
+        assert_eq!(devices(&a, "p1").unwrap()[1].revoked_ms, Some(200));
+        revoke_device(&a, "p1", &b_peer, 201).unwrap();
+        assert_eq!(devices(&a, "p1").unwrap()[1].revoked_ms, Some(200), "revoking twice is a no-op");
+        hist::record_visit(&b, "p1", "https://after-revoke-b.example/", "", 210).unwrap();
+        hist::record_visit(&a, "p1", "https://after-revoke-a.example/", "", 211).unwrap();
+        for _ in 0..5 {
+            std::thread::scope(|s| {
+                s.spawn(|| tick(&a, "p1"));
+                s.spawn(|| tick(&b, "p1"));
+            });
+        }
+        assert!(!has_visit(&a, "https://after-revoke-b.example/"), "a revoked device's changes stay out");
+        assert!(!has_visit(&b, "https://after-revoke-a.example/"), "a revoked device stops receiving");
 
         stop(&a, "p1");
         stop(&b, "p1");
