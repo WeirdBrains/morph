@@ -804,6 +804,40 @@ def serve_tests():
                         time.sleep(0.12)
                 except (BrokenPipeError, ConnectionResetError):
                     pass
+            elif self.path.startswith("/jwt-download.html"):
+                # A page signed in with JWTs in its storage (see jwt_page).
+                body = jwt_page("store=0" not in self.path).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            elif self.path.startswith("/dl/jwt"):
+                # Behind a JavaScript login: a resume (Range) needs the page's
+                # live JWT as a bearer token; the page's own link needs none.
+                rng = self.headers.get("Range")
+                auth = self.headers.get("Authorization")
+                JWT_REQUESTS.append((rng, auth))
+                if rng and auth != f"Bearer {JWT_GOOD}":
+                    self.send_response(401)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                start = int(rng.split("=", 1)[1].split("-", 1)[0]) if rng and rng.startswith("bytes=") else 0
+                self.send_response(206 if rng else 200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Disposition", f'attachment; filename="{JWT_NAME}"')
+                self.send_header("Content-Length", str(len(SLOW_BYTES) - start))
+                if rng:
+                    self.send_header("Content-Range", f"bytes {start}-{len(SLOW_BYTES) - 1}/{len(SLOW_BYTES)}")
+                self.end_headers()
+                try:
+                    for i in range(start, len(SLOW_BYTES), 32 * 1024):
+                        self.wfile.write(SLOW_BYTES[i:i + 32 * 1024])
+                        self.wfile.flush()
+                        time.sleep(0.12)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
             elif self.path.startswith("/dl/object"):
                 self.send_response(200)
                 self.send_header("Content-Type", "application/octet-stream")
@@ -1059,6 +1093,34 @@ def download(r, binary, display, base):
 SLOW_NAME = "morph-slow-asset.bin"
 SLOW_BYTES = bytes((i * 13) % 251 for i in range(1_600_000))
 SLOW_RANGES = []
+JWT_NAME = "morph-jwt-asset.bin"
+JWT_REQUESTS = []
+
+
+def make_jwt(exp_from_now, sub):
+    import base64
+
+    def enc(b):
+        return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+
+    header = json.dumps({"alg": "HS256", "typ": "JWT"}).encode()
+    claims = json.dumps({"sub": sub, "exp": int(time.time()) + exp_from_now}).encode()
+    return f"{enc(header)}.{enc(claims)}.{enc(b'signature')}"
+
+
+JWT_GOOD = make_jwt(3600, "me")
+JWT_OLD = make_jwt(-600, "me")
+
+
+def jwt_page(live):
+    """A page signed in the JavaScript way: an expired JWT in localStorage
+    and (when `live`) the live one inside a JSON blob in sessionStorage,
+    and a link filling the page to the download behind the login."""
+    store = f"sessionStorage.setItem('auth', JSON.stringify({{user: 'me', access_token: '{JWT_GOOD}'}}));" if live else ""
+    return f"""<!doctype html><html><head><meta charset="utf-8"><title>jwt download</title>
+<style>body {{ margin: 0; }} a {{ position: fixed; inset: 0; display: block; font-size: 120px; }}</style>
+<script>localStorage.setItem('token', '{JWT_OLD}'); {store}</script></head>
+<body><a id="a" href="/dl/jwt">jwt download</a></body></html>"""
 
 
 def morph_rows(m, key):
@@ -1155,6 +1217,80 @@ def downloads_panel(r, binary, display, base, shots=None):
         shot("downloads-panel-done")
         m2.key("Escape", delay=0.6)
         r.check(g, "Escape closes the panel", wait_for(lambda: m2.lines(r"^morph-event downloads panel closed"), 4))
+    finally:
+        m2.stop()
+
+
+def downloads_js_login(r, binary, display, base, live):
+    """A download behind a JavaScript login: pause it, and the resume the
+    server refuses (401) goes on with the page's live JWT read from its
+    storage (`live`), the expired one skipped; with only the expired one,
+    the page starts the download again and the tile takes it over."""
+    g = "downloads-jwt" if live else "downloads-jwt-fallback"
+    home = Path(tempfile.mkdtemp(prefix="morph-xvfb-jwt-"))
+    pick = home / "picked"
+    staging = home / "Downloads"
+    pick.mkdir()
+    staging.mkdir()
+    (home / "xdg" / "config").mkdir(parents=True, exist_ok=True)
+    (home / "xdg" / "config" / "user-dirs.dirs").write_text(f'XDG_DOWNLOAD_DIR="{staging}"\n')
+    env = {"MORPH_TEST_PICK_DIR": str(pick), "MORPH_LOG_LAYOUT": "1", "MORPH_TEST_NO_OPEN": "1"}
+    m2 = Driver(binary, display, str(home), extra_env=env)
+    JWT_REQUESTS.clear()
+
+    def center(name):
+        h = morph_rows(m2, f"downloads hit name={name}")
+        return (float(h["x"]) + float(h["w"]) / 2, float(h["y"]) + float(h["h"]) / 2) if h else None
+
+    try:
+        win = wait_for(lambda: m2.own_window(), 20)
+        r.check(g, "a Morph for the signed-in page opens", win)
+        if not win:
+            return
+        before = len(m2.events())
+        if not hand_to(r, g, binary, base + "jwt-download.html" + ("" if live else "?store=0"), m2.env):
+            return
+        wait_for(lambda: any(n == "TitleChanged" and a and "jwt download" in a for _, n, a in m2.events()[before:]), 10)
+        win = m2.window("jwt download") or win
+        m2.activate(win)
+        m2.click(win, 400, 76 + 200)
+        started = wait_for(lambda: [a for _, n, a in m2.events()[before:] if n == "Download" and a and "Started" in a], 15)
+        r.check(g, "the download behind the login starts", started, str(m2.lines("morph-event")[-5:]))
+        if not started:
+            return
+        m2.key("ctrl+shift+y", delay=0.8)
+        wait_for(lambda: m2.lines(r"^morph-event downloads panel open"), 5)
+        key = next((ln.split()[3] for ln in reversed(m2.lines(r"^morph-event downloads row id=\d+ "))), "")
+        dl = key.split("=", 1)[1] if "=" in key else "1"
+        row = lambda: morph_rows(m2, f"downloads row id={dl}")  # noqa: E731
+        wait_for(lambda: row().get("state") == "running", 8)
+        pause = wait_for(lambda: center(f"pause-{dl}"), 4)
+        if pause:
+            m2.click(win, int(pause[0]), int(pause[1]))
+        paused = wait_for(lambda: (lambda x: x if x.get("state") == "paused" else None)(row()), 4) or row()
+        r.check(g, "it pauses", paused.get("state") == "paused", str(paused))
+        time.sleep(1.0)
+        resume = wait_for(lambda: center(f"resume-{dl}"), 3)
+        if resume:
+            m2.click(win, int(resume[0]), int(resume[1]))
+        saved = wait_for(lambda: m2.lines("morph-event download saved"), 60)
+        target = pick / JWT_NAME
+        whole = bool(saved) and target.exists() and target.read_bytes() == SLOW_BYTES
+        refused = [a for rng, a in JWT_REQUESTS if rng and a != f"Bearer {JWT_GOOD}"]
+        r.check(g, "the first resume is refused without the page's token", refused, str([(rng, (a or "")[:12]) for rng, a in JWT_REQUESTS]))
+        if live:
+            found = m2.lines(r"^morph-event tab=0 DownloadToken\(\d+, found: true\)")
+            r.check(g, "the live JWT is read from the page's storage", found, str(m2.lines("DownloadAuth|DownloadToken")))
+            ranged = [a for rng, a in JWT_REQUESTS if rng and a == f"Bearer {JWT_GOOD}"]
+            never_old = not any(a == f"Bearer {JWT_OLD}" for _, a in JWT_REQUESTS)
+            r.check(g, "the resume goes on with it (Range + Bearer), never the expired one", ranged and never_old, str(len(ranged)))
+        else:
+            r.check(g, "no usable token: the page is asked to start it again", m2.lines(r"DownloadAuth\(Retrigger"), str(m2.lines("DownloadAuth|DownloadToken")))
+            fresh = sum(1 for rng, _ in JWT_REQUESTS if not rng)
+            r.check(g, "the page's own new download is taken over by the tile", fresh >= 2 and len(m2.lines(r"^morph-event downloads row id=")) > 0, str(fresh))
+        r.check(g, "the download lands whole", whole, f"{saved} {target.stat().st_size if target.exists() else 0} bytes")
+        leaked = any(JWT_GOOD in ln or JWT_OLD in ln for ln in m2.lines(""))
+        r.check(g, "no token is ever logged", not leaked, "a JWT is in Morph's output" if leaked else "")
     finally:
         m2.stop()
 
@@ -2223,7 +2359,10 @@ def run(args):
     if args.only == "downloads":
         r = Results()
         try:
-            downloads_panel(r, args.bin, display, serve_tests(), args.screenshots)
+            base = serve_tests()
+            downloads_panel(r, args.bin, display, base, args.screenshots)
+            downloads_js_login(r, args.bin, display, base, True)
+            downloads_js_login(r, args.bin, display, base, False)
             return finish(r, args)
         finally:
             for proc in (wm, xvfb):
@@ -2318,6 +2457,8 @@ def run(args):
         file_picker(r, args.bin, display, base)
         download(r, args.bin, display, base)
         downloads_panel(r, args.bin, display, base, args.screenshots)
+        downloads_js_login(r, args.bin, display, base, True)
+        downloads_js_login(r, args.bin, display, base, False)
         select_menu(r, args.bin, display, base)
         page_clipboard(r, args.bin, display, base, args.wayland)
         main_menu(r, args.bin, display)
