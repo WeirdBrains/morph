@@ -6,10 +6,9 @@
 //! the latest clear) stays gone; a later visit survives. `MAX_HISTORY` is a
 //! local cap applied after merge and is never synced as a delete.
 //!
-//! History ops go on their own log stream (`<node>/history`) rather than the
-//! node's bookmarks stream. `weirdnet-sync` 0.1 keeps one pull cursor per
-//! stream, so mixing types in one stream would let a bookmarks pull move the
-//! cursor past history ops. A separate stream keeps each type's cursor exact.
+//! History ops share the node's log stream with bookmarks and settings;
+//! `weirdnet-sync` 0.2 keeps a pull position per type. Ops that 0.1-era
+//! builds wrote on a separate `<node>/history` stream still merge.
 use std::collections::{BTreeMap, BTreeSet};
 
 use morph_store::{HistoryEntry, Library, Tombstone};
@@ -43,11 +42,6 @@ fn decode(bytes: &[u8]) -> Option<HistoryOp> {
     serde_json::from_slice(bytes).ok()
 }
 
-/// This device's history stream id.
-pub fn stream_id(our_node: &str) -> String {
-    format!("{our_node}/{HISTORY}")
-}
-
 pub fn history_on(lib: &Library) -> bool {
     types_on(lib).ok().is_some_and(|t| t.iter().any(|x| x == HISTORY))
 }
@@ -63,7 +57,7 @@ fn record(lib: &mut Library, record_id: &str, op: &HistoryOp, now_ms: i64) -> mo
     if !history_on(lib) {
         return Ok(None);
     }
-    let node = NodeId::new(stream_id(&our));
+    let node = NodeId::new(&our);
     let clock = load_clock(lib)?;
     let mut log = load_log(lib)?;
     let hlc = Hlc::tick(clock.as_ref(), now_ms.max(0) as u64, node.clone());
@@ -124,7 +118,7 @@ pub fn backfill(lib: &mut Library, now_ms: i64) -> morph_store::Result<()> {
         return Ok(());
     }
     missing.reverse();
-    let node = NodeId::new(stream_id(&our));
+    let node = NodeId::new(&our);
     let mut clock = load_clock(lib)?;
     for e in &missing {
         let wall = if e.visited_ms > 0 { e.visited_ms } else { now_ms };
@@ -207,7 +201,7 @@ mod tests {
     /// A remote device's op on its own history stream.
     fn remote(lib: &mut Library, n: &str, ms: u64, id: &str, op: HistoryOp) {
         let mut log = load_log(lib).unwrap();
-        let node = NodeId::new(stream_id(n));
+        let node = NodeId::new(n);
         log.append(node.clone(), Hlc::new(ms, 0, node), HISTORY, id, encode(&op));
         persist_log(lib, &log, None).unwrap();
     }
@@ -226,7 +220,7 @@ mod tests {
         lib.append_visits(&[HistoryEntry { url: "https://local.example/".into(), visited_ms: 5, ..Default::default() }], 0).unwrap();
         enable(&mut lib, "a", 10).unwrap();
         assert!(history_on(&lib), "history is a default opt-in");
-        let ours: Vec<_> = load_log(&lib).unwrap().iter_node(&NodeId::new(stream_id("a"))).cloned().collect();
+        let ours: Vec<_> = load_log(&lib).unwrap().iter_node(&NodeId::new("a")).cloned().collect();
         assert_eq!(ours.len(), 1, "the existing visit is backfilled on our history stream");
         remote(&mut lib, "b", 20, "h-b1", visit("https://remote.example/", 20));
         materialize(&mut lib, 30).unwrap();
@@ -281,12 +275,11 @@ mod tests {
         enable(&mut lib, "a", 10).unwrap();
         let mut e = HistoryEntry { url: "https://x.example/".into(), visited_ms: 11, ..Default::default() };
         local_visit(&mut lib, &mut e, 11).unwrap();
-        assert!(e.id.starts_with("h-") && !e.hlc.is_empty() && e.node_id == stream_id("a"));
+        assert!(e.id.starts_with("h-") && !e.hlc.is_empty() && e.node_id == "a");
         local_delete_url(&mut lib, "https://x.example", 12).unwrap();
         local_clear(&mut lib, 13).unwrap();
         let log = load_log(&lib).unwrap();
-        assert_eq!(log.iter_node(&NodeId::new(stream_id("a"))).count(), 3);
-        assert!(log.iter_node(&NodeId::new("a")).all(|x| x.typ == BOOKMARKS), "history never lands on the bookmarks stream");
+        assert_eq!(log.iter_node(&NodeId::new("a")).filter(|x| x.typ == HISTORY).count(), 3, "history shares the node's stream");
 
         set_types(&mut lib, &[BOOKMARKS.to_string()]).unwrap();
         let mut off = HistoryEntry { url: "https://y.example/".into(), visited_ms: 14, ..Default::default() };
@@ -313,7 +306,7 @@ mod tests {
         let (_t, mut lib) = open();
         enable(&mut lib, "a", 10).unwrap();
         let mut log = load_log(&lib).unwrap();
-        let node = NodeId::new(stream_id("b"));
+        let node = NodeId::new("b");
         for i in 0..(MAX_HISTORY as u64 + 3) {
             let op = visit(&format!("https://x.example/{i}"), i as i64 + 1);
             log.append(node.clone(), Hlc::new(i + 1, 0, node.clone()), HISTORY, format!("h-{i}"), encode(&op));
