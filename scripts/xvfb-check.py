@@ -751,6 +751,25 @@ def serve_tests():
                 self.send_response(302)
                 self.send_header("Location", "/dl/object?token=x")
                 self.end_headers()
+            elif self.path.startswith("/dl/slow"):
+                # A few seconds long, honouring Range (pause and resume).
+                rng = self.headers.get("Range")
+                SLOW_RANGES.append(rng)
+                start = int(rng.split("=", 1)[1].split("-", 1)[0]) if rng and rng.startswith("bytes=") else 0
+                self.send_response(206 if rng else 200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Disposition", f'attachment; filename="{SLOW_NAME}"')
+                self.send_header("Content-Length", str(len(SLOW_BYTES) - start))
+                if rng:
+                    self.send_header("Content-Range", f"bytes {start}-{len(SLOW_BYTES) - 1}/{len(SLOW_BYTES)}")
+                self.end_headers()
+                try:
+                    for i in range(start, len(SLOW_BYTES), 32 * 1024):
+                        self.wfile.write(SLOW_BYTES[i:i + 32 * 1024])
+                        self.wfile.flush()
+                        time.sleep(0.12)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
             elif self.path.startswith("/dl/object"):
                 self.send_response(200)
                 self.send_header("Content-Type", "application/octet-stream")
@@ -1003,6 +1022,109 @@ def download(r, binary, display, base):
         m2.stop()
 
 
+SLOW_NAME = "morph-slow-asset.bin"
+SLOW_BYTES = bytes((i * 13) % 251 for i in range(1_600_000))
+SLOW_RANGES = []
+
+
+def morph_rows(m, key):
+    """The newest `morph-event <key> ...` line as a dict of its fields."""
+    rows = m.lines(rf"^morph-event {re.escape(key)} ")
+    if not rows:
+        return {}
+    rest = rows[-1][len(f"morph-event {key} "):]
+    return dict(kv.split("=", 1) for kv in rest.split() if "=" in kv)
+
+
+def downloads_panel(r, binary, display, base, shots=None):
+    """The toolbar's downloads button sits just left of ☰; Ctrl+Shift+Y
+    opens the panel under it with a tile per download: a progress bar and
+    time left while it runs, a click to open it when done ("Opens in …"),
+    pause and resume (the rest fetched with a Range request) whose buttons
+    don't count as a click on the tile, and once saved no bar, no estimate,
+    and the file opened (logged only: MORPH_TEST_NO_OPEN)."""
+    g = "downloads"
+    home = Path(tempfile.mkdtemp(prefix="morph-xvfb-downloads-"))
+    pick = home / "picked"
+    staging = home / "Downloads"
+    pick.mkdir()
+    staging.mkdir()
+    (home / "xdg" / "config").mkdir(parents=True, exist_ok=True)
+    (home / "xdg" / "config" / "user-dirs.dirs").write_text(f'XDG_DOWNLOAD_DIR="{staging}"\n')
+    env = {"MORPH_TEST_PICK_DIR": str(pick), "MORPH_LOG_LAYOUT": "1", "MORPH_TEST_NO_OPEN": "1"}
+    m2 = Driver(binary, display, str(home), extra_env=env)
+
+    def shot(name):
+        if shots and not isinstance(m2, WaylandMorph) and shutil.which("import"):
+            Path(shots).mkdir(parents=True, exist_ok=True)
+            subprocess.run(["import", "-window", "root", str(Path(shots) / f"{name}.png")], env=m2.env, capture_output=True)
+
+    def center(name):
+        h = morph_rows(m2, f"downloads hit name={name}")
+        return (float(h["x"]) + float(h["w"]) / 2, float(h["y"]) + float(h["h"]) / 2) if h else None
+
+    try:
+        win = wait_for(lambda: m2.own_window(), 20)
+        r.check(g, "a Morph for the downloads page opens", win)
+        if not win:
+            return
+        bar = wait_for(lambda: morph_rows(m2, "toolbar"), 10) or {}
+        ok = bar and float(bar["downloads_right"]) <= float(bar["menu_left"]) <= float(bar["downloads_right"]) + 8
+        r.check(g, "the downloads button sits just left of the ☰ button", ok, str(bar))
+        before = len(m2.events())
+        if not hand_to(r, g, binary, base + "slow-download.html", m2.env):
+            return
+        wait_for(lambda: any(n == "TitleChanged" and a and "slow download" in a for _, n, a in m2.events()[before:]), 10)
+        win = m2.window("slow download") or win
+        m2.activate(win)
+        m2.click(win, 400, 76 + 200)
+        started = wait_for(lambda: [a for _, n, a in m2.events()[before:] if n == "Download" and a and "Started" in a], 15)
+        r.check(g, "the slow download starts", started, str(m2.lines("morph-event")[-5:]))
+        if not started:
+            return
+        m2.key("ctrl+shift+y", delay=0.8)
+        r.check(g, "Ctrl+Shift+Y opens the downloads panel", wait_for(lambda: m2.lines(r"^morph-event downloads panel open"), 5), str(m2.lines("morph-event")[-5:]))
+        key = next((ln.split()[3] for ln in reversed(m2.lines(r"^morph-event downloads row id=\d+ "))), "")
+        dl = key.split("=", 1)[1] if "=" in key else "1"
+        row = lambda: morph_rows(m2, f"downloads row id={dl}")  # noqa: E731
+        running = wait_for(lambda: (lambda x: x if x.get("state") == "running" and x.get("eta", "").endswith("_left") else None)(row()), 8) or row()
+        r.check(g, "a running download shows a progress bar and a time left", running.get("bar") == "determinate" and re.search(r"\d+[sm]_left$", running.get("eta", "")), str(running))
+        shot("downloads-panel-running")
+        tile = center(f"tile-{dl}")
+        if tile:
+            m2.click(win, int(tile[0]), int(tile[1]))
+        waiting = wait_for(lambda: (lambda x: x if x.get("open", "-").startswith("Opens_") else None)(row()), 4) or row()
+        r.check(g, "a click on a running tile opens it when done (Opens in …)", re.match(r"Opens_(in_\d+[sm]|when_done)", waiting.get("open", "")), str(waiting))
+        shot("downloads-panel-opens-when-done")
+        pause = center(f"pause-{dl}")
+        if pause:
+            m2.click(win, int(pause[0]), int(pause[1]))
+        paused = wait_for(lambda: (lambda x: x if x.get("state") == "paused" else None)(row()), 4) or row()
+        r.check(g, "Pause pauses it: Paused instead of a time left", paused.get("state") == "paused" and paused.get("eta") == "Paused", str(paused))
+        r.check(g, "the Pause button is not a click on the tile", paused.get("open", "-").startswith("Opens_"), str(paused))
+        received = (paused.get("status") or "")
+        time.sleep(1.0)
+        shot("downloads-panel-paused")
+        resume = wait_for(lambda: center(f"resume-{dl}"), 3)
+        if resume:
+            m2.click(win, int(resume[0]), int(resume[1]))
+        r.check(g, "Resume runs it again", wait_for(lambda: row().get("state") in ("running", "saved"), 4), str(row()))
+        saved = wait_for(lambda: m2.lines("morph-event download saved"), 40)
+        target = pick / SLOW_NAME
+        r.check(g, "the resumed download lands whole", saved and target.exists() and target.read_bytes() == SLOW_BYTES, f"{saved} {target.stat().st_size if target.exists() else 0} bytes, paused at {received}")
+        resumed = [x for x in SLOW_RANGES if x]
+        r.check(g, "resume asked only for the rest (a Range request)", resumed and resumed[-1] != "bytes=0-", str(SLOW_RANGES))
+        opened = wait_for(lambda: m2.lines(r"^morph-event download open "), 5)
+        r.check(g, "the waiting tile opens the file once saved", opened and opened[-1].endswith(str(target)), str(opened))
+        done = wait_for(lambda: (lambda x: x if x.get("state") == "saved" else None)(row()), 4) or row()
+        r.check(g, "once saved the bar and the estimate are gone", done.get("bar") == "none" and done.get("eta") == "-" and done.get("open") == "-", str(done))
+        shot("downloads-panel-done")
+        m2.key("Escape", delay=0.6)
+        r.check(g, "Escape closes the panel", wait_for(lambda: m2.lines(r"^morph-event downloads panel closed"), 4))
+    finally:
+        m2.stop()
+
+
 def select_menu(r, binary, display, base):
     """A click on a <select> opens its list; Down and Enter pick the next
     option and the page sees one change (Linux: GTK's list on X11, the
@@ -1139,7 +1261,7 @@ def page_clipboard(r, binary, display, base, wayland):
         m2.stop()
 
 
-MAIN_MENU = ["New tab", "Find in page", "Bookmarks", "History", "Identity", "Profiles", "Settings", "About Morph", "Quit"]
+MAIN_MENU = ["New tab", "Find in page", "Bookmarks", "History", "Downloads", "Identity", "Profiles", "Settings", "About Morph", "Quit"]
 MENU_SEPARATED = {"Find in page", "Identity", "About Morph", "Quit"}
 
 
@@ -1189,6 +1311,9 @@ def main_menu(r, binary, display):
             elif label in ("Bookmarks", "History", "Identity", "Profiles"):
                 ok = wait_for(lambda: st().get("w", w0) < w0)
                 detail = f"page width {w0} -> {st().get('w')} (no panel beside it)"
+            elif label == "Downloads":
+                ok = wait_for(lambda: m2.lines(r"^morph-event downloads panel open"))
+                detail = str(m2.lines("morph-event")[-4:])
             elif label == "Settings":
                 ok = wait_for(lambda: "Settings" in m2.title(win) or "Preferences" in m2.title(win))
                 detail = m2.title(win)
@@ -1891,6 +2016,8 @@ def main():
     ap.add_argument("--input-bin", help="morph-wl-input (default: next to --bin)")
     ap.add_argument("--local-relay", help="a local relay to link through (weirdnet-device-link's local-relay example)")
     ap.add_argument("--app-server", help="a Weirdnet app behind the local relay (morph-services' serve-app example)")
+    ap.add_argument("--only", choices=["downloads"], help="run just this check")
+    ap.add_argument("--screenshots", help="save screenshots of checks that take them (X11) here")
     args = ap.parse_args()
     relay = start_local_relay(args.local_relay) if args.local_relay else None
     app = start_app_server(args.app_server) if relay and args.app_server else None
@@ -1957,11 +2084,22 @@ def run(args):
         wm = xvfb  # sway manages windows (full screen) itself
     else:
         display = ":" + str(70 + os.getpid() % 200)
+        if display == ":100":  # someone's own virtual display
+            display = ":270"
         xvfb = subprocess.Popen(["Xvfb", display, "-screen", "0", "1600x1000x24", "-ac", "-noreset"], stderr=subprocess.DEVNULL)
         time.sleep(1.5)
         if not args.no_wm and shutil.which("openbox"):
             wm = subprocess.Popen(["openbox"], env=dict(os.environ, DISPLAY=display), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             time.sleep(1.0)
+    if args.only == "downloads":
+        r = Results()
+        try:
+            downloads_panel(r, args.bin, display, serve_tests(), args.screenshots)
+            return finish(r, args)
+        finally:
+            for proc in (wm, xvfb):
+                if proc and proc.poll() is None:
+                    proc.terminate()
     home = tempfile.mkdtemp(prefix="morph-xvfb-")
     m = Driver(args.bin, display, home, LINK_ENV)
     r = Results()
@@ -2050,6 +2188,7 @@ def run(args):
         hover_page(r, args.bin, display, base)
         file_picker(r, args.bin, display, base)
         download(r, args.bin, display, base)
+        downloads_panel(r, args.bin, display, base, args.screenshots)
         select_menu(r, args.bin, display, base)
         page_clipboard(r, args.bin, display, base, args.wayland)
         main_menu(r, args.bin, display)
