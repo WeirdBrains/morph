@@ -49,39 +49,41 @@ enum Transfer {
     Idle,
 }
 
-/// Speed, smoothed over the last few seconds.
+/// Speed over the last few seconds: the bytes that came in that window
+/// over its length, so a burst (the first buffers, one fast second) moves
+/// it a little and the time left doesn't jump around.
 #[derive(Debug, Clone, Default)]
 struct Rate {
-    last: Option<(Instant, u64)>,
-    speed: Option<f64>,
+    /// (when, bytes so far), oldest first, spanning about [`Self::WINDOW`].
+    samples: VecDeque<(Instant, u64)>,
 }
 
 impl Rate {
-    /// Seconds the smoothing looks back over (exponential).
-    const WINDOW: f64 = 4.0;
+    /// How far back the speed looks.
+    const WINDOW: Duration = Duration::from_secs(5);
+    /// How much it needs to have seen before it says anything.
+    const LEAST: Duration = Duration::from_secs(1);
 
     fn sample(&mut self, now: Instant, received: u64) {
-        let Some((at, before)) = self.last else {
-            self.last = Some((now, received));
-            return;
-        };
-        let dt = now.saturating_duration_since(at).as_secs_f64();
-        if dt < 0.2 {
-            return;
+        if self.samples.back().is_some_and(|(_, r)| received < *r) {
+            self.samples.clear();
         }
-        let instant = received.saturating_sub(before) as f64 / dt;
-        let weight = 1.0 - (-dt / Self::WINDOW).exp();
-        self.speed = Some(match self.speed {
-            Some(speed) => speed + (instant - speed) * weight,
-            None => instant,
-        });
-        self.last = Some((now, received));
+        self.samples.push_back((now, received));
+        // Keep one sample at or before the window's start.
+        while self.samples.len() > 2 && self.samples.get(1).is_some_and(|(at, _)| now.saturating_duration_since(*at) >= Self::WINDOW) {
+            self.samples.pop_front();
+        }
     }
 
-    /// The bytes start again from a new place (resume, restart): the next
-    /// sample starts a new interval; the speed so far stays as the guess.
+    fn speed(&self) -> Option<f64> {
+        let (first, last) = (self.samples.front()?, self.samples.back()?);
+        let dt = last.0.saturating_duration_since(first.0);
+        (dt >= Self::LEAST).then(|| last.1.saturating_sub(first.1) as f64 / dt.as_secs_f64())
+    }
+
+    /// The bytes start again from a new place (pause, resume, restart).
     fn restart(&mut self) {
-        self.last = None;
+        self.samples.clear();
     }
 }
 
@@ -129,6 +131,11 @@ impl DownloadItem {
         self.state == DownloadState::Running
     }
 
+    /// All bytes are in (it may still wait for the save dialog).
+    pub fn bytes_in(&self) -> bool {
+        self.complete
+    }
+
     /// Running or paused: not over yet.
     pub fn active(&self) -> bool {
         matches!(self.state, DownloadState::Running | DownloadState::Paused)
@@ -141,7 +148,7 @@ impl DownloadItem {
 
     /// Bytes per second, smoothed, while it runs.
     pub fn speed(&self) -> Option<f64> {
-        self.rate.speed.filter(|_| self.running() && !self.complete)
+        self.rate.speed().filter(|_| self.running() && !self.complete)
     }
 
     /// The time left at the smoothed speed: only while it runs with a
@@ -964,7 +971,7 @@ mod tests {
         }
         let steady = d.get(1).unwrap().eta().unwrap().as_secs_f64();
         assert!((steady - 90.0).abs() < 2.0, "{steady}");
-        // One fast second barely moves it; a raw rate would say 9 s.
+        // One fast second moves it a little; a raw rate would say 9 s.
         d.apply_at(Download { id: 1, change: DownloadChange::Progress { received: 21_000, total: Some(100_000) } }, at(11.0));
         let after = d.get(1).unwrap().eta().unwrap().as_secs_f64();
         assert!(after < steady && after > 20.0, "{steady} -> {after}");
