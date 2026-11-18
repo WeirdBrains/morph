@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- The address bar suggests pages from your history and bookmarks as you type, below the bar, ranked by how well they match, how often you visit them and how recently. The best match completes inline as selected text (Right accepts it), and the last row searches with your search engine. Up and Down choose, Enter opens, Escape closes.
+
+- Menus, the downloads panel and the suggestions no longer sit on a black page area on Linux/X11: the page stays visible behind them.
+
+- Settings rows no longer run past their card: the text wraps and the switches and inputs always stay visible, in Relays too.
+
 ## [0.2.1] - 2026-11-18
 
 - New window: Ctrl+N (⌘N on macOS) and ☰ → New window.
