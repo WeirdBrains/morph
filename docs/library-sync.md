@@ -222,6 +222,12 @@ Messages:
 - `Ack { node_id, last_seq }`.
 - `Roster { certs, revocations }` — on first session and when the set changes.
 
+As built, a running node runs a sync pass 3 s after start and then every
+30 s (`morph_services::sync::SYNC_INTERVAL`). Each pass pulls into a copy
+of the sync state and folds the result back, so the node keeps answering
+the peer (which may be pulling from us at the same moment) while it waits
+on the network.
+
 **Catch-up:** on unlock (keystore or password) and then periodically, the
 device hello's every node in its roster, directly or via the relay, and
 pulls each node from `sync_cursor`. If none are reachable, it waits; there
