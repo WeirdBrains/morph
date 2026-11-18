@@ -869,6 +869,14 @@ impl SettingsView {
                                             .child(state),
                                     ),
                             )
+                            .children(d.key_note().map(|n| div().text_size(px(12.)).text_color(rgb(t.accent)).child(n)))
+                            .children(
+                                self.confirm_revoke
+                                    .as_deref()
+                                    .filter(|p| *p == d.peer_id)
+                                    .and_then(|p| morph_services::sync::revoke_warning(&self.devices, p))
+                                    .map(|w| div().text_size(px(12.)).text_color(rgb(t.error)).child(w)),
+                            )
                             .child(div().text_size(px(11.)).text_color(rgb(t.text_secondary)).child(format!("Peer {}", d.peer_id))),
                     )
                     .child(control)
@@ -880,7 +888,7 @@ impl SettingsView {
                 .px(px(12.))
                 .text_size(px(12.))
                 .text_color(rgb(t.text_secondary))
-                .child("Revoking stops this profile's devices from syncing with that one; the others learn it on their next sync. To lock out a lost device that still knows your recovery words, also make a new identity.")
+                .child("Revoking stops this profile's devices from syncing with that one and changes the sync key, so it cannot read anything synced afterwards, even with your recovery words. The others learn it on their next sync. A device restored from the recovery words needs re-admission: link it again from a device that syncs.")
                 .into_any_element(),
         );
         rows
@@ -1322,11 +1330,7 @@ fn device_summary(devices: &[DeviceView]) -> String {
 }
 
 fn device_state(d: &DeviceView) -> &'static str {
-    match (d.this_device, d.revoked_ms.is_some()) {
-        (_, true) => "Revoked",
-        (true, false) => "This device",
-        (false, false) => "Linked",
-    }
+    d.state_label()
 }
 
 /// `MORPH_LOG_LAYOUT=1`: an invisible element that logs its bounds when they
@@ -1373,6 +1377,9 @@ mod tests {
             issued_ms: 1,
             revoked_ms: revoked,
             this_device: this,
+            needs_admission: false,
+            awaiting_first_sync: false,
+            has_key: true,
         };
         assert_eq!(device_summary(&[d(true, None)]), "1 device");
         assert_eq!(device_summary(&[d(true, None), d(false, Some(5))]), "2 devices, 1 revoked");
@@ -1380,6 +1387,16 @@ mod tests {
             (device_state(&d(true, None)), device_state(&d(false, None)), device_state(&d(false, Some(1)))),
             ("This device", "Linked", "Revoked")
         );
+        let waiting = DeviceView { needs_admission: true, ..d(true, None) };
+        assert_eq!(waiting.key_note(), Some("Needs re-admission from another device"));
+        let linked = DeviceView { awaiting_first_sync: true, ..d(false, None) };
+        assert_eq!(linked.key_note(), Some("Waiting for its first sync"));
+        assert_eq!(d(false, None).key_note(), None);
+        let old = DeviceView { peer_id: "old".into(), label: "Phone".into(), has_key: false, ..d(false, None) };
+        let target = DeviceView { peer_id: "t".into(), ..d(false, None) };
+        let w = morph_services::sync::revoke_warning(&[d(true, None), old.clone(), target], "t").unwrap();
+        assert!(w.starts_with("Phone has not synced since updating Morph"), "{w}");
+        assert_eq!(morph_services::sync::revoke_warning(&[d(true, None), old], "old"), None, "the device being revoked does not count");
         assert_eq!(Section::named("devices"), Some(Section::Devices));
         assert_eq!(visible_items("revoke"), [Item::Devices]);
         assert!(!Section::Devices.app_wide());

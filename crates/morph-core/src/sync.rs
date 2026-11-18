@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use weirdnet_sync::hlc::Hlc;
 use weirdnet_sync::log::{LogEntry, OpLog};
 use weirdnet_sync::merge::{self, CONFLICT_KEEP_MS, EditOrDelete, Lww, OrSet, folder_cycle, lww};
-use weirdnet_sync::{NodeId, Roster, SyncState, SyncType as typ};
+use weirdnet_sync::{EpochKeys, NodeId, Roster, SyncState, SyncType as typ};
 
 /// Default opt-ins after link or first enable.
 pub const BOOKMARKS: &str = typ::BOOKMARKS;
@@ -665,6 +665,8 @@ pub fn conflict_count(lib: &Library) -> morph_store::Result<usize> {
 pub const META_SEED: &str = "seed";
 pub const META_NODE_KEY: &str = "node_key";
 pub const META_ROSTER: &str = "roster";
+/// Rotated epoch keys (secret; `library.db` is encrypted).
+pub const META_EPOCH_KEYS: &str = "epoch_keys";
 /// Per-type pull positions (`weirdnet-sync` 0.2), as JSON `[node, type, seq]` rows.
 pub const META_TYPE_CURSORS: &str = "type_cursors";
 
@@ -692,6 +694,14 @@ pub fn load_roster(lib: &Library) -> morph_store::Result<Roster> {
 
 pub fn save_roster(lib: &mut Library, roster: &Roster) -> morph_store::Result<()> {
     lib.set_sync_meta(META_ROSTER, &serde_json::to_vec(roster).expect("roster json"))
+}
+
+pub fn load_epoch_keys(lib: &Library) -> morph_store::Result<EpochKeys> {
+    Ok(lib.sync_meta(META_EPOCH_KEYS)?.and_then(|b| EpochKeys::import(&b).ok()).unwrap_or_default())
+}
+
+pub fn save_epoch_keys(lib: &mut Library, keys: &EpochKeys) -> morph_store::Result<()> {
+    lib.set_sync_meta(META_EPOCH_KEYS, &keys.export())
 }
 
 pub fn store_seed(lib: &mut Library, seed: &[u8]) -> morph_store::Result<()> {
@@ -749,9 +759,16 @@ pub fn refresh_live(profile_dir: &Path, lib: &Library) {
     if let Ok(t) = types_on(lib) {
         st.types = t;
     }
-    if let Ok(r) = load_roster(lib) {
+    if let Ok(mut r) = load_roster(lib) {
+        // Keep what the live node learned meanwhile (a hello's device key, an admission).
+        let key = st.user_key.clone();
+        r.merge(&st.roster, &key, weirdnet_sync::roster::default_profile());
         st.roster = r;
     }
+    if let Ok(k) = load_epoch_keys(lib) {
+        st.keys.merge(&k);
+    }
+    st.refresh_keys();
 }
 
 #[cfg(test)]
