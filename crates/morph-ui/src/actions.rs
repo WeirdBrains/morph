@@ -40,6 +40,8 @@ pub enum Action {
     ShowAbout,
     /// Show the preferences at the search engine section.
     ShowSearchSettings,
+    /// Open or close the downloads panel (the toolbar's downloads button).
+    ShowDownloads,
 }
 
 impl Action {
@@ -70,6 +72,7 @@ impl Action {
             Action::ShowIdentity => "shell.show_identity".into(),
             Action::ShowAbout => "shell.show_about".into(),
             Action::ShowSearchSettings => "shell.show_search_settings".into(),
+            Action::ShowDownloads => "browser.show_downloads".into(),
         }
     }
 
@@ -99,6 +102,7 @@ impl Action {
             Action::ShowIdentity,
             Action::ShowAbout,
             Action::ShowSearchSettings,
+            Action::ShowDownloads,
         ];
         if let Some(action) = fixed.into_iter().find(|a| a.name() == name) {
             return Some(action);
@@ -149,6 +153,7 @@ impl Default for Keymap {
             ("ctrl-shift-m", Action::ShowProfiles),
             ("ctrl-,", Action::ShowSettings),
             ("ctrl-shift-l", Action::ShowIdentity),
+            ("ctrl-shift-y", Action::ShowDownloads),
         ];
         let mut bindings: Vec<Binding> = fixed.into_iter().map(|(k, a)| Binding { keystroke: k.into(), action: a }).collect();
         bindings.extend((1..=8).map(|n| Binding { keystroke: format!("ctrl-{n}"), action: Action::SelectTab(n - 1) }));
@@ -166,8 +171,10 @@ pub const MAC_CTRL_EXCEPTIONS: [&str; 2] = ["ctrl-tab", "ctrl-shift-tab"];
 
 /// Keys macOS browsers use instead: Cmd+H hides the app, so history is
 /// Cmd+Y; Option+arrows move by word in text fields, so back and forward
-/// are Cmd+[ and Cmd+]; F11 shows the desktop, so full screen is Ctrl+Cmd+F.
-pub const MAC_RENAMES: [(&str, &str); 4] = [("ctrl-h", "cmd-y"), ("alt-left", "cmd-["), ("alt-right", "cmd-]"), ("f11", "ctrl-cmd-f")];
+/// are Cmd+[ and Cmd+]; F11 shows the desktop, so full screen is Ctrl+Cmd+F;
+/// downloads are Cmd+Shift+J there, as in Chrome.
+pub const MAC_RENAMES: [(&str, &str); 5] =
+    [("ctrl-h", "cmd-y"), ("alt-left", "cmd-["), ("alt-right", "cmd-]"), ("f11", "ctrl-cmd-f"), ("ctrl-shift-y", "cmd-shift-j")];
 
 /// Keys only one side has (Windows and Linux, or macOS), added after the
 /// shared ones.
@@ -261,6 +268,8 @@ mod tests {
         assert_eq!(mac.action_for("cmd-alt-right"), Some(Action::NextTab));
         assert_eq!(mac.action_for("cmd-shift-r"), Some(Action::Reload));
         assert_eq!(mac.action_for("f6"), None);
+        assert_eq!(mac.action_for("cmd-shift-j"), Some(Action::ShowDownloads));
+        assert_eq!(mac.action_for("cmd-shift-y"), None);
         let pc = Keymap::default().for_platform(false);
         assert_eq!(pc.action_for("ctrl-h"), Some(Action::ShowHistory));
         assert_eq!(pc.action_for("alt-left"), Some(Action::Back));
@@ -270,6 +279,7 @@ mod tests {
         assert_eq!(pc.action_for("f6"), Some(Action::FocusAddress));
         assert_eq!(pc.action_for("alt-d"), Some(Action::FocusAddress));
         assert_eq!(pc.action_for("shift-f5"), Some(Action::Reload));
+        assert_eq!(pc.action_for("ctrl-shift-y"), Some(Action::ShowDownloads));
         // Menus keep showing the first key.
         assert_eq!(pc.keystroke_for(Action::Reload), Some("ctrl-r"));
         assert_eq!(pc.keystroke_for(Action::NextTab), Some("ctrl-tab"));

@@ -57,7 +57,8 @@ actions!(
         ShowSettings,
         ShowIdentity,
         ShowAbout,
-        ShowSearchSettings
+        ShowSearchSettings,
+        ShowDownloads
     ]
 );
 
@@ -95,6 +96,7 @@ pub(crate) fn gpui_action(action: Action) -> Box<dyn gpui::Action> {
         Action::ShowIdentity => Box::new(ShowIdentity),
         Action::ShowAbout => Box::new(ShowAbout),
         Action::ShowSearchSettings => Box::new(ShowSearchSettings),
+        Action::ShowDownloads => Box::new(ShowDownloads),
     }
 }
 
@@ -1025,6 +1027,7 @@ impl Render for Shell {
             ShowIdentity => Action::ShowIdentity,
             ShowAbout => Action::ShowAbout,
             ShowSearchSettings => Action::ShowSearchSettings,
+            ShowDownloads => Action::ShowDownloads,
         ]);
         let root = root.on_any_mouse_down(cx.listener(|this, _, _, cx| this.focus_shell(cx)));
         if let Some(error) = &self.error {

@@ -5425,6 +5425,7 @@ dependencies = [
  "morph-ui",
  "morph-webview",
  "tempfile",
+ "ureq",
 ]
 
 [[package]]

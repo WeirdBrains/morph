@@ -699,9 +699,53 @@ impl Browser {
         self.log_download(&outcome);
     }
 
-    /// Forget the downloads that ended (the bar's close button).
+    /// Forget the downloads that ended (the bar's close button, the
+    /// panel's Clear).
     pub fn clear_downloads(&mut self) {
         self.downloads.clear_done();
+    }
+
+    /// Pause download `id`, keeping its bytes so far.
+    pub fn pause_download(&mut self, id: u64) {
+        if self.downloads.pause(id) {
+            self.backend.cancel_download(id);
+        }
+    }
+
+    /// Resume paused download `id` (from where it stopped when the server
+    /// can, else from the start).
+    pub fn resume_download(&mut self, id: u64) {
+        let outcome = self.downloads.resume(id);
+        self.log_download(&outcome);
+    }
+
+    /// Cancel download `id` and delete its bytes.
+    pub fn cancel_download(&mut self, id: u64) {
+        if self.downloads.cancel(id) {
+            self.backend.cancel_download(id);
+        }
+    }
+
+    /// Start failed or cancelled download `id` again.
+    pub fn retry_download(&mut self, id: u64) {
+        self.downloads.retry(id);
+    }
+
+    /// A click on download `id`: the saved file to open now, or (while it
+    /// runs) open it when done; a second click takes that back.
+    pub fn activate_download(&mut self, id: u64) -> Option<PathBuf> {
+        self.downloads.activate(id)
+    }
+
+    /// A download clicked while it ran is saved: open this file now.
+    pub fn take_download_open(&mut self) -> Option<PathBuf> {
+        self.downloads.take_open()
+    }
+
+    /// How many downloads run and their combined progress, for the
+    /// toolbar's downloads button.
+    pub fn downloads_progress(&self) -> Option<(usize, Option<f32>)> {
+        self.downloads.progress()
     }
 
     fn log_download(&self, outcome: &downloads::Outcome) {
@@ -1145,7 +1189,9 @@ impl Browser {
             | Action::ShowBookmarks
             | Action::ShowHistory
             | Action::ShowProfiles
-            | Action::ShowIdentity => {
+            | Action::ShowIdentity
+            // The shell's downloads panel.
+            | Action::ShowDownloads => {
                 return false;
             }
         }
@@ -1417,6 +1463,10 @@ impl Browser {
     /// Drain the backend's events into tab state.
     pub fn poll(&mut self) -> Polled {
         let mut polled = Polled::default();
+        for outcome in self.downloads.poll_fetches() {
+            self.log_download(&outcome);
+            polled.changed = true;
+        }
         for (view, event) in self.backend.poll() {
             if let Event::Shortcut(key) = event {
                 polled.shortcuts.push(key);
