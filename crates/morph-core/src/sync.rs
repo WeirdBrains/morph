@@ -12,9 +12,13 @@ use weirdnet_sync::log::{LogEntry, OpLog};
 use weirdnet_sync::merge::{self, CONFLICT_KEEP_MS, EditOrDelete, Lww, OrSet, folder_cycle, lww};
 use weirdnet_sync::{NodeId, Roster, SyncState, SyncType as typ};
 
-/// Default opt-in for this milestone (history and settings come later).
+/// Default opt-ins after link or first enable (settings come later).
 pub const BOOKMARKS: &str = typ::BOOKMARKS;
-pub const DEFAULT_TYPES: &[&str] = &[BOOKMARKS];
+pub const HISTORY: &str = typ::HISTORY;
+pub const DEFAULT_TYPES: &[&str] = &[BOOKMARKS, HISTORY];
+
+/// Record types this build can merge. A pull asks for each one that is on.
+pub const SUPPORTED_TYPES: &[&str] = &[BOOKMARKS, HISTORY];
 
 /// One bookmarks-log mutation. `record_id` lives on the log entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -87,14 +91,49 @@ pub fn bookmarks_on(lib: &Library) -> bool {
 /// opt-ins, and backfill existing rows into the log so they go out on the
 /// first pull.
 pub fn enable(lib: &mut Library, our_node: &str, now_ms: i64) -> morph_store::Result<()> {
+    upgrade_defaults(lib)?;
     if node_id(lib)?.as_deref() == Some(our_node) && bookmarks_on(lib) {
-        return Ok(());
+        return crate::history_sync::backfill(lib, now_ms);
     }
     set_node_id(lib, our_node)?;
     if types_on(lib)?.is_empty() {
         set_types(lib, &DEFAULT_TYPES.iter().map(|s| s.to_string()).collect::<Vec<_>>())?;
+        lib.set_sync_meta(META_DEFAULTS, DEFAULTS_VERSION)?;
     }
-    backfill_local_log(lib, our_node, now_ms)
+    backfill_local_log(lib, our_node, now_ms)?;
+    crate::history_sync::backfill(lib, now_ms)
+}
+
+const META_DEFAULTS: &str = "defaults";
+const DEFAULTS_VERSION: &[u8] = b"2";
+
+/// Libraries that synced before history existed have opt-ins `["bookmarks"]`
+/// (the old default). Turn history on for them once, like a fresh link.
+fn upgrade_defaults(lib: &mut Library) -> morph_store::Result<()> {
+    if lib.sync_meta(META_DEFAULTS)?.as_deref() == Some(DEFAULTS_VERSION) {
+        return Ok(());
+    }
+    let types = types_on(lib)?;
+    if types == [BOOKMARKS] {
+        set_types(lib, &DEFAULT_TYPES.iter().map(|s| s.to_string()).collect::<Vec<_>>())?;
+    }
+    if !types.is_empty() {
+        lib.set_sync_meta(META_DEFAULTS, DEFAULTS_VERSION)?;
+    }
+    Ok(())
+}
+
+/// Whether any record type this build can merge is on.
+pub fn any_on(lib: &Library) -> bool {
+    types_on(lib).ok().is_some_and(|t| t.iter().any(|x| SUPPORTED_TYPES.contains(&x.as_str())))
+}
+
+/// Rematerialize every supported type from the log.
+pub fn materialize_all(lib: &mut Library, now_ms: i64) -> morph_store::Result<()> {
+    if bookmarks_on(lib) {
+        materialize(lib, now_ms)?;
+    }
+    crate::history_sync::materialize(lib, now_ms)
 }
 
 fn backfill_local_log(lib: &mut Library, our_node: &str, now_ms: i64) -> morph_store::Result<()> {
@@ -603,6 +642,23 @@ fn latest_row(
 /// Apply newly integrated log entries and rematerialize bookmarks.
 pub fn apply_log(lib: &mut Library, now_ms: i64) -> morph_store::Result<()> {
     materialize(lib, now_ms)
+}
+
+/// Advance our clock past every op we now hold, so a local write made after
+/// seeing a remote op (a visit after a remote clear) orders after it.
+/// `weirdnet-sync` 0.1's `pull_from` does not do this itself.
+pub fn observe_remote(state: &mut SyncState, wall_ms: u64) {
+    let newest = state
+        .log
+        .cursors()
+        .keys()
+        .filter_map(|n| state.log.iter_node(n).map(|e| &e.hlc).max_by(|a, b| a.cmp_total(b)).cloned())
+        .max_by(|a, b| a.cmp_total(b));
+    if let Some(h) = newest
+        && state.clock.as_ref().is_none_or(|c| h.cmp_total(c).is_gt())
+    {
+        state.clock = Some(Hlc::receive(state.clock.as_ref(), &h, wall_ms, state.our_node.clone()));
+    }
 }
 
 pub fn conflict_count(lib: &Library) -> morph_store::Result<usize> {
