@@ -45,6 +45,21 @@ pub struct Config {
     /// shells pass weirdnet-net's, `morph_services::app_calls`); `None` is
     /// [`app_call::NotYet`] (no network: every call says so).
     pub app_caller: Option<Arc<dyn AppCaller>>,
+    /// The first tab's back/forward history ([`DetachedTab::session`]): a
+    /// tab moved here from another window. `start_url` is loaded instead
+    /// when the engine can't restore it.
+    pub start_session: Option<Vec<u8>>,
+}
+
+/// A tab taken out of a window ([`Browser::detach_tab`]) to open in
+/// another: its address and title, its engine history when the engine
+/// can hand it over, and the search engine it picked.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DetachedTab {
+    pub url: String,
+    pub title: String,
+    pub session: Option<Vec<u8>>,
+    pub engine: Option<String>,
 }
 
 /// The most of a `data:` address the engine takes. WebView2 refuses
@@ -396,6 +411,12 @@ pub struct Browser {
     app_loads: HashMap<TabId, AppLoad>,
     /// The app address each app page (`data:` address, by its token) shows.
     app_pages: HashMap<String, String>,
+    /// Links to open in windows of their own (Shift+click, the link
+    /// menu), until the shell takes them.
+    new_windows: Vec<String>,
+    /// A right click on a link in a page the shell draws: the link and
+    /// where (page coordinates), until the shell takes it for its menu.
+    link_menu: Option<(String, f64, f64)>,
 }
 
 /// Whether `url` is an address Morph opens itself (`morph:`,
@@ -429,11 +450,14 @@ impl Browser {
             app_caller: config.app_caller.clone().unwrap_or_else(|| Arc::new(app_call::NotYet)),
             app_loads: HashMap::new(),
             app_pages: HashMap::new(),
+            new_windows: Vec::new(),
+            link_menu: None,
         };
         let first = browser.tabs.active_id();
         let url = config.start_url.trim().to_string();
         // Morph's own pages are drawn by the shell, never loaded or searched.
-        browser.attach(first, &url)?;
+        let session = config.start_session.filter(|_| !url.is_empty() && !is_own_address(&url));
+        browser.attach_with(first, &url, session)?;
         browser.after_switch();
         browser.open_own(&url);
         Ok(browser)
@@ -445,6 +469,11 @@ impl Browser {
     }
 
     fn attach(&mut self, id: TabId, url: &str) -> morph_webview::Result<()> {
+        self.attach_with(id, url, None)
+    }
+
+    /// [`Self::attach`], starting from `session` (engine history) when given.
+    fn attach_with(&mut self, id: TabId, url: &str, session: Option<Vec<u8>>) -> morph_webview::Result<()> {
         let target =
             if url.is_empty() || is_own_address(url) { String::new() } else { omnibox::target_for(url, self.default_engine).unwrap_or_default() };
         let active = self.tabs.active_id() == id;
@@ -453,6 +482,7 @@ impl Browser {
             data_dir: self.data_dir.clone(),
             bounds: self.page_area,
             visible: active && self.shown,
+            session: session.filter(|_| !target.is_empty()),
         })?;
         self.by_view.insert(view.id(), id);
         let blank = target.is_empty();
@@ -1143,6 +1173,54 @@ impl Browser {
         }
     }
 
+    /// Take tab `id` out of this window to open in another, with its
+    /// history when the engine can hand it over. `None` (and nothing
+    /// changes) when it is the only tab: its window is what would move.
+    pub fn detach_tab(&mut self, id: TabId) -> Option<DetachedTab> {
+        if self.tabs.len() < 2 {
+            return None;
+        }
+        let tab = self.tabs.tab(id)?.clone();
+        let page = self.pages.get(&id)?;
+        // Morph's own pages, app pages and error pages reopen by address.
+        let session = (page.cover.is_none() && !tab.url.is_empty() && !is_own_address(&tab.url)).then(|| page.view.session_state()).flatten();
+        let engine = self.tab_engines.get(&id).map(|e| e.id.to_string());
+        self.close_tab(id);
+        Some(DetachedTab { url: tab.url, title: tab.title, session, engine })
+    }
+
+    /// Open `more` (a saved window's other tabs) after the first, in order,
+    /// then select the tab at `active`.
+    pub fn restore_tabs(&mut self, more: &[String], active: usize) {
+        for url in more {
+            self.new_tab(url);
+        }
+        self.select_index(active);
+    }
+
+    /// Links the user asked to open in new windows since the last call.
+    pub fn take_new_windows(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.new_windows)
+    }
+
+    /// A link a page asked the shell's link menu for (pages the shell
+    /// draws): the link and where, in page coordinates.
+    pub fn take_link_menu(&mut self) -> Option<(String, f64, f64)> {
+        self.link_menu.take()
+    }
+
+    /// The link menu's choice: open `url` in a new tab here.
+    pub fn open_link_in_tab(&mut self, url: &str) {
+        self.new_tab(url);
+    }
+
+    /// Every tab's address, left to right, and the active one's index, for
+    /// the saved session.
+    pub fn tab_urls(&self) -> (Vec<String>, usize) {
+        let urls = self.tabs.tabs().iter().map(|t| t.url.clone()).collect();
+        (urls, self.tabs.index_of(self.tabs.active_id()).unwrap_or(0))
+    }
+
     /// Close every tab but `id`.
     pub fn close_other_tabs(&mut self, id: TabId) {
         let others: Vec<TabId> = self.tabs.tabs().iter().map(|t| t.id).filter(|&t| t != id).collect();
@@ -1686,6 +1764,15 @@ impl Browser {
                     && old != tab
                 {
                     page.view.choose_files(None);
+                }
+            }
+            Event::OpenLink { url, target } => match target {
+                morph_webview::LinkTarget::NewTab => self.open_link_in_tab(&url),
+                morph_webview::LinkTarget::NewWindow => self.new_windows.push(url),
+            },
+            Event::LinkMenu { url, x, y } => {
+                if active {
+                    self.link_menu = Some((url, x, y));
                 }
             }
             Event::Shortcut(_) | Event::Download(_) | Event::Cookies { .. } => {}

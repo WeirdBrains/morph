@@ -92,6 +92,35 @@ pub struct Spec {
     /// Where it sits in the host window.
     pub bounds: Rect,
     pub visible: bool,
+    /// The back/forward history to start with ([`WebView::session_state`]
+    /// of a page being moved to another window); it goes to its current
+    /// entry instead of `url`. Backends that can't restore one load `url`.
+    pub session: Option<Vec<u8>>,
+}
+
+/// Where a link the user asked to open elsewhere goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkTarget {
+    /// Ctrl or Cmd+click, a middle click, or a `target=_blank` link.
+    NewTab,
+    /// Shift+click.
+    NewWindow,
+}
+
+impl LinkTarget {
+    /// The target for a link clicked with GDK modifier state `modifiers`
+    /// (Shift 1, Control 4) and mouse `button` (1 left, 2 middle): Shift
+    /// alone opens a window, anything else (Ctrl, Cmd, a middle click,
+    /// `target=_blank`) a tab.
+    pub fn for_click(modifiers: u32, button: u32) -> LinkTarget {
+        const SHIFT: u32 = 1;
+        const CONTROL: u32 = 4;
+        const SUPER: u32 = 1 << 26;
+        const META: u32 = 1 << 28;
+        let shift = modifiers & SHIFT != 0;
+        let tab_key = modifiers & (CONTROL | SUPER | META) != 0;
+        if shift && !tab_key && button != 2 { LinkTarget::NewWindow } else { LinkTarget::NewTab }
+    }
 }
 
 /// Something a web view reports. Delivered by [`Backend::poll`].
@@ -105,6 +134,21 @@ pub enum Event {
     History {
         can_back: bool,
         can_forward: bool,
+    },
+    /// The user asked to open link `url` in a new tab or window (a click
+    /// with Ctrl, Shift or the middle button, a `target=_blank` link, or
+    /// the page's link menu). The page stays as it is; the shell opens it.
+    /// Script popups (`window.open`) stay [`Event::PopupOpened`].
+    OpenLink {
+        url: String,
+        target: LinkTarget,
+    },
+    /// A right click on link `url` in a page the shell draws, at `x`, `y`
+    /// (page coordinates): the shell shows its own link menu.
+    LinkMenu {
+        url: String,
+        x: f64,
+        y: f64,
     },
     /// The page opened a popup window (`window.open`); the backend owns it.
     PopupOpened {
@@ -457,6 +501,12 @@ pub trait WebView {
     /// Answer the page's [`Event::FileChooser`]: the chosen files, or
     /// `None` when the user cancelled.
     fn choose_files(&self, _paths: Option<Vec<std::path::PathBuf>>) {}
+    /// The page's back/forward history, serialized, for
+    /// [`Spec::session`] (moving the page to another window). `None` when
+    /// the backend can't say.
+    fn session_state(&self) -> Option<Vec<u8>> {
+        None
+    }
     /// Forget the profile's cookies, cache and site storage (every view of
     /// the same data directory shares them).
     fn clear_data(&self) -> Result<()> {
@@ -699,5 +749,21 @@ mod bridge_tests {
     fn backends_without_a_bridge_ignore_it() {
         let mut backend = fake::FakeBackend::default();
         backend.set_page_bridge(PageBridge { script: "".into(), handler: Rc::new(|_| None) });
+    }
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::LinkTarget;
+
+    #[test]
+    fn shift_opens_a_window_and_every_other_click_a_tab() {
+        assert_eq!(LinkTarget::for_click(1, 1), LinkTarget::NewWindow, "Shift+click");
+        assert_eq!(LinkTarget::for_click(4, 1), LinkTarget::NewTab, "Ctrl+click");
+        assert_eq!(LinkTarget::for_click(1 << 28, 1), LinkTarget::NewTab, "Cmd+click");
+        assert_eq!(LinkTarget::for_click(0, 2), LinkTarget::NewTab, "middle click");
+        assert_eq!(LinkTarget::for_click(1, 2), LinkTarget::NewTab, "Shift+middle click");
+        assert_eq!(LinkTarget::for_click(5, 1), LinkTarget::NewTab, "Ctrl+Shift+click");
+        assert_eq!(LinkTarget::for_click(0, 1), LinkTarget::NewTab, "a target=_blank link");
     }
 }

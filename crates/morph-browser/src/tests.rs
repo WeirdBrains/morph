@@ -1059,3 +1059,74 @@ fn settings_parts_have_their_own_morph_pages() {
     }
     assert_eq!(b.active_url(), "https://example.com");
 }
+
+#[test]
+fn link_clicks_open_tabs_and_shift_clicks_ask_for_a_window() {
+    let (mut b, fake) = browser("https://a.test/");
+    let view = fake.created()[0];
+    fake.emit(view, Event::OpenLink { url: "https://b.test/".into(), target: morph_webview::LinkTarget::NewTab });
+    b.poll();
+    assert_eq!(b.tabs().len(), 2);
+    assert_eq!(b.active_url(), "https://b.test/");
+    assert!(b.take_new_windows().is_empty());
+    fake.emit(view, Event::OpenLink { url: "https://c.test/".into(), target: morph_webview::LinkTarget::NewWindow });
+    b.poll();
+    assert_eq!(b.tabs().len(), 2, "a window, not a tab");
+    assert_eq!(b.take_new_windows(), vec!["https://c.test/".to_string()]);
+    assert!(b.take_new_windows().is_empty(), "taken once");
+}
+
+#[test]
+fn the_shell_gets_the_link_menu_of_the_active_page_only() {
+    let (mut b, fake) = browser("https://a.test/");
+    let first = fake.created()[0];
+    b.new_tab("https://b.test/");
+    fake.emit(first, Event::LinkMenu { url: "https://x.test/".into(), x: 1.0, y: 2.0 });
+    b.poll();
+    assert_eq!(b.take_link_menu(), None, "a background tab's menu is dropped");
+    let second = fake.created()[1];
+    fake.emit(second, Event::LinkMenu { url: "https://y.test/".into(), x: 3.0, y: 4.0 });
+    b.poll();
+    assert_eq!(b.take_link_menu(), Some(("https://y.test/".into(), 3.0, 4.0)));
+}
+
+#[test]
+fn a_detached_tab_leaves_with_its_history_and_starts_another_window_from_it() {
+    let (mut b, fake) = browser("https://a.test/");
+    assert_eq!(b.detach_tab(b.tabs()[0].id), None, "the only tab stays (its window would move)");
+    b.new_tab("https://b.test/");
+    b.set_tab_engine("duckduckgo");
+    let moved = b.tabs()[1].id;
+    let tab = b.detach_tab(moved).unwrap();
+    assert_eq!(tab.url, "https://b.test/");
+    assert_eq!(tab.session.as_deref(), Some(&b"fake-session:https://b.test/"[..]));
+    assert_eq!(tab.engine.as_deref(), Some("duckduckgo"));
+    assert_eq!(b.tabs().len(), 1);
+    assert!(!b.take_quit(), "moving a tab out never quits");
+    assert!(fake.calls_for(fake.created()[1]).contains(&Call::Dropped), "its page here is gone");
+    // The other window starts from that history.
+    let other = FakeBackend::new();
+    let b2 = Browser::new(Box::new(other.clone()), Config { start_url: tab.url.clone(), start_session: tab.session.clone(), ..Config::default() })
+        .unwrap();
+    assert_eq!(b2.active_url(), "https://b.test/");
+    match &other.calls_for(other.created()[0])[0] {
+        Call::Create(spec) => assert_eq!(spec.session, tab.session),
+        c => panic!("{c:?}"),
+    }
+}
+
+#[test]
+fn own_pages_move_by_address_and_a_saved_window_reopens_in_order() {
+    let (mut b, _) = browser("https://a.test/");
+    b.new_tab("morph://about");
+    let about = b.tabs()[1].id;
+    let tab = b.detach_tab(about).unwrap();
+    assert_eq!(tab.url, "morph://about");
+    assert_eq!(tab.session, None);
+    let (mut r, fake) = browser("https://a.test/");
+    r.restore_tabs(&["https://b.test/".into(), "https://c.test/".into()], 1);
+    let (urls, active) = r.tab_urls();
+    assert_eq!(urls, vec!["https://a.test/", "https://b.test/", "https://c.test/"]);
+    assert_eq!(active, 1);
+    assert_eq!(fake.created().len(), 3);
+}
