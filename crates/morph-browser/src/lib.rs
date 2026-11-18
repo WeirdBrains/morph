@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 
+mod download_auth;
 pub mod downloads;
 
 use morph_core::app_call::{self, AppCallError, AppCaller, AppPage};
@@ -417,6 +418,8 @@ pub struct Browser {
     /// A right click on a link in a page the shell draws: the link and
     /// where (page coordinates), until the shell takes it for its menu.
     link_menu: Option<(String, f64, f64)>,
+    /// Refused resumes' token searches and re-triggers.
+    auth: download_auth::AuthWork,
 }
 
 /// Whether `url` is an address Morph opens itself (`morph:`,
@@ -452,6 +455,7 @@ impl Browser {
             app_pages: HashMap::new(),
             new_windows: Vec::new(),
             link_menu: None,
+            auth: download_auth::AuthWork::default(),
         };
         let first = browser.tabs.active_id();
         let url = config.start_url.trim().to_string();
@@ -724,7 +728,7 @@ impl Browser {
     pub fn save_download(&mut self, id: u64, path: Option<PathBuf>) {
         let (stop, outcome) = self.downloads.answer(id, path);
         if stop {
-            self.backend.cancel_download(id);
+            self.backend.cancel_download(self.downloads.engine_id(id));
         }
         self.log_download(&outcome);
     }
@@ -738,7 +742,7 @@ impl Browser {
     /// Pause download `id`, keeping its bytes so far.
     pub fn pause_download(&mut self, id: u64) {
         if self.downloads.pause(id) {
-            self.backend.cancel_download(id);
+            self.backend.cancel_download(self.downloads.engine_id(id));
         }
     }
 
@@ -763,7 +767,7 @@ impl Browser {
             return;
         }
         let url = self.downloads.fetch_url(id).unwrap_or_default();
-        if !self.backend.request_cookies(id, &url) {
+        if !self.backend.request_cookies(self.downloads.engine_id(id), &url) {
             self.downloads.cookies_answered(id, None);
         }
     }
@@ -771,7 +775,7 @@ impl Browser {
     /// Cancel download `id` and delete its bytes.
     pub fn cancel_download(&mut self, id: u64) {
         if self.downloads.cancel(id) {
-            self.backend.cancel_download(id);
+            self.backend.cancel_download(self.downloads.engine_id(id));
         }
     }
 
@@ -1592,9 +1596,15 @@ impl Browser {
                 let outcome = self.downloads.apply(download);
                 if let Some((id, url)) = started {
                     self.backend.request_cookies(id, &url);
+                    if let Some(&tab) = self.by_view.get(&view) {
+                        self.auth.tabs.insert(id, tab);
+                    }
                 }
                 self.log_download(&outcome);
                 polled.changed = true;
+                continue;
+            }
+            if self.hidden_view_event(view, &event) {
                 continue;
             }
             let Some(&tab) = self.by_view.get(&view) else {
@@ -1611,6 +1621,9 @@ impl Browser {
             self.apply(tab, event);
         }
         if self.poll_app_calls() {
+            polled.changed = true;
+        }
+        if self.poll_download_auth() {
             polled.changed = true;
         }
         polled

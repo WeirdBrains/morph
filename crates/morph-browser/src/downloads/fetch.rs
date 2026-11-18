@@ -48,6 +48,11 @@ pub(crate) enum Change {
         received: u64,
         total: Option<u64>,
     },
+    /// 401 or 403: the session didn't do; `why` says so if nothing else works.
+    Refused {
+        status: u16,
+        why: String,
+    },
     Finished,
     Failed(String),
 }
@@ -130,7 +135,9 @@ fn transfer(job: &Job, send: &dyn Fn(Change)) -> Result<bool, String> {
             } else {
                 "no sign-in was saved with it"
             };
-            return Err(format!("the server refused to resume (HTTP {status}): {session}; sign in again and retry"));
+            // The shell may find a sign-in and try again before this counts as a failure.
+            send(Change::Refused { status, why: format!("the server refused to resume (HTTP {status}): {session}; sign in again and retry") });
+            return Ok(false);
         }
         _ => return Err(format!("the server answered HTTP {status}")),
     };
