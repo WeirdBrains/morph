@@ -2,7 +2,9 @@
 
 Status: 2026-11-18 — milestones 1–5 (bookmarks, folders, tags, history and
 settings) are wired on published `weirdnet-sync` 0.1.0 and `weirdnet-net`
-0.6.0. The Devices UI and revocation are still ahead. Product rules are in
+0.6.0. Milestone 6 is in progress: the desktop lists linked devices
+(Settings > Linked devices) and revokes one; the key-epoch rekey is not
+cryptographic yet (see "Revocation today"). Product rules are in
 `docs/identity-recovery.md` section 5. This file is the Morph implementation
 plan for that section: bookmarks, folders, tags and history first, then
 settings, between a user's own linked devices, end-to-end encrypted, over
@@ -53,8 +55,9 @@ already reads and writes.
   `library.db`, history row ids and tombstones, a self-issued `NodeCert` on the
   first device, a roster snapshot at link time, and a bookmark sync loop
   (`morph-services::sync`) for bookmarks, history and settings with a
-  two-home local-relay test. A Devices UI / revocation is still a later
-  milestone.
+  two-home local-relay test, plus `devices` / `revoke_device` and a desktop
+  Linked devices section. The two-home test revokes B on A and checks both
+  directions are cut off.
 
 ## Data model
 
@@ -196,6 +199,25 @@ Revoking a device (Settings > Devices, once built) signs a revocation with
 the user key, gossips it in the log, and bumps the key epoch so the revoked
 node cannot decrypt later pages even if it still has an old `SyncKey`.
 
+### Revocation today
+
+`revoke_device` calls `Roster::revoke` (weirdnet-sync),
+which records the revocation and bumps the roster epoch; the roster rides
+every hello, so other devices merge it on their next sync and refuse the
+revoked node's sessions (`revoked`). Merges never undo a revocation.
+
+Limits, until Weirdnet grows a real rekey:
+
+- The epoch is mixed into `SyncKey`, but every device derives `SyncKey` from
+  the same user seed, so a revoked device that still holds the seed (or the
+  recovery words) can derive later epochs too. What keeps it out is the
+  session check, not the key. Locking out a device that knows the words
+  means a new identity.
+- On `weirdnet-sync` 0.1.0 a third device that has not seen the revocation
+  is refused by the revoker as `epoch-behind` instead of catching up. The
+  catch-up (roster sent back on `epoch-behind`, merged and retried) is on
+  weirdnet-sync main and needs a release before Morph can pin it.
+
 ## Transport and protocol
 
 Reuse the link node's listen addresses and relay list
@@ -277,7 +299,7 @@ if the first device has no cert and no roster, the user re-opens Add device
 |---|---|
 | Official relay / ingress peer | Peer ids, that a circuit was reserved, encrypted blob sizes and timing. Not URLs, titles, tags, settings, user ids, or certs in the clear (those sit in the sealed channel). |
 | Another Weirdnet user | Nothing. Sessions whose cert is not the same `user_id`, or is revoked, are refused before any page is sent. |
-| A revoked device that kept an old `SyncKey` | Pages sealed under earlier epochs only. |
+| A revoked device that kept an old `SyncKey` | Nothing new: its sessions are refused. It could derive later keys from the seed it holds, so this rests on the session check until Weirdnet has a real rekey. |
 | Logs and `morph-event` lines | Actions, record ids, node ids, seq numbers. Never seeds, words, passwords, `LibraryKey`, `SyncKey`, or page URLs and titles. |
 
 At rest each library remains a SQLCipher file mode 0600, opened only while
@@ -359,10 +381,10 @@ Morph pins that published version; it does not take a git or path dependency.
    after link, conflicts surfaced in the library panel.
 4. **History**, including delete-by-URL and clear-all.
 5. **Settings** (`search_engine`, `home_page`, `theme` only).
-6. **Devices UI and revocation** (Settings > Devices, key epoch). Until
-   this ships, losing a device means the profile password and a later
-   epoch bump still need a manual story — do not advertise revocation as
-   done.
+6. **Devices UI and revocation** (Settings > Linked devices, key epoch).
+   Listing and revoking are in the desktop; mobile, the 3+-device catch-up
+   release and a cryptographic rekey are still ahead — do not advertise
+   revocation as locking out a device that knows the recovery words.
 7. Later, out of scope here: open tabs on other devices, an optional
    always-on sealed page store, saved passwords (separate opt-in and key).
 
