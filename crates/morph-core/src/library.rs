@@ -61,16 +61,24 @@ fn record_visit_capped(home: &Path, id: &str, url: &str, title: &str, now_ms: i6
     }
     profiles::require(home, id)?;
     let title = title.trim();
-    let in_db = library_db::with(home, id, |lib| match lib.newest_visit()? {
-        Some(mut last) if same_page(&last.url, url) => {
-            if !title.is_empty() {
-                last.title = title.to_string();
+    let in_db = library_db::with(home, id, |lib| {
+        match lib.newest_visit()? {
+            Some(mut last) if same_page(&last.url, url) => {
+                if !title.is_empty() {
+                    last.title = title.to_string();
+                }
+                last.visited_ms = now_ms;
+                crate::history_sync::local_visit(lib, &mut last, now_ms)?;
+                lib.replace_newest_visit(&last)?;
             }
-            last.visited_ms = now_ms;
-            lib.replace_newest_visit(&last)
+            _ => {
+                let mut entry = HistoryEntry { url: url.trim().to_string(), title: title.to_string(), visited_ms: now_ms, ..Default::default() };
+                crate::history_sync::local_visit(lib, &mut entry, now_ms)?;
+                lib.append_visits(&[entry], cap)?;
+            }
         }
-        _ => lib
-            .append_visits(&[HistoryEntry { url: url.trim().to_string(), title: title.to_string(), visited_ms: now_ms, ..Default::default() }], cap),
+        crate::sync::refresh_live(&profiles::profile_dir(home, id), lib);
+        Ok(())
     })?;
     if in_db.is_some() {
         return Ok(());
@@ -117,7 +125,13 @@ pub fn history(home: impl AsRef<Path>, id: &str, query: &str, limit: usize) -> R
 pub fn delete_history_url(home: impl AsRef<Path>, id: &str, url: &str) -> Result<(), ProfileError> {
     let home = home.as_ref();
     profiles::require(home, id)?;
-    if library_db::with(home, id, |lib| lib.delete_visits(|e| same_page(&e.url, url)))?.is_some() {
+    let in_db = library_db::with(home, id, |lib| {
+        lib.delete_visits(|e| same_page(&e.url, url))?;
+        crate::history_sync::local_delete_url(lib, url, now_ms())?;
+        crate::sync::refresh_live(&profiles::profile_dir(home, id), lib);
+        Ok(())
+    })?;
+    if in_db.is_some() {
         return Ok(());
     }
     let path = history_path(home, id);
@@ -134,7 +148,13 @@ pub fn delete_history_url(home: impl AsRef<Path>, id: &str, url: &str) -> Result
 pub fn clear_history(home: impl AsRef<Path>, id: &str) -> Result<(), ProfileError> {
     let home = home.as_ref();
     profiles::require(home, id)?;
-    if library_db::with(home, id, |lib| lib.clear_history())?.is_some() {
+    let in_db = library_db::with(home, id, |lib| {
+        lib.clear_history()?;
+        crate::history_sync::local_clear(lib, now_ms())?;
+        crate::sync::refresh_live(&profiles::profile_dir(home, id), lib);
+        Ok(())
+    })?;
+    if in_db.is_some() {
         return Ok(());
     }
     let path = history_path(home, id);
@@ -142,6 +162,10 @@ pub fn clear_history(home: impl AsRef<Path>, id: &str) -> Result<(), ProfileErro
         fs::remove_file(path)?;
     }
     Ok(())
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
 /// The JSON history, oldest first (for the move into the encrypted database).
