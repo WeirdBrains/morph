@@ -1506,6 +1506,8 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
     await _showPanel(
       (panel) => MorphSettingsPage(
         relays: widget.api,
+        network: widget.api,
+        home: _home,
         profileName: _profileName,
         coreVersion: coreVersionLabel ?? '…',
         renderPath: '${webView.renderPath}',

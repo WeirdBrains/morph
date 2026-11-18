@@ -1,6 +1,6 @@
 /// The Rust surface the shell needs. Widget tests use a fake so they can run
 /// on the Dart VM without loading generated FFI bindings or `libmorph_bridge.so`.
-abstract class MorphApi implements MorphRelaySource {
+abstract class MorphApi implements MorphRelaySource, MorphNetworkSource {
   String coreVersion();
 
   /// What typing [input] into the address bar opens (`morph-core`'s rule,
@@ -329,6 +329,64 @@ abstract class MorphRelaySource {
   /// real state while no link runs.
   Future<void> relayCheckStart();
   Future<void> relayCheckStop();
+}
+
+/// Settings → Relays: Weirdnet discovery and manually added peers for every
+/// profile (`network.json` in the Morph home, the same file the desktop
+/// uses). Rust validates, stores and restarts the running nodes; turning
+/// discovery off keeps sharing, relays and sync with added peers.
+abstract class MorphNetworkSource {
+  Future<MorphNetworkSettings> loadNetwork({String? home});
+
+  /// Turn discovery on or off. A locked setting comes back unchanged.
+  Future<MorphNetworkSettings> setDiscovery(bool enabled, {String? home});
+
+  /// Add a peer by multiaddr (ending in `/p2p/<id>`) or `<id> <addr>`.
+  /// Throws [MorphNetworkError] saying what is wrong with [spec].
+  Future<MorphNetworkSettings> addNetworkPeer(String spec, {String? home});
+  Future<MorphNetworkSettings> removeNetworkPeer(String peerId, {String? home});
+}
+
+/// Why a network settings change failed, for the screen.
+class MorphNetworkError implements Exception {
+  const MorphNetworkError(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
+/// One manually added peer: an address hint, not trust.
+class MorphNetworkPeer {
+  const MorphNetworkPeer({required this.peerId, required this.addrs});
+
+  final String peerId;
+  final List<String> addrs;
+}
+
+class MorphNetworkSettings {
+  const MorphNetworkSettings({
+    required this.discoveryEnabled,
+    required this.discoveryLocked,
+    required this.discoveryHelp,
+    required this.peers,
+    this.lockSource,
+  });
+
+  /// Whether discovery runs (the preference, unless an admin locked it off).
+  final bool discoveryEnabled;
+
+  /// An admin override (`MORPH_DISABLE_WEIRDNET_DISCOVERY` or a policy
+  /// file) forces discovery off; the switch cannot turn it back on.
+  final bool discoveryLocked;
+
+  /// `env` or `policy` when locked.
+  final String? lockSource;
+
+  /// What the screen says under the switch (why it is locked, if it is).
+  final String discoveryHelp;
+  final List<MorphNetworkPeer> peers;
 }
 
 enum MorphRelayState {

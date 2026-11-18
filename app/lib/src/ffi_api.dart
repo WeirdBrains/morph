@@ -7,6 +7,7 @@ import 'rust/api/device_link.dart' as rust_link;
 import 'rust/api/identity.dart' as rust_identity;
 import 'rust/api/info.dart' as rust_info;
 import 'rust/api/library.dart' as rust_library;
+import 'rust/api/network.dart' as rust_network;
 import 'rust/api/omnibox.dart' as rust_omnibox;
 import 'rust/api/page.dart' as rust_page;
 import 'rust/api/profiles.dart' as rust_profiles;
@@ -744,4 +745,46 @@ class FfiMorphApi implements MorphApi {
 
   @override
   Future<void> relayCheckStop() => rust_relays.relayCheckStop();
+
+  @override
+  Future<MorphNetworkSettings> loadNetwork({String? home}) =>
+      _network(() => rust_network.loadNetwork(home: home));
+
+  @override
+  Future<MorphNetworkSettings> setDiscovery(bool enabled, {String? home}) =>
+      _network(() => rust_network.setDiscovery(home: home, enabled: enabled));
+
+  @override
+  Future<MorphNetworkSettings> addNetworkPeer(String spec, {String? home}) =>
+      _network(() => rust_network.addNetworkPeer(home: home, spec: spec));
+
+  @override
+  Future<MorphNetworkSettings> removeNetworkPeer(
+    String peerId, {
+    String? home,
+  }) => _network(
+    () => rust_network.removeNetworkPeer(home: home, peerId: peerId),
+  );
+
+  Future<MorphNetworkSettings> _network(
+    Future<rust_network.NetworkView> Function() call,
+  ) async {
+    final rust_network.NetworkView v;
+    try {
+      v = await call();
+    } catch (e) {
+      // The bridge throws Rust's error text as is.
+      throw MorphNetworkError('$e');
+    }
+    return MorphNetworkSettings(
+      discoveryEnabled: v.discoveryEnabled,
+      discoveryLocked: v.discoveryLocked,
+      lockSource: v.lockSource,
+      discoveryHelp: v.discoveryHelp,
+      peers: [
+        for (final p in v.peers)
+          MorphNetworkPeer(peerId: p.peerId, addrs: p.addrs),
+      ],
+    );
+  }
 }
