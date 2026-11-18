@@ -15,6 +15,22 @@ Michael's GPU), each with a
 going through the phases without waiting for him. Phase 7 (macOS and Windows
 builds, `v0.2.0-alpha.8`) is below.
 
+## Active work (who owns what)
+
+Two agents work on Morph. Before editing an area someone else owns, tell them first. Only
+Morph Lead Dev cuts releases and tags or touches version, release.toml or packaging files.
+Update this table when you start or finish an area.
+
+| Area | Owner | Status (2026-11-18) |
+|---|---|---|
+| Networking: weirdnet-net peers and relays, Grindvakt DDNS, `weirdnet-morph://` and the scheme registry | Morph Lead Dev | v0.3, not started |
+| Sync and security: weirdnet-sync 0.3.0 key rotation and its Morph wiring, Linked devices | Morph Lead Dev | in progress |
+| Password saver: backend and storage | Morph Lead Dev | v0.3, not started |
+| 0.2.x patches: omnibox suggestions, transparent popups, multi-window follow-ups, downloads | Morph Lead Dev | in progress |
+| Releases and packaging | Morph Lead Dev | v0.2.1 in progress |
+| Agent work: local AI, projects, Companions | Morph Dev | v0.3 (moved from v0.4) |
+| Design for all v0.3 screens | Morph Dev | in progress |
+
 ## Where things stand
 
 - The `gpui` branch was merged into `main` (fast-forward, `fbb5af9`) on 2026-11-14.
