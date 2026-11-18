@@ -199,11 +199,31 @@ pub fn load(home: impl AsRef<Path>) -> Result<Settings, SettingsError> {
 }
 
 /// Write [settings] to the current profile, migrating leftover files first.
+/// Changes to the synced fields go into the profile's sync log when its
+/// library is open (see [`crate::settings_sync`]).
 pub fn save(home: impl AsRef<Path>, settings: &Settings) -> Result<(), SettingsError> {
     let home = home.as_ref();
+    let prev = load(home).unwrap_or_default();
     crate::profiles::migrate(home)?;
     let current = crate::profiles::current(home)?;
-    let path = crate::profiles::settings_path(home, &current.id);
+    write_profile(home, &current.id, settings)?;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+    let logged = crate::library_db::with(home, &current.id, |lib| {
+        crate::settings_sync::record_local_changes(lib, &prev, settings, now)?;
+        crate::sync::refresh_live(&crate::profiles::profile_dir(home, &current.id), lib);
+        Ok(())
+    });
+    match logged {
+        // A locked library catches up from the file on the next unlock.
+        Ok(_) | Err(crate::profiles::ProfileError::Locked) => Ok(()),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Write `settings` to one profile's `settings.json` (atomic replace), with no
+/// sync bookkeeping.
+pub fn write_profile(home: impl AsRef<Path>, profile_id: &str, settings: &Settings) -> Result<(), SettingsError> {
+    let path = crate::profiles::settings_path(home, profile_id);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
