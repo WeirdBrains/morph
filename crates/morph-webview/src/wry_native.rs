@@ -68,6 +68,9 @@ struct Downloads {
     next: std::cell::Cell<u64>,
     live: RefCell<Vec<(u64, String)>>,
     cancelled: RefCell<std::collections::HashSet<u64>>,
+    /// The view each download started in: its profile's cookies are asked
+    /// through it ([`Backend::request_cookies`]).
+    started_in: RefCell<HashMap<u64, ViewId>>,
 }
 
 /// Report a view's downloads as [`Event::Download`]: the bytes go to a
@@ -86,6 +89,7 @@ fn with_downloads<'a>(builder: WebViewBuilder<'a>, id: ViewId, downloads: &Rc<Do
         let _ = std::fs::remove_file(&staged);
         *path = staged.clone();
         d.live.borrow_mut().push((n, url.clone()));
+        d.started_in.borrow_mut().insert(n, id);
         q.borrow_mut().push((id, Event::Download(crate::Download { id: n, change: crate::DownloadChange::Started { url, name, staged } })));
         true
     });
@@ -271,6 +275,29 @@ impl Backend for NativeBackend {
 
     /// wry cannot stop a download: it runs on, and its end reports the
     /// cancel (the shell deletes the staged bytes then).
+    fn request_cookies(&mut self, download: u64, url: &str) -> bool {
+        let Some(view) = self.downloads.started_in.borrow().get(&download).copied() else {
+            return false;
+        };
+        let Some(shared) = self.views.iter().find(|(v, _)| *v == view).and_then(|(_, s)| s.upgrade()) else {
+            return false;
+        };
+        // WKWebView's and WebView2's cookie stores answer here and now.
+        let cookies = shared.view.cookies_for_url(url).ok().map(|list| {
+            list.into_iter()
+                .map(|c| crate::Cookie {
+                    name: c.name().to_string(),
+                    value: c.value().to_string(),
+                    domain: c.domain().unwrap_or_default().to_string(),
+                    path: c.path().unwrap_or_default().to_string(),
+                    secure: c.secure().unwrap_or(false),
+                })
+                .collect()
+        });
+        self.queue.borrow_mut().push((view, Event::Cookies { download, cookies }));
+        true
+    }
+
     fn cancel_download(&mut self, id: u64) {
         self.downloads.cancelled.borrow_mut().insert(id);
     }

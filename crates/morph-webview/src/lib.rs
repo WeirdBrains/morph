@@ -150,6 +150,12 @@ pub enum Event {
     /// for whichever view it likes (downloads belong to the profile's
     /// web data, not to a page).
     Download(Download),
+    /// The answer to [`Backend::request_cookies`]: the cookies the engine
+    /// would send now, or `None` if it could not say.
+    Cookies {
+        download: u64,
+        cookies: Option<Vec<Cookie>>,
+    },
 }
 
 /// What happened to download `id` (unique within the backend).
@@ -172,6 +178,53 @@ pub enum DownloadChange {
     Finished,
     /// It stopped short: the network failed or it was cancelled.
     Failed(String),
+    /// The request the download came from, as far as the engine tells
+    /// (after [`DownloadChange::Started`]), so the shell can resume it later
+    /// with the same session.
+    Context(RequestContext),
+}
+
+/// What the engine says about a download's request and response. Its
+/// `Debug` shows header names, never their values.
+#[derive(Clone, PartialEq, Eq, Default)]
+pub struct RequestContext {
+    /// Where the bytes came from, after redirects.
+    pub final_url: String,
+    pub referer: Option<String>,
+    pub user_agent: Option<String>,
+    /// Every request header the engine exposes.
+    pub headers: Vec<(String, String)>,
+    pub etag: Option<String>,
+    pub last_modified: Option<String>,
+}
+
+impl std::fmt::Debug for RequestContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RequestContext")
+            .field("final_url", &self.final_url)
+            .field("referer", &self.referer.is_some())
+            .field("user_agent", &self.user_agent.is_some())
+            .field("headers", &self.headers.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>())
+            .field("etag", &self.etag)
+            .field("last_modified", &self.last_modified)
+            .finish()
+    }
+}
+
+/// A cookie from the engine's cookie store. Its `Debug` hides the value.
+#[derive(Clone, PartialEq, Eq, Default)]
+pub struct Cookie {
+    pub name: String,
+    pub value: String,
+    pub domain: String,
+    pub path: String,
+    pub secure: bool,
+}
+
+impl std::fmt::Debug for Cookie {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}=<{} bytes> ({}{})", self.name, self.value.len(), self.domain, self.path)
+    }
 }
 
 /// A `<select>`'s list, for the shell to draw beside the element.
@@ -566,6 +619,12 @@ pub trait Backend {
     /// Stop download `id` (the user cancelled the save dialog). Its
     /// staged bytes are the shell's to delete.
     fn cancel_download(&mut self, _id: u64) {}
+    /// Ask the cookie store of download `download`'s profile which cookies
+    /// it would send to `url` now; the answer comes as [`Event::Cookies`].
+    /// `false`: this backend can't ask (no answer will come).
+    fn request_cookies(&mut self, _download: u64, _url: &str) -> bool {
+        false
+    }
 }
 
 /// Where a download's bytes go until the user picks the file's place: a
