@@ -28,7 +28,7 @@ Update this table when you start or finish an area.
 | Password saver: backend and storage | Morph Lead Dev | v0.3, not started |
 | 0.2.x patches: omnibox suggestions, transparent popups, multi-window follow-ups, downloads | Morph Lead Dev | in progress |
 | Releases and packaging | Morph Lead Dev | v0.2.1 in progress |
-| Agent work: local AI, projects, Companions | Morph Dev | v0.3 (moved from v0.4) |
+| Agent work: new `weirdnet-agent` crate (agent loop, tools, approvals, trace), `morph-ai`, `morph-companion`, `morph-ui` `Slot::Companion`, projects. Design: [Companions Design v1](https://cursor.com/canvas/store-e1e5cb1f-1e04-4388-8265-5c11c09b3f62/2ca47086-6c82-43a2-ba40-cea34404b597). Branch `main` | Morph Dev | v0.3 (moved from v0.4), in progress: `weirdnet-agent` v0 core first (local only until its repo exists) |
 | Design for all v0.3 screens | Morph Dev | in progress |
 
 ## Where things stand
