@@ -68,6 +68,7 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    morph_services::sync::enable_autostart();
     let paths = match morph_identity::Paths::resolve(None) {
         Ok(paths) => paths,
         Err(e) => {
