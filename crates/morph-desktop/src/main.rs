@@ -15,6 +15,8 @@ mod backend;
 mod brand;
 mod browser_view;
 mod cli;
+mod companion_host;
+mod companion_view;
 mod default_browser;
 mod dialogs;
 mod identity;

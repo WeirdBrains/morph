@@ -19,7 +19,9 @@ morph-core.workspace = true
 gpui.workspace = true
 gpui_platform.workspace = true
 image.workspace = true
+morph-ai.workspace = true
 morph-browser.workspace = true
+morph-companion.workspace = true
 morph-identity.workspace = true
 morph-os.workspace = true
 morph-services.workspace = true
@@ -28,6 +30,10 @@ morph-webview.workspace = true
 qrcode.workspace = true
 raw-window-handle.workspace = true
 unicode-segmentation.workspace = true
+weirdnet-agent.workspace = true
+async-trait.workspace = true
+# The Companion panel runs its sessions on a worker thread.
+tokio = { version = "1", features = ["rt", "sync", "time"] }
 
 # Linux: GPUI's patched platform (the raw key behind a key event) and the
 # render check's process handling.

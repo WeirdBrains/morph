@@ -18,6 +18,7 @@ use morph_ui::theme::Theme;
 
 use crate::browser_view::{self, BrowserView};
 use crate::cli::Args;
+use crate::companion_view::CompanionView;
 use crate::identity_view::IdentityView;
 use crate::library::Tab;
 use crate::library_view::LibraryView;
@@ -59,7 +60,8 @@ actions!(
         ShowIdentity,
         ShowAbout,
         ShowSearchSettings,
-        ShowDownloads
+        ShowDownloads,
+        ToggleCompanions
     ]
 );
 
@@ -99,6 +101,7 @@ pub(crate) fn gpui_action(action: Action) -> Box<dyn gpui::Action> {
         Action::ShowAbout => Box::new(ShowAbout),
         Action::ShowSearchSettings => Box::new(ShowSearchSettings),
         Action::ShowDownloads => Box::new(ShowDownloads),
+        Action::ToggleCompanions => Box::new(ToggleCompanions),
     }
 }
 
@@ -157,7 +160,7 @@ pub enum WindowStart {
 }
 
 /// Components each profile has its own of; rebuilt on a profile switch.
-const PER_PROFILE: [&str; 3] = [component::BROWSER, component::LIBRARY, component::IDENTITY];
+const PER_PROFILE: [&str; 4] = [component::BROWSER, component::LIBRARY, component::IDENTITY, component::COMPANIONS];
 
 /// What the host needs from a component.
 pub trait Hosted {
@@ -299,6 +302,31 @@ impl Hosted for Entity<IdentityView> {
     }
 }
 
+impl Hosted for Entity<CompanionView> {
+    fn apply_settings(&self, settings: &morph_core::settings::Settings, cx: &mut App) {
+        let theme = Theme::for_choice(settings.theme);
+        self.update(cx, |view, cx| view.set_theme(theme, cx));
+    }
+    fn kind(&self) -> KindId {
+        KindId::new(component::COMPANIONS)
+    }
+    fn view(&self) -> AnyView {
+        self.clone().into()
+    }
+    fn dispatch(&self, _action: Action, _window: &mut Window, _cx: &mut App) -> bool {
+        false
+    }
+    fn tick(&self, _window: &mut Window, cx: &mut App) -> Vec<String> {
+        self.update(cx, |view, cx| view.poll(cx));
+        Vec::new()
+    }
+    fn set_shown(&self, _shown: bool, _cx: &mut App) {}
+    fn focus_shell(&self, _cx: &App) {}
+    fn title(&self, _cx: &App) -> String {
+        "Companions".into()
+    }
+}
+
 impl Hosted for Entity<SettingsView> {
     fn apply_settings(&self, settings: &morph_core::settings::Settings, cx: &mut App) {
         let theme = Theme::for_choice(settings.theme);
@@ -392,6 +420,9 @@ pub struct Shell {
     profiles: Option<Entity<ProfilesView>>,
     settings: Option<Entity<SettingsView>>,
     identity: Option<Entity<IdentityView>>,
+    companions: Option<Entity<CompanionView>>,
+    /// The Companion panel's edge is being dragged.
+    companion_drag: bool,
     /// Subscriptions to the profile's own components, dropped on a switch.
     profile_subscriptions: Vec<Subscription>,
     /// The main component's page as last passed to the panels.
@@ -469,6 +500,8 @@ impl Shell {
             profiles: Some(profiles),
             settings: Some(settings),
             identity: None,
+            companions: None,
+            companion_drag: false,
             last_page: None,
             last_marked: None,
             buttons: chrome::window_buttons(&|k| std::env::var(k).ok()),
@@ -557,6 +590,10 @@ impl Shell {
         self.profile_subscriptions.push(cx.subscribe_in(&identity, window, |shell, _, request, window, cx| shell.request(request, window, cx)));
         self.components.push(Box::new(identity.clone()));
         self.identity = Some(identity);
+        let companions = cx.new(|cx| CompanionView::new(&home, &profile, theme, window, cx));
+        self.profile_subscriptions.push(cx.subscribe_in(&companions, window, |shell, _, request, window, cx| shell.request(request, window, cx)));
+        self.components.push(Box::new(companions.clone()));
+        self.companions = Some(companions);
         self.last_page = None;
         self.last_marked = None;
         self.last_caption = None;
@@ -874,6 +911,22 @@ impl Shell {
         cx.notify();
     }
 
+    /// Open or close the Companion panel. It is window-level: switching tabs leaves it as it is.
+    fn toggle_companions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(companions) = self.companions.clone() else {
+            return;
+        };
+        let open = self.layout.toggle_kind(Slot::Companion, KindId::new(component::COMPANIONS));
+        self.save_layout();
+        if open {
+            companions.update(cx, |view, cx| view.focus(window, cx));
+            self.focus_shell(cx);
+        } else if let Some(main) = self.main() {
+            main.focus_content(window, cx);
+        }
+        cx.notify();
+    }
+
     /// Show the preferences page (in a tab of the main component), at
     /// `section` if given.
     fn show_settings(&mut self, section: Option<crate::settings_view::Section>, window: &mut Window, cx: &mut Context<Self>) {
@@ -919,6 +972,7 @@ impl Shell {
             Action::ShowSettings => return self.show_settings(None, window, cx),
             Action::ShowSearchSettings => return self.show_settings(Some(crate::settings_view::Section::Search), window, cx),
             Action::ShowIdentity => return self.show_identity(window, cx),
+            Action::ToggleCompanions => return self.toggle_companions(window, cx),
             _ => {}
         }
         let main = self.layout.shown(Slot::Main).cloned();
@@ -1035,6 +1089,9 @@ impl Shell {
             if let Some(library) = &self.library {
                 library.update(cx, |view, cx| view.set_page(page.clone(), cx));
             }
+            if let Some(companions) = &self.companions {
+                companions.update(cx, |view, cx| view.set_page(page.clone(), cx));
+            }
             self.last_page = page;
         }
         let marked = self.library.as_ref().map(|l| l.read(cx).marked());
@@ -1051,7 +1108,7 @@ impl Shell {
         }
     }
 
-    fn slot(&self, slot: Slot, cx: &App) -> Option<gpui::AnyElement> {
+    fn slot(&self, slot: Slot, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let t = self.theme;
         let kind = self.layout.shown(slot)?;
         let content = match self.component(kind) {
@@ -1069,11 +1126,27 @@ impl Shell {
             }
         };
         let size = px(self.layout.state(slot).size as f32);
-        let _ = cx;
         Some(match slot {
             Slot::Main => div().flex_1().flex().flex_col().min_w(px(0.)).child(content).into_any_element(),
             Slot::Sidebar => div().w(size).h_full().border_r_1().border_color(rgb(t.surface_variant)).child(content).into_any_element(),
             Slot::Bottom => div().h(size).w_full().border_t_1().border_color(rgb(t.surface_variant)).child(content).into_any_element(),
+            Slot::Companion => div()
+                .w(size)
+                .h_full()
+                .flex()
+                .flex_row()
+                .child(
+                    // The edge to drag: moving it changes the panel's width (see `render`).
+                    div().id("companion-resize").w(px(4.)).h_full().cursor(CursorStyle::ResizeLeftRight).bg(rgb(t.surface_variant)).on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            this.companion_drag = true;
+                            cx.notify();
+                        }),
+                    ),
+                )
+                .child(div().flex_1().min_w(px(0.)).h_full().child(content))
+                .into_any_element(),
         })
     }
 }
@@ -1158,12 +1231,37 @@ impl Render for Shell {
             ShowAbout => Action::ShowAbout,
             ShowSearchSettings => Action::ShowSearchSettings,
             ShowDownloads => Action::ShowDownloads,
+            ToggleCompanions => Action::ToggleCompanions,
         ]);
         let root = root.on_any_mouse_down(cx.listener(|this, _, _, cx| this.focus_shell(cx)));
+        let root = root
+            .on_mouse_move(cx.listener(|this, event: &gpui::MouseMoveEvent, window, cx| {
+                if this.companion_drag && event.dragging() {
+                    let width = f32::from(window.bounds().size.width);
+                    this.layout.set_size(Slot::Companion, (width - f32::from(event.position.x)).max(0.) as u32);
+                    cx.notify();
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    if std::mem::take(&mut this.companion_drag) {
+                        this.save_layout();
+                        cx.notify();
+                    }
+                }),
+            );
         if let Some(error) = &self.error {
             return root.items_center().justify_center().child(div().max_w(px(640.)).p(px(24.)).child(error.clone()));
         }
-        let middle = div().flex().flex_row().flex_1().min_h(px(0.)).children(self.slot(Slot::Sidebar, cx)).children(self.slot(Slot::Main, cx));
+        let middle = div()
+            .flex()
+            .flex_row()
+            .flex_1()
+            .min_h(px(0.))
+            .children(self.slot(Slot::Sidebar, cx))
+            .children(self.slot(Slot::Main, cx))
+            .children(self.slot(Slot::Companion, cx));
         // A frameless window that is not maximized or tiled keeps a thin
         // border to resize it by.
         let floating = match window.window_decorations() {
