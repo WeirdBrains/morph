@@ -140,6 +140,18 @@ pub struct BrowserView {
     download_dialogs: Vec<gpui::Task<()>>,
     /// When the last download ended, for hiding the downloads bar.
     downloads_done: Option<std::time::Instant>,
+    /// The downloads bar was hidden (a while after the last download
+    /// ended, or dismissed); the panel still lists them.
+    downloads_bar_hidden: bool,
+    /// The downloads panel under the toolbar's downloads button, when open.
+    downloads_panel: Option<DownloadsPanel>,
+    downloads_focus: FocusHandle,
+    downloads_scroll: ScrollHandle,
+    /// When the panel last redrew for its live times left.
+    downloads_redrawn: std::time::Instant,
+    /// What the panel and the toolbar last reported (`MORPH_LOG_EVENTS`,
+    /// `MORPH_LOG_LAYOUT`), so each change is logged once.
+    downloads_logged: std::cell::RefCell<HashMap<String, String>>,
     /// The shell wants the page shown (it hides it under its own panels).
     shell_shown: bool,
     /// Where the bar's buttons were last drawn (their menus open there).
@@ -197,7 +209,7 @@ pub fn address_items(profiles: &[(String, String, bool)]) -> Vec<AddressItem> {
         AddressItem::ComingSoon("More"),
         AddressItem::Run(Action::ShowHistory, "History"),
         AddressItem::Run(Action::ShowBookmarks, "Bookmarks"),
-        AddressItem::ComingSoon("Downloads"),
+        AddressItem::Run(Action::ShowDownloads, "Downloads"),
         AddressItem::ComingSoon("Passwords"),
         AddressItem::Identity,
         AddressItem::Run(Action::ShowSettings, "Settings"),
@@ -245,16 +257,63 @@ struct Toast {
 /// How long the downloads bar stays after the last download ended.
 const DOWNLOADS_SHOWN: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// A byte count for people: `512 B`, `4.5 MB`.
-fn size_text(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
-    let mut value = bytes as f64;
-    let mut unit = 0;
-    while value >= 1000.0 && unit < UNITS.len() - 1 {
-        value /= 1000.0;
-        unit += 1;
+use morph_browser::downloads::size_text;
+
+/// The downloads panel (the toolbar's downloads button, Ctrl+Shift+Y or
+/// ⌘⇧J): every download of the window, newest first.
+struct DownloadsPanel {
+    /// The page was hidden for it (child-window pages draw above the shell).
+    hid_page: bool,
+}
+
+/// Width of the downloads panel.
+pub const DOWNLOADS_PANEL_WIDTH: f32 = 380.;
+
+/// How often an open panel redraws while downloads run (times left).
+const DOWNLOADS_REDRAW: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// How a download's tile draws its progress bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DownloadBar {
+    /// Over (saved, failed, cancelled): no bar.
+    None,
+    /// The size is known: filled to the fraction.
+    Determinate(u16),
+    /// The size is unknown: a moving piece.
+    Indeterminate,
+}
+
+impl DownloadBar {
+    pub fn of(d: &morph_browser::downloads::DownloadItem) -> Self {
+        if !d.active() {
+            return DownloadBar::None;
+        }
+        match d.fraction() {
+            Some(f) => DownloadBar::Determinate((f * 1000.0).round() as u16),
+            None => DownloadBar::Indeterminate,
+        }
     }
-    if unit == 0 { format!("{bytes} B") } else { format!("{value:.1} {}", UNITS[unit]) }
+
+    fn name(self) -> &'static str {
+        match self {
+            DownloadBar::None => "none",
+            DownloadBar::Determinate(_) => "determinate",
+            DownloadBar::Indeterminate => "indeterminate",
+        }
+    }
+}
+
+/// The time-left part of a tile: the estimate while it runs, `Paused`,
+/// nothing once it is over.
+pub fn download_eta_label(d: &morph_browser::downloads::DownloadItem) -> Option<String> {
+    use morph_browser::downloads::DownloadState;
+    match d.state {
+        DownloadState::Paused => Some("Paused".into()),
+        DownloadState::Running => {
+            Some(d.eta().map(|e| format!("{} left", morph_browser::downloads::eta_text(e))).unwrap_or_else(|| "Estimating…".into()))
+        }
+        _ => None,
+    }
 }
 
 /// How long a toast shows.
@@ -290,11 +349,12 @@ struct ShellMenu {
 /// The main menu: the old Flutter dot menu's entries (Find in page,
 /// Bookmarks, History, Identity, Settings) with New tab, Profiles and
 /// About added.
-pub const MAIN_MENU: [(&str, Action, bool); 9] = [
+pub const MAIN_MENU: [(&str, Action, bool); 10] = [
     ("New tab", Action::NewTab, false),
     ("Find in page", Action::Find, true),
     ("Bookmarks", Action::ShowBookmarks, false),
     ("History", Action::ShowHistory, false),
+    ("Downloads", Action::ShowDownloads, false),
     ("Identity", Action::ShowIdentity, true),
     ("Profiles", Action::ShowProfiles, false),
     ("Settings", Action::ShowSettings, false),
@@ -379,6 +439,12 @@ impl BrowserView {
             file_dialog: None,
             download_dialogs: Vec::new(),
             downloads_done: None,
+            downloads_bar_hidden: false,
+            downloads_panel: None,
+            downloads_focus: cx.focus_handle(),
+            downloads_scroll: ScrollHandle::new(),
+            downloads_redrawn: std::time::Instant::now(),
+            downloads_logged: std::cell::RefCell::new(HashMap::new()),
             shell_shown: true,
             icon_images: std::cell::RefCell::new(HashMap::new()),
             button_bounds: std::cell::RefCell::new(HashMap::new()),
@@ -460,6 +526,10 @@ impl BrowserView {
 
     /// Run a shell action. Returns whether the browser handled it.
     pub fn dispatch(&mut self, action: Action, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if action == Action::ShowDownloads {
+            self.toggle_downloads(window, cx);
+            return true;
+        }
         let opens_find =
             matches!(action, Action::Find) || (matches!(action, Action::FindNext | Action::FindPrevious) && self.browser.find().is_none());
         let handled = self.browser.dispatch(action);
@@ -699,6 +769,31 @@ impl BrowserView {
             }));
         }
         self.tick_downloads(cx);
+        while let Some(path) = self.browser.take_download_open() {
+            open_file(&path, cx);
+        }
+        if self.downloads_panel.is_some()
+            && self.browser.downloads().iter().any(|d| d.running())
+            && self.downloads_redrawn.elapsed() >= DOWNLOADS_REDRAW
+        {
+            self.downloads_redrawn = std::time::Instant::now();
+            cx.notify();
+        }
+        if log_layout() {
+            let bounds = self.button_bounds.borrow();
+            if let (Some(dl), Some(menu)) = (bounds.get("downloads"), bounds.get("main-menu")) {
+                let line = format!(
+                    "downloads_left={:.0} downloads_right={:.0} downloads_top={:.0} downloads_bottom={:.0} menu_left={:.0} menu_right={:.0}",
+                    f32::from(dl.left()),
+                    f32::from(dl.right()),
+                    f32::from(dl.top()),
+                    f32::from(dl.bottom()),
+                    f32::from(menu.left()),
+                    f32::from(menu.right())
+                );
+                self.log_once("toolbar", line);
+            }
+        }
         // Pages follow the shell's scale on either backend.
         self.browser.set_scale(f64::from(window.scale_factor()));
         if self.browser.draws_pages()
@@ -734,12 +829,16 @@ impl BrowserView {
             // Every dialog answered (their tasks are done).
             self.download_dialogs.clear();
         }
-        if downloads.is_empty() || downloads.iter().any(|d| d.running()) {
+        if downloads.is_empty() || downloads.iter().any(|d| d.active()) {
             self.downloads_done = None;
+            if downloads.iter().any(|d| d.running()) && self.downloads_bar_hidden {
+                self.downloads_bar_hidden = false;
+                cx.notify();
+            }
         } else if let Some(done) = self.downloads_done {
-            if done.elapsed() >= DOWNLOADS_SHOWN {
-                self.downloads_done = None;
-                self.browser.clear_downloads();
+            if done.elapsed() >= DOWNLOADS_SHOWN && !self.downloads_bar_hidden {
+                // The bar goes; the panel keeps the list.
+                self.downloads_bar_hidden = true;
                 cx.notify();
             }
         } else {
@@ -752,6 +851,9 @@ impl BrowserView {
     fn download_bar(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         use morph_browser::downloads::DownloadState;
         let t = self.theme;
+        if self.downloads_bar_hidden || self.downloads_panel.is_some() {
+            return None;
+        }
         let d = self.browser.downloads().iter().rev().find(|d| d.state != DownloadState::Cancelled)?;
         let others = self.browser.downloads().iter().filter(|o| o.running() && o.id != d.id).count();
         let text = match &d.state {
@@ -794,7 +896,7 @@ impl BrowserView {
             bar = bar.child(
                 div().id("downloads-close").px(px(6.)).cursor_pointer().text_color(rgb(t.accent)).hover(|s| s.underline()).child("Dismiss").on_click(
                     cx.listener(|this, _, _, cx| {
-                        this.browser.clear_downloads();
+                        this.downloads_bar_hidden = true;
                         cx.notify();
                     }),
                 ),
@@ -1086,7 +1188,7 @@ impl BrowserView {
 
     fn close_shell_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(menu) = self.shell_menu.take() {
-            if menu.hid_page && self.address_menu.as_ref().is_none_or(|m| !m.hid_page) {
+            if menu.hid_page && self.address_menu.as_ref().is_none_or(|m| !m.hid_page) && self.downloads_panel.as_ref().is_none_or(|p| !p.hid_page) {
                 self.browser.set_shown(self.shell_shown);
             }
             if self.shell_menu_focus.is_focused(window) {
@@ -1098,6 +1200,7 @@ impl BrowserView {
 
     /// The ☰ button: the main menu under it, at the window's right edge.
     fn open_main_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_downloads(window, cx);
         let entries = MAIN_MENU
             .iter()
             .map(|&(label, action, separated)| {
@@ -1625,8 +1728,11 @@ impl BrowserView {
                 let label: SharedString = if state.popups == 1 { "1 popup".into() } else { format!("{} popups", state.popups).into() };
                 d.child(div().flex_none().whitespace_nowrap().px(px(8.)).text_size(px(12.)).text_color(rgb(t.accent_alt)).child(label))
             })
+            .child(self.downloads_button(cx))
             .child(
                 self.button("main-menu-button", "☰", true)
+                    .relative()
+                    .child(bounds_probe(cx.entity(), "main-menu"))
                     .when(self.shell_menu.as_ref().is_some_and(|m| m.id == "main-menu"), |d| d.bg(rgb(t.surface_variant)))
                     .on_click(cx.listener(|this, _, window, cx| {
                         if this.shell_menu.as_ref().is_some_and(|m| m.id == "main-menu") {
@@ -1808,6 +1914,9 @@ impl BrowserView {
         if self.address_menu.is_some() && self.shell_menu.is_none() {
             out.extend(self.address_menu_overlay(cx));
         }
+        if self.downloads_panel.is_some() && self.shell_menu.is_none() {
+            out.extend(self.downloads_overlay(cx));
+        }
         if let Some(menu) = &self.shell_menu {
             let natural = menu_view::natural_height(&menu.rows);
             let this = cx.entity();
@@ -1879,6 +1988,7 @@ impl BrowserView {
             self.select_scrolled = None;
         }
         if self.shell_menu.is_none()
+            && self.downloads_panel.is_none()
             && self.browser.option_menu().is_none()
             && let Some(tip) = self.browser.tooltip()
         {
@@ -2444,7 +2554,7 @@ impl BrowserView {
 
     fn close_address_menu(&mut self, cx: &mut Context<Self>) {
         if let Some(menu) = self.address_menu.take() {
-            if menu.hid_page && self.shell_menu.as_ref().is_none_or(|m| !m.hid_page) {
+            if menu.hid_page && self.shell_menu.as_ref().is_none_or(|m| !m.hid_page) && self.downloads_panel.as_ref().is_none_or(|p| !p.hid_page) {
                 self.browser.set_shown(self.shell_shown);
             }
             cx.notify();
@@ -2638,6 +2748,486 @@ impl BrowserView {
     }
 }
 
+/// The downloads button and panel.
+impl BrowserView {
+    /// Open or close the downloads panel (its button, its shortcut, the ☰
+    /// menu's Downloads).
+    fn toggle_downloads(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.downloads_panel.is_some() {
+            self.close_downloads(window, cx);
+            self.browser.focus_page();
+            self.sync_focus(window, cx);
+        } else {
+            self.open_downloads(window, cx);
+        }
+    }
+
+    fn open_downloads(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_shell_menu(window, cx);
+        self.close_address_menu(cx);
+        let hid_page = !self.browser.draws_pages();
+        if hid_page {
+            self.browser.set_shown(false);
+        }
+        self.downloads_panel = Some(DownloadsPanel { hid_page });
+        self.browser.focus_shell();
+        window.focus(&self.downloads_focus, cx);
+        log_event("downloads panel open");
+        cx.notify();
+    }
+
+    fn close_downloads(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(panel) = self.downloads_panel.take() else {
+            return;
+        };
+        if panel.hid_page && self.shell_menu.as_ref().is_none_or(|m| !m.hid_page) && self.address_menu.as_ref().is_none_or(|m| !m.hid_page) {
+            self.browser.set_shown(self.shell_shown);
+        }
+        if self.downloads_focus.is_focused(window) {
+            window.blur(cx);
+        }
+        self.downloads_logged.borrow_mut().retain(|k, _| k == "toolbar");
+        log_event("downloads panel closed");
+        cx.notify();
+    }
+
+    /// Log `line` under `key` once per change (the xvfb checks read it).
+    fn log_once(&self, key: &str, line: String) {
+        let mut logged = self.downloads_logged.borrow_mut();
+        if logged.get(key) != Some(&line) {
+            println!("morph-event {key} {line}");
+            logged.insert(key.to_string(), line);
+        }
+    }
+
+    /// The toolbar's downloads button, left of ☰: an arrow, a bar under it
+    /// while downloads run (filled to their progress when every size is
+    /// known), and how many run when more than one.
+    fn downloads_button(&self, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
+        let t = self.theme;
+        let progress = self.browser.downloads_progress();
+        let open = self.downloads_panel.is_some();
+        let tooltip = match progress {
+            Some((1, _)) => "Downloads — 1 running".to_string(),
+            Some((n, _)) => format!("Downloads — {n} running"),
+            None => "Downloads".to_string(),
+        };
+        self.button("downloads-button", "↓", true)
+            .relative()
+            .tooltip(tip(tooltip, t))
+            .when(open, |d| d.bg(rgb(t.surface_variant)))
+            .when(progress.is_some(), |d| d.text_color(rgb(t.accent)))
+            .child(bounds_probe(cx.entity(), "downloads"))
+            .when_some(progress, |d, (count, fraction)| {
+                let track = div().absolute().left(px(6.)).right(px(6.)).bottom(px(3.)).h(px(2.)).rounded(px(1.)).bg(rgb(t.surface_variant));
+                let fill = match fraction {
+                    Some(f) => div().absolute().left_0().top_0().h_full().w(gpui::relative(f.max(0.05))).rounded(px(1.)).bg(rgb(t.accent)),
+                    None => div()
+                        .absolute()
+                        .left_0()
+                        .top_0()
+                        .h_full()
+                        .w(gpui::relative(0.35))
+                        .left(gpui::relative(indeterminate_phase() * 0.65))
+                        .bg(rgb(t.accent)),
+                };
+                d.child(track.child(fill)).when(count > 1, |d| {
+                    d.child(
+                        div()
+                            .absolute()
+                            .top(px(1.))
+                            .right(px(1.))
+                            .min_w(px(12.))
+                            .h(px(12.))
+                            .px(px(2.))
+                            .rounded(px(6.))
+                            .bg(rgb(t.accent))
+                            .text_color(rgb(t.background))
+                            .text_size(px(9.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(count.to_string()),
+                    )
+                })
+            })
+            .on_click(cx.listener(|this, _, window, cx| {
+                log_bar("downloads");
+                this.toggle_downloads(window, cx);
+            }))
+    }
+
+    /// A small text button on a download's tile; its click never reaches
+    /// the tile (which opens the file).
+    fn tile_button(
+        &self,
+        name: &str,
+        id: u64,
+        label: &'static str,
+        cx: &mut Context<Self>,
+        run: fn(&mut Self, u64, &mut Context<Self>),
+    ) -> gpui::Stateful<gpui::Div> {
+        let t = self.theme;
+        let key = format!("{name}-{id}");
+        div()
+            .id(gpui::ElementId::Name(format!("download-{key}").into()))
+            .relative()
+            .flex_none()
+            .px(px(8.))
+            .h(px(22.))
+            .flex()
+            .items_center()
+            .rounded(px(5.))
+            .text_size(px(11.))
+            .bg(rgb(t.surface_variant))
+            .border_1()
+            .border_color(rgb(t.border))
+            .text_color(rgb(t.text_primary))
+            .cursor_pointer()
+            .hover(|s| s.bg(rgb(t.border)))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(move |this, _, _, cx| {
+                cx.stop_propagation();
+                run(this, id, cx);
+                cx.notify();
+            }))
+            .child(hit_probe(cx.entity(), key))
+            .child(label)
+    }
+
+    /// One download's tile: a click opens the file (or, while it runs,
+    /// opens it when done); its buttons pause, resume, cancel, retry or
+    /// show it in its folder.
+    fn download_tile(&self, d: &morph_browser::downloads::DownloadItem, cx: &mut Context<Self>) -> gpui::AnyElement {
+        use morph_browser::downloads::DownloadState;
+        let t = self.theme;
+        let id = d.id;
+        let bar = DownloadBar::of(d);
+        let mut buttons = div().flex().flex_row().flex_none().gap(px(4.));
+        match &d.state {
+            DownloadState::Running if !d.bytes_in() => {
+                buttons = buttons.child(self.tile_button("pause", id, "Pause", cx, |this, id, _| this.browser.pause_download(id)));
+            }
+            DownloadState::Paused => {
+                buttons = buttons.child(self.tile_button("resume", id, "Resume", cx, |this, id, _| this.browser.resume_download(id)));
+            }
+            DownloadState::Failed(_) | DownloadState::Cancelled => {
+                buttons = buttons.child(self.tile_button("retry", id, "Retry", cx, |this, id, _| this.browser.retry_download(id)));
+            }
+            _ => {}
+        }
+        if d.active() {
+            buttons = buttons.child(self.tile_button("cancel", id, "Cancel", cx, |this, id, _| this.browser.cancel_download(id)));
+        }
+        if matches!(d.state, DownloadState::Saved(_)) {
+            buttons = buttons.child(self.tile_button("folder", id, "Show in folder", cx, |this, id, cx| {
+                if let Some(path) = this.browser.downloads().iter().find(|d| d.id == id).and_then(|d| d.path()).map(Path::to_path_buf) {
+                    reveal_file(&path, cx);
+                }
+            }));
+        }
+        let failed = matches!(d.state, DownloadState::Failed(_));
+        let status = d.status_text();
+        let open_label = d.open_label();
+        let eta = download_eta_label(d);
+        let progress_bar = match bar {
+            DownloadBar::None => None,
+            DownloadBar::Determinate(per_mille) => Some(
+                div()
+                    .id(gpui::ElementId::Name(format!("download-bar-{id}").into()))
+                    .relative()
+                    .h(px(4.))
+                    .w_full()
+                    .rounded(px(2.))
+                    .bg(rgb(t.surface_variant))
+                    .child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .top_0()
+                            .h_full()
+                            .w(gpui::relative(f32::from(per_mille) / 1000.0))
+                            .rounded(px(2.))
+                            .bg(rgb(if d.running() { t.accent } else { t.text_secondary })),
+                    ),
+            ),
+            DownloadBar::Indeterminate => Some(
+                div()
+                    .id(gpui::ElementId::Name(format!("download-bar-{id}").into()))
+                    .relative()
+                    .overflow_hidden()
+                    .h(px(4.))
+                    .w_full()
+                    .rounded(px(2.))
+                    .bg(rgb(t.surface_variant))
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .h_full()
+                            .w(gpui::relative(0.3))
+                            .left(gpui::relative(if d.running() { indeterminate_phase() * 0.7 } else { 0.0 }))
+                            .rounded(px(2.))
+                            .bg(rgb(if d.running() { t.accent } else { t.text_secondary })),
+                    ),
+            ),
+        };
+        if crate::browser_view::log_events() {
+            self.log_once(
+                &format!("downloads row id={id}"),
+                format!(
+                    "name={} state={} bar={} eta={} open={} status={}",
+                    d.name.replace(' ', "_"),
+                    state_name(&d.state),
+                    bar.name(),
+                    eta.clone().unwrap_or_else(|| "-".into()).replace(' ', "_"),
+                    open_label.clone().unwrap_or_else(|| "-".into()).replace(' ', "_"),
+                    status.replace(' ', "_")
+                ),
+            );
+        }
+        let can_open = matches!(d.state, DownloadState::Saved(_) | DownloadState::Running | DownloadState::Paused);
+        div()
+            .id(gpui::ElementId::Name(format!("download-tile-{id}").into()))
+            .relative()
+            .flex()
+            .flex_col()
+            .gap(px(4.))
+            .px(px(12.))
+            .py(px(8.))
+            .rounded(px(8.))
+            .when(can_open, |d| d.cursor_pointer().hover(|s| s.bg(rgb(t.surface_variant))))
+            .when(d.open_when_done, |e| e.border_1().border_color(rgb(t.accent)))
+            .child(hit_probe(cx.entity(), format!("tile-{id}")))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if let Some(path) = this.browser.activate_download(id) {
+                    open_file(&path, cx);
+                }
+                cx.notify();
+            }))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .text_size(px(13.))
+                            .text_color(rgb(if matches!(d.state, DownloadState::Cancelled) { t.text_secondary } else { t.text_primary }))
+                            .child(d.name.clone()),
+                    )
+                    .child(buttons),
+            )
+            .children(progress_bar)
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap(px(8.))
+                    .text_size(px(11.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .text_color(rgb(if failed { t.error } else { t.text_secondary }))
+                            .child(status),
+                    )
+                    .when_some(open_label, |e, label| e.child(div().flex_none().text_color(rgb(t.accent)).child(label))),
+            )
+            .into_any_element()
+    }
+
+    /// The downloads panel under its button, with a backdrop that closes
+    /// it on a click elsewhere.
+    fn downloads_overlay(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+        let t = self.theme;
+        let Some(button) = self.button_bounds.borrow().get("downloads").copied() else {
+            return Vec::new();
+        };
+        let items = self.browser.downloads();
+        let any_done = items.iter().any(|d| !d.active());
+        let backdrop = div().id("downloads-backdrop").absolute().top_0().left_0().size_full().occlude().on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                if !button.contains(&event.position) {
+                    this.close_downloads(window, cx);
+                    this.browser.focus_page();
+                    this.sync_focus(window, cx);
+                }
+            }),
+        );
+        let header = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .px(px(14.))
+            .h(px(40.))
+            .child(div().flex_1().text_size(px(14.)).text_color(rgb(t.text_primary)).child("Downloads"))
+            .when(any_done, |d| {
+                d.child(
+                    div()
+                        .id("downloads-clear")
+                        .relative()
+                        .px(px(8.))
+                        .py(px(2.))
+                        .rounded(px(5.))
+                        .text_size(px(12.))
+                        .text_color(rgb(t.accent))
+                        .cursor_pointer()
+                        .hover(|s| s.bg(rgb(t.surface_variant)))
+                        .child(hit_probe(cx.entity(), "clear".into()))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.browser.clear_downloads();
+                            cx.notify();
+                        }))
+                        .child("Clear completed"),
+                )
+            });
+        let tiles: Vec<gpui::AnyElement> = items.iter().rev().map(|d| self.download_tile(d, cx)).collect();
+        let empty = tiles.is_empty();
+        if log_events() {
+            self.log_once("downloads panel", format!("rows={}", tiles.len()));
+        }
+        let panel = div()
+            .id("downloads-panel")
+            .occlude()
+            .track_focus(&self.downloads_focus)
+            .key_context("DownloadsPanel")
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if event.keystroke.key == "escape" {
+                    cx.stop_propagation();
+                    this.close_downloads(window, cx);
+                    this.browser.focus_page();
+                    this.sync_focus(window, cx);
+                }
+            }))
+            .w(px(DOWNLOADS_PANEL_WIDTH))
+            .max_h(px(480.))
+            .flex()
+            .flex_col()
+            .rounded(px(10.))
+            .bg(rgb(t.surface))
+            .border_1()
+            .border_color(rgb(t.border))
+            .shadow_lg()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(header)
+            .child(div().h(px(1.)).bg(rgb(t.surface_variant)))
+            .child(
+                div()
+                    .id("downloads-list")
+                    .flex()
+                    .flex_col()
+                    .p(px(4.))
+                    .gap(px(2.))
+                    .overflow_y_scroll()
+                    .track_scroll(&self.downloads_scroll)
+                    .when(empty, |d| {
+                        d.child(div().px(px(10.)).py(px(18.)).text_size(px(13.)).text_color(rgb(t.text_secondary)).child("No downloads yet"))
+                    })
+                    .children(tiles),
+            );
+        let at = point(button.right() - px(DOWNLOADS_PANEL_WIDTH), button.bottom() + px(4.));
+        vec![
+            deferred(backdrop).with_priority(1).into_any_element(),
+            deferred(anchored().position(at).snap_to_window_with_margin(px(4.)).child(panel)).with_priority(2).into_any_element(),
+        ]
+    }
+}
+
+/// A download state's name, for the event log.
+fn state_name(state: &morph_browser::downloads::DownloadState) -> &'static str {
+    use morph_browser::downloads::DownloadState;
+    match state {
+        DownloadState::Running => "running",
+        DownloadState::Paused => "paused",
+        DownloadState::Saved(_) => "saved",
+        DownloadState::Failed(_) => "failed",
+        DownloadState::Cancelled => "cancelled",
+    }
+}
+
+/// Where an indeterminate bar's moving piece is (0 to 1, back and forth
+/// every 2 s).
+fn indeterminate_phase() -> f32 {
+    let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+    let x = (ms % 2000) as f32 / 1000.0;
+    if x > 1.0 { 2.0 - x } else { x }
+}
+
+/// Records where an element was laid out, under `id` (the toolbar's
+/// buttons; their menus and panels open there).
+fn bounds_probe(entity: Entity<BrowserView>, id: &'static str) -> impl IntoElement {
+    canvas(
+        move |bounds, _, cx| {
+            entity.read(cx).button_bounds.borrow_mut().insert(id, bounds);
+        },
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .size_full()
+}
+
+/// Logs where a panel element is (`MORPH_LOG_LAYOUT=1`), for the checks'
+/// clicks.
+fn hit_probe(entity: Entity<BrowserView>, name: String) -> impl IntoElement {
+    canvas(
+        move |bounds, _, cx| {
+            if log_layout() {
+                let line = format!(
+                    "x={:.0} y={:.0} w={:.0} h={:.0}",
+                    f32::from(bounds.origin.x),
+                    f32::from(bounds.origin.y),
+                    f32::from(bounds.size.width),
+                    f32::from(bounds.size.height)
+                );
+                entity.read(cx).log_once(&format!("downloads hit name={name}"), line);
+            }
+        },
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .size_full()
+}
+
+/// `MORPH_LOG_EVENTS=1`.
+fn log_events() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("MORPH_LOG_EVENTS").is_some_and(|v| v == "1"))
+}
+
+fn log_event(what: &str) {
+    if log_events() {
+        println!("morph-event {what}");
+    }
+}
+
+/// Open a downloaded file with the system's app for it (`MORPH_TEST_NO_OPEN`:
+/// only log it, for the checks).
+fn open_file(path: &Path, cx: &mut App) {
+    log_event(&format!("download open {}", path.display()));
+    if std::env::var_os("MORPH_TEST_NO_OPEN").is_none() {
+        cx.open_with_system(path);
+    }
+}
+
+/// Show a downloaded file in its folder.
+fn reveal_file(path: &Path, cx: &mut App) {
+    log_event(&format!("download reveal {}", path.display()));
+    if std::env::var_os("MORPH_TEST_NO_OPEN").is_none() {
+        cx.reveal_path(path);
+    }
+}
+
 /// Say which tab-bar button ran, for the xvfb checks.
 fn log_bar(id: &str) {
     if std::env::var_os("MORPH_LOG_EVENTS").is_some_and(|v| v == "1") {
@@ -2705,6 +3295,7 @@ mod tests {
             })
             .collect();
         assert_eq!(names, ["Extensions", "More", "History", "Bookmarks", "Downloads", "Passwords", "Settings"]);
+        assert!(items.contains(&A::Run(super::Action::ShowDownloads, "Downloads")), "Downloads opens the panel, no longer coming soon");
         assert!(items.contains(&A::Bookmark) && items.contains(&A::Find) && items.contains(&A::Identity));
         assert!(!format!("{items:?}").contains("Desktop"), "no desktop-site entry on desktop");
         assert_eq!(items.last(), Some(&A::ManageProfiles));
@@ -2718,5 +3309,43 @@ mod tests {
         assert_eq!(super::step(Some(2), 3, true), Some(0));
         assert_eq!(super::step(Some(0), 3, false), Some(2));
         assert_eq!(super::step(None, 0, true), None);
+    }
+
+    #[test]
+    fn downloads_sit_in_the_main_menu_after_history_with_their_shortcut() {
+        let names: Vec<&str> = super::MAIN_MENU.iter().map(|e| e.0).collect();
+        let at = names.iter().position(|n| *n == "Downloads").expect("a Downloads entry");
+        assert_eq!(names[at - 1], "History");
+        assert_eq!(super::MAIN_MENU[at].1, super::Action::ShowDownloads);
+        let labels = super::shortcut_labels(&morph_ui::actions::Keymap::default().for_platform(cfg!(target_os = "macos")));
+        let want = if cfg!(target_os = "macos") { "⌘⇧J" } else { "Ctrl+Shift+Y" };
+        assert_eq!(labels.get(&super::Action::ShowDownloads).map(String::as_str), Some(want));
+    }
+
+    #[test]
+    fn a_tile_shows_a_bar_and_a_time_left_until_it_is_over() {
+        use super::{DownloadBar, download_eta_label};
+        use morph_browser::downloads::Downloads;
+        use morph_webview::{Download, DownloadChange};
+        let dir = std::env::temp_dir().join(format!("morph-tile-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut d = Downloads::default();
+        let staged = dir.join(".a.bin.1.morph-part");
+        std::fs::write(&staged, b"bytes").unwrap();
+        d.apply(Download { id: 1, change: DownloadChange::Started { url: "http://x/a.bin".into(), name: "a.bin".into(), staged } });
+        let t0 = std::time::Instant::now();
+        d.apply_at(Download { id: 1, change: DownloadChange::Progress { received: 0, total: None } }, t0);
+        assert_eq!(DownloadBar::of(&d.items()[0]), DownloadBar::Indeterminate, "no size: indeterminate");
+        assert_eq!(download_eta_label(&d.items()[0]).as_deref(), Some("Estimating…"));
+        d.apply_at(Download { id: 1, change: DownloadChange::Progress { received: 250, total: Some(1000) } }, t0 + std::time::Duration::from_secs(1));
+        assert_eq!(DownloadBar::of(&d.items()[0]), DownloadBar::Determinate(250));
+        assert_eq!(download_eta_label(&d.items()[0]).as_deref(), Some("3s left"));
+        assert!(d.pause(1));
+        assert_eq!(download_eta_label(&d.items()[0]).as_deref(), Some("Paused"));
+        assert_eq!(DownloadBar::of(&d.items()[0]), DownloadBar::Determinate(250), "a paused bar stays");
+        d.cancel(1);
+        assert_eq!(DownloadBar::of(&d.items()[0]), DownloadBar::None);
+        assert_eq!(download_eta_label(&d.items()[0]), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
