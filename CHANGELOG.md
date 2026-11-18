@@ -7,17 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-18
+
 - Downloads button left of the ☰ menu (Ctrl+Shift+Y, ⌘⇧J on macOS) opens a downloads panel.
+
 - Download tiles show a progress bar, speed and time left, and have Pause, Resume, Cancel, Retry and Show in folder.
+
 - Clicking a tile opens the file, or opens it when done ("Opens in 12s") while it is still downloading.
+
 - Downloads behind a login resume with the page's session, kept encrypted and deleted when the download ends.
+
 - Bookmarks, folders and tags sync between linked devices over Weirdnet.
+
 - History (visits, deletes, clear-all) syncs between linked devices.
+
 - Search engine, home page and theme sync between linked devices.
+
 - Sync runs on its own soon after unlock and every 30 seconds.
+
 - Settings > Linked devices lists linked devices and revokes one.
+
 - Settings > Relays can turn Weirdnet discovery off and add peers by hand, on desktop and the phone app; an admin policy can lock discovery off.
+
 - `weirdnet-<app>://` links call the app over Weirdnet and show its answer, with a clear page for each failure.
+
 - Uses weirdnet-net 0.6.0 and weirdnet-sync 0.2.0.
 
 ## [0.2.0-alpha.15] - 2026-11-17
