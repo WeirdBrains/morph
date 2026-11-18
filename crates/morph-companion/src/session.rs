@@ -28,12 +28,31 @@ pub struct Sessions {
     policy: SharedPolicy,
     approver: Arc<dyn Approver>,
     open: HashMap<AgentId, AgentSession>,
-    running: Mutex<HashMap<AgentId, CancelToken>>,
+    running: Running,
+}
+
+type Running = Arc<Mutex<HashMap<AgentId, CancelToken>>>;
+
+/// Stops tasks from another thread while `Sessions::run` holds the sessions.
+#[derive(Clone)]
+pub struct Canceller(Running);
+
+impl Canceller {
+    /// Stops a companion's running task. Returns whether one was running.
+    pub fn cancel(&self, companion: &AgentId) -> bool {
+        match self.0.lock().unwrap().get(companion) {
+            Some(token) => {
+                token.cancel();
+                true
+            }
+            None => false,
+        }
+    }
 }
 
 impl Sessions {
     pub fn new(models: Arc<dyn ModelProvider>, tools: Arc<ToolRegistry>, policy: SharedPolicy, approver: Arc<dyn Approver>) -> Self {
-        Self { models, tools, policy, approver, open: HashMap::new(), running: Mutex::new(HashMap::new()) }
+        Self { models, tools, policy, approver, open: HashMap::new(), running: Running::default() }
     }
 
     /// Runs one task for a companion, handing each view update to `on_update` as it happens.
@@ -77,15 +96,14 @@ impl Sessions {
         Ok(outcome)
     }
 
+    /// A handle that stops tasks from another thread.
+    pub fn canceller(&self) -> Canceller {
+        Canceller(self.running.clone())
+    }
+
     /// Stops a companion's running task. Returns whether one was running.
     pub fn cancel(&self, companion: &AgentId) -> bool {
-        match self.running.lock().unwrap().get(companion) {
-            Some(token) => {
-                token.cancel();
-                true
-            }
-            None => false,
-        }
+        self.canceller().cancel(companion)
     }
 
     pub fn is_running(&self, companion: &AgentId) -> bool {
