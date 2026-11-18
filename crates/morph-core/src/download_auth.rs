@@ -175,7 +175,7 @@ mod tests {
         assert!(!is_jwt(&none), "unsigned tokens don't count");
         let no_alg = format!("{}.{}.sig", URL_SAFE_NO_PAD.encode(r#"{"typ":"JWT"}"#), URL_SAFE_NO_PAD.encode("{}"));
         assert!(!is_jwt(&no_alg));
-        assert_eq!(jwts_in(&format!(r#"{{"auth":{{"access_token":"{good}","x":1}}}}"#)), [good.clone()]);
+        assert_eq!(jwts_in(&format!(r#"{{"auth":{{"access_token":"{good}","x":1}}}}"#)), std::slice::from_ref(&good));
         assert_eq!(jwts_in(&format!("Bearer {good}")), [good]);
     }
 
