@@ -662,6 +662,24 @@ unfinished alpha.10 work is parked on branch `wip/alpha10`, not built).
   `<desktop>-mimeapps.list` itself (xdg-settings failed on Hyprland), then
   checks each type with `xdg-mime`.
 
+## Release (0.2.0)
+
+- Release `v0.2.0` (tag at `1002011`, cut with `weirdnet_release.py --version 0.2.0`
+  from `6d546b8`): https://github.com/WeirdBrains/morph/releases/tag/v0.2.0. Not a
+  pre-release. Library sync (bookmarks, history, settings) on weirdnet-sync 0.2.0,
+  Linked devices with revoke, the discovery switch and manual peers (desktop and
+  phone), the downloads button and panel, and download sessions for resume.
+- The 11 matrix assets come from CI run 44376962078 (`1002011`, all green; iOS
+  green) and `... assets 0.2.0` passed. A release arm64 APK
+  (`morph-0.2.0-android-arm64.apk`, fixed test key `c2af967c...`) was added by the
+  new on-demand `Android release APK` workflow (run 44385402732), and SHA256SUMS
+  was regenerated to list it.
+- `morph-bin` 0.2.0-1 / `morph` / nix point at the 0.2.0 tarball (sha256
+  `c1cd722a7834fd7bee528074777d43cab32fa74992bf9d41dd89c8cb54b4a2d2`);
+  `taur-check` is clean. Not uploaded to TAUR: the repo is private (shared
+  AGENTS.md) and there is no taurctl on the box. No crates published
+  (`[crates] publish = []`).
+
 ## Release and TAUR (alpha.15)
 
 - Pre-release `v0.2.0-alpha.15` (tag at `f8aeff6`, cut from `1253118`):
