@@ -552,6 +552,87 @@ fn destination_path(destination: &str) -> Option<PathBuf> {
 /// How often a download reports its progress at most.
 const PROGRESS_EVERY: Duration = Duration::from_millis(200);
 
+/// Links the user opens elsewhere: a click with Ctrl, Shift or the middle
+/// button, or on a `target=_blank` link, becomes [`Event::OpenLink`] for
+/// the shell (a tab or a window of its own) instead of WebKit's bare popup
+/// window. Script popups (`window.open`, which need `window.opener`) are
+/// left to [`popup_handler`].
+pub(crate) fn watch_links(engine: &webkit2gtk::WebView, id: ViewId, queue: &Queue) {
+    use webkit2gtk::{NavigationPolicyDecision, NavigationPolicyDecisionExt, NavigationType, PolicyDecisionExt, PolicyDecisionType, URIRequestExt};
+    let q = queue.clone();
+    engine.connect_decide_policy(move |_, decision, kind| {
+        if kind != PolicyDecisionType::NewWindowAction {
+            return false;
+        }
+        let Some(action) = decision.dynamic_cast_ref::<NavigationPolicyDecision>().and_then(|d| d.navigation_action()) else {
+            return false;
+        };
+        if action.navigation_type() != NavigationType::LinkClicked {
+            return false;
+        }
+        let Some(url) = action.request().and_then(|r| r.uri()).map(|u| u.to_string()).filter(|u| !u.is_empty()) else {
+            return false;
+        };
+        let target = crate::LinkTarget::for_click(action.modifiers(), action.mouse_button());
+        q.borrow_mut().push((id, Event::OpenLink { url, target }));
+        decision.ignore();
+        true
+    });
+}
+
+/// WebKit's own link menu (pages in windows of their own, X11): its "Open
+/// Link in New Window" made a bare popup window, so it becomes Morph's
+/// "Open Link in New Tab" and "Open Link in New Window".
+pub(crate) fn link_menu_entries(engine: &webkit2gtk::WebView, id: ViewId, queue: &Queue) {
+    use webkit2gtk::{ContextMenuAction, ContextMenuExt, ContextMenuItem, ContextMenuItemExt, HitTestResultExt};
+    let q = queue.clone();
+    engine.connect_context_menu(move |_, menu, _, hit| {
+        if !hit.context_is_link() {
+            return false;
+        }
+        let Some(url) = hit.link_uri().map(|u| u.to_string()) else {
+            return false;
+        };
+        let items = menu.items();
+        let at = items.iter().position(|i| i.stock_action() == ContextMenuAction::OpenLinkInNewWindow);
+        if let Some(old) = at.and_then(|i| items.get(i)) {
+            menu.remove(old);
+        }
+        let at = at.unwrap_or(1) as i32;
+        for (n, (name, label, target)) in [
+            ("morph-open-tab", "Open Link in New _Tab", crate::LinkTarget::NewTab),
+            ("morph-open-window", "Open Link in New _Window", crate::LinkTarget::NewWindow),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let action = webkit2gtk::gio::SimpleAction::new(name, None);
+            let (q, url) = (q.clone(), url.clone());
+            action.connect_activate(move |_, _| q.borrow_mut().push((id, Event::OpenLink { url: url.clone(), target })));
+            menu.insert(&ContextMenuItem::from_gaction(&action, label, None), at + n as i32);
+        }
+        false
+    });
+}
+
+/// The page's back/forward history, serialized (`WebKitWebViewSessionState`).
+pub(crate) fn session_bytes(engine: &webkit2gtk::WebView) -> Option<Vec<u8>> {
+    let state = engine.session_state()?;
+    Some(state.serialize()?.to_vec())
+}
+
+/// Give a new page the history `bytes` holds and go to its current entry.
+/// `false` when the bytes are not a session (the caller loads its address).
+pub(crate) fn restore_session(engine: &webkit2gtk::WebView, bytes: &[u8]) -> bool {
+    let state = webkit2gtk::WebViewSessionState::new(&gtk::glib::Bytes::from(bytes));
+    engine.restore_session_state(&state);
+    let Some(item) = engine.back_forward_list().and_then(|l| webkit2gtk::BackForwardListExt::current_item(&l)) else {
+        return false;
+    };
+    engine.go_to_back_forward_list_item(&item);
+    true
+}
+
 /// Hooks every WebKitGTK backend adds to a page: its icon (from
 /// [`crate::icons::ICON_SCRIPT`], over a message handler of its own so a
 /// page can only report its own icon) and file chooser requests, which the
@@ -901,8 +982,10 @@ impl Backend for WryBackend {
         let id = ViewId(self.next);
         let context = self.contexts.entry(spec.data_dir.clone()).or_insert_with(|| WebContext::new(spec.data_dir.clone()));
         let url = if spec.url.is_empty() { "about:blank".to_string() } else { spec.url.clone() };
-        let builder = WebViewBuilder::new_with_web_context(context)
-            .with_url(url)
+        let builder = WebViewBuilder::new_with_web_context(context);
+        // A page moved from another window starts from its history instead.
+        let builder = if spec.session.is_some() { builder } else { builder.with_url(url.clone()) };
+        let builder = builder
             .with_bounds(wry_rect(spec.bounds))
             .with_initialization_script(UNDO_REDO_SCRIPT)
             .with_initialization_script(CONTROL_SCHEME_SCRIPT)
@@ -914,6 +997,13 @@ impl Backend for WryBackend {
         hook_downloads(&engine, id, &mut self.hooked, &spec.data_dir, &self.downloads, &self.queue);
         attach_bridge(&engine, &self.bridge);
         watch(&engine, id, &self.queue, &self.shortcuts);
+        watch_links(&engine, id, &self.queue);
+        link_menu_entries(&engine, id, &self.queue);
+        if let Some(session) = &spec.session
+            && !restore_session(&engine, session)
+        {
+            engine.load_uri(&url);
+        }
         let chooser: Chooser = Rc::default();
         watch_more(&engine, id, &self.queue, &chooser);
         apply_zoom(&engine, self.scale);
@@ -1011,6 +1101,9 @@ impl WebView for WryView {
     }
     fn clear_data(&self) -> Result<()> {
         self.view.clear_all_browsing_data().map_err(backend_err)
+    }
+    fn session_state(&self) -> Option<Vec<u8>> {
+        session_bytes(&self.view.webview())
     }
     fn load_url(&self, url: &str) -> Result<()> {
         self.view.load_url(url).map_err(backend_err)

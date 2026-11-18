@@ -131,8 +131,9 @@ impl Backend for FakeBackend {
             shared.next += 1;
             ViewId(shared.next)
         };
+        let url = spec.url.clone();
         self.record(id, Call::Create(spec));
-        Ok(Box::new(FakeView { id, backend: self.clone() }))
+        Ok(Box::new(FakeView { id, backend: self.clone(), url: RefCell::new(url) }))
     }
 
     fn poll(&mut self) -> Vec<(ViewId, Event)> {
@@ -158,6 +159,9 @@ impl Backend for FakeBackend {
 struct FakeView {
     id: ViewId,
     backend: FakeBackend,
+    /// The last address it was given, as its "history" for
+    /// [`WebView::session_state`].
+    url: RefCell<String>,
 }
 
 impl WebView for FakeView {
@@ -166,6 +170,7 @@ impl WebView for FakeView {
     }
     fn load_url(&self, url: &str) -> Result<()> {
         self.backend.record(self.id, Call::Load(url.into()));
+        *self.url.borrow_mut() = url.into();
         Ok(())
     }
     fn back(&self) -> Result<()> {
@@ -226,6 +231,9 @@ impl WebView for FakeView {
     }
     fn choose_files(&self, paths: Option<Vec<std::path::PathBuf>>) {
         self.backend.record(self.id, Call::ChooseFiles(paths));
+    }
+    fn session_state(&self) -> Option<Vec<u8>> {
+        Some(format!("fake-session:{}", self.url.borrow()).into_bytes())
     }
     fn clear_data(&self) -> crate::Result<()> {
         self.backend.record(self.id, Call::ClearData);

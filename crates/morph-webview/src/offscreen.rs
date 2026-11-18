@@ -220,8 +220,10 @@ impl Backend for OffscreenBackend {
         // as its window, and moved into its off-screen window unannounced.
         let embedder = &self.shared.embedder;
         embedder.add(&vbox);
-        let builder = WebViewBuilder::new_with_web_context(context)
-            .with_url(url)
+        let builder = WebViewBuilder::new_with_web_context(context);
+        // A page moved from another window starts from its history instead.
+        let builder = if spec.session.is_some() { builder } else { builder.with_url(url.clone()) };
+        let builder = builder
             .with_initialization_script(UNDO_REDO_SCRIPT)
             .with_initialization_script(CONTROL_SCHEME_SCRIPT)
             .with_initialization_script(crate::icons::ICON_SCRIPT)
@@ -248,6 +250,12 @@ impl Backend for OffscreenBackend {
         crate::wry_linux::hook_downloads(&engine, id, &mut self.hooked, &spec.data_dir, &self.downloads, &self.queue);
         attach_bridge(&engine, &self.bridge);
         watch(&engine, id, &self.queue, &self.shortcuts);
+        crate::wry_linux::watch_links(&engine, id, &self.queue);
+        if let Some(session) = &spec.session
+            && !crate::wry_linux::restore_session(&engine, session)
+        {
+            engine.load_uri(&url);
+        }
         let chooser: crate::wry_linux::Chooser = Rc::default();
         crate::wry_linux::watch_more(&engine, id, &self.queue, &chooser);
         let dirty = Rc::new(Cell::new(true));
@@ -274,12 +282,21 @@ impl Backend for OffscreenBackend {
             });
         });
         // WebKit's context menu is a GTK menu, which needs a window on the
-        // screen to hang from; an off-screen page has none.
-        engine.connect_context_menu(|_, _, _, _| true);
+        // screen to hang from; an off-screen page has none. On a link the
+        // shell draws its own link menu instead.
+        let zoom = Rc::new(Cell::new(0.0));
+        let (queue, z) = (self.queue.clone(), zoom.clone());
+        engine.connect_context_menu(move |_, _, event, hit| {
+            if let Some(url) = hit.context_is_link().then(|| hit.link_uri()).flatten() {
+                let scale = if z.get() > 0.0 { z.get() } else { 1.0 };
+                let (x, y) = event.coords().unwrap_or((0.0, 0.0));
+                queue.borrow_mut().push((id, Event::LinkMenu { url: url.to_string(), x: x / scale, y: y / scale }));
+            }
+            true
+        });
         // The same goes for a <select>'s list (it opened in the middle of
         // the screen, far from the element) and for tooltips: the shell
         // draws both.
-        let zoom = Rc::new(Cell::new(0.0));
         let menu: OpenMenu = Rc::default();
         let (queue, open, z) = (self.queue.clone(), menu.clone(), zoom.clone());
         engine.connect_show_option_menu(move |_, options, _, rect| {
@@ -695,6 +712,9 @@ impl WebView for OffscreenView {
     }
     fn clear_data(&self) -> Result<()> {
         self.view.clear_all_browsing_data().map_err(backend_err)
+    }
+    fn session_state(&self) -> Option<Vec<u8>> {
+        crate::wry_linux::session_bytes(&self.engine())
     }
     fn load_url(&self, url: &str) -> Result<()> {
         self.view.load_url(url).map_err(backend_err)
