@@ -28,7 +28,7 @@ Update this table when you start or finish an area.
 | Password saver: backend and storage | Morph Lead Dev | v0.3, not started |
 | 0.2.x patches: omnibox suggestions, transparent popups, multi-window follow-ups, downloads | Morph Lead Dev | in progress |
 | Releases and packaging | Morph Lead Dev | v0.2.1 in progress |
-| Agent work: new `weirdnet-agent` crate (agent loop, tools, approvals, trace), `morph-ai`, `morph-companion`, `morph-ui` `Slot::Companion`, projects. Design: [Companions Design v1](https://cursor.com/canvas/store-e1e5cb1f-1e04-4388-8265-5c11c09b3f62/2ca47086-6c82-43a2-ba40-cea34404b597). Branch `main` | Morph Dev | v0.3 (moved from v0.4), in progress: `weirdnet-agent` v0 core first (local only until its repo exists) |
+| Agent work: new `weirdnet-agent` crate (agent loop, tools, approvals, trace), `morph-ai`, `morph-companion`, `morph-ui` `Slot::Companion`, projects. Design: [Companions Design v1](https://cursor.com/canvas/store-e1e5cb1f-1e04-4388-8265-5c11c09b3f62/2ca47086-6c82-43a2-ba40-cea34404b597). Branch `main` | Morph Dev | v0.3 (moved from v0.4), in progress: `weirdnet-agent` 0.1.0 is on crates.io and pinned `=0.1.0`; `morph-ai` and `morph-companion` scaffolds are on main with tests. Next: wiring into the app (browser tools, research host, model provider over `weirdnet-model`) and `morph-ui` `Slot::Companion`, after confirming with Lead Dev |
 | Design for all v0.3 screens | Morph Dev | in progress |
 
 ## Where things stand
