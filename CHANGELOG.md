@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-11-19
+
 - Switching a window to another profile no longer loses its tabs. The tabs it showed stay saved with the profile it left (on disk at once, so a crash or quit keeps them too), and switching back brings them back in order with the same active tab; a profile with several windows gets all of them back, the others in new windows.
 
 ## [0.2.1] - 2026-11-18
