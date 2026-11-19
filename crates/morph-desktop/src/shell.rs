@@ -1117,17 +1117,14 @@ impl Shell {
         let Some(companions) = self.companions.clone() else {
             return;
         };
-        // Shown: fold it to its strip or open it out. Hidden: show it opened out.
-        let open = if self.layout.shown(Slot::Companion).is_some() {
-            let fold = !companions.read(cx).is_collapsed();
-            companions.update(cx, |view, cx| view.set_collapsed(fold, cx));
-            !fold
-        } else {
+        let shown = self.layout.shown(Slot::Companion).is_some();
+        let fold = companions_shortcut(shown, companions.read(cx).is_collapsed());
+        if !shown {
             self.layout.toggle_kind(Slot::Companion, KindId::new(component::COMPANIONS));
             self.save_layout();
-            companions.update(cx, |view, cx| view.set_collapsed(false, cx));
-            true
-        };
+        }
+        companions.update(cx, |view, cx| view.set_collapsed(fold, cx));
+        let open = !fold;
         if open {
             companions.update(cx, |view, cx| view.focus(window, cx));
             self.focus_shell(cx);
@@ -1389,6 +1386,12 @@ macro_rules! on_actions {
     ($el:expr, $cx:expr, [$($gpui:ident => $action:expr),* $(,)?]) => {
         $el$(.on_action($cx.listener(|this, _: &$gpui, window, cx| this.run($action, window, cx))))*
     };
+}
+
+/// Whether Ctrl+Shift+K leaves the Companion panel folded: a shown panel folds or opens out, a
+/// hidden one is shown opened out.
+fn companions_shortcut(shown: bool, collapsed: bool) -> bool {
+    shown && !collapsed
 }
 
 /// Width of the frameless window's resize border, in logical pixels.
@@ -1976,6 +1979,22 @@ mod tests {
                 assert!(page_action(&keymap, &key).is_some(), "{key}");
             }
         }
+    }
+
+    #[test]
+    fn ctrl_shift_k_folds_and_unfolds_a_shown_companion_panel_and_shows_a_hidden_one() {
+        let other = Keymap::default().for_platform(false);
+        let mac = Keymap::default().for_platform(true);
+        // From GPUI (the panel or the shell has the keyboard) and from the page.
+        assert_eq!(other.action_for("ctrl-shift-k"), Some(Action::ToggleCompanions));
+        assert_eq!(page_action(&other, "shift-ctrl-k"), Some(Action::ToggleCompanions));
+        assert_eq!(page_action(&mac, "shift-cmd-k"), Some(Action::ToggleCompanions));
+        assert!(gpui::Keystroke::parse("ctrl-shift-k").is_ok());
+        // Open → folded → open; hidden → shown open.
+        assert!(companions_shortcut(true, false));
+        assert!(!companions_shortcut(true, true));
+        assert!(!companions_shortcut(false, false));
+        assert!(!companions_shortcut(false, true));
     }
 
     #[test]
