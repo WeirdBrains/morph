@@ -74,9 +74,8 @@ struct Builder {
 
 impl Builder {
     fn push_block(&mut self, b: Block) {
-        match self.stack.last_mut() {
-            Some(Container::Root(v) | Container::Item(v) | Container::Quote(v)) => v.push(b),
-            _ => {}
+        if let Some(Container::Root(v) | Container::Item(v) | Container::Quote(v)) = self.stack.last_mut() {
+            v.push(b);
         }
     }
 
