@@ -8,9 +8,14 @@
 //! |--------------------|-----------------------------------------------------------------|
 //! | `morph-companions` | `c/<id>` companion (OR-set), `default` and `settings` (LWW)     |
 //! | `morph-grants`     | `site/<agent>\u{1f}<site>` level (LWW), `allow/<key>` standing allow and `ext/<agent>` external approval (OR-set) |
-//! | `morph-chats`      | `t/<id>` chat turn (OR-set; long answers clipped)               |
+//! | `morph-chats`      | `t/<id>` chat turn (OR-set; long turns chunked, whole)          |
 //! | `morph-mcp`        | `s/<id>` server config without secret values (OR-set)           |
 //! | `morph-journal`    | `j/<id>` journal and `e/<id>` entry (OR-set)                    |
+//!
+//! Every record is written with `SyncState::write` and read with `SyncState::read`, so a value
+//! over the type's `inline_max` is chunked and travels whole (a chat turn with a long answer).
+//! [`configure`] sets the record options, the same on every device. Peers on an older Morph
+//! see an entry's fallback `op` only: for a chunked chat turn that is a clipped copy.
 //!
 //! The files the app reads stay where they were (the companions directory, through
 //! [`AiStore`]). Like settings, sync works by difference: [`backfill`] logs what changed in
@@ -35,12 +40,13 @@ use morph_store::Library;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use weirdnet_agent::{AgentKind, CompanionScope, Policy};
-use weirdnet_sync::NodeId;
 use weirdnet_sync::hlc::Hlc;
+use weirdnet_sync::log::LogEntry;
 use weirdnet_sync::merge::OrSet;
+use weirdnet_sync::{NodeId, RecordOptions, RecordValue, SyncError, SyncState};
 
-pub use morph_core::companion_sync::{CHATS, COMPANIONS, GRANTS, JOURNAL, MCP, SENSITIVE, TYPES};
-use morph_core::sync::{load_clock, load_log, load_roster, node_id, persist_log, types_on};
+pub use morph_core::companion_sync::{CHATS, COMPANIONS, GRANTS, JOURNAL, MCP, MCP_SECRETS, SENSITIVE, TYPES};
+use morph_core::sync::{load_roster, node_id, persist_log, save_records, types_on};
 
 const META_SNAPSHOT: &str = "companion-sync";
 const SEP: char = '\u{1f}';
@@ -75,6 +81,8 @@ pub enum CompanionSyncError {
     Store(#[from] morph_store::StoreError),
     #[error(transparent)]
     Files(#[from] StoreError),
+    #[error("the library has no sync node id")]
+    NoState,
 }
 
 pub type Result<T> = std::result::Result<T, CompanionSyncError>;
@@ -97,16 +105,11 @@ fn to_value<T: Serialize>(v: &T) -> Value {
     serde_json::to_value(v).expect("record json")
 }
 
-/// Largest synced chat op (its JSON). A sealed page travels hex-encoded inside CBOR that
-/// sends bytes as an integer array (about four times the plaintext on the wire), so one op
-/// must stay under a quarter of `weirdnet_sync::PAGE_MAX` (the reply cap) with room for the
-/// envelope.
-/// `ChatTurn::for_sync` bounds the answer's bytes, not its JSON (escaped quotes, newlines and
-/// control characters grow it up to sixfold), nor the question or sources.
-const MAX_SYNCED_TURN: usize = 56 * 1024;
-const MAX_SYNCED_QUESTION: usize = 8 * 1024;
-const MAX_SYNCED_SOURCES: usize = 64;
-const MAX_SYNCED_SOURCE: usize = 2048;
+/// Bounds for the clipped copy older peers get as a chunked turn's fallback; the answer is
+/// clipped until the op fits the type's `inline_max`.
+const FALLBACK_QUESTION: usize = 8 * 1024;
+const FALLBACK_SOURCES: usize = 64;
+const FALLBACK_SOURCE: usize = 2048;
 
 fn clip_str(s: &mut String, max: usize) {
     if s.len() > max {
@@ -122,31 +125,75 @@ fn op_len(turn: &ChatTurn) -> usize {
     serde_json::to_vec(&RecOp::Put { value: to_value(turn) }).map_or(usize::MAX, |b| b.len())
 }
 
-/// The copy of a turn that syncs: [`ChatTurn::for_sync`], then clipped further until its op
-/// fits [`MAX_SYNCED_TURN`]. Deterministic, so the device with the full turn recognises it.
-fn synced_turn(turn: &ChatTurn) -> ChatTurn {
-    let mut t = turn.for_sync();
-    if op_len(&t) <= MAX_SYNCED_TURN {
+/// How the companion types are written, the same on every device: chats with the crate's
+/// default limits (a turn over `inline_max` is chunked), MCP secrets sealed. Types stay on or
+/// off as the user chose (`SyncState::configure` would turn them on).
+pub fn configure(st: &mut SyncState) {
+    let on = st.types.clone();
+    for (typ, sealed) in [(CHATS, false), (MCP_SECRETS, true)] {
+        if let Err(e) = st.configure(typ, RecordOptions { sealed, ..Default::default() }) {
+            eprintln!("morph-sync: configure {typ}: {e}");
+        }
+    }
+    st.types = on;
+}
+
+/// The copy of a turn older peers see when the whole turn is chunked: clipped until its op
+/// fits `max` (the fence-aware [`morph_ai::clip_markdown`] for the answer). Deterministic, so
+/// the device with the full turn recognises it.
+fn fallback_turn(turn: &ChatTurn, max: usize) -> ChatTurn {
+    let mut t = turn.clone();
+    if op_len(&t) <= max {
         return t;
     }
-    clip_str(&mut t.question, MAX_SYNCED_QUESTION);
-    t.sources.truncate(MAX_SYNCED_SOURCES);
-    t.sources.iter_mut().for_each(|s| clip_str(s, MAX_SYNCED_SOURCE));
+    clip_str(&mut t.question, FALLBACK_QUESTION);
+    t.sources.truncate(FALLBACK_SOURCES);
+    t.sources.iter_mut().for_each(|s| clip_str(s, FALLBACK_SOURCE));
     // Then the answer, shorter each round (to the marker alone at worst), so this ends;
-    // then the last sources.
+    // then the question (JSON escapes can still grow it sixfold) and the last sources.
     let answer = t.answer.clone();
     let mut keep = answer.len();
     loop {
         let len = op_len(&t);
-        if len <= MAX_SYNCED_TURN || keep == 0 {
+        if len <= max || keep == 0 {
             break;
         }
-        keep = keep * MAX_SYNCED_TURN / len / 2;
-        // Fence-aware, so a cut inside a code block closes it before the note.
+        keep = keep * max / len / 2;
         t.answer = morph_ai::clip_markdown(&answer, keep);
     }
-    while op_len(&t) > MAX_SYNCED_TURN && t.sources.pop().is_some() {}
+    while op_len(&t) > max && !t.question.is_empty() {
+        let half = t.question.len() / 2;
+        clip_str(&mut t.question, half);
+    }
+    while op_len(&t) > max && t.sources.pop().is_some() {}
     t
+}
+
+/// The fallback `op` for a write of `op` to `typ`: a clipped copy for a chat turn too large
+/// to go inline, else none.
+fn fallback(sync: &SyncState, typ: &str, op: &RecOp, len: usize) -> Vec<u8> {
+    let max = sync.options(typ).limits.inline_max;
+    match op {
+        RecOp::Put { value } if typ == CHATS && len > max => serde_json::from_value::<ChatTurn>(value.clone())
+            .ok()
+            .and_then(|t| serde_json::to_vec(&RecOp::Put { value: to_value(&fallback_turn(&t, max)) }).ok())
+            .filter(|b| b.len() <= max)
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
+/// An entry's op: its whole value, opened when sealed. While chunks are still to pull, the
+/// fallback the writer gave (if any). An entry this device cannot open is `Err`.
+fn read_op(sync: &SyncState, e: &LogEntry) -> std::result::Result<Option<RecOp>, SyncError> {
+    Ok(match sync.read(e)? {
+        RecordValue::Ready(bytes) => serde_json::from_slice(&bytes).ok(),
+        RecordValue::Pending { .. } => serde_json::from_slice(&e.op).ok(),
+    })
+}
+
+fn records_state(lib: &Library) -> Result<SyncState> {
+    crate::sync::records_state(lib).ok_or(CompanionSyncError::NoState)
 }
 
 /// Records from the files. Allows get a sync key: the one they were synced under, else
@@ -201,17 +248,8 @@ fn read_files(store: &dyn AiStore, our: &str, base: &State) -> Result<State> {
     st.recs.insert(GRANTS.into(), g);
 
     let mut t = BTreeMap::new();
-    let synced = base.recs.get(CHATS);
     for turn in store.load_chats()?.unwrap_or_default().turns {
-        let id = format!("t/{}", turn.id);
-        // A turn this device only has as the merged (clipped) copy is logged as it came, not
-        // clipped again: re-clipping a clipped answer changes it, and that newer copy would
-        // replace the full answer on the device that ran it.
-        let v = match synced.and_then(|b| b.get(&id)) {
-            Some(prev) if serde_json::from_value::<ChatTurn>(prev.clone()).is_ok_and(|p| p == turn) => prev.clone(),
-            _ => to_value(&synced_turn(&turn)),
-        };
-        t.insert(id, v);
+        t.insert(format!("t/{}", turn.id), to_value(&turn));
     }
     st.recs.insert(CHATS.into(), t);
 
@@ -269,9 +307,8 @@ pub fn backfill(lib: &mut Library, store: &dyn AiStore, now_ms: i64) -> Result<(
     let first = base.is_none();
     let base = base.unwrap_or_default();
     let mut file = read_files(store, &our, &base)?;
-    let node = NodeId::new(&our);
-    let mut clock = load_clock(lib)?;
-    let mut log = load_log(lib)?;
+    let mut sync = records_state(lib)?;
+    let node = sync.our_node.clone();
     let mut wrote = false;
     for typ in &types {
         let empty = BTreeMap::new();
@@ -287,19 +324,37 @@ pub fn backfill(lib: &mut Library, store: &dyn AiStore, now_ms: i64) -> Result<(
             ops.push((id.clone(), RecOp::Remove, false));
         }
         for (id, op, at_zero) in ops {
-            let hlc = if at_zero {
-                Hlc::new(0, 0, node.clone())
+            let bytes = serde_json::to_vec(&op).expect("op json");
+            let done = if at_zero {
+                // A first-run default, small and plain: stamped at time zero.
+                sync.log.append(node.clone(), Hlc::new(0, 0, node.clone()), *typ, &id, bytes);
+                Ok(())
             } else {
-                let h = Hlc::tick(clock.as_ref(), now_ms.max(0) as u64, node.clone());
-                clock = Some(h.clone());
-                h
+                let fb = fallback(&sync, typ, &op, bytes.len());
+                // A value over `record_max` syncs as its clipped copy, if it has one.
+                let bytes = if bytes.len() > sync.options(typ).limits.record_max && !fb.is_empty() { fb.clone() } else { bytes };
+                sync.write_with_fallback(now_ms.max(0) as u64, typ, &id, &bytes, fb).map(|_| ())
             };
-            log.append(node.clone(), hlc, *typ, id, serde_json::to_vec(&op).expect("op json"));
-            wrote = true;
+            match done {
+                Ok(()) => wrote = true,
+                Err(e) => {
+                    // Not logged: keep the last merged value in the snapshot, so the next pass
+                    // tries again.
+                    if !matches!(&e, SyncError::Refused(r) if r == "no-epoch-key") {
+                        eprintln!("morph-sync: {typ} {id}: {e}");
+                    }
+                    let recs = file.recs.entry(typ.to_string()).or_default();
+                    match before.get(&id) {
+                        Some(v) => recs.insert(id, v.clone()),
+                        None => recs.remove(&id),
+                    };
+                }
+            }
         }
     }
     if wrote {
-        persist_log(lib, &log, clock.as_ref())?;
+        persist_log(lib, &sync.log, sync.clock.as_ref())?;
+        save_records(lib, &sync.records)?;
     }
     // Types that are off keep their last merged records, so turning one on later diffs correctly.
     for (typ, recs) in &base.recs {
@@ -332,12 +387,8 @@ fn voided(typ: &str, revoked: &BTreeMap<String, i64>, e: &weirdnet_sync::log::Lo
 
 /// Merge one type's ops from every node: OR-sets for collections, LWW for single values. Each
 /// winning value comes with the node that wrote it.
-fn merge_type(
-    lib: &Library,
-    log: &weirdnet_sync::log::OpLog,
-    typ: &str,
-    revoked: &BTreeMap<String, i64>,
-) -> Result<BTreeMap<String, (Value, String)>> {
+fn merge_type(lib: &Library, sync: &SyncState, typ: &str, revoked: &BTreeMap<String, i64>) -> Result<BTreeMap<String, (Value, String)>> {
+    let log = &sync.log;
     let mut nodes: BTreeSet<String> = log.cursors().keys().map(|n| n.0.clone()).collect();
     for e in lib.sync_log()? {
         nodes.insert(e.node_id);
@@ -349,7 +400,9 @@ fn merge_type(
             if voided(typ, revoked, e) {
                 continue;
             }
-            let Ok(op) = serde_json::from_slice::<RecOp>(&e.op) else { continue };
+            // An entry this device cannot read (sealed under a key it lacks) is skipped, so
+            // the record keeps the latest entry it can.
+            let Ok(Some(op)) = read_op(sync, e) else { continue };
             let value = match &op {
                 RecOp::Put { value } => Some(value.clone()),
                 RecOp::Remove => None,
@@ -427,8 +480,9 @@ fn write_if_changed<T: PartialEq>(current: Option<T>, next: T, save: impl FnOnce
     Ok(true)
 }
 
-fn write_files(store: &dyn AiStore, st: &mut State, types: &[&str]) -> Result<bool> {
+fn write_files(store: &dyn AiStore, st: &mut State, types: &[&str], chat_inline_max: usize) -> Result<bool> {
     let mut changed = false;
+    let mut kept = Vec::new();
     let recs = |t: &str| st.recs.get(t).cloned().unwrap_or_default();
     if types.contains(&COMPANIONS) {
         let c = recs(COMPANIONS);
@@ -495,12 +549,15 @@ fn write_files(store: &dyn AiStore, st: &mut State, types: &[&str]) -> Result<bo
     if types.contains(&CHATS) {
         let mut log = ChatLog { turns: recs(CHATS).into_values().filter_map(|v| serde_json::from_value(v).ok()).collect() };
         log.sort();
-        // Keep this device's unclipped answers when the synced copy is only their clipped form.
+        // Keep this device's whole turn where the merged copy is only its clipped fallback
+        // (its chunks are on their way, or it was too large to sync whole). The snapshot
+        // records the whole turn as well, so the next pass does not log it again.
         let current = store.load_chats()?;
         if let Some(cur) = &current {
             for t in log.turns.iter_mut() {
-                if let Some(full) = cur.turns.iter().find(|c| c.id == t.id && synced_turn(c) == *t) {
+                if let Some(full) = cur.turns.iter().find(|c| c.id == t.id && fallback_turn(c, chat_inline_max) == *t) {
                     *t = full.clone();
+                    kept.push((format!("t/{}", t.id), to_value(full)));
                 }
             }
         }
@@ -523,6 +580,9 @@ fn write_files(store: &dyn AiStore, st: &mut State, types: &[&str]) -> Result<bo
         journals.entries.sort_by(|a, b| a.at_ms.cmp(&b.at_ms).then_with(|| a.id.cmp(&b.id)));
         changed |= write_if_changed(store.load_journals()?, journals, |j| store.save_journals(j))?;
     }
+    if !kept.is_empty() {
+        st.recs.entry(CHATS.to_string()).or_default().extend(kept);
+    }
     Ok(changed)
 }
 
@@ -535,7 +595,7 @@ pub fn materialize(lib: &mut Library, store: &dyn AiStore) -> Result<bool> {
         return Ok(false);
     }
     let Some(base) = load_snapshot(lib)? else { return Ok(false) };
-    let log = load_log(lib)?;
+    let sync = records_state(lib)?;
     let revoked_at = morph_core::sync::revoked_writers(&load_roster(lib)?);
     let revoked: BTreeSet<String> = revoked_at.keys().cloned().collect();
     let mut st = State {
@@ -546,14 +606,14 @@ pub fn materialize(lib: &mut Library, store: &dyn AiStore) -> Result<bool> {
         mcp_writers: base.mcp_writers.clone(),
     };
     for typ in &types {
-        let merged = merge_type(lib, &log, typ, &revoked_at)?;
+        let merged = merge_type(lib, &sync, typ, &revoked_at)?;
         if *typ == MCP {
             st.mcp_writers = merged.iter().map(|(id, (_, w))| (id.clone(), w.clone())).collect();
         }
         st.recs.insert(typ.to_string(), merged.into_iter().map(|(id, (v, _))| (id, v)).collect());
     }
     drop_revoked_hosts(&mut st, &base, &revoked);
-    let changed = write_files(store, &mut st, &types)?;
+    let changed = write_files(store, &mut st, &types, sync.options(CHATS).limits.inline_max)?;
     save_snapshot(lib, &st)?;
     if changed {
         APPLIED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -613,9 +673,10 @@ pub fn after_revoke(lib: &mut Library, store: &dyn AiStore, now_ms: i64) -> Resu
 mod tests {
     use super::*;
     use morph_ai::{ChatTurn, CompanionProfile, Journal, JournalEntry, JournalKind, McpServer, McpTransport, McpValue, MemoryStore, ModelChoice};
-    use morph_core::sync::{enable, save_roster};
+    use morph_core::sync::{enable, load_log, save_roster};
     use morph_identity::profile_identity::LibraryKey;
     use weirdnet_agent::{AgentId, AllowRule, SiteLevel};
+    use weirdnet_sync::Limits;
 
     fn lib() -> (tempfile::TempDir, Library) {
         let tmp = tempfile::tempdir().unwrap();
@@ -635,13 +696,27 @@ mod tests {
         RecOp::Put { value: to_value(v) }
     }
 
+    /// What this device ("a") logged for `typ`, read whole.
     fn ours(lib: &Library, typ: &str) -> Vec<(String, RecOp)> {
-        load_log(lib)
-            .unwrap()
-            .iter_node(&NodeId::new("a"))
-            .filter(|e| e.typ == typ)
-            .map(|e| (e.record_id.clone(), serde_json::from_slice(&e.op).unwrap()))
-            .collect()
+        let sync = records_state(lib).unwrap();
+        sync.log.iter_node(&NodeId::new("a")).filter(|e| e.typ == typ).map(|e| (e.record_id.clone(), read_op(&sync, e).unwrap().unwrap())).collect()
+    }
+
+    /// Hand `from`'s entries that pass `keep` to `to`, as a pull would.
+    fn copy_entries(from: &Library, to: &mut Library, keep: impl Fn(&LogEntry) -> bool) {
+        let src = load_log(from).unwrap();
+        let mut log = load_log(to).unwrap();
+        for e in src.iter().filter(|e| keep(e)) {
+            match &e.value {
+                Some(v) => log.append_value(e.node_id.clone(), e.hlc.clone(), e.typ.clone(), e.record_id.clone(), e.op.clone(), v.clone()),
+                None => log.append(e.node_id.clone(), e.hlc.clone(), e.typ.clone(), e.record_id.clone(), e.op.clone()),
+            };
+        }
+        persist_log(to, &log, None).unwrap();
+    }
+
+    fn chat_inline_max(lib: &Library) -> usize {
+        records_state(lib).unwrap().options(CHATS).limits.inline_max
     }
 
     fn revoke(lib: &mut Library, peer: &str) {
@@ -874,54 +949,84 @@ mod tests {
         assert_eq!(names, ["Notes", "Research"]);
     }
 
+    /// A long answer in a fenced code block, several times `inline_max`.
+    fn long_turn() -> ChatTurn {
+        let code = "println!(\"\\\"\");\n".repeat(40 * 1024);
+        ChatTurn::new(AgentId::new("local"), "q", format!("Here:\n\n```rust\n{code}```\n"), 1)
+    }
+
     #[test]
-    fn long_answers_stay_whole_on_the_device_that_has_them() {
-        let (_t, mut l, s) = setup();
-        let long = ChatTurn::new(AgentId::new("local"), "q", "x".repeat(morph_ai::chats::MAX_SYNCED_ANSWER + 10), 1);
+    fn long_turns_sync_whole_in_chunks_and_read_back_after_a_restart() {
+        let (t, mut l, s) = setup();
+        let long = long_turn();
         let mut log = ChatLog::default();
         log.push(long.clone());
         s.save_chats(&log).unwrap();
         backfill(&mut l, &s, 100).unwrap();
-        materialize(&mut l, &s).unwrap();
-        assert_eq!(s.load_chats().unwrap().unwrap().turns[0], long);
+        let max = chat_inline_max(&l);
+        let all = load_log(&l).unwrap();
+        assert!(all.iter().any(|e| e.typ == weirdnet_sync::chunk_type(CHATS)), "the turn is chunked");
+        let e = all.iter().find(|e| e.typ == CHATS).unwrap();
+        assert!(e.op.len() <= max, "the fallback fits inline");
+        assert_eq!(serde_json::from_slice::<RecOp>(&e.op).unwrap(), put(&fallback_turn(&long, max)), "older peers get the clipped copy");
+        assert_eq!(ours(&l, CHATS), [(format!("t/{}", long.id), put(&long))], "the entry holds the whole turn");
+
+        // Restart: reopen the library, materialize into empty files.
+        drop(l);
+        let mut l = Library::open(&t.path().join("lib"), &LibraryKey::from_bytes([7; 32])).unwrap();
+        let fresh = MemoryStore::default();
+        materialize(&mut l, &fresh).unwrap();
+        assert_eq!(fresh.load_chats().unwrap().unwrap().turns, std::slice::from_ref(&long), "read back whole after a restart");
+
+        // Another device gets it whole too, and does not log it back.
+        let (_tb, mut b) = lib();
+        enable(&mut b, "b", 10).unwrap();
+        let sb = MemoryStore::default();
+        backfill(&mut b, &sb, 100).unwrap();
+        copy_entries(&l, &mut b, |_| true);
+        materialize(&mut b, &sb).unwrap();
+        assert_eq!(sb.load_chats().unwrap().unwrap().turns, [long]);
+        backfill(&mut b, &sb, 200).unwrap();
+        assert!(load_log(&b).unwrap().iter_node(&NodeId::new("b")).all(|e| e.typ != CHATS), "nothing logged back");
     }
 
     #[test]
-    fn a_clipped_answer_is_not_clipped_again_where_only_the_clipped_copy_is() {
-        let (_t, mut l, s) = setup();
-        backfill(&mut l, &s, 100).unwrap();
-        // Multi-byte text, so the clip lands short of the byte limit.
-        let full = ChatTurn::new(AgentId::new("local"), "q", "é".repeat(morph_ai::chats::MAX_SYNCED_ANSWER), 1);
-        let clipped = synced_turn(&full);
-        assert!(clipped.answer.len() < full.answer.len());
-        remote(&mut l, "b", 50, CHATS, &format!("t/{}", full.id), put(&clipped));
-        materialize(&mut l, &s).unwrap();
-        assert_eq!(s.load_chats().unwrap().unwrap().turns, std::slice::from_ref(&clipped));
-        backfill(&mut l, &s, 200).unwrap();
-        assert!(ours(&l, CHATS).is_empty(), "the clipped copy is not re-clipped and logged back");
-        // On the device that ran it, the full answer stays.
-        assert_eq!(synced_turn(&full), clipped);
+    fn a_turn_shows_its_fallback_until_its_chunks_arrive() {
+        let (_t, mut a, s) = setup();
+        let long = long_turn();
+        let mut log = ChatLog::default();
+        log.push(long.clone());
+        s.save_chats(&log).unwrap();
+        backfill(&mut a, &s, 100).unwrap();
+        let max = chat_inline_max(&a);
+
+        let (_tb, mut b) = lib();
+        enable(&mut b, "b", 10).unwrap();
+        let sb = MemoryStore::default();
+        backfill(&mut b, &sb, 100).unwrap();
+        copy_entries(&a, &mut b, |e| e.typ == CHATS);
+        materialize(&mut b, &sb).unwrap();
+        assert_eq!(sb.load_chats().unwrap().unwrap().turns, [fallback_turn(&long, max)], "the clipped copy meanwhile");
+        backfill(&mut b, &sb, 200).unwrap();
+        assert!(load_log(&b).unwrap().iter_node(&NodeId::new("b")).all(|e| e.typ != CHATS), "the clipped copy is not logged back");
+
+        copy_entries(&a, &mut b, |e| e.typ == weirdnet_sync::chunk_type(CHATS));
+        materialize(&mut b, &sb).unwrap();
+        assert_eq!(sb.load_chats().unwrap().unwrap().turns, [long], "then the whole turn");
     }
 
     #[test]
-    fn a_synced_answer_clipped_inside_a_code_block_closes_it_and_is_not_clipped_again() {
-        let (_t, mut l, s) = setup();
-        backfill(&mut l, &s, 100).unwrap();
-        // Quotes double in JSON, so this takes the op-size clip as well as `for_sync`'s.
-        let code = "println!(\"\\\"\");\n".repeat(morph_ai::chats::MAX_SYNCED_ANSWER / 8);
-        let full = ChatTurn::new(AgentId::new("local"), "q", format!("Here:\n\n```rust\n{code}```\n"), 1);
-        let clipped = synced_turn(&full);
-        assert!(op_len(&clipped) <= MAX_SYNCED_TURN);
+    fn a_fallback_clipped_inside_a_code_block_closes_it() {
+        let full = long_turn();
+        let max = Limits::default().inline_max;
+        let clipped = fallback_turn(&full, max);
+        assert!(op_len(&clipped) <= max);
         let note = format!("\n```\n\n{}", morph_ai::CLIP_NOTE);
         assert!(clipped.answer.ends_with(&note), "{}", &clipped.answer[clipped.answer.len() - 120..]);
         assert_eq!(clipped.answer.matches("```").count(), 2, "one fence opened, one closed");
-        // The device holding only the clipped copy keeps it as it came.
-        remote(&mut l, "b", 50, CHATS, &format!("t/{}", full.id), put(&clipped));
-        materialize(&mut l, &s).unwrap();
-        assert_eq!(s.load_chats().unwrap().unwrap().turns, std::slice::from_ref(&clipped));
-        backfill(&mut l, &s, 200).unwrap();
-        assert!(ours(&l, CHATS).is_empty(), "the clipped copy is not re-clipped and logged back");
-        assert_eq!(synced_turn(&full), clipped, "deterministic, so the full copy is recognised");
+        assert_eq!(fallback_turn(&full, max), clipped, "deterministic, so the full copy is recognised");
+        let short = ChatTurn::new(AgentId::new("local"), "q", "a", 1);
+        assert_eq!(fallback_turn(&short, max), short);
     }
 
     #[test]
@@ -937,24 +1042,23 @@ mod tests {
     }
 
     #[test]
-    fn every_synced_turn_fits_a_sync_page() {
+    fn every_fallback_fits_inline() {
         let (_t, mut l, s) = setup();
-        // Control characters escape to six bytes each in JSON; the question and sources are
-        // not bounded by `for_sync`.
-        let mut turn = ChatTurn::new(AgentId::new("local"), "\u{1}".repeat(300 * 1024), "\u{2}\"".repeat(morph_ai::chats::MAX_SYNCED_ANSWER), 1);
+        // Control characters escape to six bytes each in JSON. Over `record_max` as a whole,
+        // so only the clipped copy is logged.
+        let mut turn = ChatTurn::new(AgentId::new("local"), "\u{1}".repeat(300 * 1024), "\u{2}\"".repeat(200 * 1024), 1);
         turn.sources = (0..2000).map(|i| format!("https://example.com/{i}/{}", "\u{3}".repeat(4000))).collect();
-        let synced = synced_turn(&turn);
-        assert!(op_len(&synced) <= MAX_SYNCED_TURN, "{}", op_len(&synced));
-        const { assert!(MAX_SYNCED_TURN + 1024 < (weirdnet_sync::PAGE_MAX - 16 * 1024) / 4, "fits one sealed page on the wire") };
-        assert!(synced.answer.ends_with("ran it)*"));
-        assert_eq!(synced_turn(&turn), synced, "deterministic");
+        let max = chat_inline_max(&l);
+        let fb = fallback_turn(&turn, max);
+        assert!(op_len(&fb) <= max, "{}", op_len(&fb));
+        assert!(fb.answer.ends_with("ran it)*"));
         let mut log = ChatLog::default();
         log.push(turn.clone());
         s.save_chats(&log).unwrap();
         backfill(&mut l, &s, 100).unwrap();
         let ops = load_log(&l).unwrap().iter_node(&NodeId::new("a")).filter(|e| e.typ == CHATS).map(|e| e.op.len()).collect::<Vec<_>>();
         assert_eq!(ops.len(), 1);
-        assert!(ops[0] <= MAX_SYNCED_TURN);
+        assert!(ops[0] > 0 && ops[0] <= max);
         materialize(&mut l, &s).unwrap();
         assert_eq!(s.load_chats().unwrap().unwrap().turns[0], turn, "the full turn stays here");
         backfill(&mut l, &s, 101).unwrap();

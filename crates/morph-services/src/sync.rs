@@ -294,9 +294,59 @@ fn build_state(lib: &Library) -> Option<(Arc<Mutex<SyncState>>, Keypair)> {
         if let Ok(mut s) = st.lock() {
             let _ = s.publish_device_key(now_ms());
             s.refresh_keys();
+            companion_sync::configure(&mut s);
         }
         (st, key)
     })
+}
+
+/// The library's records as a [`SyncState`] without a running node: log, clock, record
+/// options and epoch keys, configured like the live state. `companion_sync` writes and reads
+/// its records through it (chunked and sealed values need it). A library that is not linked
+/// yet gets a placeholder identity that never leaves this value: it writes plain and chunked
+/// records, and a sealed write is refused (`no-epoch-key`) until a rotation gave it a key.
+pub(crate) fn records_state(lib: &Library) -> Option<SyncState> {
+    let our = core::node_id(lib).ok().flatten()?;
+    let linked = || {
+        let seed = core::load_seed(lib).ok().flatten()?;
+        let node_key = Keypair::from_protobuf_encoding(&core::load_node_key(lib).ok().flatten()?).ok()?;
+        let (user, user_id) = user_from_seed(&seed)?;
+        let roster = core::load_roster(lib).ok()?;
+        let our_cert = roster.get(&our).cloned()?;
+        Some((seed, user.public(), user_id, roster, our_cert, Device::from_node_key(&node_key).ok()))
+    };
+    let (seed, user_key, user_id, roster, our_cert, device) = linked().unwrap_or_else(|| {
+        let user = Keypair::generate_ed25519();
+        let user_id = weirdnet_net::user::user_id(&user.public());
+        let cert = NodeCert {
+            user_id: user_id.clone(),
+            peer_id: our.clone(),
+            label: String::new(),
+            cert: Vec::new(),
+            issued_at: 0,
+            revoked_at: None,
+            revocation: None,
+        };
+        (Vec::new(), user.public(), user_id, Roster::new(), cert, None)
+    });
+    let mut st = SyncState {
+        seed,
+        user_id,
+        user_key,
+        our_cert,
+        our_node: weirdnet_sync::NodeId::new(our),
+        types: core::types_on(lib).ok()?,
+        roster,
+        log: core::load_log(lib).ok()?,
+        clock: core::load_clock(lib).ok()?,
+        device,
+        keys: core::load_epoch_keys(lib).ok()?,
+        auto_first_rotation: false,
+        records: core::load_records(lib).ok()?,
+    };
+    st.refresh_keys();
+    companion_sync::configure(&mut st);
+    Some(st)
 }
 
 /// The profile's sync state without a running node, for revoking and approving.
@@ -324,6 +374,7 @@ fn offline_state(lib: &Library) -> Option<(SyncState, Keypair)> {
     };
     st.publish_device_key(now_ms()).ok()?;
     st.refresh_keys();
+    companion_sync::configure(&mut st);
     Some((st, user))
 }
 
@@ -393,6 +444,14 @@ pub fn tick(home: &Path, profile_id: &str) -> Result<usize> {
             match pull_from(&mut work, node.as_ref(), peer, &addrs, typ) {
                 Ok(got) => n += got,
                 Err(e) => eprintln!("morph-sync: {typ} pull from {peer} failed: {e}"),
+            }
+            // `pull_from` brings a type's chunks along; ask again for any a record still
+            // misses (another device may have written them since).
+            if !work.log.pending_blobs(typ).is_empty() {
+                match weirdnet_sync::pull_chunks(&mut work, node.as_ref(), peer, &addrs, typ) {
+                    Ok(got) => n += got,
+                    Err(e) => eprintln!("morph-sync: {typ} chunks from {peer} failed: {e}"),
+                }
             }
         }
         {
