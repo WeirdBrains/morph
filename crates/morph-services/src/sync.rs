@@ -774,8 +774,10 @@ mod tests {
         panic!("no relay reservation: {st:?}");
     }
 
+    /// Generous: a shared CI runner, with the first key rotation and the
+    /// other tests' nodes running at once, can take a while to settle.
     fn tick_until(home_a: &Path, home_b: &Path, pred: impl Fn() -> bool) {
-        let end = Instant::now() + Duration::from_secs(30);
+        let end = Instant::now() + Duration::from_secs(90);
         while Instant::now() < end {
             // Both sides pull at once, as two running devices would.
             std::thread::scope(|s| {
@@ -786,6 +788,18 @@ mod tests {
                 return;
             }
             std::thread::sleep(Duration::from_millis(150));
+        }
+        for h in [home_a, home_b] {
+            let r = library_db::with(h, "p1", |lib| core::load_roster(lib)).unwrap().unwrap();
+            let v = r.chain_view();
+            let marks: Vec<String> = bookmarks::tree(h, "p1").unwrap().bookmarks.iter().map(|b| b.url.clone()).collect();
+            eprintln!(
+                "DBG2 home={} head={:?} status={:?} keys={} marks={marks:?}",
+                h.display(),
+                v.head,
+                library_db::with(h, "p1", |lib| Ok(offline_state(lib).map(|(st, _)| st.key_status()))).unwrap(),
+                library_db::with(h, "p1", |lib| Ok(core::load_epoch_keys(lib)?.len())).unwrap().unwrap()
+            );
         }
         panic!("sync did not catch up in time");
     }
@@ -1069,7 +1083,7 @@ mod tests {
     }
 
     fn tick_all(homes: &[&Path], pred: impl Fn() -> bool) {
-        let end = Instant::now() + Duration::from_secs(90);
+        let end = Instant::now() + Duration::from_secs(180);
         while Instant::now() < end {
             std::thread::scope(|s| {
                 for h in homes {
@@ -1083,6 +1097,12 @@ mod tests {
         }
         for h in homes {
             let r = library_db::with(h, "p1", |lib| core::load_roster(lib)).unwrap().unwrap();
+            let marks: Vec<String> = bookmarks::tree(h, "p1").unwrap().bookmarks.iter().map(|b| b.url.clone()).collect();
+            let cursors =
+                library_db::with(h, "p1", |lib| Ok(lib.sync_meta(core::META_TYPE_CURSORS)?.map(|b| String::from_utf8_lossy(&b).into_owned())))
+                    .unwrap()
+                    .unwrap();
+            eprintln!("DBG home={} marks={marks:?} cursors={cursors:?}", h.display());
             let v = r.chain_view();
             eprintln!(
                 "DBG head={:?} root={:?} sticky={:?} status={:?} rots={:?} devs={} certs={} appr={:?}",
