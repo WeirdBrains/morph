@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["crates/morph-core", "crates/morph-identity", "crates/morph-store", "crates/morph-keystore", "crates/morph-bridge", "crates/morph-webview-control", "crates/weirdnet-device-link", "crates/morph-ui", "crates/morph-webview", "crates/morph-browser", "crates/morph-services", "crates/morph-desktop", "crates/morph-wl-input", "crates/morph-os", "crates/morph-ai", "crates/morph-companion"]
-default-members = ["crates/morph-core", "crates/morph-identity", "crates/morph-store", "crates/morph-keystore", "crates/morph-bridge", "crates/morph-webview-control", "crates/weirdnet-device-link", "crates/morph-ui", "crates/morph-webview", "crates/morph-browser", "crates/morph-services", "crates/morph-desktop", "crates/morph-wl-input", "crates/morph-os", "crates/morph-ai", "crates/morph-companion"]
+members = ["crates/morph-core", "crates/morph-identity", "crates/morph-store", "crates/morph-keystore", "crates/morph-bridge", "crates/morph-webview-control", "crates/morph-ui", "crates/morph-webview", "crates/morph-browser", "crates/morph-services", "crates/morph-desktop", "crates/morph-wl-input", "crates/morph-os", "crates/morph-ai", "crates/morph-companion"]
+default-members = ["crates/morph-core", "crates/morph-identity", "crates/morph-store", "crates/morph-keystore", "crates/morph-bridge", "crates/morph-webview-control", "crates/morph-ui", "crates/morph-webview", "crates/morph-browser", "crates/morph-services", "crates/morph-desktop", "crates/morph-wl-input", "crates/morph-os", "crates/morph-ai", "crates/morph-companion"]
 
 [workspace.package]
 version = "0.1.0"
@@ -18,7 +18,7 @@ morph-identity = { path = "crates/morph-identity" }
 morph-store = { path = "crates/morph-store" }
 morph-keystore = { path = "crates/morph-keystore" }
 morph-webview-control = { path = "crates/morph-webview-control" }
-weirdnet-device-link = { path = "crates/weirdnet-device-link" }
+weirdnet-device-link = "=0.3.0"
 morph-ui = { path = "crates/morph-ui" }
 morph-webview = { path = "crates/morph-webview" }
 morph-browser = { path = "crates/morph-browser" }

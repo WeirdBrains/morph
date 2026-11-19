@@ -101,7 +101,12 @@ impl From<HostStatus> for LinkState {
 }
 
 fn link_error(e: weirdnet_device_link::Error) -> Error {
-    Error::Message(e.to_string())
+    use weirdnet_device_link::Error as E;
+    Error::Message(match e {
+        E::OlderCode => "The other device runs an older Morph. Update it to link.".to_string(),
+        E::NewerCode => "The other device runs a newer Morph. Update this device to link.".to_string(),
+        e => e.to_string(),
+    })
 }
 
 /// What [`NewDevice::finish`] stored, including the sync types and roster
@@ -311,6 +316,14 @@ mod tests {
     use super::*;
     use crate::profile_identity::{create, load, unlock};
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn code_version_errors_name_morph() {
+        let older = link_error(weirdnet_device_link::Error::OlderCode).to_string();
+        let newer = link_error(weirdnet_device_link::Error::NewerCode).to_string();
+        assert!(older.contains("older Morph"), "{older}");
+        assert!(newer.contains("newer Morph"), "{newer}");
+    }
 
     fn pw(s: &str) -> SecretString {
         SecretString::from(s.to_string())

@@ -10345,12 +10345,13 @@ dependencies = [
 
 [[package]]
 name = "weirdnet-device-link"
-version = "0.1.0"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b898943c727395e7996c5687cac277c69f3c2fef0ff841b31b87bbd936d0189e"
 dependencies = [
  "base64 0.22.1",
  "cbor4ii",
  "multiaddr",
- "qrcode",
  "serde",
  "sha2 0.11.1",
  "thiserror 2.0.21",
