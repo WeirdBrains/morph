@@ -331,9 +331,12 @@ struct PanelApprover {
 impl Approver for PanelApprover {
     async fn decide(&self, prompt: &ApprovalPrompt, tool: &ToolSpec) -> ApprovalAnswer {
         let target = if tool.tier == Tier::Interact { self.pending.lock().unwrap().take() } else { None };
-        let detail = match &target {
-            Some(t) => format!("{} · “{t}”", tool.name),
-            None => tool.name.clone(),
+        // The tool and what it touches: the element's text, else the search engine or site.
+        let detail = match (&target, &prompt.request.provider, &prompt.request.site) {
+            (Some(t), ..) => format!("{} · “{t}”", tool.name),
+            (None, Some(p), _) => format!("{} · {p}", tool.name),
+            (None, None, Some(site)) => format!("{} · {site}", tool.name),
+            _ => tool.name.clone(),
         };
         let _ = self.msgs.send(Msg::CardDetail(prompt.agent.clone(), detail));
         let highlight = |text: Option<String>| {
