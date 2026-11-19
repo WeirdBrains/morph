@@ -121,8 +121,9 @@ async fn ask<T>(calls: &Mutex<Sender<HostCall>>, make: impl FnOnce(Reply<T>) -> 
     }
 }
 
-/// How long a card's outline stays on the page (the bridge's most; it has no way to clear one).
-const HIGHLIGHT: Duration = Duration::from_secs(30);
+/// How long a card's outline stays on the page: the bridge's most (30 s). The panel clears it
+/// as soon as the card is done; a card that waits longer than that shows no outline.
+const HIGHLIGHT: Duration = morph_webview::page_action::HIGHLIGHT_MAX;
 /// One `page.scroll` up or down, CSS pixels.
 const SCROLL_STEP: f64 = 600.0;
 /// Far enough for the top or the bottom of any page (the page clamps it).
