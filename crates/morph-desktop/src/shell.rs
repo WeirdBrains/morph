@@ -461,6 +461,11 @@ pub struct Shell {
     /// URLs from outside (a later launch, weirdnet-morph:// links) to
     /// route once the window runs.
     pending_links: Vec<String>,
+    /// Give the page the keyboard on the next tick, once the links above
+    /// have opened: a window that opens (or unlocks) on a page types into
+    /// it, on Wayland too, where nothing but the shell hands a page the
+    /// keyboard. A blank tab keeps it in the address bar.
+    focus_page_soon: bool,
     /// The tabs as last handed to the session (profile, window).
     last_session: Option<(String, Option<morph_core::session::WindowSession>)>,
     /// Where this window's tab numbers start in the event log.
@@ -538,6 +543,7 @@ impl Shell {
                 .filter_map(|name| Action::from_name(name.trim()))
                 .collect(),
             pending_links: Vec::new(),
+            focus_page_soon: true,
             last_session: None,
             log_base: 1000 * Windows::opened(cx) as u64,
             _subscriptions: subscriptions,
@@ -815,6 +821,7 @@ impl Shell {
         crate::library::open_at_launch(&self.home, &self.profile);
         self.layout = layout::load(&self.home, &self.profile);
         self.build(start, window, cx);
+        self.focus_page_soon = true;
         for saved in more {
             let profile = self.profile.clone();
             cx.defer(move |cx| open_window(cx, profile, WindowStart::Saved(saved), None));
@@ -1268,6 +1275,12 @@ impl Shell {
                 self.open_external(url, window, cx);
             }
             window.activate_window();
+        }
+        if std::mem::take(&mut self.focus_page_soon)
+            && let Some(main) = self.main()
+            && main.page(cx).is_some()
+        {
+            main.focus_content(window, cx);
         }
         let mut shortcuts = Vec::new();
         for component in &self.components {
