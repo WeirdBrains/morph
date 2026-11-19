@@ -24,11 +24,19 @@ pub struct CompanionProfile {
     /// The model a Local or Node companion runs. External companions bring their own.
     #[serde(default)]
     pub model: Option<ModelChoice>,
+    /// The device (peer id) a Node companion runs on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
 }
 
 impl CompanionProfile {
     pub fn local(id: &str, name: &str, model: ModelChoice) -> Self {
-        Self { identity: AgentIdentity::new(id, name, AgentKind::Local), model: Some(model) }
+        Self { identity: AgentIdentity::new(id, name, AgentKind::Local), model: Some(model), host: None }
+    }
+
+    /// A Node companion: its agent loop runs on another of the user's linked devices.
+    pub fn on_node(id: &str, name: &str, host: &str, model: ModelChoice) -> Self {
+        Self { identity: AgentIdentity::new(id, name, AgentKind::Node), model: Some(model), host: Some(host.to_string()) }
     }
 
     pub fn id(&self) -> &AgentId {
@@ -115,6 +123,11 @@ impl Roster {
         Ok(())
     }
 
+    /// Node companions that run on `host`.
+    pub fn hosted_on<'a>(&'a self, host: &'a str) -> impl Iterator<Item = &'a CompanionProfile> {
+        self.companions.iter().filter(move |c| c.identity.kind == AgentKind::Node && c.host.as_deref() == Some(host))
+    }
+
     /// Removes a companion. The caller also forgets its grants (see [`crate::Grants::forget`]).
     pub fn remove(&mut self, id: &AgentId) -> Result<CompanionProfile, RosterError> {
         let i = self.companions.iter().position(|c| c.id() == id).ok_or_else(|| RosterError::Unknown(id.to_string()))?;
@@ -168,6 +181,16 @@ mod tests {
         r.add(CompanionProfile::local("atlas", "Atlas", ModelChoice::Gemma4E2B)).unwrap();
         r.rename(&AgentId::new("atlas"), "ATLAS").unwrap();
         assert_eq!(r.rename(&AgentId::new("atlas"), "local"), Err(RosterError::NameTaken("local".into())));
+    }
+
+    #[test]
+    fn node_companions_name_their_device() {
+        let mut r = roster();
+        r.add(CompanionProfile::on_node("atlas", "Atlas", "desk", ModelChoice::Gemma4E4B)).unwrap();
+        assert_eq!(r.hosted_on("desk").map(|c| c.name()).collect::<Vec<_>>(), ["Atlas"]);
+        assert_eq!(r.hosted_on("phone").count(), 0);
+        let old: CompanionProfile = serde_json::from_str(r#"{"identity":{"id":"x","name":"X","kind":"local"}}"#).unwrap();
+        assert_eq!(old.host, None, "profiles saved before Node companions still load");
     }
 
     #[test]

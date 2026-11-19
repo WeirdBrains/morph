@@ -168,6 +168,7 @@ mod tests {
             .add(morph_ai::CompanionProfile {
                 identity: weirdnet_agent::AgentIdentity::new("ext", "Ext", weirdnet_agent::AgentKind::External),
                 model: None,
+                host: None,
             })
             .unwrap();
         let approver = Arc::new(ScriptedApprover::new(vec![]));

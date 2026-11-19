@@ -5,6 +5,9 @@ use std::sync::{Arc, Mutex};
 
 use weirdnet_agent::{AgentId, AllowRule, CompanionScope, Policy, SharedPolicy, SiteLevel, StandingAllow};
 
+use crate::chats::ChatLog;
+use crate::journal::Journals;
+use crate::mcp::McpConfigs;
 use crate::roster::Roster;
 use crate::settings::AgentSettings;
 
@@ -25,6 +28,27 @@ pub trait AiStore: Send + Sync {
     fn save_policy(&self, policy: &Policy) -> Result<(), StoreError>;
     fn load_settings(&self) -> Result<Option<AgentSettings>, StoreError>;
     fn save_settings(&self, settings: &AgentSettings) -> Result<(), StoreError>;
+    /// Saved chats. Stores written before chats existed hold none.
+    fn load_chats(&self) -> Result<Option<ChatLog>, StoreError> {
+        Ok(None)
+    }
+    fn save_chats(&self, _chats: &ChatLog) -> Result<(), StoreError> {
+        Err(StoreError::Io("this store does not keep chats".into()))
+    }
+    /// MCP server configs (secret values are never in here; see [`crate::mcp::McpSecrets`]).
+    fn load_mcp(&self) -> Result<Option<McpConfigs>, StoreError> {
+        Ok(None)
+    }
+    fn save_mcp(&self, _mcp: &McpConfigs) -> Result<(), StoreError> {
+        Err(StoreError::Io("this store does not keep MCP configs".into()))
+    }
+    /// Notes and project journals.
+    fn load_journals(&self) -> Result<Option<Journals>, StoreError> {
+        Ok(None)
+    }
+    fn save_journals(&self, _journals: &Journals) -> Result<(), StoreError> {
+        Err(StoreError::Io("this store does not keep journals".into()))
+    }
 }
 
 #[derive(Default)]
@@ -32,6 +56,9 @@ pub struct MemoryStore {
     roster: Mutex<Option<Roster>>,
     policy: Mutex<Option<Policy>>,
     settings: Mutex<Option<AgentSettings>>,
+    chats: Mutex<Option<ChatLog>>,
+    mcp: Mutex<Option<McpConfigs>>,
+    journals: Mutex<Option<Journals>>,
 }
 
 impl AiStore for MemoryStore {
@@ -56,9 +83,31 @@ impl AiStore for MemoryStore {
         *self.settings.lock().unwrap() = Some(settings.clone());
         Ok(())
     }
+    fn load_chats(&self) -> Result<Option<ChatLog>, StoreError> {
+        Ok(self.chats.lock().unwrap().clone())
+    }
+    fn save_chats(&self, chats: &ChatLog) -> Result<(), StoreError> {
+        *self.chats.lock().unwrap() = Some(chats.clone());
+        Ok(())
+    }
+    fn load_mcp(&self) -> Result<Option<McpConfigs>, StoreError> {
+        Ok(self.mcp.lock().unwrap().clone())
+    }
+    fn save_mcp(&self, mcp: &McpConfigs) -> Result<(), StoreError> {
+        *self.mcp.lock().unwrap() = Some(mcp.for_sync());
+        Ok(())
+    }
+    fn load_journals(&self) -> Result<Option<Journals>, StoreError> {
+        Ok(self.journals.lock().unwrap().clone())
+    }
+    fn save_journals(&self, journals: &Journals) -> Result<(), StoreError> {
+        *self.journals.lock().unwrap() = Some(journals.clone());
+        Ok(())
+    }
 }
 
-/// JSON files `roster.json` and `policy.json` in a directory, written atomically.
+/// JSON files (`roster.json`, `policy.json`, `settings.json`, `chats.json`, `mcp.json`,
+/// `journals.json`) in a directory, written atomically.
 pub struct FileStore {
     dir: PathBuf,
 }
@@ -103,6 +152,25 @@ impl AiStore for FileStore {
     }
     fn save_settings(&self, settings: &AgentSettings) -> Result<(), StoreError> {
         self.write("settings.json", settings)
+    }
+    fn load_chats(&self) -> Result<Option<ChatLog>, StoreError> {
+        self.read("chats.json")
+    }
+    fn save_chats(&self, chats: &ChatLog) -> Result<(), StoreError> {
+        self.write("chats.json", chats)
+    }
+    fn load_mcp(&self) -> Result<Option<McpConfigs>, StoreError> {
+        self.read("mcp.json")
+    }
+    /// Secret values are moved out first: `mcp.json` never holds one.
+    fn save_mcp(&self, mcp: &McpConfigs) -> Result<(), StoreError> {
+        self.write("mcp.json", &mcp.for_sync())
+    }
+    fn load_journals(&self) -> Result<Option<Journals>, StoreError> {
+        self.read("journals.json")
+    }
+    fn save_journals(&self, journals: &Journals) -> Result<(), StoreError> {
+        self.write("journals.json", journals)
     }
 }
 
@@ -250,6 +318,31 @@ mod tests {
         assert_eq!(s.load_policy().unwrap(), Some(p));
         std::fs::write(dir.path().join("ai/policy.json"), b"{nope").unwrap();
         assert!(matches!(s.load_policy(), Err(StoreError::Corrupt(_))));
+    }
+
+    #[test]
+    fn chats_mcp_and_journals_round_trip_and_mcp_secrets_stay_out_of_the_file() {
+        use crate::chats::ChatTurn;
+        use crate::mcp::{McpServer, McpTransport, McpValue};
+        let dir = tempfile::tempdir().unwrap();
+        let file = FileStore::new(dir.path().join("companions"));
+        assert_eq!(file.load_chats().unwrap(), None);
+        let mut chats = ChatLog::default();
+        chats.push(ChatTurn::new(AgentId::new("local"), "q", "a", 1));
+        file.save_chats(&chats).unwrap();
+        assert_eq!(file.load_chats().unwrap(), Some(chats));
+        let mut journals = Journals::default();
+        journals.create_project("P").unwrap();
+        file.save_journals(&journals).unwrap();
+        assert_eq!(file.load_journals().unwrap(), Some(journals));
+        let mut env = std::collections::BTreeMap::new();
+        env.insert("API_KEY".to_string(), McpValue::Plain { value: "sk-live-1".into() });
+        let mut mcp = McpConfigs::default();
+        mcp.upsert(McpServer::new("S", McpTransport::Stdio { command: "s".into(), args: vec![], env }));
+        file.save_mcp(&mcp).unwrap();
+        let raw = std::fs::read_to_string(dir.path().join("companions/mcp.json")).unwrap();
+        assert!(!raw.contains("sk-live-1"), "{raw}");
+        assert_eq!(file.load_mcp().unwrap().unwrap().servers[0].secret_names(), ["API_KEY"]);
     }
 
     #[test]
