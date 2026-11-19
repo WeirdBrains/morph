@@ -137,9 +137,34 @@ impl CompanionView {
 
     fn submit(&mut self, cx: &mut Context<Self>) {
         let text = self.input.read(cx).text().trim().to_string();
+        self.input.update(cx, |i, cx| i.set_text("", cx));
+        self.send(text, cx);
+    }
+
+    /// A question from the address bar (`> q` or `>name q`): select that companion and send it.
+    /// The tab is attached only if the user attached it in this conversation.
+    pub fn ask(&mut self, name: Option<&str>, question: &str, cx: &mut Context<Self>) {
+        let target = match name {
+            Some(n) => self.roster.find_by_name(n).map(|c| c.id().clone()),
+            None => self.roster.default_companion().map(|c| c.id().clone()),
+        };
+        match target {
+            Some(id) => self.selected = id,
+            None => {
+                let msg = format!("No companion named {}.", name.unwrap_or("default"));
+                self.conversation().fail(&msg);
+                cx.notify();
+                return;
+            }
+        }
+        self.send(question.trim().to_string(), cx);
+    }
+
+    fn send(&mut self, text: String, cx: &mut Context<Self>) {
         let id = self.selected.clone();
         let conv = self.conversation();
         if text.is_empty() || conv.is_running() {
+            cx.notify();
             return;
         }
         let input = match conv.attached() {
@@ -147,7 +172,6 @@ impl CompanionView {
             None => text.clone(),
         };
         conv.start_task(&text);
-        self.input.update(cx, |i, cx| i.set_text("", cx));
         self.worker.run(self.roster.clone(), id, input);
         cx.notify();
     }

@@ -7,9 +7,11 @@ use std::path::Path;
 use std::rc::Rc;
 
 use gpui::{MouseButton, MouseDownEvent, SharedString, Window, anchored, deferred, div, point, prelude::*, px, rgb};
-use morph_core::suggest::{self, Index, Source, Suggestion};
+use morph_ai::{AiStore, FileStore, ModelChoice, Platform, Roster};
+use morph_core::suggest::{self, Ask, Index, Source, Suggestion};
 
 use super::{BrowserView, Context};
+use crate::shell::ShellRequest;
 
 /// One row of the list.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,6 +19,47 @@ pub enum Row {
     Page(Suggestion),
     /// Search the configured engine for this text.
     Search(String),
+    /// `>`: a companion's name that continues what was typed (Enter completes it).
+    Companion(String),
+    /// `>`: ask this companion (the default one's name when none was typed).
+    Ask {
+        companion: String,
+        question: String,
+    },
+    /// `>`: no companion has this name.
+    Unknown(String),
+}
+
+/// The rows for text that starts with `>`; history, bookmarks and search do not apply.
+pub fn companion_rows(ask: &Ask, names: &[String], default: &str) -> Vec<Row> {
+    let question = ask.question.clone();
+    if ask.typing_name {
+        let typed = ask.name.as_deref().unwrap_or("");
+        let matches = suggest::complete_names(typed, names);
+        if matches.is_empty() {
+            return vec![Row::Unknown(typed.to_string())];
+        }
+        return matches.into_iter().map(|n| Row::Companion(n.to_string())).collect();
+    }
+    match ask.name.as_deref() {
+        None => vec![Row::Ask { companion: default.to_string(), question }],
+        Some(typed) => match suggest::resolve_name(typed, names) {
+            Some(name) => vec![Row::Ask { companion: name.to_string(), question }],
+            None => vec![Row::Unknown(typed.to_string())],
+        },
+    }
+}
+
+/// Companion names and the default one's name for the profile, as the Companion panel has them.
+pub fn load_companions(home: &Path, profile: &str) -> (Vec<String>, String) {
+    let store = FileStore::new(morph_core::profiles::profile_dir(home, profile).join("companions"));
+    let roster = match store.load_roster() {
+        Ok(Some(r)) if r.default_companion().is_some() => r,
+        _ => Roster::first_run(ModelChoice::default_for(Platform::Desktop)),
+    };
+    let names = roster.companions().iter().map(|c| c.name().to_string()).collect();
+    let default = roster.default_companion().map(|c| c.name().to_string()).unwrap_or_default();
+    (names, default)
 }
 
 /// The list under the address bar while the user types.
@@ -52,6 +95,17 @@ impl BrowserView {
         let at_end = field.cursor() == text.len() && field.selection().is_empty() && field.marked().is_none();
         if text.trim().is_empty() || !self.browser.address_focused() {
             self.suggest = None;
+            return;
+        }
+        if let suggest::Mode::Companion(ask) = suggest::dispatch(&text) {
+            let (names, default) = match &self.suggest_source {
+                Some((home, profile)) => load_companions(home, profile),
+                None => (Vec::new(), String::new()),
+            };
+            self.open_address_menu();
+            self.suggest = Some(Suggestions { rows: companion_rows(&ask, &names, &default), selected: None, completion: None });
+            self.log_suggestions();
+            cx.notify();
             return;
         }
         if self.suggest_index.is_none() {
@@ -126,6 +180,9 @@ impl BrowserView {
             .map(|r| match r {
                 Row::Page(p) => p.url.as_str(),
                 Row::Search(_) => "search",
+                Row::Companion(_) => "companion",
+                Row::Ask { .. } => "ask",
+                Row::Unknown(_) => "unknown",
             })
             .collect();
         let field = self.browser.address();
@@ -176,10 +233,47 @@ impl BrowserView {
         true
     }
 
+    /// Enter on text that starts with `>`: ask the companion, or complete a name. Returns false for
+    /// everything else.
+    pub(super) fn submit_companion(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let text = self.browser.address().text().to_string();
+        let suggest::Mode::Companion(ask) = suggest::dispatch(&text) else {
+            return false;
+        };
+        let (names, default) = match &self.suggest_source {
+            Some((home, profile)) => load_companions(home, profile),
+            None => (Vec::new(), String::new()),
+        };
+        if let Some(row) = companion_rows(&ask, &names, &default).into_iter().next() {
+            self.open_suggestion(row, window, cx);
+        }
+        true
+    }
+
     pub(super) fn open_suggestion(&mut self, row: Row, window: &mut Window, cx: &mut Context<Self>) {
         let target = match row {
             Row::Page(page) => page.url,
             Row::Search(query) => self.browser.tab_engine().url(&query),
+            Row::Companion(name) => {
+                let end = self.browser.address().text().len();
+                self.browser.address_mut().replace(Some(0..end), &format!(">{name} "));
+                self.text_changed(0, false, cx);
+                return;
+            }
+            Row::Ask { companion, question } => {
+                if question.is_empty() {
+                    return;
+                }
+                let default = self.suggest_source.as_ref().map(|(h, p)| load_companions(h, p).1).unwrap_or_default();
+                let name = (companion != default).then_some(companion);
+                super::log_event("companion asked from the address bar");
+                self.suggest = None;
+                self.leave_address(window, cx);
+                cx.emit(ShellRequest::AskCompanion { name, question });
+                cx.notify();
+                return;
+            }
+            Row::Unknown(_) => return,
         };
         super::log_event(&format!("suggestion opened {target}"));
         self.suggest = None;
@@ -219,6 +313,13 @@ impl BrowserView {
                     (glyph.into(), title.into(), if p.title.is_empty() { SharedString::default() } else { shown.into() })
                 }
                 Row::Search(q) => (engine.mark.into(), format!("Search {} for “{q}”", engine.name).into(), SharedString::default()),
+                Row::Companion(name) => ("›".into(), name.clone().into(), "companion".into()),
+                Row::Ask { companion, question } => (
+                    "›".into(),
+                    if question.is_empty() { format!("Ask {companion}…") } else { format!("Ask {companion}: {question}") }.into(),
+                    SharedString::default(),
+                ),
+                Row::Unknown(name) => ("›".into(), format!("No companion named “{name}”").into(), SharedString::default()),
             };
             let open = row.clone();
             div()
@@ -282,5 +383,45 @@ impl BrowserView {
             deferred(backdrop).with_priority(1).into_any_element(),
             deferred(anchored().position(point(bar.left(), top)).snap_to_window_with_margin(px(4.)).child(panel)).with_priority(2).into_any_element(),
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names() -> Vec<String> {
+        vec!["Atlas".into(), "Archie".into(), "Bo".into()]
+    }
+
+    fn rows(text: &str) -> Vec<Row> {
+        match suggest::dispatch(text) {
+            suggest::Mode::Companion(ask) => companion_rows(&ask, &names(), "Atlas"),
+            suggest::Mode::Normal => panic!("{text:?} is not companion input"),
+        }
+    }
+
+    #[test]
+    fn the_default_companion_is_asked_without_a_name() {
+        assert_eq!(rows("> why is the sky blue"), [Row::Ask { companion: "Atlas".into(), question: "why is the sky blue".into() }]);
+    }
+
+    #[test]
+    fn a_named_companion_is_asked_by_its_roster_name() {
+        assert_eq!(rows(">bo hi"), [Row::Ask { companion: "Bo".into(), question: "hi".into() }]);
+        assert_eq!(rows(">nobody hi"), [Row::Unknown("nobody".into())]);
+    }
+
+    #[test]
+    fn names_complete_while_typing_and_the_bare_chevron_lists_them_all() {
+        assert_eq!(rows(">a"), [Row::Companion("Atlas".into()), Row::Companion("Archie".into())]);
+        assert_eq!(rows(">at"), [Row::Companion("Atlas".into())]);
+        assert_eq!(rows(">").len(), 3);
+        assert_eq!(rows(">zz"), [Row::Unknown("zz".into())]);
+    }
+
+    #[test]
+    fn a_question_still_being_typed_has_no_text_to_send() {
+        assert_eq!(rows(">atlas "), [Row::Ask { companion: "Atlas".into(), question: String::new() }]);
     }
 }
