@@ -161,7 +161,11 @@ mod tests {
     fn leaks(home: &Path, needle: &str) -> Vec<PathBuf> {
         let mut all = Vec::new();
         files_under(&dirs(home).0, &mut all);
-        all.into_iter().filter(|p| String::from_utf8_lossy(&std::fs::read(p).unwrap_or_default()).contains(needle)).collect()
+        // The library database is encrypted whole, so its bytes are random: a short needle
+        // such as a three-byte tag turns up in them by chance (roughly once in 16 MB), which
+        // made this test fail now and then. A long needle (a digest or a secret) cannot.
+        let random = |p: &Path| needle.len() < 16 && p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("library.db"));
+        all.into_iter().filter(|p| !random(p) && String::from_utf8_lossy(&std::fs::read(p).unwrap_or_default()).contains(needle)).collect()
     }
 
     /// What an older build left: plaintext companion files and MCP local files.
@@ -204,7 +208,8 @@ mod tests {
         a.save_with(&path, io_beside(&profile).as_ref()).unwrap();
         let inside = String::from_utf8(io_beside(&profile).read(&path).unwrap().unwrap()).unwrap();
         assert!(inside.contains("k1:") && !inside.contains(&plain) && !inside.contains(SECRET), "{inside}");
-        assert!(leaks(&home, &plain).is_empty() && leaks(&home, "k1:").is_empty(), "sealed on disk too");
+        let (by_digest, by_tag) = (leaks(&home, &plain), leaks(&home, "k1:"));
+        assert!(by_digest.is_empty() && by_tag.is_empty(), "sealed on disk too: {by_digest:?} {by_tag:?}");
 
         profile_lock::lock(&home, "default");
         assert!(matches!(derive_key(&companions, APPROVAL_KEY_CONTEXT), Err(StoreError::Locked)), "no key while locked");
