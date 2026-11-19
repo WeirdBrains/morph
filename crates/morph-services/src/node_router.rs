@@ -310,15 +310,17 @@ impl LinkRx for FrameReader {
 /// [`LinkHandler`]s for the serving side. This is the only code that knows the protocols.
 pub mod protocols {
     use std::sync::Arc;
+    use std::time::Duration;
 
     use async_trait::async_trait;
     use morph_ai::remote::{LinkRx, LinkTx};
     use morph_ai::{Link, LinkHandler, NodeRouter, OffloadPlan, RouteError};
     use weirdnet_agent::Caller;
-    use weirdnet_agent::ModelBackend;
+    use weirdnet_agent::remote::infer::v2::{EmbedBackend, Finish, InferBackend, Output, Request};
     use weirdnet_agent::remote::infer::{Admission, InferHost, RemoteModel};
     use weirdnet_agent::remote::task::TaskHost;
     use weirdnet_agent::remote::{self, Channel, Dialer, FrameRx, FrameTx, RemoteError};
+    use weirdnet_agent::{CancelToken, DeltaSink, Message, ModelBackend, ModelError, ModelTurn, ToolSpec};
 
     use crate::device_calls::DeviceCaller;
 
@@ -383,6 +385,102 @@ pub mod protocols {
         }
     }
 
+    /// How often a served stream is checked against the roster and the lock while it runs.
+    const WATCH: Duration = Duration::from_millis(250);
+
+    /// The gate: the profile is unlocked, and `caller` is a current linked device.
+    fn admit(gate: &DeviceCaller, caller: &Caller) -> Result<(), RemoteError> {
+        if gate.check_unlocked().is_err() {
+            return Err(RemoteError::refused("profile-locked"));
+        }
+        let presented = match caller.cert_bytes.as_deref().map(weirdnet_agent::serve::decode_cert) {
+            None => None,
+            Some(Ok(cert)) => Some(cert),
+            Some(Err(_)) => return Err(RemoteError::refused("wrong-user")),
+        };
+        match gate.check(&caller.peer, presented.as_ref()).reason() {
+            None => Ok(()),
+            Some(reason) => Err(RemoteError::refused(reason)),
+        }
+    }
+
+    /// Drives `served` for `caller`'s stream, but stops it, running or still queued, within
+    /// [`WATCH`] of the profile locking or the caller leaving the roster (revoked, removed).
+    /// Needs a runtime with a timer.
+    async fn watched(
+        gate: &DeviceCaller,
+        caller: &Caller,
+        served: impl std::future::Future<Output = Result<(), RemoteError>>,
+    ) -> Result<(), RemoteError> {
+        let gone = async {
+            loop {
+                tokio::time::sleep(WATCH).await;
+                if let Err(e) = admit(gate, caller) {
+                    return e;
+                }
+            }
+        };
+        futures::pin_mut!(served, gone);
+        match futures::future::select(served, gone).await {
+            futures::future::Either::Left((done, _)) => done,
+            futures::future::Either::Right((why, _)) => Err(why),
+        }
+    }
+
+    /// A backend that checks the caller again whenever it is asked to run: a turn waits in the
+    /// admission queue after it was authorized, and the caller may be gone by its turn.
+    struct Rechecked<B: ?Sized> {
+        inner: Arc<B>,
+        gate: DeviceCaller,
+        caller: Caller,
+    }
+
+    impl<B: ?Sized> Rechecked<B> {
+        fn wrap(inner: Arc<B>, gate: &DeviceCaller, caller: &Caller) -> Arc<Self> {
+            Arc::new(Self { inner, gate: gate.clone(), caller: caller.clone() })
+        }
+    }
+
+    #[async_trait]
+    impl ModelBackend for Rechecked<dyn ModelBackend> {
+        fn name(&self) -> String {
+            self.inner.name()
+        }
+
+        async fn complete(&self, m: &[Message], t: &[ToolSpec], d: &DeltaSink, c: &CancelToken) -> Result<ModelTurn, ModelError> {
+            admit(&self.gate, &self.caller).map_err(|e| ModelError::Unavailable(e.to_string()))?;
+            self.inner.complete(m, t, d, c).await
+        }
+    }
+
+    #[async_trait]
+    impl InferBackend for Rechecked<dyn InferBackend> {
+        fn name(&self) -> String {
+            self.inner.name()
+        }
+
+        fn resumes(&self) -> bool {
+            self.inner.resumes()
+        }
+
+        async fn infer(&self, request: &Request, out: &Output, cancel: &CancelToken) -> Result<Finish, RemoteError> {
+            admit(&self.gate, &self.caller)?;
+            self.inner.infer(request, out, cancel).await
+        }
+    }
+
+    #[async_trait]
+    impl EmbedBackend for Rechecked<dyn EmbedBackend> {
+        fn name(&self) -> String {
+            self.inner.name()
+        }
+
+        async fn embed(&self, input: &str, cancel: &CancelToken) -> Result<Vec<f32>, RemoteError> {
+            admit(&self.gate, &self.caller)?;
+            self.inner.embed(input, cancel).await
+        }
+    }
+
     /// Wraps an [`InferHost`] so only this user's current, non-revoked linked devices may use
     /// it, and nobody may while the profile is locked. `authorize` runs first on every request
     /// (the agent crate calls it before anything else) and `open` and friends check again, so
@@ -403,18 +501,7 @@ pub mod protocols {
         /// The gate: the profile is unlocked, and `caller` (the Noise-authenticated peer, plus
         /// the certificate it presented, if any) is a current linked device.
         pub(crate) fn check(&self, caller: &Caller) -> Result<(), RemoteError> {
-            if self.gate.check_unlocked().is_err() {
-                return Err(RemoteError::refused("profile-locked"));
-            }
-            let presented = match caller.cert_bytes.as_deref().map(weirdnet_agent::serve::decode_cert) {
-                None => None,
-                Some(Ok(cert)) => Some(cert),
-                Some(Err(_)) => return Err(RemoteError::refused("wrong-user")),
-            };
-            match self.gate.check(&caller.peer, presented.as_ref()).reason() {
-                None => Ok(()),
-                Some(reason) => Err(RemoteError::refused(reason)),
-            }
+            admit(&self.gate, caller)
         }
     }
 
@@ -426,7 +513,7 @@ pub mod protocols {
 
         fn open(&self, caller: &Caller, model: Option<&str>) -> Result<Arc<dyn ModelBackend>, RemoteError> {
             self.check(caller)?;
-            self.inner.open(caller, model)
+            Ok(Rechecked::wrap(self.inner.open(caller, model)?, &self.gate, caller))
         }
 
         fn open_request(
@@ -435,12 +522,12 @@ pub mod protocols {
             request: &remote::infer::v2::Request,
         ) -> Result<Arc<dyn remote::infer::v2::InferBackend>, RemoteError> {
             self.check(caller)?;
-            self.inner.open_request(caller, request)
+            Ok(Rechecked::wrap(self.inner.open_request(caller, request)?, &self.gate, caller))
         }
 
         fn open_embed(&self, caller: &Caller, model: Option<&str>) -> Result<Arc<dyn remote::infer::v2::EmbedBackend>, RemoteError> {
             self.check(caller)?;
-            self.inner.open_embed(caller, model)
+            Ok(Rechecked::wrap(self.inner.open_embed(caller, model)?, &self.gate, caller))
         }
     }
 
@@ -448,6 +535,7 @@ pub mod protocols {
     /// host is always behind a [`RosterHost`], so there is no way to serve it ungated.
     pub struct InferService {
         host: Arc<dyn InferHost>,
+        gate: DeviceCaller,
         admission: Admission,
         /// Serve infer/2 on this stream (register the service under [`INFER_V2`]), else infer/1.
         v2: bool,
@@ -455,7 +543,7 @@ pub mod protocols {
 
     impl InferService {
         pub fn new<H: InferHost + 'static>(host: H, gate: DeviceCaller, admission: Admission) -> Self {
-            Self { host: Arc::new(RosterHost::new(host, gate)), admission, v2: false }
+            Self { host: Arc::new(RosterHost::new(host, gate.clone())), gate, admission, v2: false }
         }
 
         /// The same service for [`INFER_V2`] streams.
@@ -472,9 +560,9 @@ pub mod protocols {
         async fn handle(&self, from: String, link: Link) {
             let caller = Caller::new(from.clone());
             let served = if self.v2 {
-                remote::infer::v2::serve(channel(link), caller, self.host.as_ref(), &self.admission).await
+                watched(&self.gate, &caller, remote::infer::v2::serve(channel(link), caller.clone(), self.host.as_ref(), &self.admission)).await
             } else {
-                remote::infer::serve(channel(link), &caller, self.host.as_ref(), &self.admission).await
+                watched(&self.gate, &caller, remote::infer::serve(channel(link), &caller, self.host.as_ref(), &self.admission)).await
             };
             if let Err(e) = served {
                 eprintln!("morph-agent: inference for {from}: {e}");
@@ -813,6 +901,133 @@ mod tests {
             crate::profile_lock::lock(&home, "default");
             assert!(matches!(host.authorize(&caller), Err(RemoteError::Refused { message }) if message == "profile-locked"));
             assert!(host.open(&caller, None).is_err());
+        }
+
+        /// A host whose turns take half a minute (or until they are stopped) and count their starts.
+        struct SlowHost(Arc<std::sync::atomic::AtomicUsize>);
+
+        struct Slow(Arc<std::sync::atomic::AtomicUsize>);
+
+        #[async_trait]
+        impl ModelBackend for Slow {
+            fn name(&self) -> String {
+                "slow".into()
+            }
+            async fn complete(
+                &self,
+                _m: &[Message],
+                _t: &[weirdnet_agent::tool::ToolSpec],
+                _d: &DeltaSink,
+                _c: &CancelToken,
+            ) -> Result<ModelTurn, weirdnet_agent::ModelError> {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                Ok(ModelTurn { text: "too late".into(), tool_calls: vec![] })
+            }
+        }
+
+        impl InferHost for SlowHost {
+            fn authorize(&self, _caller: &Caller) -> Result<(), RemoteError> {
+                Ok(())
+            }
+            fn open(&self, _caller: &Caller, _model: Option<&str>) -> Result<Arc<dyn ModelBackend>, RemoteError> {
+                Ok(Arc::new(Slow(self.0.clone())))
+            }
+        }
+
+        /// A desk serving slow turns one at a time with two queued, a phone linked to it, and
+        /// what it takes to revoke the phone or lock the profile.
+        struct Slowed {
+            rt: tokio::runtime::Runtime,
+            phone: Arc<dyn NodeRouter>,
+            desk: String,
+            started: Arc<std::sync::atomic::AtomicUsize>,
+            revoke: Box<dyn Fn()>,
+            _tmp: tempfile::TempDir,
+            home: std::path::PathBuf,
+        }
+
+        fn slowed() -> Slowed {
+            let tmp = tempfile::tempdir().unwrap();
+            let home = tmp.path().join("h");
+            morph_core::profiles::load_catalog(&home).unwrap();
+            crate::identity::create(&home, "default", &morph_identity::profile_identity::SecretString::from("a long password".to_string())).unwrap();
+            let rt = tokio();
+            let user = Keypair::generate_ed25519();
+            let (a, b) = (device(&user, "desk"), device(&user, "phone"));
+            let (server, st, listening) = up(&user, &a, &[&b.cert], None);
+            let server = server.for_locked_profile(&home, "default");
+            let at: Multiaddr = format!("{}/p2p/{}", listening[0], server.peer_id()).parse().unwrap();
+            let started = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let desk = DeviceRouter::new(server.clone());
+            rt.spawn(
+                desk.serve(protocols::INFER_V2, Arc::new(InferService::new(SlowHost(started.clone()), server, Admission::with_queue(1, 2)).v2()))
+                    .unwrap(),
+            );
+            let (phone, _, _) = up(&user, &b, &[&a.cert], Some(at));
+            let peer = b.cert.peer_id.clone();
+            let revoke = Box::new(move || drop(st.lock().unwrap().roster.revoke(&WEIRDNET, &user, &peer, 9).unwrap()));
+            Slowed { rt, phone: Arc::new(DeviceRouter::new(phone)), desk: a.cert.peer_id, started, revoke, _tmp: tmp, home }
+        }
+
+        impl Slowed {
+            /// Three turns from the phone: one runs, two wait their turn. Returns how long it took
+            /// them all to end (error or answer) after `stop` ran once the first had started.
+            fn three_turns_then(&self, stop: impl FnOnce()) -> (std::time::Duration, Vec<Result<ModelTurn, weirdnet_agent::ModelError>>) {
+                let plan = OffloadPlan { nodes: vec![self.desk.clone()], fallback_local: false };
+                self.rt.block_on(async {
+                    let turns: Vec<_> = (0..3)
+                        .map(|_| {
+                            let model = remote_model(self.phone.clone(), &plan, None);
+                            tokio::spawn(async move { model.complete(&[Message::user("hi")], &[], &DeltaSink::discard(), &CancelToken::new()).await })
+                        })
+                        .collect();
+                    while self.started.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+                        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                    }
+                    // Let the other two reach the queue.
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    let at = std::time::Instant::now();
+                    stop();
+                    let mut ended = Vec::new();
+                    for t in turns {
+                        ended.push(tokio::time::timeout(std::time::Duration::from_secs(10), t).await.expect("the turn ended").unwrap());
+                    }
+                    (at.elapsed(), ended)
+                })
+            }
+        }
+
+        #[test]
+        fn a_revoked_device_loses_its_running_and_queued_turns_at_once() {
+            let s = slowed();
+            let (took, ended) = s.three_turns_then(|| (s.revoke)());
+            assert!(took < std::time::Duration::from_secs(3), "stopped in {took:?}, not after the 30 s turns");
+            assert!(ended.iter().all(|t| t.is_err()), "{ended:?}");
+            assert_eq!(s.started.load(std::sync::atomic::Ordering::SeqCst), 1, "a queued turn never started after the revoke");
+        }
+
+        #[test]
+        fn locking_the_profile_stops_its_running_and_queued_turns_at_once() {
+            let s = slowed();
+            let (took, ended) = s.three_turns_then(|| crate::profile_lock::lock(&s.home, "default"));
+            assert!(took < std::time::Duration::from_secs(3), "stopped in {took:?}, not after the 30 s turns");
+            assert!(ended.iter().all(|t| t.is_err()), "{ended:?}");
+            assert_eq!(s.started.load(std::sync::atomic::Ordering::SeqCst), 1);
+        }
+
+        #[test]
+        fn a_backend_opened_before_a_revoke_refuses_to_run_after_it() {
+            // What a queued request holds when its turn comes: checked again, not trusted from before.
+            let user = Keypair::generate_ed25519();
+            let (a, b) = (device(&user, "desk"), device(&user, "phone"));
+            let (server, st, _) = up(&user, &a, &[&b.cert], None);
+            let host = RosterHost::new(SlowHost(Arc::default()), server);
+            let caller = Caller::new(b.cert.peer_id.clone());
+            let backend = host.open(&caller, None).unwrap();
+            st.lock().unwrap().roster.revoke(&WEIRDNET, &user, &b.cert.peer_id, 9).unwrap();
+            let r = rt(backend.complete(&[Message::user("hi")], &[], &DeltaSink::discard(), &CancelToken::new()));
+            assert!(matches!(r, Err(weirdnet_agent::ModelError::Unavailable(m)) if m.contains("revoked")), "refused at run time");
         }
 
         #[test]
