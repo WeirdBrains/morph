@@ -56,6 +56,8 @@ pub struct CompanionView {
     synced: u64,
     /// The first-run roster is not on disk yet (saved once, never over a stored one).
     roster_unsaved: bool,
+    /// The user's other devices, for Node companions.
+    devices: crate::companion_devices::CompanionDevices,
     /// `MORPH_COMPANION_AUTOASK=<question>`: a dev flag that sends one question when the panel first polls.
     autoask: Option<String>,
     store: FileStore,
@@ -194,6 +196,7 @@ impl CompanionView {
             policy_base,
             synced,
             roster_unsaved,
+            devices: crate::companion_devices::CompanionDevices::new(home.to_path_buf(), profile.to_string()),
             autoask: std::env::var("MORPH_COMPANION_AUTOASK").ok().filter(|q| !q.trim().is_empty()),
             store,
             focus: cx.focus_handle(),
@@ -354,8 +357,15 @@ impl CompanionView {
 
     fn send(&mut self, text: String, cx: &mut Context<Self>) {
         let id = self.selected.clone();
+        let not_here = self.roster.get(&id).and_then(|c| self.devices.not_here(c));
         let conv = self.conversation();
         if text.is_empty() || conv.is_running() {
+            cx.notify();
+            return;
+        }
+        // A Node companion runs on its device, never here in its place.
+        if let Some(reason) = not_here {
+            conv.fail(&reason);
             cx.notify();
             return;
         }
@@ -606,6 +616,7 @@ impl CompanionView {
             self.synced = synced;
             self.reload_agents(cx);
         }
+        self.devices.tick();
         if let Some(q) = self.autoask.take() {
             self.send(q, cx);
         }
