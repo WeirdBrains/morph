@@ -23,9 +23,9 @@ Update this table when you start or finish an area.
 
 | Area | Owner | Status (2026-11-18) |
 |---|---|---|
-| Networking: weirdnet-net peers and relays, Grindvakt DDNS, `weirdnet-morph://` and the scheme registry | Morph Lead Dev | v0.3, in progress (storage landed 9ffd5ce, 92afbec, 904137b; remaining: OsAuth backend, page capture/fill with origin matching, Settings > Privacy toggle and saved-logins list; sync waits on weirdnet-sync) |
+| Networking: weirdnet-net peers and relays, Grindvakt DDNS, `weirdnet-morph://` and the scheme registry | Morph Lead Dev | v0.3, not started |
 | Sync and security: weirdnet-sync 0.3.0 key rotation and its Morph wiring, Linked devices | Morph Lead Dev | in progress |
-| Password saver: backend and storage | Morph Lead Dev | v0.3, not started |
+| Password saver: backend and storage | Morph Lead Dev | v0.3, in progress (storage landed 9ffd5ce, 92afbec, 904137b; remaining: OsAuth backend, page capture/fill with origin matching, Settings > Privacy toggle and saved-logins list; sync waits on weirdnet-sync) |
 | Profile lock: a profile with an identity asks for its password to open (on by default, off in Settings > Privacy and site data with the password, policy `require_profile_password`), sealed `settings.json`/`tabs.json` (`morph-core/src/profile_files.rs`, `profile_lock.rs`), the gate and password change (`morph-services/src/profile_lock.rs`, `morph-identity` `change_password`), lock screen and Lock profile (`morph-desktop/src/lock_view.rs`, `shell.rs`, `settings_view/lock.rs`), [docs/profile-lock.md](profile-lock.md). Touch point in Morph Dev's `mcp_host.rs`: `Hooks::locked` (no server runs for a locked profile; the watcher reloads on lock and unlock) | Morph Lead Dev | v0.3, in progress (on main 1d4b65f..bf6cb6e), unreleased. Open for Morph Dev: seal `companions/`, `ai/policy.json` and the MCP host's `mcp-*.local.json` under the profile file key (`morph_core::profile_files::{read, write}`). Not yet: auto-lock after idle, OS auth unlock, the Flutter gate with biometrics |
 | 0.2.x patches: omnibox suggestions, transparent popups, multi-window follow-ups, downloads | Morph Lead Dev | in progress |
 | Releases and packaging | Morph Lead Dev | v0.2.1 in progress |
