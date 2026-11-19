@@ -13,14 +13,14 @@ publish = false
 [features]
 default = []
 # `LocalModels`: the provider over weirdnet-model (downloads, worker per model).
-local = ["dep:weirdnet-model", "weirdnet-model/agent"]
+local = ["dep:weirdnet-model", "weirdnet-model/agent", "dep:tokio"]
 # `mcp_runtime`: connect the configured MCP servers (weirdnet-mcp client with the agent feature).
 mcp = ["dep:weirdnet-mcp", "weirdnet-mcp/agent", "dep:tokio"]
 
 [dependencies]
 weirdnet-model = { workspace = true, optional = true }
 weirdnet-mcp = { workspace = true, optional = true }
-tokio = { version = "1", optional = true, features = ["rt", "time"] }
+tokio = { version = "1", optional = true, features = ["rt", "time", "sync", "macros"] }
 weirdnet-agent.workspace = true
 serde.workspace = true
 serde_json.workspace = true
