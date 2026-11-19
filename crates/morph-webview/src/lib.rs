@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 pub use bridge::{BridgeContext, ContextHandler, FrameKind, Trust};
+pub use page_action::{Action, ActionError, ActionOutcome, ActionRequest, ActionResult, Locator, PageActions};
 pub use page_read::{Isolation, PageData, PageReads, ReadError, ReadRequest, Want};
 
 #[cfg(target_os = "linux")]
@@ -26,6 +27,7 @@ pub mod keys;
 pub mod native_page;
 #[cfg(target_os = "linux")]
 pub mod offscreen;
+pub mod page_action;
 pub mod page_read;
 #[cfg(target_os = "linux")]
 pub mod render_probe;
@@ -105,6 +107,21 @@ pub struct Spec {
     /// research, a download's token search): it stays hidden, and its
     /// bridge messages say [`BridgeContext::background`].
     pub background: bool,
+    /// Where the page keeps cookies, cache and site storage.
+    pub storage: Storage,
+}
+
+/// Where a view keeps cookies, cache and site storage (docs/bridge-api.md).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Storage {
+    /// The profile's ([`Spec::data_dir`]): signed in wherever the user is.
+    #[default]
+    Profile,
+    /// A throwaway store of the view's own: it starts empty (signed out),
+    /// is never written to disk, shares no cookies or storage with the
+    /// profile, and goes with the view. Backends that can't make one refuse
+    /// the view with [`Error::Unsupported`] ([`Backend::ephemeral_storage`]).
+    Ephemeral,
 }
 
 /// Where a link the user asked to open elsewhere goes.
@@ -457,6 +474,8 @@ pub enum Error {
     Backend(String),
     #[error("no web view {0:?}")]
     Missing(ViewId),
+    #[error("this web view can't: {0}")]
+    Unsupported(&'static str),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -772,6 +791,16 @@ pub trait Backend {
     fn request_cookies(&mut self, _download: u64, _url: &str) -> bool {
         false
     }
+    /// Whether views can have [`Storage::Ephemeral`]; without it a create
+    /// asking for one fails with [`Error::Unsupported`].
+    fn ephemeral_storage(&self) -> bool {
+        false
+    }
+}
+
+/// The refusal for a [`Storage::Ephemeral`] view on a backend without one.
+pub(crate) fn check_storage(spec: &Spec, supported: bool) -> Result<()> {
+    if spec.storage == Storage::Ephemeral && !supported { Err(Error::Unsupported("throwaway (ephemeral) storage")) } else { Ok(()) }
 }
 
 /// What [`WebView::evaluate`] calls with the script's result.

@@ -53,6 +53,13 @@ struct Shared {
     hold_reads: bool,
     /// Chunks of answers under way, by read key.
     read_chunks: std::collections::HashMap<String, Vec<String>>,
+    /// Views can't have throwaway storage ([`crate::Storage::Ephemeral`]).
+    no_ephemeral: bool,
+    /// What page actions ([`crate::page_action`]) answer in pages whose
+    /// address starts with the key: the page side's raw answer.
+    page_actions: Vec<(String, String)>,
+    /// Where views say they run isolated scripts (`None`: a script world).
+    isolation: Option<crate::Isolation>,
 }
 
 /// The fake backend. Clone it to keep a handle for assertions after handing
@@ -137,16 +144,45 @@ impl FakeBackend {
         self.shared.borrow_mut().page_reads.push((url_prefix.into(), json.into()));
     }
 
+    /// Page actions in pages whose address starts with `url_prefix` answer
+    /// `answer` (`O<json>` or `E<code>:<detail>`) from now on.
+    pub fn answer_page_actions(&self, url_prefix: &str, answer: &str) {
+        self.shared.borrow_mut().page_actions.push((url_prefix.into(), answer.into()));
+    }
+
+    /// Views say they run isolated scripts in `isolation` from now on (and
+    /// refuse them with [`crate::Isolation::None`]).
+    pub fn set_isolation(&self, isolation: crate::Isolation) {
+        self.shared.borrow_mut().isolation = Some(isolation);
+    }
+
+    /// Refuse [`crate::Storage::Ephemeral`] views from now on, like a
+    /// backend without throwaway storage.
+    pub fn refuse_ephemeral(&self) {
+        self.shared.borrow_mut().no_ephemeral = true;
+    }
+
     /// Page reads get no answer from now on.
     pub fn hold_page_reads(&self) {
         self.shared.borrow_mut().hold_reads = true;
     }
 
-    /// The page side of a page read, for `script` in a page at `url`.
+    /// The page side of a page read or action, for `script` in a page at `url`.
     fn page_read(&self, url: &str, script: &str) -> Option<String> {
         let mut shared = self.shared.borrow_mut();
         if shared.hold_reads {
             return None;
+        }
+        if script.starts_with("/*morph-action:") {
+            return Some(
+                shared
+                    .page_actions
+                    .iter()
+                    .rev()
+                    .find(|(p, _)| url.starts_with(p.as_str()))
+                    .map(|(_, a)| a.clone())
+                    .unwrap_or_else(|| "Enotfound:".into()),
+            );
         }
         let head = script.strip_prefix("/*morph-read:")?.split("*/").next()?.to_string();
         let parts: Vec<&str> = head.split(':').collect();
@@ -204,6 +240,7 @@ impl FakeBackend {
 
 impl Backend for FakeBackend {
     fn create(&mut self, spec: Spec) -> Result<Box<dyn WebView>> {
+        crate::check_storage(&spec, self.ephemeral_storage())?;
         let id = {
             let mut shared = self.shared.borrow_mut();
             shared.next += 1;
@@ -226,6 +263,10 @@ impl Backend for FakeBackend {
 
     fn draws_pages(&self) -> bool {
         self.shared.borrow().draws
+    }
+
+    fn ephemeral_storage(&self) -> bool {
+        !self.shared.borrow().no_ephemeral
     }
 
     fn keyboard(&self) -> Option<ViewId> {
@@ -254,9 +295,12 @@ impl WebView for FakeView {
         true
     }
     fn isolation(&self) -> crate::Isolation {
-        crate::Isolation::ScriptWorld
+        self.backend.shared.borrow().isolation.unwrap_or(crate::Isolation::ScriptWorld)
     }
     fn evaluate_isolated(&self, script: &str, done: crate::ScriptDone) -> bool {
+        if self.isolation() == crate::Isolation::None {
+            return false;
+        }
         self.backend.record(self.id, Call::EvaluateIsolated(script.into()));
         let url = self.url.borrow().clone();
         if let Some(answer) = self.backend.page_read(&url, script) {

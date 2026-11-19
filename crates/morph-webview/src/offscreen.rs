@@ -201,11 +201,15 @@ fn pointer_device() -> Option<gdk::Device> {
 }
 
 impl Backend for OffscreenBackend {
+    fn ephemeral_storage(&self) -> bool {
+        true
+    }
     fn create(&mut self, spec: Spec) -> Result<Box<dyn WebView>> {
         self.next += 1;
         let id = ViewId(self.next);
+        crate::check_storage(&spec, true)?;
         let view_bridge = crate::bridge::ViewBridge::new(id, spec.visible, spec.background);
-        let context = self.contexts.entry(spec.data_dir.clone()).or_insert_with(|| WebContext::new(spec.data_dir.clone()));
+        let ephemeral = spec.storage == crate::Storage::Ephemeral;
         let url = if spec.url.is_empty() { "about:blank".to_string() } else { spec.url.clone() };
         let window = gtk::OffscreenWindow::new();
         window.realize();
@@ -221,7 +225,12 @@ impl Backend for OffscreenBackend {
         // as its window, and moved into its off-screen window unannounced.
         let embedder = &self.shared.embedder;
         embedder.add(&vbox);
-        let builder = WebViewBuilder::new_with_web_context(context);
+        // Throwaway storage: a WebKitWebContext of the view's own (see wry_linux).
+        let builder = if ephemeral {
+            WebViewBuilder::new().with_incognito(true)
+        } else {
+            WebViewBuilder::new_with_web_context(self.contexts.entry(spec.data_dir.clone()).or_insert_with(|| WebContext::new(spec.data_dir.clone())))
+        };
         // A page moved from another window starts from its history instead.
         let builder = if spec.session.is_some() { builder } else { builder.with_url(url.clone()) };
         let builder = builder
@@ -248,7 +257,11 @@ impl Backend for OffscreenBackend {
         embedder.remove(&vbox);
         window.add(&vbox);
         engine.disconnect(quiet);
-        crate::wry_linux::hook_downloads(&engine, id, &mut self.hooked, &spec.data_dir, &self.downloads, &self.queue);
+        if ephemeral {
+            crate::wry_linux::refuse_downloads(&engine);
+        } else {
+            crate::wry_linux::hook_downloads(&engine, id, &mut self.hooked, &spec.data_dir, &self.downloads, &self.queue);
+        }
         attach_bridge(&engine, &self.bridge, &view_bridge, true);
         watch(&engine, id, &self.queue, &self.shortcuts);
         crate::wry_linux::watch_links(&engine, id, &self.queue);
@@ -355,6 +368,13 @@ impl Backend for OffscreenBackend {
         };
         page.apply_size();
         page.set_visible(spec.visible)?;
+        if spec.background {
+            // Never drawn by the shell (`visible` stays false), but laid out
+            // at its size like a real page: an off-screen window that was
+            // never shown has no allocation, so the page got WebKit's
+            // minimum viewport and reads and actions saw a sliver of it.
+            page.window.show_all();
+        }
         Ok(Box::new(page))
     }
 

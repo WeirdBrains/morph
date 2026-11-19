@@ -34,3 +34,8 @@ wry.workspace = true
 [[test]]
 name = "bridge_webkit"
 harness = false
+
+# Throwaway storage and page actions in real WebKitGTK pages; needs a display (xvfb-run), skips without one.
+[[test]]
+name = "session_actions_webkit"
+harness = false

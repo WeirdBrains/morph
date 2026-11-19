@@ -1,15 +1,19 @@
 //! Pages a host loads and reads out of sight (docs/bridge-api.md): a
-//! companion's research, a summary of a link. Each is a background view of
-//! the window's profile ([`Spec::background`]): never shown, its popups
-//! refused, its bridge messages marked `background`. Hosts open one, wait for
-//! it to load, read it ([`morph_webview::page_read`]) and close it; tabs can
-//! be read the same way.
+//! companion's research, a summary of a link. Each is a background view
+//! ([`Spec::background`]): never shown, its popups refused, its bridge
+//! messages marked `background`. By default it has throwaway storage of its
+//! own ([`HostSession::Ephemeral`]: signed out, nothing kept); a host can ask
+//! for the window profile's instead ([`HostSession::Profile`], signed in).
+//! Hosts open one, wait for it to load, read it
+//! ([`morph_webview::page_read`]), act in it ([`morph_webview::page_action`])
+//! and close it; tabs can be read and acted in the same way.
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use morph_core::tabs::TabId;
+use morph_webview::page_action::{ActionError, ActionRequest, ActionResult};
 use morph_webview::page_read::{Pending, ReadResult, Resolver};
-use morph_webview::{Event, ReadError, ReadRequest, Rect, Spec, ViewId, WebView};
+use morph_webview::{Event, ReadError, ReadRequest, Rect, Spec, Storage, ViewId, WebView};
 
 use crate::Browser;
 
@@ -22,6 +26,44 @@ const SIZE: (f64, f64) = (1280.0, 800.0);
 /// Identifies a host page for the life of its browser.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct HostPageId(pub u64);
+
+/// Whose cookies and site storage a host page has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HostSession {
+    /// Throwaway storage of the page's own: signed out everywhere, never
+    /// sees the profile's cookies or storage, nothing written to disk, gone
+    /// when the page closes. The default (logged-out research).
+    #[default]
+    Ephemeral,
+    /// The window profile's: signed in wherever the user is (the per-task
+    /// signed-in opt-in).
+    Profile,
+}
+
+/// A host page to open.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostPageRequest {
+    pub url: String,
+    pub session: HostSession,
+    /// [`HostPageState::Failed`] when it hasn't loaded by then.
+    pub load_timeout: Duration,
+}
+
+impl HostPageRequest {
+    /// `url` with throwaway storage and [`LOAD_TIMEOUT`].
+    pub fn new(url: impl Into<String>) -> Self {
+        Self { url: url.into(), session: HostSession::Ephemeral, load_timeout: LOAD_TIMEOUT }
+    }
+
+    /// `url` with the window profile's storage (signed in).
+    pub fn signed_in(url: impl Into<String>) -> Self {
+        Self { session: HostSession::Profile, ..Self::new(url) }
+    }
+
+    pub fn timeout(self, load_timeout: Duration) -> Self {
+        Self { load_timeout, ..self }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HostPageState {
@@ -36,6 +78,7 @@ pub enum HostPageState {
 
 struct HostPage {
     view: Box<dyn WebView>,
+    session: HostSession,
     state: HostPageState,
     deadline: Instant,
     waiters: Vec<Resolver<HostPageState>>,
@@ -76,21 +119,38 @@ fn ready<T>(value: T) -> Pending<T> {
 }
 
 impl Browser {
-    /// Load `url` in a new host page of this window's profile.
+    /// Load `url` in a new host page with this window profile's storage
+    /// (signed in): [`Self::open_host_page_with`] and
+    /// [`HostPageRequest::signed_in`].
     pub fn open_host_page(&mut self, url: &str, load_timeout: Duration) -> morph_webview::Result<HostPageId> {
+        self.open_host_page_with(HostPageRequest::signed_in(url).timeout(load_timeout))
+    }
+
+    /// Open a host page. [`HostSession::Ephemeral`] fails with
+    /// [`morph_webview::Error::Unsupported`] where the engine has no
+    /// throwaway storage (never falls back to the profile's).
+    pub fn open_host_page_with(&mut self, request: HostPageRequest) -> morph_webview::Result<HostPageId> {
+        let storage = match request.session {
+            HostSession::Ephemeral => Storage::Ephemeral,
+            HostSession::Profile => Storage::Profile,
+        };
         let view = self.backend.create(Spec {
-            url: url.to_string(),
+            url: request.url,
             data_dir: self.data_dir.clone(),
             bounds: Rect::new(0.0, 0.0, SIZE.0, SIZE.1),
             visible: false,
             session: None,
             background: true,
+            storage,
         })?;
+        let load_timeout = request.load_timeout;
+        let session = request.session;
         let host = &mut self.host_pages;
         host.next += 1;
         let id = HostPageId(host.next);
         host.by_view.insert(view.id(), id);
-        host.pages.insert(id, HostPage { view, state: HostPageState::Loading, deadline: Instant::now() + load_timeout, waiters: Vec::new() });
+        host.pages
+            .insert(id, HostPage { view, session, state: HostPageState::Loading, deadline: Instant::now() + load_timeout, waiters: Vec::new() });
         Ok(id)
     }
 
@@ -124,6 +184,35 @@ impl Browser {
         }
     }
 
+    /// Whose storage host page `id` has (`None`: no such page).
+    pub fn host_page_session(&self, id: HostPageId) -> Option<HostSession> {
+        self.host_pages.pages.get(&id).map(|p| p.session)
+    }
+
+    /// Run `request` in host page `id` (see [`morph_webview::page_action`]).
+    pub fn host_page_action(&mut self, id: HostPageId, request: ActionRequest) -> Pending<ActionResult> {
+        match self.host_pages.pages.get(&id) {
+            Some(page) => self.actions.run(page.view.as_ref(), request),
+            None => ready(Err(ActionError::Gone)),
+        }
+    }
+
+    /// Run `request` in tab `tab`'s page, shown or not: click, fill, focus,
+    /// read back, highlight or scroll. The caller has the user's approval;
+    /// this only refuses what isn't safe to run (wrong origin, no script
+    /// world unless allowed).
+    pub fn tab_action(&mut self, tab: TabId, request: ActionRequest) -> Pending<ActionResult> {
+        match self.pages.get(&tab) {
+            Some(page) if page.cover.is_none() => self.actions.run(page.view.as_ref(), request),
+            _ => ready(Err(ActionError::Gone)),
+        }
+    }
+
+    /// [`Self::tab_action`] in the active tab.
+    pub fn active_tab_action(&mut self, request: ActionRequest) -> Pending<ActionResult> {
+        self.tab_action(self.tabs.active_id(), request)
+    }
+
     /// Read tab `tab`'s page, shown or not.
     pub fn read_tab(&mut self, tab: TabId, request: ReadRequest) -> Pending<ReadResult> {
         match self.pages.get(&tab) {
@@ -145,6 +234,7 @@ impl Browser {
         let view = page.view.id();
         self.host_pages.by_view.remove(&view);
         self.reads.forget_view(view);
+        self.actions.forget_view(view);
         HostPages::settle(&mut page, HostPageState::Closed);
         true
     }
@@ -188,7 +278,9 @@ impl Browser {
             }
         }
         let (host, pages, by_view) = (&self.host_pages, &self.pages, &self.by_view);
-        self.reads.tick(now, |v| host.view(v).or_else(|| by_view.get(&v).and_then(|t| pages.get(t)).map(|p| p.view.as_ref())));
+        let find = |v: ViewId| host.view(v).or_else(|| by_view.get(&v).and_then(|t| pages.get(t)).map(|p| p.view.as_ref()));
+        self.reads.tick(now, find);
+        self.actions.tick(now, find);
     }
 }
 
@@ -263,6 +355,63 @@ mod tests {
         let loaded = b.host_page_loaded(stalled);
         b.poll();
         assert_eq!(loaded.try_take(), Some(HostPageState::Failed("the page did not load in time".into())));
+    }
+
+    fn storage_of(fake: &FakeBackend, view: ViewId) -> Storage {
+        match &fake.calls_for(view)[0] {
+            Call::Create(spec) => spec.storage,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn host_pages_are_signed_out_unless_asked() {
+        let (mut b, fake) = browser();
+        let research = b.open_host_page_with(HostPageRequest::new("https://docs.test/")).unwrap();
+        assert_eq!(storage_of(&fake, *fake.created().last().unwrap()), Storage::Ephemeral);
+        assert_eq!(b.host_page_session(research), Some(HostSession::Ephemeral));
+        let signed_in = b.open_host_page_with(HostPageRequest::signed_in("https://mail.test/")).unwrap();
+        assert_eq!(storage_of(&fake, *fake.created().last().unwrap()), Storage::Profile);
+        assert_eq!(b.host_page_session(signed_in), Some(HostSession::Profile));
+        // The old call keeps what it did: the profile's storage.
+        b.open_host_page("https://mail.test/", LOAD_TIMEOUT).unwrap();
+        assert_eq!(storage_of(&fake, *fake.created().last().unwrap()), Storage::Profile);
+        assert_eq!(HostPageRequest::new("x").session, HostSession::Ephemeral, "the default");
+    }
+
+    #[test]
+    fn an_engine_without_throwaway_storage_refuses_rather_than_signing_in() {
+        let (mut b, fake) = browser();
+        fake.refuse_ephemeral();
+        let before = fake.created().len();
+        assert!(matches!(b.open_host_page_with(HostPageRequest::new("https://docs.test/")), Err(morph_webview::Error::Unsupported(_))));
+        assert_eq!(fake.created().len(), before, "no view, and no fallback to the profile");
+        assert!(b.host_pages().is_empty());
+    }
+
+    #[test]
+    fn tabs_and_host_pages_take_actions() {
+        use morph_webview::page_action::{Action, ActionError, ActionRequest, Locator};
+        let (mut b, fake) = browser();
+        fake.answer_page_actions(
+            "https://example.com",
+            r#"O{"url":"https://example.com/","origin":"https://example.com","matches":1,"element":{"tag":"button","name":"Go"}}"#,
+        );
+        let click = b.active_tab_action(ActionRequest::new(Action::Click(Locator::role("button", Some("Go")))).on_origin("https://example.com"));
+        b.poll();
+        let out = click.try_take().unwrap().unwrap();
+        assert_eq!(out.element.unwrap().name, "Go");
+        let wrong = b.active_tab_action(ActionRequest::new(Action::Click(Locator::text("Go"))).on_origin("https://bank.test"));
+        b.poll();
+        assert!(matches!(wrong.try_take(), Some(Err(ActionError::WrongOrigin { .. }))));
+
+        fake.hold_page_reads();
+        let id = b.open_host_page_with(HostPageRequest::new("https://docs.test/")).unwrap();
+        let scroll = b.host_page_action(id, ActionRequest::new(Action::ScrollBy { dx: 0.0, dy: 600.0 }));
+        assert!(b.close_host_page(id));
+        b.poll();
+        assert_eq!(scroll.try_take(), Some(Err(ActionError::Gone)));
+        assert_eq!(b.host_page_action(id, ActionRequest::new(Action::ScrollBy { dx: 0.0, dy: 1.0 })).try_take(), Some(Err(ActionError::Gone)));
     }
 
     #[test]

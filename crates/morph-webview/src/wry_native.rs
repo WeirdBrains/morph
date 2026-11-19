@@ -59,6 +59,11 @@ const TRANSPORT: HostTransport = HostTransport::WebKitIpc;
 #[cfg(target_os = "windows")]
 const TRANSPORT: HostTransport = HostTransport::WebView2;
 
+/// The WebView2 profile throwaway-storage views use (InPrivate, so nothing
+/// of it outlives the last one open; never the window profile's own).
+#[cfg(target_os = "windows")]
+const EPHEMERAL_PROFILE: &str = "MorphEphemeral";
+
 pub struct NativeBackend {
     parent: Parent,
     next: u64,
@@ -159,14 +164,25 @@ fn backend_err(e: impl std::fmt::Display) -> Error {
 }
 
 impl Backend for NativeBackend {
+    fn ephemeral_storage(&self) -> bool {
+        true
+    }
     fn create(&mut self, spec: Spec) -> Result<Box<dyn WebView>> {
         self.next += 1;
         let id = ViewId(self.next);
         let url = if spec.url.is_empty() { "about:blank".to_string() } else { spec.url.clone() };
         let pending: Rc<RefCell<Pending>> = Rc::default();
+        crate::check_storage(&spec, true)?;
         let view_bridge = ViewBridge::new(id, spec.visible, spec.background);
+        let ephemeral = spec.storage == crate::Storage::Ephemeral;
         let context = self.contexts.entry(spec.data_dir.clone()).or_insert_with(|| WebContext::new(spec.data_dir.clone()));
+        // Throwaway storage (wry's incognito): on macOS a new
+        // WKWebsiteDataStore.nonPersistent() per view; on Windows the
+        // profile's WebView2 environment with an InPrivate controller of a
+        // profile of its own (EPHEMERAL_PROFILE), so it never sees the
+        // profile's cookies and its data goes when the last such view does.
         let mut builder = WebViewBuilder::new_with_web_context(context)
+            .with_incognito(ephemeral)
             .with_url(url)
             .with_bounds(wry_rect(spec.bounds))
             .with_visible(spec.visible && !spec.background)
@@ -184,7 +200,7 @@ impl Backend for NativeBackend {
         #[cfg(target_os = "macos")]
         {
             use wry::WebViewBuilderExtDarwin;
-            if let Some(dir) = &spec.data_dir {
+            if let Some(dir) = spec.data_dir.as_ref().filter(|_| !ephemeral) {
                 builder = builder.with_data_store_identifier(crate::native_page::store_id(dir));
             }
             let q = self.queue.clone();
@@ -199,6 +215,9 @@ impl Backend for NativeBackend {
             // reaches the page, and the page script hands Morph its own.
             use wry::WebViewBuilderExtWindows;
             builder = builder.with_browser_accelerator_keys(false);
+            if ephemeral {
+                builder = builder.with_profile_name(EPHEMERAL_PROFILE);
+            }
         }
         let q = self.queue.clone();
         builder = builder.with_document_title_changed_handler(move |title| q.borrow_mut().push((id, Event::TitleChanged(title))));

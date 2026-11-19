@@ -118,6 +118,7 @@ impl Browser {
                 visible: false,
                 session: None,
                 background: true,
+                storage: morph_webview::Storage::Profile,
             };
             match self.backend.create(spec) {
                 Ok(view) if !origins.is_empty() => {
