@@ -12,6 +12,29 @@ Code: `morph-core/src/profile_lock.rs` (the setting, policy and backoff),
 `morph-identity/src/profile_identity.rs` (`change_password`),
 `morph-desktop/src/lock_view.rs` (the lock screen) and `shell.rs` (where windows build).
 
+## Status
+
+Progress note for whoever picks this up next (update it with each push).
+
+- Done, in five commits on main: identity `change_password` (crash-safe),
+  sealed profile files, `morph_services::profile_lock` (default on, policy,
+  backoff), gates on launch, switch, new window, CLI/URL hand-off, MCP host
+  (stops servers beside the `applied_revision` watch), sync (`Error::Locked`)
+  and `DeviceCaller` (`DeviceCallError::Locked`), the desktop lock screen,
+  Settings > Privacy (off with the current password and a warning, change),
+  docs and changelog.
+- Tests: workspace tests and clippy `-D warnings` pass;
+  `sync::tests::three_homes_rotate_on_revoke_and_re_admit_a_restored_device`
+  can time out under a full parallel run and passes alone, on main as well.
+- `scripts/xvfb-check.py --only profile-lock` is written but not run yet: the
+  dev machine has no `xdotool` (or `sway` for `--wayland`). Run it in CI or a
+  box that has them.
+- Open: seal `companions/`, `ai/policy.json` and the MCP host's
+  `mcp-*.local.json` under the file key (with Morph Dev); show locked
+  profiles in `profiles_view`; auto-lock after idle; OS authentication
+  unlock; the Flutter gate with biometrics; the password saver decision (see
+  "Password saver" below).
+
 ## Keys
 
 ```text
