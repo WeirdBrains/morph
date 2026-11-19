@@ -60,6 +60,8 @@ pub struct CompanionView {
     devices: crate::companion_devices::CompanionDevices,
     /// `MORPH_COMPANION_AUTOASK=<question>`: a dev flag that sends one question when the panel first polls.
     autoask: Option<String>,
+    /// When the panel was made: the dev question waits for the tab's address, at most 10 s.
+    made: Instant,
     /// The profile lock: while it is locked no task starts, and locking stops the running ones.
     lock: LockCheck,
     /// When the lock was last looked at, and what it said.
@@ -255,6 +257,7 @@ impl CompanionView {
             roster_unsaved,
             devices: crate::companion_devices::CompanionDevices::new(home.to_path_buf(), profile.to_string()).with_lock(lock.clone()),
             autoask: std::env::var("MORPH_COMPANION_AUTOASK").ok().filter(|q| !q.trim().is_empty()),
+            made: Instant::now(),
             lock,
             lock_seen: None,
             store,
@@ -811,7 +814,10 @@ impl CompanionView {
         }
         self.devices.tick();
         self.follow_lock();
-        if let Some(q) = self.autoask.take() {
+        // Sent once the tab's address is known, as a question typed by the user would be.
+        let tab_known = self.page.as_ref().is_some_and(|p| !p.url.is_empty() && p.url != "about:blank");
+        if self.autoask.is_some() && (tab_known || self.made.elapsed() > Duration::from_secs(10)) {
+            let q = self.autoask.take().unwrap_or_default();
             self.send(q, cx);
         }
         self.serve_hosts(cx);
