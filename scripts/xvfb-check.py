@@ -374,6 +374,21 @@ def wait_for(fn, timeout=6.0):
     return value
 
 
+def settled(fn, still=0.6, timeout=6.0):
+    """`fn()` once it has not changed for `still` seconds (or the last seen
+    after `timeout`): a smooth scroll reports every step on its way."""
+    end = time.time() + timeout
+    value, since = fn(), time.time()
+    while time.time() < end:
+        time.sleep(0.1)
+        now = fn()
+        if now != value:
+            value, since = now, time.time()
+        elif time.time() - since >= still:
+            break
+    return value
+
+
 def settled_layout(morph, win, fallback, timeout=10.0, still=1.0):
     """The window width and the page state once neither has changed for
     `still` seconds (or the last seen after `timeout`)."""
@@ -470,18 +485,22 @@ def page_keys(m, r, area, win, popup, top):
     # Scrolling needs the page, not a field, focused.
     m.click(win, 300, top + 300)
     m.key("Escape")
-    y0 = (st() or {}).get("y", -1)
+    # Each scroll is read once it has come to rest: a smooth scroll reports
+    # its steps, and a step read as the end left the next check comparing
+    # against a page still moving (Page Up "scrolling" 27 -> 303).
+    scroll_y = lambda: settled(lambda: (st() or {}).get("y", -1))  # noqa: E731
+    y0 = scroll_y()
     m.key("Next")
-    y1 = (st() or {}).get("y", -1)
+    y1 = scroll_y()
     r.check(area, "Page Down scrolls", y1 > y0 >= 0, f"{y0} -> {y1}")
     m.key("Prior")
-    y2 = (st() or {}).get("y", -1)
+    y2 = scroll_y()
     r.check(area, "Page Up scrolls back", y2 < y1, f"{y1} -> {y2}")
     m.key("space")
-    y3 = (st() or {}).get("y", -1)
+    y3 = scroll_y()
     r.check(area, "Space scrolls down", y3 > y2, f"{y2} -> {y3}")
     m.key("shift+space")
-    y4 = (st() or {}).get("y", -1)
+    y4 = scroll_y()
     r.check(area, "Shift+Space scrolls up", y4 < y3, f"{y3} -> {y4}")
     m.key("Down", "Down", "Down")
     y5 = (st() or {}).get("y", -1)
@@ -2531,6 +2550,15 @@ def app_calls(m, r, win, top):
     under the app address, and a 404, a refusal and an app the peer doesn't
     serve each get Morph's page saying so. None is searched."""
     base = f"weirdnet-morph-test://{APP_PEER}"
+
+    def back_to_keys():
+        # Back to keys.html, and wait until it has loaded, so the next
+        # address is never typed while the back load is still landing (one
+        # run's typing reached keys.html instead of the address bar).
+        since = len(m.events())
+        m.key("alt+Left", delay=0.3)
+        wait_for(lambda: any(n == "LoadFinished" for _, n, _ in m.events()[since:]) and m.title(win).startswith("M{"), 10)
+
     for path, title, logged, label in [
         ("/hello?x=1", r"Hello from morph-test", r"ok status=200 kind=html", "an app's HTML page loads through the relay, titled by the app"),
         ("/data.json", None, r"ok status=200 kind=json", "an app's JSON answer is shown"),
@@ -2554,7 +2582,7 @@ def app_calls(m, r, win, top):
             shown = [a for t, name, a in m.events()[since:] if name == "UrlChanged"]
             r.check("app", "the engine got the app's page as a data: address (Morph never hands it the weirdnet- address)", any((a or "").strip("\"").startswith("data:text/html") for a in shown), str([(a or "")[:40] for a in shown]))
             r.check("app", "the query never reaches the log", not m.lines(r"morph-event app-call .*x=1"), "")
-        m.key("alt+Left", delay=1.0)
+        back_to_keys()
     m.click(win, 300, top + 300)
     m.key("ctrl+l", delay=0.6)
     m.type(f"weirdnet-other-app://{APP_PEER}/")
