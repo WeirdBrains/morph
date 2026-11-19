@@ -684,4 +684,40 @@ mod tests {
         assert_eq!((b.per_page, b.tokens_per_page), (d.per_page, d.tokens_per_page));
         assert!(b.per_task > d.per_task);
     }
+
+    struct Ping(&'static str);
+
+    #[async_trait]
+    impl weirdnet_agent::Tool for Ping {
+        fn spec(&self) -> ToolSpec {
+            ToolSpec::new(self.0, "ping").tier(Tier::Navigate)
+        }
+        fn target(&self, _: &serde_json::Value) -> CallTarget {
+            CallTarget::url("https://srv.example/")
+        }
+        async fn call(&self, _: &ToolContext, _: serde_json::Value) -> Result<ToolOutput, ToolError> {
+            Ok(ToolOutput::default())
+        }
+    }
+
+    #[test]
+    fn a_task_gets_the_browser_tools_beside_the_servers_tools_with_their_switches() {
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let mut servers = ToolRegistry::new();
+        servers.add_source(Arc::new(weirdnet_agent::LocalTools::new("srv").with(Ping("srv.ping")).with(Ping("srv.off"))));
+        rt.block_on(servers.refresh()).unwrap();
+        servers.set_tool_enabled("srv.off", false);
+        let (calls, _rx) = std::sync::mpsc::channel();
+        let browser: Arc<dyn BrowserHost> = Arc::new(DesktopBrowser::new(calls, Seen::default()));
+        let sources: Vec<Arc<dyn ToolSource>> = vec![Arc::new(browser_tools(browser, PendingTarget::default()))];
+        let both = rt.block_on(with_hosts(&sources, Arc::new(servers)));
+        let names: Vec<String> = both.specs().into_iter().map(|s| s.name).collect();
+        assert!(names.contains(&"page.text".to_string()) && names.contains(&"srv.ping".to_string()));
+        assert!(!names.contains(&"srv.off".to_string()), "a switched-off server tool stays off");
+        let (src, spec) = both.lookup("srv.ping").unwrap();
+        assert_eq!((src.id(), spec.tier), ("mcp-servers", Tier::Navigate));
+        assert_eq!(src.target("srv.ping", &serde_json::json!({})), CallTarget::url("https://srv.example/"));
+        let none = rt.block_on(with_hosts(&[], Arc::new(ToolRegistry::new())));
+        assert!(none.specs().is_empty());
+    }
 }
