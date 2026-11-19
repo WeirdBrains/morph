@@ -374,6 +374,23 @@ def wait_for(fn, timeout=6.0):
     return value
 
 
+def settled_layout(morph, win, fallback, timeout=10.0, still=1.0):
+    """The window width and the page state once neither has changed for
+    `still` seconds (or the last seen after `timeout`)."""
+    end = time.time() + timeout
+    last, since = None, time.time()
+    width, page = morph.geometry(win)[2], state(morph) or fallback
+    while time.time() < end:
+        width, page = morph.geometry(win)[2], state(morph) or fallback
+        now = (width, page.get("w"), page.get("h"))
+        if now != last:
+            last, since = now, time.time()
+        elif time.time() - since >= still:
+            break
+        time.sleep(0.2)
+    return width, page
+
+
 class Results:
     def __init__(self):
         self.rows = []
@@ -1466,10 +1483,12 @@ def main_menu(r, binary, display):
             time.sleep(1.0)
             win = m2.own_window() or win
             m2.activate(win)
-            _, _, width, _ = m2.geometry(win)
-            # The first state can come before the window took its size
-            # (seen on Wayland at scale 2): measure from the settled one.
-            s0 = state(m2) or s0
+            # The first states can come before the window took its size: on
+            # Wayland at scale 2 a fresh window reported a 395-wide page and
+            # reached its 510 a moment later, after the fixed sleep, so the
+            # menu click used the old width and missed. Measure, and take the
+            # click positions, once the window and the page hold still.
+            width, s0 = settled_layout(m2, win, s0)
             w0, h0 = s0.get("w", 0), s0.get("h", 0)
             before = len(m2.events())
             m2.click(win, width - 23, 55)
@@ -1986,8 +2005,10 @@ def open_identity(m, r, area):
     """Ctrl+Shift+L opens the identity panel beside the page."""
     win = wait_for(m.own_window, 20)
     m.activate(win)
+    # A Morph just started may still be taking its size (Wayland, scale 2).
+    _, s0 = settled_layout(m, win, state(m) or {})
     m.click(win, 300, 76 + 300)
-    w0 = (state(m) or {}).get("w", 0)
+    w0 = (state(m) or s0).get("w", 0)
     m.key("ctrl+shift+l", delay=1.0)
     r.check(area, "Ctrl+Shift+L opens the identity panel beside the page", wait_for(lambda: (state(m) or {}).get("w", 0) < w0), f"{w0} -> {(state(m) or {}).get('w')}")
     return win, w0
