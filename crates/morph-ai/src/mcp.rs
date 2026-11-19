@@ -153,6 +153,19 @@ impl McpConfigs {
         self.servers.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then_with(|| a.id.cmp(&b.id)));
     }
 
+    /// Takes a removed companion out of every server's scope. A server that was only for that
+    /// companion is left for nobody (an empty scope), never widened to everyone. Returns whether
+    /// anything changed.
+    pub fn forget_companion(&mut self, companion: &str) -> bool {
+        let mut changed = false;
+        for s in &mut self.servers {
+            if let Some(scope) = &mut s.companions {
+                changed |= scope.remove(companion);
+            }
+        }
+        changed
+    }
+
     pub fn remove(&mut self, id: &str) -> bool {
         let before = self.servers.len();
         self.servers.retain(|s| s.id != id);

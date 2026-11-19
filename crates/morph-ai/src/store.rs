@@ -19,6 +19,21 @@ pub enum StoreError {
     Corrupt(String),
 }
 
+/// Removes a companion from the stored roster and takes its id out of the MCP servers' scopes
+/// (a server that was only for it ends up for nobody, not for everyone). The caller also forgets
+/// its grants (see [`Grants::forget`]).
+pub fn remove_companion(store: &dyn AiStore, id: &weirdnet_agent::AgentId) -> Result<crate::CompanionProfile, String> {
+    let mut roster = store.load_roster().map_err(|e| e.to_string())?.ok_or_else(|| format!("no companion {id}"))?;
+    let removed = roster.remove(id).map_err(|e| e.to_string())?;
+    store.save_roster(&roster).map_err(|e| e.to_string())?;
+    if let Some(mut mcp) = store.load_mcp().map_err(|e| e.to_string())?
+        && mcp.forget_companion(id.as_str())
+    {
+        store.save_mcp(&mcp).map_err(|e| e.to_string())?;
+    }
+    Ok(removed)
+}
+
 /// Where the roster and policy live. The app implements it over its encrypted store; tests
 /// and first runs use [`MemoryStore`] or [`FileStore`].
 pub trait AiStore: Send + Sync {
@@ -344,6 +359,41 @@ pub fn rebase_shared(store: &dyn AiStore, policy: &SharedPolicy, base: &Policy) 
 mod tests {
     use super::*;
     use crate::model::ModelChoice;
+
+    #[test]
+    fn removing_a_companion_takes_its_id_out_of_mcp_scopes_without_widening_any() {
+        use crate::{CompanionProfile, McpConfigs, McpServer, McpTransport, Roster};
+        use std::collections::{BTreeMap, BTreeSet};
+        let store = MemoryStore::default();
+        let mut roster = Roster::first_run(ModelChoice::Gemma4E4B);
+        roster.add(CompanionProfile::local("scout", "Scout", ModelChoice::Gemma4E4B)).unwrap();
+        store.save_roster(&roster).unwrap();
+        let http = || McpTransport::Http { url: "https://x".into(), headers: BTreeMap::new() };
+        let mut both = McpServer::new("Both", http());
+        both.companions = Some(BTreeSet::from(["local".to_string(), "scout".to_string()]));
+        let mut only = McpServer::new("Only", http());
+        only.companions = Some(BTreeSet::from(["scout".to_string()]));
+        let everyone = McpServer::new("Everyone", http());
+        let mut cfgs = McpConfigs::default();
+        for s in [&both, &only, &everyone] {
+            cfgs.upsert(s.clone());
+        }
+        store.save_mcp(&cfgs).unwrap();
+
+        remove_companion(&store, &AgentId::new("scout")).unwrap();
+        assert!(store.load_roster().unwrap().unwrap().get(&AgentId::new("scout")).is_none());
+        let after = store.load_mcp().unwrap().unwrap();
+        let scope = |id: &str| after.servers.iter().find(|s| s.id == id).unwrap().companions.clone();
+        assert_eq!(scope(&both.id), Some(BTreeSet::from(["local".to_string()])));
+        assert_eq!(scope(&only.id), Some(BTreeSet::new()), "for nobody now, not for everyone");
+        assert!(!after.servers.iter().find(|s| s.id == only.id).unwrap().applies_to("local"));
+        assert_eq!(scope(&everyone.id), None);
+        // A companion that is not there is an error and changes nothing.
+        assert!(remove_companion(&store, &AgentId::new("scout")).is_err());
+        assert_eq!(store.load_mcp().unwrap().unwrap(), after);
+        let mut again = after.clone();
+        assert!(!again.forget_companion("scout"), "nothing left to take out");
+    }
 
     #[test]
     fn grants_persist_through_the_store() {
