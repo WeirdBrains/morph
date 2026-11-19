@@ -253,6 +253,13 @@ jobs:
   # GitHub's runners.
   desktop-macos:
     runs-on: ${{ vars.MAC_RUNNER == 'on' && github.event_name != 'pull_request' && (github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) && fromJSON('["self-hosted","macOS","ARM64","weirdbrains-mac"]') || 'macos-latest' }}
+    # One Mac, one build at a time: on the Mac, a newer push to the same ref
+    # replaces an older one still waiting (the running build finishes), so
+    # pushes don't pile up behind a sleeping or busy Mac. Hosted runs are
+    # unaffected (a group per run).
+    concurrency:
+      group: ${{ vars.MAC_RUNNER == 'on' && github.event_name != 'pull_request' && (github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) && format('desktop-macos-mac-{0}', github.ref) || format('desktop-macos-{0}', github.run_id) }}
+      cancel-in-progress: false
     timeout-minutes: 150
     env:
       CARGO_INCREMENTAL: "0"
