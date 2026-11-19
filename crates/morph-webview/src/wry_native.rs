@@ -132,6 +132,162 @@ struct Shared {
     view: wry::WebView,
     pending: Rc<RefCell<Pending>>,
     bridge: ViewBridge,
+    /// Morph's script world in this view (reads and actions run there).
+    world: World,
+}
+
+/// Morph's script world on WKWebView: the named `WKContentWorld`
+/// ([`bridge::HOST_WORLD`]), kept alive for the view's life so its globals
+/// (a chunked read's parts) last between calls. Page scripts can't see or
+/// change its JavaScript globals; they share the DOM.
+#[cfg(target_os = "macos")]
+struct World(objc2::rc::Retained<objc2_web_kit::WKContentWorld>);
+
+#[cfg(target_os = "macos")]
+impl World {
+    fn new() -> Option<Self> {
+        let mtm = objc2::MainThreadMarker::new()?;
+        // SAFETY: on the main thread; any name is valid.
+        Some(Self(unsafe { objc2_web_kit::WKContentWorld::worldWithName(&objc2_foundation::NSString::from_str(bridge::HOST_WORLD), mtm) }))
+    }
+
+    /// Run `script` in the main frame in this world; `done` gets its string.
+    fn evaluate(&self, view: &wry::WebView, script: &str, done: crate::ScriptDone) -> bool {
+        use objc2::runtime::AnyObject;
+        use objc2_foundation::{NSError, NSString};
+        use wry::WebViewExtMacOS;
+        let slot = Cell::new(Some(done));
+        let block = block2::RcBlock::new(move |result: *mut AnyObject, error: *mut NSError| {
+            let Some(done) = slot.take() else {
+                return;
+            };
+            // SAFETY: WebKit hands a valid object or nil.
+            let text =
+                if error.is_null() { unsafe { result.as_ref() }.and_then(|r| r.downcast_ref::<NSString>()).map(|s| s.to_string()) } else { None };
+            done(text);
+        });
+        // SAFETY: on the main thread (the shell's); WebKit keeps the block
+        // until it calls it; `None` is the main frame.
+        unsafe {
+            view.webview().evaluateJavaScript_inFrame_inContentWorld_completionHandler(&NSString::from_str(script), None, &self.0, Some(&*block))
+        };
+        true
+    }
+}
+
+/// Morph's script world on WebView2: a CDP isolated world
+/// (`Page.createIsolatedWorld`) in the top frame, made on first use in each
+/// document and run in with `Runtime.evaluate` and its `contextId`. Page
+/// scripts can't see or change its globals; they share the DOM.
+#[cfg(target_os = "windows")]
+#[derive(Clone, Default)]
+struct World(Rc<Cell<Option<i64>>>);
+
+#[cfg(target_os = "windows")]
+impl World {
+    fn new() -> Option<Self> {
+        Some(Self::default())
+    }
+
+    fn evaluate(&self, view: &wry::WebView, script: &str, done: crate::ScriptDone) -> bool {
+        use wry::WebViewExtWindows;
+        let slot = Rc::new(Cell::new(Some(done)));
+        let finish: cdp::Finish = Rc::new(move |r: Option<String>| {
+            if let Some(done) = slot.take() {
+                done(r)
+            }
+        });
+        let core = view.webview();
+        match self.0.get() {
+            Some(context) => cdp::run_in(core, self.clone(), context, script.to_string(), finish, true),
+            None => cdp::make_world(core, self.clone(), script.to_string(), finish),
+        }
+        true
+    }
+
+    /// A new document is coming: its world is made on first use.
+    fn page_loading(&self) {
+        self.0.set(None);
+    }
+}
+
+/// The DevTools protocol calls behind [`World`] on WebView2.
+#[cfg(target_os = "windows")]
+mod cdp {
+    use std::rc::Rc;
+
+    use webview2_com::CallDevToolsProtocolMethodCompletedHandler;
+    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2;
+    use windows_core::HSTRING;
+
+    use super::World;
+
+    pub(super) type Finish = Rc<dyn Fn(Option<String>)>;
+
+    /// Call `method`; `done` gets its result object, or `None` when the call
+    /// failed (an error object instead of a result counts as failed).
+    fn call(core: &ICoreWebView2, method: &str, params: serde_json::Value, done: impl FnOnce(Option<serde_json::Value>) + 'static) -> bool {
+        let handler = CallDevToolsProtocolMethodCompletedHandler::create(Box::new(move |status: windows_core::Result<()>, json: String| {
+            let value = status
+                .ok()
+                .and_then(|_| serde_json::from_str::<serde_json::Value>(&json).ok())
+                .filter(|v| v.get("code").is_none() || v.get("message").is_none());
+            done(value);
+            Ok(())
+        }));
+        // SAFETY: on the UI thread that owns the web view.
+        unsafe { core.CallDevToolsProtocolMethod(&HSTRING::from(method), &HSTRING::from(params.to_string()), &handler) }.is_ok()
+    }
+
+    /// Make the isolated world in the top frame's document, then run `script` there.
+    pub(super) fn make_world(core: ICoreWebView2, world: World, script: String, finish: Finish) {
+        let (c, f) = (core.clone(), finish.clone());
+        let ok = call(&core, "Page.getFrameTree", serde_json::json!({}), move |tree| {
+            let Some(frame) = tree.as_ref().and_then(|t| t["frameTree"]["frame"]["id"].as_str()).map(str::to_string) else {
+                return f(None);
+            };
+            let (c2, f2) = (c.clone(), f.clone());
+            let params = serde_json::json!({ "frameId": frame, "worldName": crate::bridge::HOST_WORLD, "grantUniveralAccess": false });
+            let ok = call(&c, "Page.createIsolatedWorld", params, move |made| {
+                let Some(context) = made.as_ref().and_then(|m| m["executionContextId"].as_i64()) else {
+                    return f2(None);
+                };
+                // Two made at once: both run in the first kept, so a read's
+                // parts stay in one world.
+                let context = world.0.get().unwrap_or_else(|| {
+                    world.0.set(Some(context));
+                    context
+                });
+                run_in(c2, world, context, script, f2, false);
+            });
+            if !ok {
+                f(None);
+            }
+        });
+        if !ok {
+            finish(None);
+        }
+    }
+
+    /// Run `script` in execution context `context`; when that context is
+    /// gone (the page moved on) and `retry`, make the world again once.
+    pub(super) fn run_in(core: ICoreWebView2, world: World, context: i64, script: String, finish: Finish, retry: bool) {
+        let params = serde_json::json!({ "expression": script, "contextId": context, "returnByValue": true, "awaitPromise": false });
+        let (c, f) = (core.clone(), finish.clone());
+        let ok = call(&core, "Runtime.evaluate", params, move |answer| match answer {
+            Some(a) if a.get("result").is_some() => {
+                f(if a.get("exceptionDetails").is_some() { None } else { a["result"]["value"].as_str().map(str::to_string) });
+            }
+            _ if retry => {
+                world.0.set(None);
+                make_world(c, world, script, f);
+            }
+            _ => f(None),
+        });
+        if !ok {
+            finish(None);
+        }
+    }
 }
 
 impl NativeBackend {
@@ -172,6 +328,7 @@ impl Backend for NativeBackend {
         let id = ViewId(self.next);
         let url = if spec.url.is_empty() { "about:blank".to_string() } else { spec.url.clone() };
         let pending: Rc<RefCell<Pending>> = Rc::default();
+        let world = World::new().ok_or_else(|| Error::Backend("web views are made on the main thread".into()))?;
         crate::check_storage(&spec, true)?;
         let view_bridge = ViewBridge::new(id, spec.visible, spec.background);
         let ephemeral = spec.storage == crate::Storage::Ephemeral;
@@ -222,11 +379,17 @@ impl Backend for NativeBackend {
         let q = self.queue.clone();
         builder = builder.with_document_title_changed_handler(move |title| q.borrow_mut().push((id, Event::TitleChanged(title))));
         let (q, p) = (self.queue.clone(), pending.clone());
+        #[cfg(target_os = "windows")]
+        let w = world.clone();
         builder = builder.with_on_page_load_handler(move |event, url| {
             let mut q = q.borrow_mut();
             q.push((id, Event::UrlChanged(url)));
             match event {
-                PageLoadEvent::Started => q.push((id, Event::LoadStarted)),
+                PageLoadEvent::Started => {
+                    #[cfg(target_os = "windows")]
+                    w.page_loading();
+                    q.push((id, Event::LoadStarted));
+                }
                 PageLoadEvent::Finished => {
                     q.push((id, Event::LoadFinished));
                     p.borrow_mut().loaded = true;
@@ -264,7 +427,7 @@ impl Backend for NativeBackend {
             q.borrow_mut().push((id, event));
         });
         let view = builder.build_as_child(&self.parent).map_err(backend_err)?;
-        let shared = Rc::new(Shared { view, pending, bridge: view_bridge });
+        let shared = Rc::new(Shared { view, pending, bridge: view_bridge, world });
         self.views.retain(|(_, v)| v.strong_count() > 0);
         self.views.push((id, Rc::downgrade(&shared)));
         Ok(Box::new(NativeView { id, shared, bounds: Cell::new(spec.bounds) }))
@@ -372,11 +535,13 @@ impl WebView for NativeView {
     fn evaluate(&self, script: &str, done: crate::ScriptDone) -> bool {
         crate::wry_evaluate(self.view(), script, done)
     }
+    /// Reads and actions run in Morph's own world here too: a
+    /// `WKContentWorld` on macOS, a CDP isolated world on Windows.
     fn isolation(&self) -> crate::Isolation {
-        crate::Isolation::PageWorld
+        crate::Isolation::ScriptWorld
     }
     fn evaluate_isolated(&self, script: &str, done: crate::ScriptDone) -> bool {
-        crate::wry_evaluate_string(self.view(), script, done)
+        self.shared.world.evaluate(self.view(), script, done)
     }
     fn engine_url(&self) -> Option<String> {
         self.view().url().ok()

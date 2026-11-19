@@ -5728,15 +5728,21 @@ dependencies = [
 name = "morph-webview"
 version = "0.1.0"
 dependencies = [
+ "block2 0.6.2",
  "gdkx11",
  "getrandom 0.3.4",
  "gtk",
  "javascriptcore-rs",
+ "objc2 0.6.5",
+ "objc2-foundation 0.3.2",
+ "objc2-web-kit",
  "raw-window-handle",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
  "webkit2gtk",
+ "webview2-com",
+ "windows-core 0.62.2",
  "wry",
  "x11-dl",
 ]
