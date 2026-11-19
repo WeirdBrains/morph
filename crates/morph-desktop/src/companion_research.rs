@@ -140,9 +140,9 @@ fn steps_done(p: &ResearchProject) -> (usize, usize) {
 }
 
 /// The tab's body: a hint for the composer, the project list, and the open project.
-pub fn body(t: Theme, state: &ResearchState, companion: &str, cx: &mut Context<CompanionView>) -> gpui::Div {
+pub fn body(t: Theme, state: &ResearchState, companion: &str, cx: &mut Context<CompanionView>) -> gpui::Stateful<gpui::Div> {
     let allow_all = state.projects.always_allow_all;
-    let mut col = div().flex().flex_col().flex_1().gap(px(6.)).overflow_hidden();
+    let mut col = div().id("research-body").flex().flex_col().flex_1().min_h(px(0.)).gap(px(6.)).overflow_y_scroll();
     col = col.child(
         div()
             .text_size(px(11.))
@@ -177,10 +177,11 @@ pub fn body(t: Theme, state: &ResearchState, companion: &str, cx: &mut Context<C
             .bg(rgb(t.surface_variant))
             .border_1()
             .border_color(rgb(if open { t.accent } else { t.surface_variant }))
-            .cursor_pointer()
-            .on_click(cx.listener(move |this, _, _, cx| this.research_open(id.clone(), cx)))
             .child(
                 div()
+                    .id(("research-head", i))
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _, _, cx| this.research_open(id.clone(), cx)))
                     .flex()
                     .flex_row()
                     .gap(px(6.))
