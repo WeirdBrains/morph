@@ -30,6 +30,19 @@ x11-dl.workspace = true
 raw-window-handle.workspace = true
 wry.workspace = true
 
+# Morph's script world for reads and actions (docs/bridge-api.md): a
+# WKContentWorld on macOS, a CDP isolated world on WebView2. The same
+# versions wry 0.57 uses.
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6.2"
+objc2 = "0.6.4"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSError", "NSString"] }
+objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-app-kit", "objc2-core-foundation", "WKContentWorld", "WKFrameInfo", "WKWebView"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+webview2-com = "0.39.1"
+windows-core = "0.62"
+
 # The bridge in a real WebKitGTK page; needs a display (xvfb-run), skips without one.
 [[test]]
 name = "bridge_webkit"

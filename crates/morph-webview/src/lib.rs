@@ -806,13 +806,6 @@ pub(crate) fn check_storage(spec: &Spec, supported: bool) -> Result<()> {
 /// What [`WebView::evaluate`] calls with the script's result.
 pub type ScriptDone = Box<dyn FnOnce(Option<String>) + Send>;
 
-/// [`WebView::evaluate_isolated`] in the page's world on a wry view: the
-/// script's string comes back JSON-quoted, and is unquoted here.
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-pub(crate) fn wry_evaluate_string(view: &wry::WebView, script: &str, done: ScriptDone) -> bool {
-    wry_evaluate(view, script, Box::new(move |r| done(r.and_then(|json| serde_json::from_str::<String>(&json).ok()))))
-}
-
 /// [`WebView::evaluate`] on a wry view (every real backend).
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub(crate) fn wry_evaluate(view: &wry::WebView, script: &str, done: ScriptDone) -> bool {
