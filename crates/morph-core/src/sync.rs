@@ -16,13 +16,15 @@ use weirdnet_sync::{EpochKeys, NodeId, Roster, SyncState, SyncType as typ};
 pub const BOOKMARKS: &str = typ::BOOKMARKS;
 pub const HISTORY: &str = typ::HISTORY;
 pub const SETTINGS: &str = typ::SETTINGS;
-pub const DEFAULT_TYPES: &[&str] = &[BOOKMARKS, HISTORY, SETTINGS];
+/// Companion records (`companion_sync`): companions, grants, chats, MCP configs, journals.
+use crate::companion_sync::{CHATS, COMPANIONS, GRANTS, JOURNAL, MCP};
+pub const DEFAULT_TYPES: &[&str] = &[BOOKMARKS, HISTORY, SETTINGS, COMPANIONS, GRANTS, CHATS, MCP, JOURNAL];
 
 /// Record types this build can merge. A pull asks for each one that is on.
-pub const SUPPORTED_TYPES: &[&str] = &[BOOKMARKS, HISTORY, SETTINGS];
+pub const SUPPORTED_TYPES: &[&str] = &[BOOKMARKS, HISTORY, SETTINGS, COMPANIONS, GRANTS, CHATS, MCP, JOURNAL];
 
 /// Earlier builds' default opt-ins, upgraded once to [`DEFAULT_TYPES`].
-const OLD_DEFAULTS: &[&[&str]] = &[&[BOOKMARKS], &[BOOKMARKS, HISTORY]];
+const OLD_DEFAULTS: &[&[&str]] = &[&[BOOKMARKS], &[BOOKMARKS, HISTORY], &[BOOKMARKS, HISTORY, SETTINGS]];
 
 /// One bookmarks-log mutation. `record_id` lives on the log entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -109,7 +111,7 @@ pub fn enable(lib: &mut Library, our_node: &str, now_ms: i64) -> morph_store::Re
 }
 
 const META_DEFAULTS: &str = "defaults";
-const DEFAULTS_VERSION: &[u8] = b"3";
+const DEFAULTS_VERSION: &[u8] = b"4";
 
 /// Libraries that synced before history or settings existed still hold an
 /// older default opt-in list. Move them to today's defaults once, like a
