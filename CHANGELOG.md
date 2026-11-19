@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Calls between your own linked devices use this device's key and its linked-device certificate, and a device answers only your other active linked devices: revoked or unknown devices are refused (docs/net-app-caller-identity.md). Calls to public Weirdnet apps stay anonymous.
+
+- Synced companion chats: a long answer is clipped once, no longer re-clipped on a device that only has the clipped copy (which could replace the full answer on the device that ran it), and no chat record is too large to sync. Revoking a device on another device now voids its grants here on the next sync pass even when nothing else changed.
+
 - The address bar suggests pages from your history and bookmarks as you type, below the bar, ranked by how well they match, how often you visit them and how recently. The best match completes inline as selected text (Right accepts it), and the last row searches with your search engine. Up and Down choose, Enter opens, Escape closes.
 
 - Menus, the downloads panel and the suggestions no longer sit on a black page area on Linux/X11: the page stays visible behind them.
