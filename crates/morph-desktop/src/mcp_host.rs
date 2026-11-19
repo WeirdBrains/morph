@@ -483,6 +483,7 @@ done"#;
     }
 
     /// A manager whose sync answers are the test's.
+    #[cfg(target_os = "linux")]
     fn manager_with(
         companions: &Path,
         allowed: &Arc<std::sync::atomic::AtomicBool>,
