@@ -1,5 +1,5 @@
 //! Saved companion chats: each finished task's question and answer. They sync across the
-//! user's devices (`morph-core` `companion_sync`), so a chat started on the phone is there on
+//! user's devices (`morph-services` `companion_sync`), so a chat started on the phone is there on
 //! the desktop.
 
 use serde::{Deserialize, Serialize};

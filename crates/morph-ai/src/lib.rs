@@ -7,7 +7,7 @@
 //! - [`store`]: [`AiStore`] and [`Grants`], per-companion per-site levels and standing allows.
 //! - [`host`]: [`BrowserHost`] and [`ResearchHost`], what the app provides to tools.
 //! - [`chats`], [`journal`], [`mcp`]: saved chats, Notes and project journals (Save to Notes,
-//!   Save to journal), and MCP server configs; all sync (`morph-core` `companion_sync`).
+//!   Save to journal), and MCP server configs; all sync (`morph-services` `companion_sync`).
 //! - [`mcp_local`] and `mcp_runtime` (feature `mcp`): per-machine MCP secrets and approvals, and
 //!   connecting the configured servers into a tool registry.
 //! - [`remote`]: [`NodeRouter`], routing for Node companions and inference offload.
