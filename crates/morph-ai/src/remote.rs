@@ -34,6 +34,9 @@ pub enum RouteError {
     NotLinked(String),
     #[error("{0} is not reachable")]
     Unreachable(String),
+    /// The device does not accept the protocol (a build from before it): ask an older one.
+    #[error("{0} is not reachable")]
+    Unsupported(String),
     #[error("the connection closed")]
     Closed,
     #[error("{0}")]

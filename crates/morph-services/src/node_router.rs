@@ -234,6 +234,7 @@ pub fn route_error(e: DeviceCallError) -> RouteError {
     match e {
         DeviceCallError::NotLinked { peer, .. } => RouteError::NotLinked(peer),
         DeviceCallError::Unreachable(p) => RouteError::Unreachable(p),
+        DeviceCallError::ProtocolNotSupported(m) => RouteError::Unsupported(m),
         other => RouteError::Failed(other.to_string()),
     }
 }
@@ -332,7 +333,7 @@ pub mod protocols {
         match e {
             RouteError::NotLinked(p) => RemoteError::Refused { message: format!("{p} is not one of your linked devices") },
             // A device from before infer/2 does not accept its protocol: the pool then asks it infer/1.
-            RouteError::Unreachable(m) if m.contains("does not accept") => RemoteError::Unsupported { message: m },
+            RouteError::Unsupported(m) => RemoteError::Unsupported { message: m },
             RouteError::Unreachable(p) => RemoteError::Unreachable { message: p },
             RouteError::Closed => RemoteError::Closed,
             RouteError::Failed(m) => RemoteError::Failed { message: m },
@@ -824,6 +825,34 @@ mod tests {
             let model = remote_model(router, &plan, None);
             let turn = rt.block_on(model.complete(&[Message::user("hi")], &[], &DeltaSink::discard(), &CancelToken::new())).unwrap();
             assert_eq!(turn.text, "from the desktop");
+            assert!(matches!(model.last_route(), Some(Route::Node { node, .. }) if node == desk));
+        }
+
+        /// Refuses infer/2 dials with the typed not-supported error, its text saying nothing
+        /// of it, and passes the rest to the real router.
+        struct WithoutInferV2(Arc<dyn NodeRouter>);
+
+        #[async_trait]
+        impl NodeRouter for WithoutInferV2 {
+            fn nodes(&self) -> Vec<LinkedNode> {
+                self.0.nodes()
+            }
+            async fn open(&self, peer: &str, protocol: &str) -> Result<Link, RouteError> {
+                if protocol == protocols::INFER_V2 {
+                    return Err(RouteError::Unsupported("infer/2".into()));
+                }
+                self.0.open(peer, protocol).await
+            }
+        }
+
+        #[test]
+        fn the_infer_1_fallback_follows_the_typed_not_supported_error() {
+            let rt = tokio();
+            let (router, desk, _) = devices(&rt);
+            let plan = OffloadPlan { nodes: vec![desk.clone()], fallback_local: false };
+            let model = remote_model(Arc::new(WithoutInferV2(router)), &plan, None);
+            let turn = rt.block_on(model.complete(&[Message::user("hi")], &[], &DeltaSink::discard(), &CancelToken::new())).unwrap();
+            assert_eq!(turn.text, "from the desktop", "infer/1 answered");
             assert!(matches!(model.last_route(), Some(Route::Node { node, .. }) if node == desk));
         }
 

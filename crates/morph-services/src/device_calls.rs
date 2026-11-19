@@ -47,6 +47,10 @@ pub enum DeviceCallError {
     Refused(String),
     #[error("{0} is not reachable")]
     Unreachable(String),
+    /// The far end is a linked device but does not accept the stream's protocol (a build from
+    /// before the protocol was added): the caller may ask an older one instead.
+    #[error("{0} is not reachable")]
+    ProtocolNotSupported(String),
     #[error("{0}")]
     Failed(String),
 }
@@ -173,7 +177,7 @@ impl DeviceCaller {
     pub async fn open_stream(&self, peer: &str, protocol: &str, limits: Limits) -> Result<Stream, DeviceCallError> {
         self.unlocked()?;
         let (id, addrs) = self.target(peer)?;
-        self.node.open_stream_async(id, &addrs, protocol, limits).await.map_err(|e| DeviceCallError::Unreachable(e.to_string()))
+        self.node.open_stream_async(id, &addrs, protocol, limits).await.map_err(|e| open_error(e.to_string()))
     }
 
     /// Serve `app` to linked devices only: every call is checked against the live roster
@@ -209,6 +213,13 @@ impl DeviceCaller {
         let incoming = self.node.accept_streams(protocol, limits).map_err(|e| DeviceCallError::Failed(e.to_string()))?;
         Ok(LinkedStreams { incoming, gate: self.clone() })
     }
+}
+
+/// A failed [`DeviceCaller::open_stream`] as a [`DeviceCallError`]. weirdnet-net 0.8 reports a
+/// protocol the far end does not accept only in its message ("the peer does not accept
+/// {protocol}"), so this is the one place that reads it; callers match the variant.
+fn open_error(message: String) -> DeviceCallError {
+    if message.contains("does not accept") { DeviceCallError::ProtocolNotSupported(message) } else { DeviceCallError::Unreachable(message) }
 }
 
 /// Incoming streams, filtered to the user's linked devices.
@@ -346,5 +357,22 @@ mod tests {
         let _b = rt(from_b.open_stream(&a.cert.peer_id, "/morph/device-test/1", Limits::default())).unwrap();
         let got = rt(incoming.next()).unwrap();
         assert_eq!(got.peer().to_string(), b.cert.peer_id);
+    }
+
+    #[test]
+    fn a_protocol_the_far_end_does_not_accept_is_its_own_error() {
+        let user = Keypair::generate_ed25519();
+        let (a, b) = (device(&user, "a"), device(&user, "b"));
+        let server = up(&user, &a, &[&b.cert], None);
+        let _incoming = server.accept_streams("/morph/device-test/1", Limits::default()).unwrap();
+        let at: Multiaddr = format!("{}/p2p/{}", server.node.status().listening[0], server.peer_id()).parse().unwrap();
+        let from_b = up(&user, &b, &[&a.cert], Some(at));
+        let err = rt(from_b.open_stream(&a.cert.peer_id, "/morph/device-test/2", Limits::default())).unwrap_err();
+        let DeviceCallError::ProtocolNotSupported(m) = &err else { panic!("{err:?}") };
+        // The text is what it was when this was an `Unreachable`.
+        assert_eq!(err.to_string(), DeviceCallError::Unreachable(m.clone()).to_string());
+        assert!(m.contains("/morph/device-test/2"), "{m}");
+        // Anything else that stops a stream opening is still unreachable.
+        assert!(matches!(open_error("network: cannot reach it in time".into()), DeviceCallError::Unreachable(_)));
     }
 }
