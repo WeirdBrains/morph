@@ -1,4 +1,4 @@
-//! Agent settings that are not per companion: where research looks. Stored in the companions
+//! Agent settings that are not per companion: where research looks and where model turns run. Stored in the companions
 //! directory as `settings.json`; the research host reads it later.
 
 use serde::{Deserialize, Serialize};
@@ -37,6 +37,9 @@ pub struct AgentSettings {
     /// The web provider after the Library. Research always searches the Library first.
     #[serde(default)]
     pub search_provider: SearchProvider,
+    /// When model turns go to another of the user's devices.
+    #[serde(default)]
+    pub offload: crate::remote::OffloadSettings,
 }
 
 #[cfg(test)]
@@ -49,7 +52,10 @@ mod tests {
         assert_eq!(AgentSettings::default().search_provider, SearchProvider::DuckDuckGo);
         let s: AgentSettings = serde_json::from_str(r#"{"future":1}"#).unwrap();
         assert_eq!(s, AgentSettings::default());
-        assert_eq!(serde_json::to_string(&AgentSettings { search_provider: SearchProvider::Google }).unwrap(), r#"{"search_provider":"google"}"#);
+        assert_eq!(
+            serde_json::to_string(&AgentSettings { search_provider: SearchProvider::Google, ..Default::default() }).unwrap(),
+            r#"{"search_provider":"google","offload":{"mode":"auto","fallback_local":true}}"#
+        );
     }
 
     #[test]
@@ -57,7 +63,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = FileStore::new(dir.path().join("companions"));
         assert_eq!(file.load_settings().unwrap(), None);
-        let s = AgentSettings { search_provider: SearchProvider::Google };
+        let s = AgentSettings { search_provider: SearchProvider::Google, ..Default::default() };
         file.save_settings(&s).unwrap();
         assert_eq!(FileStore::new(dir.path().join("companions")).load_settings().unwrap(), Some(s.clone()));
         let mem = MemoryStore::default();

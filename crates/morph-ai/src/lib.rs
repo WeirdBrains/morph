@@ -6,17 +6,32 @@
 //!   [`ModelProvider`] that turns a choice into a `weirdnet_agent::ModelBackend`.
 //! - [`store`]: [`AiStore`] and [`Grants`], per-companion per-site levels and standing allows.
 //! - [`host`]: [`BrowserHost`] and [`ResearchHost`], what the app provides to tools.
+//! - [`chats`], [`journal`], [`mcp`]: saved chats, Notes and project journals (Save to Notes,
+//!   Save to journal), and MCP server configs; all sync (`morph-core` `companion_sync`).
+//! - [`remote`]: [`NodeRouter`], routing for Node companions and inference offload.
 
+pub mod chats;
 pub mod host;
+mod ids;
+pub mod journal;
 #[cfg(feature = "local")]
 pub mod local;
+pub mod mcp;
 pub mod model;
+pub mod remote;
 pub mod roster;
 pub mod settings;
 pub mod store;
 
+pub use chats::{ChatLog, ChatTurn};
 pub use host::{BrowserHost, FetchedPage, HostError, PageSnapshot, ResearchHost, SearchHit};
+pub use ids::new_id;
+pub use journal::{Journal, JournalEntry, JournalKind, Journals, NOTES_ID};
+pub use mcp::{McpConfigs, McpSecrets, McpServer, McpTransport, McpValue};
 pub use model::{ModelChoice, ModelProvider, Platform, UnavailableModels};
+pub use remote::{
+    CompanionRoute, Link, LinkedNode, NodeRouter, OffloadMode, OffloadPlan, OffloadSettings, RouteError, offload_plan, route_companion,
+};
 pub use roster::{CompanionProfile, Roster, RosterError};
 pub use settings::{AgentSettings, SearchProvider};
 pub use store::{AiStore, FileStore, Grants, MemoryStore, StoreError, reload_shared, revoke_shared, save_shared};
