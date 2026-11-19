@@ -37,6 +37,12 @@ pub fn fetch(url: &str, timeout: Duration) -> Result<FetchedPage, HostError> {
     Ok(FetchedPage { url: final_url, status: Some(status), text, bytes })
 }
 
+/// [`fetch`] in the shape of a read, for the hidden-page-or-HTTP path.
+pub fn fetch_page(url: &str, timeout: Duration) -> Result<(PageSnapshot, Option<u16>), HostError> {
+    let page = fetch(url, timeout)?;
+    Ok((PageSnapshot { url: page.url, text: page.text, isolated: true, ..Default::default() }, page.status))
+}
+
 /// `web.read` logged out: title, main text and links.
 pub fn read(url: &str, timeout: Duration) -> Result<(PageSnapshot, Option<u16>), HostError> {
     let (final_url, status, body, kind) = get(url, timeout)?;

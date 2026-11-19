@@ -70,9 +70,11 @@ pub enum HostCall {
         title: String,
         reply: Reply<()>,
     },
-    /// Read `url` in a hidden host page of this window's profile (its signed-in session).
+    /// Read `url` in a hidden host page: a throwaway session, or with `signed_in` this window's
+    /// profile (the per-task opt-in). `Unsupported` when the engine has no throwaway storage.
     ReadHidden {
         url: String,
+        signed_in: bool,
         reply: Reply<(PageSnapshot, Option<u16>)>,
     },
 }
@@ -290,28 +292,33 @@ impl ResearchHost for DesktopResearch {
         blocking(move || companion_web::search(&provider, &query, HTTP_TIMEOUT)).await
     }
     async fn fetch(&self, url: &str, signed_in: Option<&str>) -> Result<FetchedPage, HostError> {
-        match signed_in {
-            None => {
-                let url = url.to_string();
-                blocking(move || companion_web::fetch(&url, HTTP_TIMEOUT)).await
-            }
-            Some(p) => {
-                self.check_profile(p)?;
-                let (page, status) = ask(&self.calls, |r| HostCall::ReadHidden { url: url.to_string(), reply: r }).await?;
-                Ok(FetchedPage { bytes: page.text.len() as u64, url: page.url, status, text: page.text })
-            }
-        }
+        let (page, status) = self.hidden_or_http(url, signed_in, companion_web::fetch_page).await?;
+        Ok(FetchedPage { bytes: page.text.len() as u64, url: page.url, status, text: page.text })
     }
     async fn read(&self, url: &str, signed_in: Option<&str>) -> Result<(PageSnapshot, Option<u16>), HostError> {
-        match signed_in {
-            None => {
+        self.hidden_or_http(url, signed_in, companion_web::read).await
+    }
+}
+
+impl DesktopResearch {
+    /// A hidden host page: throwaway when logged out, this profile's session with the opt-in.
+    /// Logged out on an engine without throwaway storage, plain HTTP with no cookies instead.
+    async fn hidden_or_http(
+        &self,
+        url: &str,
+        signed_in: Option<&str>,
+        http: fn(&str, Duration) -> Result<(PageSnapshot, Option<u16>), HostError>,
+    ) -> Result<(PageSnapshot, Option<u16>), HostError> {
+        if let Some(p) = signed_in {
+            self.check_profile(p)?;
+        }
+        let hidden = ask(&self.calls, |r| HostCall::ReadHidden { url: url.to_string(), signed_in: signed_in.is_some(), reply: r }).await;
+        match hidden {
+            Err(HostError::Unsupported(_)) if signed_in.is_none() => {
                 let url = url.to_string();
-                blocking(move || companion_web::read(&url, HTTP_TIMEOUT)).await
+                blocking(move || http(&url, HTTP_TIMEOUT)).await
             }
-            Some(p) => {
-                self.check_profile(p)?;
-                ask(&self.calls, |r| HostCall::ReadHidden { url: url.to_string(), reply: r }).await
-            }
+            other => other,
         }
     }
 }
@@ -723,5 +730,47 @@ mod tests {
         assert_eq!(src.target("srv.ping", &serde_json::json!({})), CallTarget::url("https://srv.example/"));
         let none = rt.block_on(with_hosts(&[], Arc::new(ToolRegistry::new())));
         assert!(none.specs().is_empty());
+    }
+
+    #[test]
+    fn research_reads_in_a_throwaway_host_page_and_falls_back_to_http_only_when_unsupported() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, rx) = mpsc::channel();
+        let host = DesktopResearch::new(tx, dir.path().to_path_buf(), "default".into(), FileStore::new(dir.path().join("c")));
+        let panel = std::thread::spawn(move || {
+            let mut asked = Vec::new();
+            for call in rx.iter() {
+                let HostCall::ReadHidden { url, signed_in, reply } = call else { panic!("unexpected {call:?}") };
+                asked.push((url.clone(), signed_in));
+                let _ = reply.send(if url.contains("old-engine") {
+                    Err(HostError::Unsupported("throwaway (ephemeral) storage".into()))
+                } else {
+                    Ok((PageSnapshot { url, text: "hidden page text".into(), isolated: true, ..Default::default() }, None))
+                });
+            }
+            asked
+        });
+        let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+        let (page, _) = rt.block_on(host.read("https://docs.example/", None)).unwrap();
+        assert_eq!(page.text, "hidden page text");
+        let fetched = rt.block_on(host.fetch("https://docs.example/raw", Some("default"))).unwrap();
+        assert_eq!(fetched.text, "hidden page text");
+        // No throwaway storage: plain HTTP (port 9 refuses, so the error is HTTP's, not Unsupported).
+        let http = rt.block_on(host.read("http://127.0.0.1:9/old-engine", None));
+        assert!(matches!(http, Err(HostError::Fetch(_))), "{http:?}");
+        // Signed in never falls back to a logged-out fetch.
+        let signed = rt.block_on(host.read("http://127.0.0.1:9/old-engine", Some("default")));
+        assert!(matches!(signed, Err(HostError::Unsupported(_))), "{signed:?}");
+        drop(host);
+        let asked = panel.join().unwrap();
+        assert_eq!(
+            asked,
+            vec![
+                ("https://docs.example/".to_string(), false),
+                ("https://docs.example/raw".to_string(), true),
+                ("http://127.0.0.1:9/old-engine".to_string(), false),
+                ("http://127.0.0.1:9/old-engine".to_string(), true),
+            ]
+        );
     }
 }

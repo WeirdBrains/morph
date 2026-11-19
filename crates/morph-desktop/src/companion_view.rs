@@ -17,7 +17,7 @@ use morph_ai::{
     AiStore, EngineFactory, FileStore, Grants, HostError, LocalModels, ModelChoice, ModelStatus, PageLink, PageSnapshot, Platform, Roster, ScrollTo,
     TabInfo,
 };
-use morph_browser::{HostPageId, HostPageState};
+use morph_browser::{HostPageId, HostPageRequest, HostPageState};
 use morph_companion::{
     ApprovalCard, AttachedPage, Conversation, Entry, FootnoteView, NoticeView, OfferView, TaskOptions, ToolState, TraceRowView, ViewUpdate,
     export_markdown, footnotes, parse_citations,
@@ -139,6 +139,13 @@ fn read_error(e: morph_webview::ReadError) -> HostError {
 /// What a page read asks for: never the raw HTML.
 fn page_request() -> ReadRequest {
     ReadRequest::new(Want { title: true, text: true, readable: true, links: true, selection: true, html: false })
+}
+
+/// A hidden research page's load and its read each get the design's per-page time.
+const HOST_PAGE_TIMEOUT: Duration = Duration::from_secs(15);
+
+fn host_read_request() -> ReadRequest {
+    ReadRequest { timeout: HOST_PAGE_TIMEOUT, ..page_request() }
 }
 
 impl EventEmitter<ShellRequest> for CompanionView {}
@@ -437,7 +444,7 @@ impl CompanionView {
                 },
                 Op::HostLoad { id, pending, reply } => match pending.try_take() {
                     None => self.ops.push(Op::HostLoad { id, pending, reply }),
-                    Some(HostPageState::Loaded) => match self.with_browser(cx, |b| b.read_host_page(id, page_request())) {
+                    Some(HostPageState::Loaded) => match self.with_browser(cx, |b| b.read_host_page(id, host_read_request())) {
                         Some(pending) => self.ops.push(Op::HostRead { id, pending, reply }),
                         None => {
                             let _ = reply.send(Err(HostError::Gone));
@@ -550,11 +557,15 @@ impl CompanionView {
                     .map_err(|e| HostError::Fetch(e.to_string()));
                 let _ = reply.send(r);
             }
-            HostCall::ReadHidden { url, reply } => {
-                let opened =
-                    self.with_browser(cx, |b| b.open_host_page(&url, morph_browser::host_pages::LOAD_TIMEOUT).map(|id| (id, b.host_page_loaded(id))));
+            HostCall::ReadHidden { url, signed_in, reply } => {
+                // Throwaway unless the user opted in for this task; never falls back to the profile.
+                let request = if signed_in { HostPageRequest::signed_in(&url) } else { HostPageRequest::new(&url) }.timeout(HOST_PAGE_TIMEOUT);
+                let opened = self.with_browser(cx, |b| b.open_host_page_with(request).map(|id| (id, b.host_page_loaded(id))));
                 match opened {
                     Some(Ok((id, pending))) => self.ops.push(Op::HostLoad { id, pending, reply }),
+                    Some(Err(morph_webview::Error::Unsupported(what))) => {
+                        let _ = reply.send(Err(HostError::Unsupported(what.to_string())));
+                    }
                     Some(Err(e)) => {
                         let _ = reply.send(Err(HostError::Fetch(e.to_string())));
                     }
