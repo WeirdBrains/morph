@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use morph_ai::mcp_runtime::{ConnectContext, ServerStatus, connect};
-use morph_ai::{AiStore, FileStore, McpApprovals, McpConfigs, McpSecrets, McpServer, McpValue, write_private};
+use morph_ai::{AiStore, FileStore, McpApprovals, McpConfigs, McpSecrets, McpServer, McpTransport, McpValue, write_private};
 use weirdnet_agent::ToolRegistry;
 
 /// This device as `McpServer::devices` names it. Configs made here run everywhere (`devices` is
@@ -243,7 +243,14 @@ impl McpManager {
                 while rx.recv().is_ok() {
                     while rx.try_recv().is_ok() {}
                     lock(&state).snapshot.busy = true;
-                    let configs = configs(&dir);
+                    let mut configs = configs(&dir);
+                    // A synced local command never starts unless this device or a linked,
+                    // unrevoked one wrote its config (Lead Dev's sync layer decides).
+                    for s in configs.servers.iter_mut() {
+                        if matches!(s.transport, McpTransport::Stdio { .. }) && !morph_services::sync::mcp_may_start_in(&dir, &s.id) {
+                            s.enabled = false;
+                        }
+                    }
                     let approvals = McpApprovals::load(&approvals_path(&dir));
                     let ctx = ConnectContext { secrets: &*secrets, approvals: &approvals, device: DEVICE, timeout: Duration::from_secs(15) };
                     let hub = rt.block_on(connect(&configs, &ctx));
