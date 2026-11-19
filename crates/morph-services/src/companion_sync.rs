@@ -125,7 +125,6 @@ fn op_len(turn: &ChatTurn) -> usize {
 /// The copy of a turn that syncs: [`ChatTurn::for_sync`], then clipped further until its op
 /// fits [`MAX_SYNCED_TURN`]. Deterministic, so the device with the full turn recognises it.
 fn synced_turn(turn: &ChatTurn) -> ChatTurn {
-    const CLIPPED: &str = "\n\n*(clipped on this device; the full answer is on the device that ran it)*";
     let mut t = turn.for_sync();
     if op_len(&t) <= MAX_SYNCED_TURN {
         return t;
@@ -143,9 +142,8 @@ fn synced_turn(turn: &ChatTurn) -> ChatTurn {
             break;
         }
         keep = keep * MAX_SYNCED_TURN / len / 2;
-        t.answer = answer.clone();
-        clip_str(&mut t.answer, keep);
-        t.answer.push_str(CLIPPED);
+        // Fence-aware, so a cut inside a code block closes it before the note.
+        t.answer = morph_ai::clip_markdown(&answer, keep);
     }
     while op_len(&t) > MAX_SYNCED_TURN && t.sources.pop().is_some() {}
     t
@@ -891,6 +889,27 @@ mod tests {
         assert!(ours(&l, CHATS).is_empty(), "the clipped copy is not re-clipped and logged back");
         // On the device that ran it, the full answer stays.
         assert_eq!(synced_turn(&full), clipped);
+    }
+
+    #[test]
+    fn a_synced_answer_clipped_inside_a_code_block_closes_it_and_is_not_clipped_again() {
+        let (_t, mut l, s) = setup();
+        backfill(&mut l, &s, 100).unwrap();
+        // Quotes double in JSON, so this takes the op-size clip as well as `for_sync`'s.
+        let code = "println!(\"\\\"\");\n".repeat(morph_ai::chats::MAX_SYNCED_ANSWER / 8);
+        let full = ChatTurn::new(AgentId::new("local"), "q", format!("Here:\n\n```rust\n{code}```\n"), 1);
+        let clipped = synced_turn(&full);
+        assert!(op_len(&clipped) <= MAX_SYNCED_TURN);
+        let note = format!("\n```\n\n{}", morph_ai::CLIP_NOTE);
+        assert!(clipped.answer.ends_with(&note), "{}", &clipped.answer[clipped.answer.len() - 120..]);
+        assert_eq!(clipped.answer.matches("```").count(), 2, "one fence opened, one closed");
+        // The device holding only the clipped copy keeps it as it came.
+        remote(&mut l, "b", 50, CHATS, &format!("t/{}", full.id), put(&clipped));
+        materialize(&mut l, &s).unwrap();
+        assert_eq!(s.load_chats().unwrap().unwrap().turns, std::slice::from_ref(&clipped));
+        backfill(&mut l, &s, 200).unwrap();
+        assert!(ours(&l, CHATS).is_empty(), "the clipped copy is not re-clipped and logged back");
+        assert_eq!(synced_turn(&full), clipped, "deterministic, so the full copy is recognised");
     }
 
     #[test]
