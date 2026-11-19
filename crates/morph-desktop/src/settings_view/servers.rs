@@ -19,15 +19,24 @@ use crate::mcp_host;
 use crate::text_input::TextInput;
 use crate::widgets::{button, chip};
 
-/// Splits an argument line: spaces separate, `"double"` or `'single'` quotes keep spaces.
+/// Splits an argument line the way a shell would, with one difference that keeps Windows paths
+/// working: spaces separate; `'single'` quotes keep everything; `"double"` quotes keep spaces; and
+/// a backslash escapes only a space, quote or backslash (`C:\tools\srv` stays as typed).
 pub fn split_args(line: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
     let mut started = false;
     let mut quote: Option<char> = None;
-    for c in line.chars() {
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
         match (quote, c) {
-            (Some(q), c) if c == q => quote = None,
+            (Some('\''), '\'') => quote = None,
+            (Some('\''), c) => cur.push(c),
+            (Some('"'), '"') => quote = None,
+            (None | Some('"'), '\\') if chars.peek().is_some_and(|n| matches!(n, ' ' | '\\' | '"' | '\'')) => {
+                cur.push(chars.next().unwrap_or('\\'));
+                started = true;
+            }
             (Some(_), c) => cur.push(c),
             (None, '"' | '\'') => {
                 quote = Some(c);
@@ -48,18 +57,11 @@ pub fn split_args(line: &str) -> Vec<String> {
     out
 }
 
-/// The inverse of [`split_args`] for showing saved arguments in one field.
+/// The inverse of [`split_args`] for showing saved arguments in one field: anything that is not
+/// plain gets single quotes (a quote inside is written `\'`), so every argument round-trips.
 pub fn join_args(args: &[String]) -> String {
-    args.iter()
-        .map(|a| {
-            if a.is_empty() || a.contains(char::is_whitespace) || a.contains(['"', '\'']) {
-                if a.contains('"') { format!("'{a}'") } else { format!("\"{a}\"") }
-            } else {
-                a.clone()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+    let plain = |a: &str| !a.is_empty() && a.chars().all(|c| !c.is_whitespace() && !matches!(c, '"' | '\'' | '\\'));
+    args.iter().map(|a| if plain(a) { a.clone() } else { format!("'{}'", a.replace('\'', "'\\''")) }).collect::<Vec<_>>().join(" ")
 }
 
 /// One environment variable or header being edited.
@@ -84,6 +86,10 @@ pub struct Form {
     bearer: Entity<TextInput>,
     bearer_shown: bool,
     rows: Vec<Row>,
+    /// Companions that may use the server; `None` is all of them.
+    scope: Option<BTreeSet<String>>,
+    /// The roster's companions (id, name) for the picker.
+    companions: Vec<(String, String)>,
 }
 
 /// What the page keeps between frames.
@@ -94,6 +100,8 @@ pub struct State {
     confirm: Option<String>,
     /// Servers whose tool list is open.
     tools_open: BTreeSet<String>,
+    /// Companion names by id, for the list.
+    names: BTreeMap<String, String>,
     /// The last connect round the page drew.
     seen_generation: u64,
     pub note: Option<String>,
@@ -122,6 +130,17 @@ pub fn target_summary(s: &McpServer) -> String {
     match &s.transport {
         McpTransport::Stdio { command, args, .. } => format!("Command: {} {}", command, join_args(args)).trim_end().to_string(),
         McpTransport::Http { url, .. } => format!("URL: {url}"),
+    }
+}
+
+/// Who may use a server, for the list: nothing is shown for "all companions".
+pub fn scope_summary(s: &McpServer, names: &BTreeMap<String, String>) -> String {
+    match &s.companions {
+        None => "For all companions".to_string(),
+        Some(ids) => {
+            let who: Vec<String> = ids.iter().map(|id| names.get(id).cloned().unwrap_or_else(|| format!("{id} (removed)"))).collect();
+            format!("Only for {}", who.join(", "))
+        }
     }
 }
 
@@ -168,7 +187,7 @@ impl SettingsView {
         self.servers = State::default();
     }
 
-    fn servers_open_form(&mut self, existing: Option<&McpServer>, secrets: &dyn McpSecrets, cx: &mut Context<Self>) {
+    fn servers_open_form(&mut self, dir: &Path, existing: Option<&McpServer>, secrets: &dyn McpSecrets, cx: &mut Context<Self>) {
         let t = self.theme;
         let mut http = false;
         let (mut name, mut command, mut args, mut url, mut bearer) = (String::new(), String::new(), String::new(), String::new(), String::new());
@@ -217,6 +236,8 @@ impl SettingsView {
             bearer: input(&bearer, "Bearer token (optional)", true, t, cx),
             bearer_shown: false,
             rows,
+            scope: existing.and_then(|s| s.companions.clone()),
+            companions: super::agents::load_roster(dir).companions().iter().map(|c| (c.id().as_str().to_string(), c.name().to_string())).collect(),
         });
         cx.notify();
     }
@@ -295,6 +316,7 @@ impl SettingsView {
             None => McpServer::new("", transport),
         };
         server.name = text(&form.name);
+        server.companions = form.scope.clone().filter(|c| !c.is_empty());
         let id = server.id.clone();
         let needs_ok = !mcp_host::is_approved(&dir, &server);
         let saved = server.clone();
@@ -424,6 +446,26 @@ impl SettingsView {
                 )
                 .child(dim("A local command runs with your permissions. Morph shows its warning and asks before the first start."))
         };
+        card = card.child(dim("Companions that can use this server"));
+        let mut picker = div().flex().flex_row().flex_wrap().gap(px(6.)).child(
+            chip(t, "srv-scope-all", "All companions", f.scope.is_none()).on_click(cx.listener(|this, _, _, cx| {
+                if let Some(f) = &mut this.servers.form {
+                    f.scope = None;
+                }
+                cx.notify();
+            })),
+        );
+        for (i, (id, name)) in f.companions.iter().enumerate() {
+            let picked = f.scope.as_ref().is_some_and(|c| c.len() == 1 && c.contains(id));
+            let id = id.clone();
+            picker = picker.child(chip(t, ("srv-scope", i), name.clone(), picked).on_click(cx.listener(move |this, _, _, cx| {
+                if let Some(f) = &mut this.servers.form {
+                    f.scope = Some(BTreeSet::from([id.clone()]));
+                }
+                cx.notify();
+            })));
+        }
+        card = card.child(picker);
         card = card.child(dim(if f.http { "Extra headers" } else { "Environment variables" }));
         for (i, r) in f.rows.iter().enumerate() {
             card = card.child(self.row_view(i, r, cx));
@@ -468,7 +510,16 @@ impl SettingsView {
                 .flex_row()
                 .items_center()
                 .gap(px(8.))
-                .child(div().flex_1().min_w_0().flex().flex_col().child(div().text_size(px(13.)).child(s.name.clone())).child(dim(target_summary(s))))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .child(div().text_size(px(13.)).child(s.name.clone()))
+                        .child(dim(target_summary(s)))
+                        .children(s.companions.as_ref().map(|_| dim(scope_summary(s, &self.servers.names)))),
+                )
                 .child(chip(t, ("srv-on", i), if enabled { "On" } else { "Off" }, enabled).on_click(cx.listener(move |this, _, _, cx| {
                     let id = id_toggle.clone();
                     this.servers_apply(move |d, _| mcp_host::set_enabled(d, &id, !enabled), cx);
@@ -477,7 +528,7 @@ impl SettingsView {
                     let Some(dir) = this.servers_dir() else { return };
                     let manager = mcp_host::get(&dir);
                     if let Some(s) = mcp_host::configs(&dir).servers.into_iter().find(|s| s.id == id_edit) {
-                        this.servers_open_form(Some(&s), &**manager.secrets(), cx);
+                        this.servers_open_form(&dir, Some(&s), &**manager.secrets(), cx);
                     }
                 })))
                 .child(
@@ -562,12 +613,14 @@ impl SettingsView {
         let snap = manager.snapshot();
         self.servers.seen_generation = snap.generation;
         let servers = mcp_host::configs(dir).servers;
+        self.servers.names =
+            super::agents::load_roster(dir).companions().iter().map(|c| (c.id().as_str().to_string(), c.name().to_string())).collect();
         let mut card = div().flex().flex_col().gap(px(8.)).px(px(12.)).py(px(10.)).rounded(px(8.)).bg(rgb(t.surface)).child(
             div().flex().flex_row().items_center().gap(px(8.)).child(div().flex_1().text_size(px(14.)).child("Connected servers")).child(
                 button(t, "srv-add", "Add server", false).on_click(cx.listener(|this, _, _, cx| {
                     let Some(dir) = this.servers_dir() else { return };
                     let manager = mcp_host::get(&dir);
-                    this.servers_open_form(None, &**manager.secrets(), cx);
+                    this.servers_open_form(&dir, None, &**manager.secrets(), cx);
                 })),
             ),
         );
@@ -610,11 +663,34 @@ mod tests {
     }
 
     #[test]
-    fn joining_arguments_round_trips() {
-        for args in [vec!["-y", "srv"], vec!["--root", "/home/a b/c"], vec!["say", "it's x"], vec!["a\"b"], vec!["", "x"]] {
-            let args: Vec<String> = args.into_iter().map(String::from).collect();
-            assert_eq!(split_args(&join_args(&args)), args, "{args:?}");
+    fn joining_arguments_round_trips_any_quoting() {
+        let cases: &[&[&str]] = &[
+            &["-y", "srv"],
+            &["--root", "/home/a b/c"],
+            &["say", "it's \"x\""],
+            &["", "x"],
+            &["a\\b", "C:\\Program Files\\x", "trailing\\", "'", "\"", "''", "\\'", " ", "\t\n", "é ü", "$HOME `x` *"],
+        ];
+        for args in cases {
+            let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+            let line = join_args(&args);
+            assert_eq!(split_args(&line), args, "{line}");
         }
+        // What a person types: Windows paths and backslash-escaped spaces.
+        assert_eq!(split_args(r"C:\tools\srv.exe --x"), [r"C:\tools\srv.exe", "--x"]);
+        assert_eq!(split_args(r"a\ b c"), ["a b", "c"]);
+        assert_eq!(split_args(r#""a \"b\" c""#), ["a \"b\" c"]);
+    }
+
+    #[test]
+    fn the_scope_is_named_by_companion_and_flags_a_removed_one() {
+        let mut s = McpServer::new("Docs", McpTransport::Http { url: "https://x".into(), headers: BTreeMap::new() });
+        let names = BTreeMap::from([("scout".to_string(), "Scout".to_string())]);
+        assert_eq!(scope_summary(&s, &names), "For all companions");
+        s.companions = Some(BTreeSet::from(["scout".to_string()]));
+        assert_eq!(scope_summary(&s, &names), "Only for Scout");
+        s.companions = Some(BTreeSet::from(["gone".to_string()]));
+        assert_eq!(scope_summary(&s, &names), "Only for gone (removed)");
     }
 
     #[test]
@@ -622,7 +698,7 @@ mod tests {
         let mut env = BTreeMap::new();
         env.insert("API_KEY".to_string(), McpValue::Plain { value: "sk-live-1".into() });
         let s = McpServer::new("S", McpTransport::Stdio { command: "npx".into(), args: vec!["-y".into(), "a b".into()], env });
-        assert_eq!(target_summary(&s), "Command: npx -y \"a b\"");
+        assert_eq!(target_summary(&s), "Command: npx -y 'a b'");
         let h = McpServer::new("H", McpTransport::Http { url: "https://x.example/mcp".into(), headers: BTreeMap::new() });
         assert_eq!(target_summary(&h), "URL: https://x.example/mcp");
     }
