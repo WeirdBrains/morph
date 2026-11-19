@@ -188,7 +188,7 @@ pub fn load_log(lib: &Library) -> morph_store::Result<OpLog> {
             .into_iter()
             .filter_map(|r| {
                 let hlc = decode_hlc(&r.hlc)?;
-                Some(LogEntry { node_id: NodeId::new(r.node_id), seq: r.seq as u64, hlc, typ: r.typ, record_id: r.record_id, op: r.op })
+                Some(LogEntry { node_id: NodeId::new(r.node_id), seq: r.seq as u64, hlc, typ: r.typ, record_id: r.record_id, op: r.op, value: None })
             })
             .collect();
         // Group by node and integrate (gaps are allowed).

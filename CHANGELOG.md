@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Updated to weirdnet-sync 0.4.0 and weirdnet-net 0.7.0. Linked-device calls use weirdnet-sync's own caller check.
+
 - A revoked device can no longer change your companions, grants or MCP servers: everything it wrote to them is void, from before the revocation too, and the last version from your other devices comes back. Anything it wrote after the revocation is ignored everywhere, even when another device relays it late. A synced MCP server that runs a local command starts only if it came from this device or a linked device that is not revoked (docs/library-sync.md).
 
 - Calls between your own linked devices use this device's key and its linked-device certificate, and a device answers only your other active linked devices: revoked or unknown devices are refused (docs/net-app-caller-identity.md). Calls to public Weirdnet apps stay anonymous.

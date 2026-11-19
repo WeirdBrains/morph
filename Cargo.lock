@@ -10408,9 +10408,9 @@ dependencies = [
 
 [[package]]
 name = "weirdnet-net"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b79247561ce6413a1d4f8ee681b3cba251313ecede42cc545e848eb379b691f"
+checksum = "01ed28d41eeff3463c0fe5d14ff5e1ecb3dce178abaa2004d62bb9477aed153d"
 dependencies = [
  "base64 0.22.1",
  "blake3",
@@ -10462,10 +10462,11 @@ dependencies = [
 
 [[package]]
 name = "weirdnet-sync"
-version = "0.3.1"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aa310f85c1060c1b1700efd166819b561ca826c64f57bfb9e4a7b47a880604c3"
+checksum = "297572dca77eae27651c4994050d8ab7b57961d50ee58855548a84e6eeb6eb61"
 dependencies = [
+ "blake3",
  "cbor4ii",
  "hex",
  "serde",
