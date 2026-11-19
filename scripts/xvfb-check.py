@@ -625,6 +625,11 @@ def profiles_panel(m, r, win, top):
     r.check("profile", "Enter creates the profile", new, str(cat))
     r.check("profile", "and the window switches to it", new and cat.get("current") == new[0], str(cat))
     r.check("profile", "the new profile starts with a blank tab", wait_for(lambda: m.title(win) == "Morph"), m.title(win))
+    # The tabs the window showed stay saved with the profile it left (a
+    # switch used to rewrite its tabs.json without them, so they were lost).
+    left = m.home / "profiles" / "default" / "tabs.json"
+    kept = wait_for(lambda: left.exists() and PAGE.name in left.read_text(errors="replace"))
+    r.check("profile", "the profile it left keeps its tabs", kept, left.read_text(errors="replace")[:300] if left.exists() else "no tabs.json")
     before = len(m.events())
     m.type(PAGE.as_uri() + "?work")
     m.key("Return", delay=1.5)
