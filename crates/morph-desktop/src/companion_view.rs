@@ -20,7 +20,7 @@ use morph_ai::{
 use morph_browser::{HostPageId, HostPageRequest, HostPageState};
 use morph_companion::{
     ApprovalCard, AttachedPage, Conversation, Entry, FootnoteView, NoticeView, OfferView, TaskOptions, ToolState, TraceRowView, ViewUpdate,
-    export_markdown, footnotes, parse_citations,
+    export_markdown, footnotes, more_pages_prompt, parse_citations, ran_out_of_pages,
 };
 use morph_core::tabs::TabId;
 use morph_ui::theme::Theme;
@@ -80,6 +80,8 @@ pub struct CompanionView {
     attached_tab: HashMap<AgentId, u64>,
     /// "Use my signed-in session" for the next task only; off again after each send.
     signed_in_next: bool,
+    /// The next task is the "+5 pages" one the user just took.
+    more_pages_next: bool,
     /// What the waiting card is about, when it is known before the card arrives.
     card_detail: HashMap<AgentId, String>,
     /// Each companion's last finished task, for Markdown export.
@@ -237,6 +239,7 @@ impl CompanionView {
             ops: Vec::new(),
             attached_tab: HashMap::new(),
             signed_in_next: false,
+            more_pages_next: false,
             card_detail: HashMap::new(),
             last: HashMap::new(),
             exported: None,
@@ -400,6 +403,16 @@ impl CompanionView {
         }
     }
 
+    /// The "+5 pages" card: go on with the extension's pages, in the same conversation.
+    fn more_pages(&mut self, cx: &mut Context<Self>) {
+        if let Some(n) = self.conversation().take_more_pages() {
+            self.more_pages_next = true;
+            self.send(more_pages_prompt(n), cx);
+            // Only that task: a send that did not start leaves no extension for the next one.
+            self.more_pages_next = false;
+        }
+    }
+
     fn send(&mut self, text: String, cx: &mut Context<Self>) {
         let id = self.selected.clone();
         let not_here = self.roster.get(&id).and_then(|c| self.devices.not_here(c));
@@ -427,7 +440,10 @@ impl CompanionView {
         };
         conv.start_task(&text);
         // Signed-in research is chosen per task and never kept.
-        let options = TaskOptions { signed_in: std::mem::take(&mut self.signed_in_next).then(|| self.profile.clone()) };
+        let options = TaskOptions {
+            signed_in: std::mem::take(&mut self.signed_in_next).then(|| self.profile.clone()),
+            more_pages: std::mem::take(&mut self.more_pages_next),
+        };
         *self.seen.attached.lock().unwrap() = None;
         self.exported = None;
         match attached {
@@ -691,6 +707,10 @@ impl CompanionView {
                     let notes = footnotes(&outcome.trace, f.citations.clone());
                     let conv = self.conversations.entry(id.clone()).or_default();
                     conv.finish_answer(&f.text, notes);
+                    // The task wanted more pages than its budget: the "+5 pages" card.
+                    if ran_out_of_pages(&outcome) {
+                        conv.offer_more_pages(crate::companion_host::research_budget().page_extension);
+                    }
                     let question = conv
                         .entries()
                         .iter()
@@ -905,6 +925,7 @@ impl Render for CompanionView {
                     div().text_size(px(11.)).text_color(rgb(color)).child(format!("{mark} {tool}")).into_any_element()
                 }
                 Entry::Error(m) => div().text_size(px(12.)).text_color(rgb(t.error)).child(m.clone()).into_any_element(),
+                Entry::MorePages { extension, taken } => more_pages_card(t, i, *extension, *taken, running, cx).into_any_element(),
             })
             .collect();
 
@@ -1053,6 +1074,23 @@ fn approval_card(t: Theme, i: usize, card: &ApprovalCard, answer: Option<&str>, 
     }
 }
 
+/// "+5 pages": the research wanted more pages than its budget.
+fn more_pages_card(t: Theme, i: usize, extension: u32, taken: bool, running: bool, cx: &mut Context<CompanionView>) -> gpui::Div {
+    let base =
+        div().flex().flex_col().gap(px(6.)).p(px(8.)).rounded(px(8.)).border_1().border_color(rgb(t.accent)).child(
+            div().text_size(px(12.)).text_color(rgb(t.text_primary)).child("Research used its page budget before reading everything it wanted."),
+        );
+    if taken {
+        base.child(dim(t, format!("Reading up to {extension} more pages")))
+    } else if running {
+        base
+    } else {
+        base.child(
+            button(t, ("companion-more-pages", i), format!("+{extension} pages"), true).on_click(cx.listener(|this, _, _, cx| this.more_pages(cx))),
+        )
+    }
+}
+
 /// A made-up conversation for the headless screenshot check (`MORPH_COMPANION_DEMO=1`): every
 /// kind of row, built through the same translation real events use.
 fn demo_conversation() -> Conversation {
@@ -1137,6 +1175,7 @@ mod tests {
                 Entry::Blocked(_) => "blocked",
                 Entry::Tool { .. } => "tool",
                 Entry::Error(_) => "error",
+                Entry::MorePages { .. } => "more pages",
             })
             .collect();
         for k in ["user", "assistant", "card", "notice", "tool"] {

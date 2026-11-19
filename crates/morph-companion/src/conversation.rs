@@ -44,6 +44,11 @@ pub enum Entry {
         state: ToolState,
     },
     Error(String),
+    /// The task's page budget ran out: the "+5 pages" card (`taken` once the user took it).
+    MorePages {
+        extension: u32,
+        taken: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -148,6 +153,26 @@ impl Conversation {
                 doc.push_str(text);
             }
             *footnotes = notes;
+        }
+    }
+
+    /// The task that just finished wanted more pages than its budget: offer `extension` more.
+    pub fn offer_more_pages(&mut self, extension: u32) {
+        self.entries.push(Entry::MorePages { extension, taken: false });
+    }
+
+    /// The user took the waiting "+5 pages" offer: its extension, once (`None` when there is no
+    /// offer waiting or a task is running). Offers before the last question no longer apply.
+    pub fn take_more_pages(&mut self) -> Option<u32> {
+        if self.running {
+            return None;
+        }
+        match self.entries.iter_mut().rev().take_while(|e| !matches!(e, Entry::User { .. })).find(|e| matches!(e, Entry::MorePages { .. })) {
+            Some(Entry::MorePages { extension, taken }) if !*taken => {
+                *taken = true;
+                Some(*extension)
+            }
+            _ => None,
         }
     }
 
@@ -319,5 +344,22 @@ mod tests {
         let texts: Vec<&str> =
             c.entries().iter().filter_map(|e| if let Entry::Assistant { text, .. } = e { Some(text.as_str()) } else { None }).collect();
         assert_eq!(texts, vec!["first answer [1]", "partial"]);
+    }
+
+    #[test]
+    fn a_more_pages_offer_is_taken_once_and_only_after_the_task_and_before_the_next_question() {
+        let mut c = Conversation::default();
+        c.start_task("q");
+        c.offer_more_pages(5);
+        assert_eq!(c.take_more_pages(), None, "not while the task runs");
+        c.apply(ViewUpdate::Finished { task_id: "t".into(), status: "done".into() });
+        assert!(matches!(c.entries().last(), Some(Entry::MorePages { extension: 5, taken: false })));
+        assert_eq!(c.take_more_pages(), Some(5));
+        assert!(matches!(c.entries().last(), Some(Entry::MorePages { taken: true, .. })));
+        assert_eq!(c.take_more_pages(), None);
+        c.offer_more_pages(5);
+        c.start_task("another question");
+        c.apply(ViewUpdate::Finished { task_id: "t2".into(), status: "done".into() });
+        assert_eq!(c.take_more_pages(), None, "an offer from before the last question is gone");
     }
 }

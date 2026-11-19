@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use morph_ai::{ModelChoice, ModelProvider, Roster};
-use weirdnet_agent::{AgentConfig, AgentId, AgentSession, Approver, Budget, CancelToken, Outcome, SharedPolicy, ToolRegistry};
+use morph_ai::{CompanionProfile, ModelChoice, ModelProvider, Roster};
+use weirdnet_agent::{AgentConfig, AgentId, AgentSession, Approver, Budget, CancelToken, Outcome, SharedPolicy, StepKind, ToolRegistry};
 
 use crate::view::{ViewUpdate, translate};
 
@@ -25,6 +25,23 @@ pub struct TaskOptions {
     /// Research in this profile's signed-in session for this task only (the plan card's toggle,
     /// off each time). `None`: logged out.
     pub signed_in: Option<String>,
+    /// The user took the "+5 pages" offer: this task reads at most [`Budget::page_extension`]
+    /// pages, going on from the conversation so far.
+    pub more_pages: bool,
+}
+
+/// What a "+5 pages" task is asked to do (the conversation so far comes with it).
+pub const MORE_PAGES_PROMPT: &str = "The page budget ran out. Read up to {n} more pages with web.read to finish the research, \
+then answer the question again in full, with footnotes for the pages you read.";
+
+/// The question a "+5 pages" task sends for `extension` pages.
+pub fn more_pages_prompt(extension: u32) -> String {
+    MORE_PAGES_PROMPT.replace("{n}", &extension.to_string())
+}
+
+/// The task wanted to read a page after its page budget ran out (its trace says so).
+pub fn ran_out_of_pages(outcome: &Outcome) -> bool {
+    outcome.trace.steps.iter().any(|s| matches!(&s.kind, StepKind::Skipped { reason, .. } if reason.starts_with("page budget used")))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -113,14 +130,18 @@ impl Sessions {
     ) -> Result<Outcome, SessionError> {
         let profile = roster.get(companion).ok_or_else(|| SessionError::UnknownCompanion(companion.to_string()))?;
         let name = profile.name().to_string();
+        // A "+5 pages" task gets only the extension's pages; the next task the normal budget.
+        let budget = if options.more_pages { Budget { max_pages: self.budget.page_extension, ..self.budget } } else { self.budget };
+        if self.open.get(companion).is_some_and(|s| s.config().budget != budget) && !self.is_running(companion) {
+            // The budget is fixed when a session opens: open it again, keeping the conversation.
+            let kept = self.open.remove(companion).map(|s| s.messages().to_vec()).unwrap_or_default();
+            self.open_session(companion, profile, budget)?;
+            if let Some(s) = self.open.get_mut(companion) {
+                s.restore_messages(kept);
+            }
+        }
         if !self.open.contains_key(companion) {
-            let choice: &ModelChoice = profile.model.as_ref().ok_or_else(|| SessionError::NoModel(name.clone()))?;
-            let model = self.models.open(choice).map_err(|e| SessionError::Model(e.to_string()))?;
-            let mut config = AgentConfig::new(profile.identity.clone());
-            config.budget = self.budget;
-            config.system_prompt = Some(format!("Your name is {name}. {SYSTEM_PROMPT}"));
-            let session = AgentSession::new(config, model, self.tools_of(companion), self.policy.clone(), self.approver.clone());
-            self.open.insert(companion.clone(), session);
+            self.open_session(companion, profile, budget)?;
         }
         let cancel = {
             let mut running = self.running.lock().unwrap();
@@ -146,6 +167,18 @@ impl Sessions {
         let (outcome, ()) = tokio::join!(work, drain);
         self.running.lock().unwrap().remove(companion);
         Ok(outcome)
+    }
+
+    fn open_session(&mut self, companion: &AgentId, profile: &CompanionProfile, budget: Budget) -> Result<(), SessionError> {
+        let name = profile.name().to_string();
+        let choice: &ModelChoice = profile.model.as_ref().ok_or_else(|| SessionError::NoModel(name.clone()))?;
+        let model = self.models.open(choice).map_err(|e| SessionError::Model(e.to_string()))?;
+        let mut config = AgentConfig::new(profile.identity.clone());
+        config.budget = budget;
+        config.system_prompt = Some(format!("Your name is {name}. {SYSTEM_PROMPT}"));
+        let session = AgentSession::new(config, model, self.tools_of(companion), self.policy.clone(), self.approver.clone());
+        self.open.insert(companion.clone(), session);
+        Ok(())
     }
 
     /// Uses `tools` for sessions opened from now on (connected MCP servers changed). Sessions

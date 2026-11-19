@@ -870,11 +870,78 @@ mod tests {
         let web = Arc::new(FakeWeb::default());
         let mut sessions =
             Sessions::new(Arc::new(provider), registry(Arc::new(FakeBrowser::default()), web.clone()).await, policy.shared(), approver);
-        let first = sessions.run_with(&roster, &id, "a", TaskOptions { signed_in: Some("Work".into()) }, |_| {}).await.unwrap();
+        let first = sessions.run_with(&roster, &id, "a", TaskOptions { signed_in: Some("Work".into()), ..Default::default() }, |_| {}).await.unwrap();
         assert!(first.trace.steps.iter().any(|s| matches!(&s.kind, StepKind::Skipped { url: Some(u), .. } if u.contains("bank.example"))));
         assert!(first.trace.steps.iter().any(|s| matches!(&s.session, SessionMark::SignedIn { profile } if profile == "Work")));
         sessions.run(&roster, &id, "b", |_| {}).await.unwrap();
         assert_eq!(web.sessions.lock().unwrap().as_slice(), &[Some("Work".to_string()), None]);
+    }
+
+    /// One scripted model shared by every session it opens (a session reopened for "+5 pages"
+    /// goes on with the same script).
+    struct SharedModel(Arc<weirdnet_agent::testing::ScriptedModel>);
+    impl ModelProvider for SharedModel {
+        fn open(&self, _: &ModelChoice) -> Result<Arc<dyn ModelBackend>, ModelError> {
+            Ok(self.0.clone())
+        }
+    }
+
+    #[tokio::test]
+    async fn out_of_pages_offers_more_and_the_offer_reads_only_the_extension_then_the_budget_resets() {
+        let roster = Roster::first_run(ModelChoice::Gemma4E4B);
+        let id = AgentId::new("local");
+        let read = |i: u32| turn("", vec![call(&format!("r{i}"), "web.read", json!({ "url": format!("https://p{i}.example/") }))]);
+        let model = Arc::new(weirdnet_agent::testing::ScriptedModel::new(vec![
+            // Task 1: three pages allowed, the fourth is not read.
+            read(1),
+            read(2),
+            read(3),
+            read(4),
+            turn("partial", vec![]),
+            // Task 2 ("+5 pages", here 2): two more, the third is not read.
+            read(5),
+            read(6),
+            read(7),
+            turn("full", vec![]),
+            // Task 3: the normal budget again.
+            read(8),
+            turn("again", vec![]),
+        ]));
+        let approver = Arc::new(ScriptedApprover::new(vec![ApprovalAnswer::Approve { scope: Scope::Task }; 3]));
+        let mut sessions = Sessions::new(
+            Arc::new(SharedModel(model.clone())),
+            registry(Arc::new(FakeBrowser::default()), Arc::new(FakeWeb::default())).await,
+            Policy::new().shared(),
+            approver,
+        );
+        sessions.set_budget(weirdnet_agent::Budget { max_pages: 3, page_extension: 2, ..Default::default() });
+
+        let first = sessions.run(&roster, &id, "research", |_| {}).await.unwrap();
+        assert!(crate::ran_out_of_pages(&first));
+        assert_eq!((first.usage.pages, first.usage.page_limit), (3, 3));
+        let mut conv = crate::Conversation::default();
+        conv.start_task("research");
+        conv.apply(crate::ViewUpdate::Finished { task_id: first.task_id.clone(), status: "done".into() });
+        conv.offer_more_pages(2);
+        assert_eq!(conv.take_more_pages(), Some(2));
+        assert_eq!(conv.take_more_pages(), None, "taken once");
+
+        let kept = sessions.messages(&id).len();
+        let more = TaskOptions { more_pages: true, ..Default::default() };
+        let second = sessions.run_with(&roster, &id, &crate::more_pages_prompt(2), more, |_| {}).await.unwrap();
+        assert_eq!(second.text, "full");
+        assert_eq!((second.usage.pages, second.usage.page_limit), (2, 2));
+        assert!(crate::ran_out_of_pages(&second));
+        let history = sessions.messages(&id).to_vec();
+        assert!(history.len() > kept, "the conversation went on");
+        assert!(history[..kept].iter().any(|m| m.content == "research"), "the first question is still there");
+        assert!(history.iter().any(|m| m.content.contains("Read up to 2 more pages")));
+
+        let third = sessions.run(&roster, &id, "again", |_| {}).await.unwrap();
+        assert_eq!(third.text, "again");
+        assert_eq!(third.usage.page_limit, 3, "the normal budget");
+        assert!(!crate::ran_out_of_pages(&third));
+        assert!(sessions.messages(&id).len() > history.len());
     }
 
     #[tokio::test]
