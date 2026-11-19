@@ -19,8 +19,12 @@ thiserror.workspace = true
 uuid = { version = "1", features = ["v7"] }
 weirdnet-schemes = "=0.1.0"
 weirdnet-sync.workspace = true
+# Companion records (companion_sync).
+morph-ai.workspace = true
+weirdnet-agent.workspace = true
 # App pages go to the web view as `data:` addresses.
 base64 = "0.22"
 
 [dev-dependencies]
 tempfile.workspace = true
+weirdnet-net.workspace = true
