@@ -13,6 +13,7 @@ Requires:       libxkbcommon-x11
 Requires:       vulkan-loader
 Requires:       fontconfig
 Requires:       freetype
+Requires:       libstdc++
 %if "%{form}" == "standalone"
 Conflicts:      morph
 Provides:       morph = %{version}-%{release}
