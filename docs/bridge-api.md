@@ -1,8 +1,9 @@
-# Page bridge API (hosts, contexts, reads)
+# Page bridge API (hosts, contexts, reads, actions, throwaway sessions)
 
-Status: on `main` (2026-11-18). Owner: Morph Lead Dev. For Morph Dev's companion
+Status: on `main` (2026-11-19). Owner: Morph Lead Dev. For Morph Dev's companion
 browser and research hosts. Code: `crates/morph-webview/src/bridge.rs`,
-`crates/morph-webview/src/page_read.rs`, `crates/morph-browser/src/host_pages.rs`.
+`crates/morph-webview/src/page_read.rs`, `crates/morph-webview/src/page_action.rs`,
+`crates/morph-browser/src/host_pages.rs`.
 Generic, but tied to the web view boundary, so it lives in `morph-webview` and
 `morph-browser` rather than a weirdnet crate.
 
@@ -37,7 +38,9 @@ impl PageBridge {
 }
 // Message types starting with "host." (bridge::HOST_PREFIX) are refused on the page channel.
 
-pub struct Spec { /* … */ pub background: bool }   // never shown, popups refused
+pub struct Spec { /* … */ pub background: bool, pub storage: Storage }   // background: never shown, popups refused
+pub enum Storage { Profile /* default: the profile's data dir */, Ephemeral /* throwaway, see below */ }
+pub trait Backend { /* … */ fn ephemeral_storage(&self) -> bool; }   // false: Ephemeral creates fail with Error::Unsupported
 
 pub trait WebView {
     /* … */
@@ -67,10 +70,39 @@ impl PageReads {
     pub fn forget_view(&mut self, view: ViewId);
 }
 
+// morph_webview::page_action (tier 2: the caller already has the user's approval)
+pub struct Locator { pub selector: Option<String>, pub role: Option<String>, pub name: Option<String>, pub text: Option<String>, pub nth: usize }
+// Locator::selector("#q"), Locator::role("button", Some("Send")), Locator::name("Email"), Locator::text("Sign in").nth(1)
+pub enum Action {
+    Click(Locator), Fill { target: Locator, value: String }, Focus(Locator), Read(Locator),
+    Highlight { target: Locator, duration: Duration /* ≤ 30 s */ },
+    ScrollBy { dx: f64, dy: f64 }, ScrollTo(Locator),
+}
+pub struct ActionRequest { pub action: Action, pub expect_origin: Option<String>, pub allow_page_world: bool, pub timeout: Duration }
+// ActionRequest::new(action).on_origin("https://shop.test")
+pub struct ActionOutcome { pub view: ViewId, pub url: String, pub origin: String, pub isolation: Isolation,
+    pub matches: usize, pub element: Option<Element>, pub scroll: ScrollState }
+pub struct Element { pub tag, pub role, pub name, pub text /* ≤ 4000 chars */, pub value: Option<String>, pub secret: bool /* password: no value */,
+    pub checked: Option<bool>, pub disabled, pub editable, pub visible, pub href: Option<String>, pub rect: Option<Bounds> }
+pub struct ScrollState { pub x, pub y, pub max_x, pub max_y, pub moved: bool, pub inner: bool /* a box in the page scrolled */ }
+pub enum ActionError { Unsupported, Gone, Timeout, NotFound, NotInteractable(String), BlockedByIsolation(Isolation),
+    WrongOrigin { expected: String, actual: String }, Navigated { from: String, to: String }, BadRequest(String), Script(String) }
+pub type ActionResult = Result<ActionOutcome, ActionError>;
+pub struct PageActions;           // beside PageReads: run(view, request) -> Pending<ActionResult>, start, tick, forget_view
+
 // morph_browser (what the companion hosts use) ---------------------------------
 
+pub enum HostSession { Ephemeral /* default */, Profile }
+pub struct HostPageRequest { pub url: String, pub session: HostSession, pub load_timeout: Duration }
+// HostPageRequest::new(url) (throwaway, LOAD_TIMEOUT), HostPageRequest::signed_in(url), .timeout(d)
+
 impl Browser {
-    pub fn open_host_page(&mut self, url: &str, load_timeout: Duration) -> morph_webview::Result<HostPageId>;
+    pub fn open_host_page_with(&mut self, request: HostPageRequest) -> morph_webview::Result<HostPageId>; // Ephemeral never falls back to Profile
+    pub fn open_host_page(&mut self, url: &str, load_timeout: Duration) -> morph_webview::Result<HostPageId>; // = signed_in(url)
+    pub fn host_page_session(&self, id: HostPageId) -> Option<HostSession>;
+    pub fn tab_action(&mut self, tab: TabId, request: ActionRequest) -> Pending<ActionResult>;
+    pub fn active_tab_action(&mut self, request: ActionRequest) -> Pending<ActionResult>;
+    pub fn host_page_action(&mut self, id: HostPageId, request: ActionRequest) -> Pending<ActionResult>;
     pub fn host_page_loaded(&mut self, id: HostPageId) -> Pending<HostPageState>; // Loaded | Failed(why) | Closed
     pub fn host_page_state(&self, id: HostPageId) -> HostPageState;
     pub fn host_page_url(&self, id: HostPageId) -> Option<String>;
@@ -85,13 +117,20 @@ impl Browser {
 Use from a host (GPUI foreground executor, same thread as the browser):
 
 ```rust
-let id = browser.open_host_page("https://docs.rs/serde", host_pages::LOAD_TIMEOUT)?;
+let id = browser.open_host_page_with(HostPageRequest::new("https://docs.rs/serde"))?;   // signed out
 let loaded = browser.host_page_loaded(id);             // awaited while the shell keeps calling browser.poll()
 if loaded.await == HostPageState::Loaded {
     let page = browser.read_host_page(id, ReadRequest::new(Want { readable: true, links: true, ..Want::default() })).await?;
     // page.readable, page.links, page.origin (engine's), page.truncated
 }
 browser.close_host_page(id);
+
+// Tier 2, after the user approved "click Send on shop.test":
+let out = browser
+    .active_tab_action(ActionRequest::new(Action::Click(Locator::role("button", Some("Send")))).on_origin("https://shop.test"))
+    .await?;   // out.element (read back after the click), out.matches, out.isolation
+let filled = browser.active_tab_action(ActionRequest::new(Action::Fill { target: Locator::name("Email"), value: email })).await?;
+browser.active_tab_action(ActionRequest::new(Action::ScrollBy { dx: 0.0, dy: 600.0 })).await?;   // page.scroll on any tab
 ```
 
 Everything is answered from `Browser::poll` (the shell's poll loop): load events,
@@ -118,27 +157,83 @@ page-read chunks and timeouts. Futures are `!Send` and resolve on the UI thread.
   during the read. Answers over the bound are refused (`TooLarge`).
 - **Hidden views.** `Spec { background: true, visible: false }` on the window's backend
   (reusing the hidden-view path the download token search already used): never shown,
-  `window.open` refused, laid out at 1280×800.
+  `window.open` refused, laid out at 1280×800 (on Wayland the off-screen window is shown
+  off screen for that; before, it had WebKit's minimum viewport).
+- **Throwaway sessions.** `Storage::Ephemeral` (what `HostPageRequest::new` asks for): a
+  store of the view's own that starts empty (signed out everywhere), is never written to
+  disk, never shares cookies or site storage with the profile, and goes with the view.
+  WebKitGTK: an ephemeral `WebKitWebContext` (ephemeral `WebsiteDataManager`) per view
+  (wry's incognito), whose downloads are cancelled. WKWebView: a new
+  `WKWebsiteDataStore.nonPersistent()` per view. WebView2: an InPrivate controller
+  (`IsInPrivateModeEnabled`) of the `MorphEphemeral` profile in the window profile's
+  environment: InPrivate pages of one profile share a session while any is open, so two
+  ephemeral pages open at once can see each other's cookies (never the profile's), and it
+  is all gone when the last one closes. A backend without one refuses
+  (`Error::Unsupported`); `open_host_page_with` never falls back to the profile.
+- **Actions.** `PageActions::run` checks the request (a non-empty locator, finite scroll,
+  a value ≤ 1 MiB), refuses when the view has no script world of Morph's
+  (`BlockedByIsolation`, unless `allow_page_world`) or when the engine's origin isn't
+  `expect_origin` (`WrongOrigin`), then runs one script with `evaluate_isolated` and the
+  engine's origin: the page side refuses when `location.origin` differs (`Navigated`) or
+  outside the top frame. Locators match in document order, on-screen elements first; role is
+  explicit or implied by the tag, name is the accessible name (labelledby, aria-label,
+  `<label>`, button/link text, alt, placeholder, title), exact matches before partial ones.
+  Click and fill first scroll the element to the middle and refuse what is hidden, disabled,
+  inert, read-only, not a text field, or covered at its centre (`NotInteractable("covered by
+  div#banner")`). Click sends pointer/mouse down and up, focus and `click()`; fill sets the
+  value with the element prototype's own setter (from Morph's world, so a page's poisoned
+  setter never runs, and React-style value trackers see a change) with `beforeinput`,
+  `input` and `change`, picks a `<select>` option by value or text, and types into
+  contenteditable with `insertText`. Events are synthetic (`isTrusted` false). Scrolls jump
+  (whatever the page's `scroll-behavior`), the page or, when it can't move that way, the
+  scrollable box under the middle of the view. The answer (≤ 64 KiB) reads the element back
+  after the action; password values are never read back (`secret`). A timed-out action may
+  still have run. There is no bridge message for any of this; `host.*` types stay refused on
+  the page channel.
+
+Generic beyond Morph: `page_read` and `page_action` (their scripts and types) would fit a
+weirdnet crate (a "webview automation" crate over any engine that can run a script in an
+isolated world); they stay in `morph-webview` for now, next to the backends that provide
+the worlds.
 
 ## Per-platform anti-forgery status
 
 | | Host channel | Reads run in | Gaps |
 |---|---|---|---|
 | Linux, X11 (`wry_linux`) and Wayland (`offscreen`), WebKitGTK | Script world `morph-host` (`UserScript::for_world`, top frame only) + handler registered in that world only; token, frame and origin checked | `morph-host` world (`run_javascript_in_world`) | Page-channel messages can't tell main frame from subframe (`FrameKind::Unknown`): WebKitGTK 4.1's `script-message-received` gives no frame. Pages share the DOM with the world, so a page can still change what its DOM says (its own content). Popups get the page channel only. |
-| macOS, WKWebView (`wry_native`) | Page world, inside a closure: the token and wry's `webkit.messageHandlers.ipc` are captured at document start before page scripts run; never on `window`. Token, frame (WKWebView's `frameInfo` URL) and origin checked | Page world (`evaluate_script_with_callback`) | wry 0.57 has no `WKContentWorld`, so page scripts can replace the builtins a host script or read uses after document start (shape a read, see or forge host *replies* through the read-only `window.__morphHost…` deliver function). They cannot forge a host *message* without the token. Fix: `WKContentWorld` through objc2 on `WebViewExtMacOS::webview()` (not done). |
-| Windows, WebView2 (`wry_native`) | Page world, inside a closure: `chrome.webview.postMessage` captured at document start; host script returns early outside the top frame (wry injects init scripts into every frame there). Token and origin checked (`Source` is the top document) | Page world | As macOS; WebView2 has no isolated world for `ExecuteScript`. |
-| Android, iOS (Flutter) | Not wired: `morph-bridge` still answers `page_bridge::answer` without context | — | Follow-up when the mobile shells need host reads. |
+| macOS, WKWebView (`wry_native`) | Page world, inside a closure: the token and wry's `webkit.messageHandlers.ipc` are captured at document start before page scripts run; never on `window`. Token, frame (WKWebView's `frameInfo` URL) and origin checked | `WKContentWorld` `morph-host` (`evaluateJavaScript:inFrame:inContentWorld:`, main frame; the world is kept for the view's life) | Reads and actions are safe from page scripts. The host *channel* still runs in the page's world (wry 0.57 adds init scripts there): page scripts can replace the builtins a host script uses after document start and see host *replies*; they cannot forge a host message without the token. Moving it needs `WKUserScript`/`addScriptMessageHandler:contentWorld:` through objc2 (not done). |
+| Windows, WebView2 (`wry_native`) | Page world, inside a closure: `chrome.webview.postMessage` captured at document start; host script returns early outside the top frame (wry injects init scripts into every frame there). Token and origin checked (`Source` is the top document) | CDP isolated world `morph-host` (`Page.createIsolatedWorld` on the top frame through `CallDevToolsProtocolMethod`, then `Runtime.evaluate` with its `contextId`; made again for each new document) | Reads and actions are safe from page scripts. Host channel as macOS (WebView2 has no isolated world for init scripts). If DevTools protocol calls are disabled (enterprise policy), reads and actions fail instead of running in the page's world. |
+| Android, iOS (Flutter) | Not wired: `morph-bridge` still answers `page_bridge::answer` without context | — | No host pages, reads or actions there yet. When wired: Android WebView has no isolated world (`evaluateJavascript` is the page's), so actions would report `Isolation::PageWorld` and need `allow_page_world`; throwaway sessions would need a separate profile (`androidx.webkit` `ProfileStore`, WebView 123+) or be `Unsupported`. iOS can use `WKContentWorld` and `nonPersistent()` like macOS. |
+
+Throwaway sessions per platform: WebKitGTK yes (one store per page, tested in Xvfb);
+WKWebView yes (one store per page); WebView2 yes (InPrivate, shared among ephemeral
+pages open at once); Android/iOS not wired.
 
 Tests: `cargo test -p morph-webview` (contexts, refusals, envelopes, chunked reads,
-timeouts, origin checks on the fake) and `cargo test -p morph-browser host_pages`; the
-real-engine forgery test is `crates/morph-webview/tests/bridge_webkit.rs`, which needs a
-display:
+timeouts, origin checks, action requests, answers, errors, isolation and origin refusals
+on the fake) and `cargo test -p morph-browser host_pages` (sessions, refusal without
+throwaway storage, tab and host page actions); the real-engine tests are
+`crates/morph-webview/tests/bridge_webkit.rs` (forgery, reads) and
+`crates/morph-webview/tests/session_actions_webkit.rs` (an ephemeral page sees neither the
+profile's cookie nor its localStorage, nor another ephemeral page's; fill by role and
+label, password not read back, `<select>` by text, contenteditable, click seen by the
+page's listener, covered/disabled/missing/bad-selector refusals, scroll by and to, on a
+page that poisons `HTMLInputElement.prototype.value`, `dispatchEvent`, `querySelectorAll`,
+`JSON.stringify` and `getBoundingClientRect`), which need a display:
 
 ```sh
 cargo test -p morph-webview --test bridge_webkit --no-run   # prints the test binary
 env -i HOME=$HOME PATH=/usr/bin:/bin XDG_RUNTIME_DIR=$(mktemp -d) MORPH_BRIDGE_WEBKIT=1 \
   xvfb-run --server-num=137 target/debug/deps/bridge_webkit-<hash>
+# the same for session_actions_webkit-<hash>
 ```
+
+On macOS and Windows the same checks run in CI on the release build:
+`scripts/desktop-smoke.py` launches Morph with `MORPH_TEST_BRIDGE=1`
+(`crates/morph-desktop/src/bridge_selftest.rs`) on a page that poisons its builtins, and
+checks that the read and the fill report `ScriptWorld` and the real values, the page sees
+the fill and the click, and a throwaway host page gets no profile cookie while a signed-in
+one does.
 
 It loads a page that tries `MorphBridge.post({type: "host.read"})`, forges a host
 envelope on the page handler, looks for `MorphHost` and the host handler from the page
