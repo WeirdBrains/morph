@@ -224,6 +224,7 @@ impl Sessions {
         // Research answered from snippets: one nudge to read, on Morph's account (its own task
         // and budget), and the snippet answer gives way to the one that read pages.
         if answered_without_reading(&outcome) && !cancel.is_cancelled() {
+            eprintln!("morph: companion {name}: answered from search results without reading a page; nudged once to read");
             on_update(ViewUpdate::Redo);
             (outcome, finished) = drive(session, &name, READ_NUDGE, options.signed_in, cancel, &mut on_update).await;
         }
