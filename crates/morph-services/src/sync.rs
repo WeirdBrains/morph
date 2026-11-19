@@ -10,9 +10,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
+use crate::companion_sync;
+use morph_core::library_db;
 use morph_core::network::NetworkSettings;
 use morph_core::sync::{self as core, LinkSettings};
-use morph_core::{companion_sync, library_db};
 use morph_identity::profile_identity::{self, SecretString};
 use morph_store::Library;
 use weirdnet_net::user::NodeCert;

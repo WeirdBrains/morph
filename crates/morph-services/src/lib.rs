@@ -9,6 +9,7 @@
 //! in as [`SecretString`], keys never leave.
 
 pub mod app_calls;
+pub mod companion_sync;
 pub mod device_calls;
 pub mod device_link;
 pub mod home;

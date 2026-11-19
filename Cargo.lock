@@ -5587,7 +5587,6 @@ name = "morph-core"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
- "morph-ai",
  "morph-identity",
  "morph-store",
  "serde",
@@ -5595,7 +5594,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "uuid",
- "weirdnet-agent",
  "weirdnet-net",
  "weirdnet-schemes",
  "weirdnet-sync",
@@ -5682,12 +5680,14 @@ dependencies = [
 name = "morph-services"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "futures",
  "morph-ai",
  "morph-core",
  "morph-identity",
  "morph-keystore",
  "morph-store",
+ "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
