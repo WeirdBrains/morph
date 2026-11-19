@@ -272,6 +272,7 @@ impl CompanionView {
             models: models.clone(),
             companions: morph_core::profiles::profile_dir(home, profile).join("companions"),
             busy: worker.busy(),
+            project: Arc::default(),
         };
         let mut view = Self {
             theme,
@@ -1236,6 +1237,9 @@ impl CompanionView {
                 }
             }
             cx.notify();
+        }
+        if let Some(s) = self.devices.model_serving() {
+            s.project.store(self.research.projects.running_here(), std::sync::atomic::Ordering::SeqCst);
         }
         self.devices.tick();
         self.follow_lock();

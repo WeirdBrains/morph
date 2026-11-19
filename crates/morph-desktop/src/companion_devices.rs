@@ -23,8 +23,9 @@ const EVERY: Duration = Duration::from_secs(10);
 const ASK_TIMEOUT: Duration = Duration::from_secs(3);
 
 struct Links {
-    /// This device's model served to the linked ones, while the setting is on.
-    serving: Option<InferServing>,
+    /// This device's model served to the linked ones, while the setting is on (and the claim
+    /// that makes this panel the process's one registrar).
+    serving: Option<(InferServing, Claim)>,
     router: DeviceRouter,
     directory: NodeDirectory,
     /// The node's start time: a restarted node needs a new router.
@@ -39,6 +40,8 @@ pub struct CompanionDevices {
     asking: Arc<AtomicBool>,
     locked: LockCheck,
     serving: Option<ModelServing>,
+    /// This panel, among the process's windows (see [`Claim`]).
+    id: u64,
 }
 
 /// What serving this device's model needs from the panel: the models, the companions folder
@@ -48,6 +51,9 @@ pub struct ModelServing {
     pub models: Arc<LocalModels>,
     pub companions: PathBuf,
     pub busy: Arc<AtomicBool>,
+    /// A research project of this device is running (held for the whole run, released while
+    /// paused), so a remote turn cannot slip in between its steps.
+    pub project: Arc<AtomicBool>,
 }
 
 impl ModelServing {
@@ -77,6 +83,35 @@ fn capabilities_of(serving: &Option<ModelServing>) -> Capabilities {
     serving.as_ref().map(ModelServing::capabilities).unwrap_or(Capabilities { platform: Platform::Desktop, serves_models: false })
 }
 
+/// Inference is registered once per process and profile, not once per window: the first panel to
+/// register holds the claim until it stops serving (setting off, lock, node restart, window
+/// closed), when another window's panel takes over at its next tick.
+static CLAIMS: std::sync::Mutex<Vec<(String, u64)>> = std::sync::Mutex::new(Vec::new());
+static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+struct Claim {
+    key: String,
+    id: u64,
+}
+
+impl Claim {
+    /// The claim on `key` for panel `id`, unless another panel holds it.
+    fn take(key: &str, id: u64) -> Option<Self> {
+        let mut claims = CLAIMS.lock().unwrap_or_else(|p| p.into_inner());
+        if claims.iter().any(|(k, _)| k == key) {
+            return None;
+        }
+        claims.push((key.to_string(), id));
+        Some(Self { key: key.to_string(), id })
+    }
+}
+
+impl Drop for Claim {
+    fn drop(&mut self) {
+        CLAIMS.lock().unwrap_or_else(|p| p.into_inner()).retain(|(k, i)| !(*k == self.key && *i == self.id));
+    }
+}
+
 /// Whether inference is registered now: the setting is on and the profile is unlocked.
 fn wants_serving(enabled: bool, locked: bool) -> bool {
     enabled && !locked
@@ -85,7 +120,16 @@ fn wants_serving(enabled: bool, locked: bool) -> bool {
 impl CompanionDevices {
     pub fn new(home: PathBuf, profile: String) -> Self {
         let locked = profile_lock(home.clone(), profile.clone());
-        Self { home, profile, links: None, checked: None, asking: Arc::new(AtomicBool::new(false)), locked, serving: None }
+        Self {
+            home,
+            profile,
+            links: None,
+            checked: None,
+            asking: Arc::new(AtomicBool::new(false)),
+            locked,
+            serving: None,
+            id: NEXT_ID.fetch_add(1, Ordering::SeqCst),
+        }
     }
 
     /// Follow the panel's profile lock check (the one its hosts refuse on), so the two never
@@ -99,6 +143,11 @@ impl CompanionDevices {
     /// once and the registration follows at the next tick.
     pub fn with_model_serving(self, serving: ModelServing) -> Self {
         Self { serving: Some(serving), ..self }
+    }
+
+    /// What serving this device's model needs, when it is set up.
+    pub fn model_serving(&self) -> Option<&ModelServing> {
+        self.serving.as_ref()
     }
 
     /// From the panel's poll: at most every [`EVERY`], follow the sync node (a router while it
@@ -144,7 +193,7 @@ impl CompanionDevices {
     /// (setting off) or when it ended (the node stopped accepting).
     fn follow_serving(&mut self) {
         let (Some(l), Some(s)) = (self.links.as_mut(), self.serving.as_ref()) else { return };
-        if l.serving.as_ref().is_some_and(|x| !x.running()) {
+        if l.serving.as_ref().is_some_and(|(x, _)| !x.running()) {
             l.serving = None;
         }
         if !wants_serving(s.enabled(), (self.locked)()) {
@@ -152,14 +201,15 @@ impl CompanionDevices {
             return;
         }
         if l.serving.is_none() {
+            let Some(claim) = Claim::take(&format!("{}|{}", self.home.display(), self.profile), self.id) else { return };
             let s = s.clone();
             let make = move || {
-                let (on, choice, busy) = (s.clone(), s.clone(), s.busy.clone());
+                let (on, choice, busy, project) = (s.clone(), s.clone(), s.busy.clone(), s.project.clone());
                 LocalInferHost::new(s.models.clone() as Arc<dyn ModelProvider>, move || choice.choice(), move || on.enabled())
-                    .with_local_priority(move || busy.load(Ordering::SeqCst))
+                    .with_local_priority(move || busy.load(Ordering::SeqCst) || project.load(Ordering::SeqCst))
             };
             match serve_inference(&l.router, make, Some((self.home.clone(), self.profile.clone())), Admission::with_queue(1, 2)) {
-                Ok(serving) => l.serving = Some(serving),
+                Ok(serving) => l.serving = Some((serving, claim)),
                 Err(e) => eprintln!("morph-companions: serving models to linked devices: {e}"),
             }
         }
@@ -209,6 +259,16 @@ mod tests {
         assert!(!wants_serving(false, false), "off");
         assert!(!wants_serving(true, true), "locked");
         assert!(!capabilities_of(&None).serves_models, "no model serving: nothing is offered to offload to");
+    }
+
+    #[test]
+    fn one_panel_registers_inference_per_profile_and_another_takes_over_when_it_stops() {
+        let (a, b) = (NEXT_ID.fetch_add(1, Ordering::SeqCst), NEXT_ID.fetch_add(1, Ordering::SeqCst));
+        let first = Claim::take("home-x|p1", a).expect("the first window registers");
+        assert!(Claim::take("home-x|p1", b).is_none(), "the second window does not");
+        assert!(Claim::take("home-x|p2", b).is_some(), "another profile has its own node");
+        drop(first);
+        assert!(Claim::take("home-x|p1", b).is_some(), "the claim is free once the first stopped serving");
     }
 
     #[test]

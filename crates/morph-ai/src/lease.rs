@@ -112,6 +112,12 @@ impl Projects {
         self.device.is_empty() || p.owned_by(&self.device)
     }
 
+    /// Whether a project this device runs is running now (not paused, waiting for the user,
+    /// done or stopped): the model is wanted for the whole run, between its steps too.
+    pub fn running_here(&self) -> bool {
+        self.projects.iter().any(|p| p.state == crate::research::ProjectState::Running && self.mine(p))
+    }
+
     /// A steer for project `id` made on this device: queued for the owner when another device
     /// owns it. Returns false when this device owns it (the caller records it directly) or the
     /// project is unknown.
@@ -226,6 +232,19 @@ mod tests {
 
     fn projects_for(d: &Device, ps: Vec<ResearchProject>) -> Projects {
         Projects { device: d.id.clone(), projects: ps, ..Default::default() }
+    }
+
+    #[test]
+    fn a_project_counts_as_running_here_only_while_it_runs_and_is_ours() {
+        let (me, other) = (dev("me"), dev("other"));
+        let mut projects = projects_for(&me, vec![owned(&me)]);
+        assert!(projects.running_here(), "running and ours");
+        for state in [ProjectState::Paused, ProjectState::NeedsYou, ProjectState::Done, ProjectState::Stopped] {
+            projects.projects[0].state = state;
+            assert!(!projects.running_here(), "{state:?} releases the model");
+        }
+        let theirs = projects_for(&me, vec![owned(&other)]);
+        assert!(!theirs.running_here(), "another device's project does not hold this one's model");
     }
 
     #[test]
