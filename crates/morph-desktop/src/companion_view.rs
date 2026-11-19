@@ -23,6 +23,7 @@ use morph_companion::{
     export_markdown, footnotes, more_pages_prompt, parse_citations, ran_out_of_pages, with_current_tab,
 };
 use morph_core::tabs::TabId;
+use morph_services::routed_models::{RoutedModels, RouterSlot, RunsOn};
 use morph_ui::theme::Theme;
 use morph_webview::page_read::Pending;
 use morph_webview::{Isolation, PageData, ReadRequest, Want};
@@ -58,6 +59,8 @@ pub struct CompanionView {
     roster_unsaved: bool,
     /// The user's other devices, for Node companions.
     devices: crate::companion_devices::CompanionDevices,
+    /// The linked device a model turn is running on, for the working line.
+    runs_on: RunsOn,
     /// `MORPH_COMPANION_AUTOASK=<question>`: a dev flag that sends one question when the panel first polls.
     autoask: Option<String>,
     /// When the panel was made: the dev question waits for the tab's address, at most 10 s.
@@ -260,7 +263,21 @@ impl CompanionView {
             ),
             calls: Some(calls),
         };
-        let worker = Worker::start_with(models.clone(), policy.clone(), tools, Some(hosts));
+        // Model turns run here or on a linked device, per Settings > Agents > Run on.
+        let router = RouterSlot::default();
+        let companions_dir = morph_core::profiles::profile_dir(home, profile).join("companions");
+        let routed = Arc::new(RoutedModels::new(
+            models.clone(),
+            {
+                let models = models.clone();
+                move |choice| matches!(models.status(choice), ModelStatus::Ready { .. })
+            },
+            move || morph_services::profile_io::file_store(&companions_dir).load_settings().ok().flatten().map(|s| s.offload).unwrap_or_default(),
+            router.clone(),
+            Platform::Desktop,
+        ));
+        let runs_on = routed.runs_on();
+        let worker = Worker::start_with(routed, policy.clone(), tools, Some(hosts));
         let selected = roster.default_companion().map(|c| c.id().clone()).unwrap_or_else(|| AgentId::new("local"));
         let input = cx.new(|cx| TextInput::new("Ask a companion", theme, cx));
         let sub = cx.subscribe_in(&input, window, |this, _, event, _, cx| match event {
@@ -289,9 +306,11 @@ impl CompanionView {
             policy_base,
             synced,
             roster_unsaved,
+            runs_on,
             devices: crate::companion_devices::CompanionDevices::new(home.to_path_buf(), profile.to_string())
                 .with_lock(lock.clone())
-                .with_model_serving(serving),
+                .with_model_serving(serving)
+                .with_router_slot(router),
             autoask: std::env::var("MORPH_COMPANION_AUTOASK").ok().filter(|q| !q.trim().is_empty()),
             made: Instant::now(),
             lock,
@@ -1447,7 +1466,7 @@ fn trace_row(t: Theme, r: &TraceRowView) -> gpui::Div {
 
 /// The working line under the transcript while a task runs: a pulsing dot, what the task is
 /// doing ("Thinking…", "Reading tokio.rs…", "Waiting for your approval") and for how long.
-fn activity_row(t: Theme, activity: &Activity, since: Instant, loading: Option<&str>) -> gpui::Div {
+fn activity_row(t: Theme, activity: &Activity, since: Instant, loading: Option<&str>, device: Option<&str>) -> gpui::Div {
     let elapsed = since.elapsed();
     let pulse = (elapsed.as_millis() / 250 % 4) as f32;
     let waiting = *activity == Activity::WaitingForApproval;
@@ -1465,7 +1484,7 @@ fn activity_row(t: Theme, activity: &Activity, since: Instant, loading: Option<&
                 .bg(rgb(if waiting { t.accent_alt } else { t.accent }))
                 .opacity(0.35 + 0.65 * (1. - (pulse - 1.5).abs() / 1.5)),
         )
-        .child(activity.label(loading))
+        .child(activity.label_on(loading, device))
         .child(div().text_color(rgb(t.text_secondary)).child(format!("{} s", elapsed.as_secs())))
 }
 
@@ -1578,6 +1597,7 @@ impl Render for CompanionView {
 
         let activity = conv.activity();
         let loading = self.model_loading();
+        let runs_on = self.runs_on.get();
         let attached = conv.attached().cloned();
         let can_attach = self.page.is_some();
         let running = conv.is_running();
@@ -1618,7 +1638,7 @@ impl Render for CompanionView {
                             .child("Ask a question, or attach this tab to talk about the page you are on.")
                     }))
                     .children(entries)
-                    .children(activity.map(|(a, since)| activity_row(t, &a, since, loading.as_deref()))),
+                    .children(activity.map(|(a, since)| activity_row(t, &a, since, loading.as_deref(), runs_on.as_deref()))),
             )
             .children((!rows.is_empty()).then(|| {
                 div()

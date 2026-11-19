@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use gpui::{Context, Entity, SharedString, Subscription, Window, div, prelude::*, px, rgb};
-use morph_ai::{AgentSettings, AiStore, CpuLimit, FileStore, Grants, ModelChoice, OffloadMode, Platform, Roster, SearchProvider};
+use morph_ai::{AgentSettings, AiStore, CpuLimit, FileStore, Grants, ModelChoice, OffloadMode, OffloadSettings, Platform, Roster, SearchProvider};
 use weirdnet_agent::{AgentId, AllowRule, CompanionScope, SiteLevel, StandingAllow};
 use weirdnet_model::{ModelStore, catalog, human};
 
@@ -143,11 +143,49 @@ pub fn site_rate_label(rate: f64) -> String {
     if rate >= 1.0 { format!("{rate}/s") } else { format!("{rate}/s (one every {} s)", (every * 10.0).round() / 10.0) }
 }
 
-/// Where turns may run when this device cannot run local models.
-pub fn set_offload_mode(dir: &Path, mode: OffloadMode) -> Result<(), String> {
+/// Where this device's model turns run ("Run on").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunOn {
+    /// Always here.
+    Here,
+    /// Here while the local model can run, else a linked device that serves models.
+    Automatic,
+    /// A linked device (peer id), asked first and alone; this device's model backs it up.
+    Device(String),
+}
+
+/// The choice the saved offload settings make.
+pub fn run_on(o: &OffloadSettings) -> RunOn {
+    match (o.mode, &o.prefer) {
+        (OffloadMode::Never, _) => RunOn::Here,
+        (OffloadMode::Always, Some(p)) => RunOn::Device(p.clone()),
+        _ => RunOn::Automatic,
+    }
+}
+
+/// Saves the choice in the agent settings (so it syncs).
+pub fn set_run_on(dir: &Path, run: RunOn) -> Result<(), String> {
     let mut s = load_settings(dir);
-    s.offload.mode = mode;
+    (s.offload.mode, s.offload.prefer) = match run {
+        RunOn::Here => (OffloadMode::Never, None),
+        RunOn::Automatic => (OffloadMode::Auto, None),
+        RunOn::Device(p) => (OffloadMode::Always, Some(p)),
+    };
     store(dir).save_settings(&s).map_err(|e| e.to_string())
+}
+
+/// What the Run on row says under its chips.
+pub fn run_on_note(run: &RunOn, devices: &[(String, String)]) -> String {
+    match run {
+        RunOn::Here => "Model turns run on this device only.".into(),
+        RunOn::Automatic => {
+            "Model turns run on this device while its model can run, and on a linked device that serves models when it cannot (no model downloaded, or a CPU that lacks what local models need).".into()
+        }
+        RunOn::Device(p) => match devices.iter().find(|(id, _)| id == p) {
+            Some((_, label)) => format!("Model turns go to {label} first. If it is offline or will not take the turn, this device's model runs it when it can."),
+            None => "That device is no longer linked, so turns run on this device.".into(),
+        },
+    }
 }
 
 /// "Serve my models to my other devices": this device answers model turns from the user's
@@ -471,14 +509,6 @@ impl SettingsView {
         ));
 
         if let Some((reason, instead)) = cpu_notice(self.agents.cpu.as_ref()) {
-            let mode = load_settings(&dir).offload.mode;
-            let chips = div().flex().flex_row().gap(px(6.)).children(
-                [(OffloadMode::Auto, "Automatic"), (OffloadMode::Always, "Another device")].into_iter().enumerate().map(|(i, (m, label))| {
-                    chip(t, ("agents-offload", i), label, mode == m).on_click(cx.listener(move |this, _, _, cx| {
-                        this.agents_apply(|d| set_offload_mode(d, m), cx);
-                    }))
-                }),
-            );
             rows.push(
                 div()
                     .flex()
@@ -490,11 +520,24 @@ impl SettingsView {
                     .bg(rgb(t.surface))
                     .child(div().text_size(px(14.)).text_color(rgb(t.error)).child(reason))
                     .child(dim(instead))
-                    .child(chips)
-                    .child(dim("Saved now; turns use it once linked-device routing is wired up.".into()))
                     .into_any_element(),
             );
         }
+        // Run on: this device, a linked device or Automatic.
+        let current = run_on(&load_settings(&dir).offload);
+        let linked: Vec<(String, String)> =
+            self.devices.iter().filter(|d| !d.this_device && d.revoked_ms.is_none()).map(|d| (d.peer_id.clone(), d.label.clone())).collect();
+        let mut options: Vec<(RunOn, String)> = vec![(RunOn::Here, "This device".into())];
+        options.extend(linked.iter().map(|(id, label)| (RunOn::Device(id.clone()), label.clone())));
+        options.push((RunOn::Automatic, "Automatic".into()));
+        let run_chips = div().flex().flex_row().flex_wrap().gap(px(6.)).children(options.into_iter().enumerate().map(|(i, (choice, label))| {
+            let selected = choice == current;
+            chip(t, ("agents-run-on", i), label, selected).on_click(cx.listener(move |this, _, _, cx| {
+                let choice = choice.clone();
+                this.agents_apply(move |d| set_run_on(d, choice), cx);
+            }))
+        }));
+        rows.push(self.plain_row("Run on", run_on_note(&current, &linked), run_chips.into_any_element()));
         if let Some(p) = profile {
             let is_default = default_id.as_ref() == Some(p.id());
             let model = p.model.clone().unwrap_or_else(|| ModelChoice::default_for(Platform::Desktop));
@@ -872,9 +915,18 @@ mod tests {
     #[test]
     fn the_offload_choice_is_saved_through_the_agent_settings() {
         let (_d, p) = tmp();
-        assert_eq!(load_settings(&p).offload.mode, OffloadMode::Auto);
-        set_offload_mode(&p, OffloadMode::Always).unwrap();
+        assert_eq!(run_on(&load_settings(&p).offload), RunOn::Automatic);
+        set_run_on(&p, RunOn::Device("12D3KooWDesk".into())).unwrap();
+        assert_eq!(run_on(&load_settings(&p).offload), RunOn::Device("12D3KooWDesk".into()));
         assert_eq!(load_settings(&p).offload.mode, OffloadMode::Always);
+        set_run_on(&p, RunOn::Here).unwrap();
+        assert_eq!(run_on(&load_settings(&p).offload), RunOn::Here);
+        set_run_on(&p, RunOn::Automatic).unwrap();
+        assert_eq!(load_settings(&p).offload.prefer, None, "the chosen device is forgotten");
+        let devices = vec![("12D3KooWDesk".to_string(), "my-desktop".to_string())];
+        assert!(run_on_note(&RunOn::Device("12D3KooWDesk".into()), &devices).contains("my-desktop first"));
+        assert!(run_on_note(&RunOn::Device("gone".into()), &devices).contains("no longer linked"));
+        assert!(run_on_note(&RunOn::Automatic, &devices).contains("while its model can run"));
         assert_eq!(load_settings(&p).search_provider, SearchProvider::DuckDuckGo, "other settings stay");
     }
 

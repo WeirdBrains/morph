@@ -13,6 +13,7 @@ use morph_ai::{
 };
 use morph_services::infer_serving::{InferServing, serve_inference};
 use morph_services::node_router::{self, Capabilities, DeviceRouter, NodeDirectory};
+use morph_services::routed_models::RouterSlot;
 use weirdnet_agent::AgentKind;
 use weirdnet_agent::remote::infer::Admission;
 
@@ -42,6 +43,8 @@ pub struct CompanionDevices {
     serving: Option<ModelServing>,
     /// This panel, among the process's windows (see [`Claim`]).
     id: u64,
+    /// The router the model provider asks linked devices through.
+    slot: RouterSlot,
 }
 
 /// What serving this device's model needs from the panel: the models, the companions folder
@@ -129,6 +132,7 @@ impl CompanionDevices {
             locked,
             serving: None,
             id: NEXT_ID.fetch_add(1, Ordering::SeqCst),
+            slot: RouterSlot::default(),
         }
     }
 
@@ -145,6 +149,11 @@ impl CompanionDevices {
         Self { serving: Some(serving), ..self }
     }
 
+    /// Share the router with the model provider (asking linked devices for turns).
+    pub fn with_router_slot(self, slot: RouterSlot) -> Self {
+        Self { slot, ..self }
+    }
+
     /// What serving this device's model needs, when it is set up.
     pub fn model_serving(&self) -> Option<&ModelServing> {
         self.serving.as_ref()
@@ -153,6 +162,11 @@ impl CompanionDevices {
     /// From the panel's poll: at most every [`EVERY`], follow the sync node (a router while it
     /// runs, none while it does not) and ask the linked devices what they can do.
     pub fn tick(&mut self) {
+        self.follow_nodes();
+        self.slot.set(self.links.as_ref().map(|l| Arc::new(l.router.clone()) as Arc<dyn NodeRouter>));
+    }
+
+    fn follow_nodes(&mut self) {
         if self.checked.is_some_and(|t| t.elapsed() < EVERY) {
             return;
         }

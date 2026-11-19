@@ -74,6 +74,15 @@ pub enum Activity {
 }
 
 impl Activity {
+    /// The line when the turn runs on another of the user's devices ("Thinking on my-desktop…").
+    pub fn label_on(&self, loading: Option<&str>, device: Option<&str>) -> String {
+        match (self, device) {
+            (Activity::Thinking, Some(d)) => format!("Thinking on {d}…"),
+            (Activity::Reasoning(tail), Some(d)) => format!("Thinking on {d}: {tail}"),
+            _ => self.label(loading),
+        }
+    }
+
     /// The line the panel shows. `loading` names the local model while it is still loading.
     pub fn label(&self, loading: Option<&str>) -> String {
         match (self, loading) {
@@ -545,6 +554,18 @@ mod tests {
         c.start_task("another question");
         c.apply(ViewUpdate::Finished { task_id: "t2".into(), status: "done".into() });
         assert_eq!(c.take_more_pages(), None, "an offer from before the last question is gone");
+    }
+
+    #[test]
+    fn the_working_line_names_the_device_a_turn_runs_on() {
+        assert_eq!(
+            Activity::Thinking.label_on(Some("Gemma 4 E4B"), Some("my-desktop")),
+            "Thinking on my-desktop…",
+            "not Loading: the model loads over there"
+        );
+        assert_eq!(Activity::Thinking.label_on(Some("Gemma 4 E4B"), None), "Loading Gemma 4 E4B…");
+        assert_eq!(Activity::Reasoning("hmm".into()).label_on(None, Some("my-desktop")), "Thinking on my-desktop: hmm");
+        assert_eq!(Activity::Writing.label_on(None, Some("my-desktop")), "Writing…");
     }
 
     #[test]
