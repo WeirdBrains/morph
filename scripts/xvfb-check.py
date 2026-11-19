@@ -2568,6 +2568,61 @@ def app_calls(m, r, win, top):
     r.check("app", "the keys page is showing again after the app calls", go_to_keys(m, win, top, "?after-app"), m.title(win))
 
 
+LOCK_PASSWORD = "xvfb lock password"
+
+
+def profile_lock_check(r, binary, display):
+    """A profile with an identity opens on the lock screen: nothing of it
+    loads (no page) until its password is typed; a wrong one keeps it
+    locked; the right one loads the page. Its tabs are sealed on disk, and
+    the next launch asks again (the key is not kept anywhere)."""
+    g = "profile-lock"
+    home = Path(tempfile.mkdtemp(prefix="morph-xvfb-lock-"))
+    seed = Path(binary).with_name("examples") / "seed-locked-profile"
+    env = dict(os.environ, MORPH_HOME=str(home), MORPH_KEYSTORE="off", MORPH_SEED_PASSWORD=LOCK_PASSWORD)
+    out = subprocess.run([str(seed)], env=env, capture_output=True, text=True)
+    if "ready" not in out.stdout:
+        r.check(g, "seed a profile with an identity", False, out.stderr[-500:])
+        return
+    lock_env = {"MORPH_KEYSTORE": "off"}
+
+    def launch():
+        m = Driver(binary, display, str(home), lock_env)
+        win = wait_for(lambda: m.own_window(), 20)
+        return m, win
+
+    m, win = launch()
+    try:
+        locked = wait_for(lambda: m.lines(r"^morph-event profile locked"), 20)
+        r.check(g, "launching into a profile with an identity shows the lock screen", locked, str(m.lines(r"morph-event")[-5:]))
+        time.sleep(1.5)
+        r.check(g, "nothing of the profile loads while it is locked", not any(n == "TitleChanged" for _, n, _ in m.events()), str(m.events()[:3]))
+        if win:
+            m.activate(win)
+        m.type("not the password")
+        m.key("Return", delay=1.5)
+        r.check(g, "a wrong password keeps it locked", not m.lines(r"^morph-event profile unlocked"), str(m.lines(r"morph-event")[-3:]))
+        m.type(LOCK_PASSWORD)
+        m.key("Return", delay=2.0)
+        unlocked = wait_for(lambda: m.lines(r"^morph-event profile unlocked"), 20)
+        r.check(g, "the right password unlocks it", unlocked, str(m.lines(r"morph-event")[-3:]))
+        loaded = wait_for(lambda: any(n == "TitleChanged" and "M{" in (a or "") for _, n, a in m.events()), 20)
+        r.check(g, "and the page it was to show loads", loaded, str(m.events()[-3:]))
+        prof = home / "profiles" / "p1"
+        sealed = prof / "tabs.json.sealed"
+        kept = wait_for(lambda: sealed.exists(), 10)
+        r.check(g, "its tabs are sealed on disk, never plaintext", kept and not (prof / "tabs.json").exists() and PAGE.name not in sealed.read_text(errors="replace"), str(list(prof.iterdir())))
+    finally:
+        m.stop()
+    m, win = launch()
+    try:
+        again = wait_for(lambda: m.lines(r"^morph-event profile locked"), 20)
+        r.check(g, "the next launch asks for the password again", again, str(m.lines(r"morph-event")[-3:]))
+    finally:
+        m.stop()
+    shutil.rmtree(home, ignore_errors=True)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bin", default=str(Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target")) / "release" / "morph"))
@@ -2578,7 +2633,7 @@ def main():
     ap.add_argument("--input-bin", help="morph-wl-input (default: next to --bin)")
     ap.add_argument("--local-relay", help="a local relay to link through (weirdnet-device-link's local-relay example)")
     ap.add_argument("--app-server", help="a Weirdnet app behind the local relay (morph-services' serve-app example)")
-    ap.add_argument("--only", choices=["downloads", "windows", "popups", "omnibox", "relays"], help="run just this check")
+    ap.add_argument("--only", choices=["downloads", "windows", "popups", "omnibox", "relays", "profile-lock"], help="run just this check")
     ap.add_argument("--screenshots", help="save screenshots of checks that take them (X11) here")
     args = ap.parse_args()
     relay = start_local_relay(args.local_relay) if args.local_relay else None
@@ -2657,6 +2712,15 @@ def run(args):
         r = Results()
         try:
             suggestions_check(r, args.bin, display, args.screenshots)
+            return finish(r, args)
+        finally:
+            for proc in (wm, xvfb):
+                if proc and proc.poll() is None:
+                    proc.terminate()
+    if args.only == "profile-lock":
+        r = Results()
+        try:
+            profile_lock_check(r, args.bin, display)
             return finish(r, args)
         finally:
             for proc in (wm, xvfb):

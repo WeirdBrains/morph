@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Hidden pages on Wayland lay out at their full size instead of a sliver.
 
+- A profile with a Weirdnet identity now asks for its password before it opens: at launch, on a switch to it, in a new window, and for links handed to it. The MCP host and sync don't act on it while it's locked. The lock is on by default, and an admin policy (`"require_profile_password": true`) can keep it on. It can be turned off per profile in Settings with the current password. The key then stays in the system keystore and the data stays encrypted. Lock profile in the menu locks it now, and switching away locks the profile you left. Wrong passwords back off (1 s doubling to 5 min after 3). Settings and open tabs are now encrypted at rest along with the library. Profiles without an identity aren't encrypted or protected, and open as before. Web view data (cookies, site storage) is protected only by OS file permissions. After upgrading, a profile that opened from the keystore asks for its password once. A forgotten password can't be recovered on the device: delete the profile, or link it again from another device (docs/profile-lock.md).
+
 - Synced records too large for one entry (chunked) or sealed now survive a restart: the sync log keeps each entry's full value in library.db, along with how each record type is written. Logs from earlier builds load as before.
 
 - Switching a window to another profile no longer loses its tabs. The tabs it showed stay saved with the profile it left (on disk at once, so a crash or quit keeps them too), and switching back brings them back in order with the same active tab; a profile with several windows gets all of them back, the others in new windows.
