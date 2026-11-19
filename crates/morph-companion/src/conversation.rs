@@ -111,6 +111,13 @@ impl Conversation {
         }
     }
 
+    /// Says what the waiting card is about (the tool, and for tier 2 what it acts on).
+    pub fn set_card_detail(&mut self, detail: &str) {
+        if let Some(Entry::Card { card, .. }) = self.entries.iter_mut().rev().find(|e| matches!(e, Entry::Card { answer: None, .. })) {
+            card.detail = Some(detail.to_string());
+        }
+    }
+
     /// Records the user's answer on the waiting card.
     pub fn answer_card(&mut self, label: &str) {
         if let Some(Entry::Card { answer, .. }) = self.entries.iter_mut().rev().find(|e| matches!(e, Entry::Card { answer: None, .. })) {
@@ -121,6 +128,19 @@ impl Conversation {
     /// Shows the checked footnotes under the last answer.
     pub fn set_footnotes(&mut self, notes: Vec<FootnoteView>) {
         if let Some(Entry::Assistant { footnotes, .. }) = self.entries.iter_mut().rev().find(|e| matches!(e, Entry::Assistant { .. })) {
+            *footnotes = notes;
+        }
+    }
+
+    /// The task finished: the last answer becomes `text` (its sources list taken out and unbacked
+    /// markers dropped, see [`crate::parse_citations`]) with the checked footnotes under it.
+    pub fn finish_answer(&mut self, text: &str, notes: Vec<FootnoteView>) {
+        if let Some(Entry::Assistant { text: t, doc, footnotes }) = self.entries.iter_mut().rev().find(|e| matches!(e, Entry::Assistant { .. })) {
+            if t != text {
+                *t = text.to_string();
+                *doc = Markdown::new();
+                doc.push_str(text);
+            }
             *footnotes = notes;
         }
     }
@@ -182,6 +202,7 @@ mod tests {
             title: "Local wants to open pages".into(),
             site: Some("a.com".into()),
             signed_in: false,
+            detail: None,
             offers: vec![OfferView { scope: Scope::Once, label: "Allow once".into() }],
         }
     }
