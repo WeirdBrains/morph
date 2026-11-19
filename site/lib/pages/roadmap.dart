@@ -56,7 +56,7 @@ class RoadmapPage extends StatelessComponent {
               ('Switching profiles keeps each profile’s tabs and windows (0.2.2)', Status.shipped),
               ('weirdnet- links call the app over Weirdnet', Status.shipped),
             ],
-            note: 'Released as $latestVersion. Work on 0.2.x fixes continues.',
+            note: 'Released as $latestVersion. No 0.2.3 is planned: the next fixes ship with v0.3.',
           ),
           _milestone(
             id: 'v0-3',
@@ -72,8 +72,15 @@ class RoadmapPage extends StatelessComponent {
                 'Key rotation on revoke, so a revoked device can’t read later sync (weirdnet-sync 0.3)',
                 Status.inProgress,
               ),
+              ('Profile lock: profiles with a Weirdnet identity ask for their password', Status.inProgress),
+              ('Address-bar suggestions from your history and bookmarks', Status.inProgress),
+              (
+                'Fixes: menus and panels over the page on Linux/X11, settings rows that wrap inside their card',
+                Status.inProgress,
+              ),
               ('First local AI helpers, moved up from v0.4', Status.inProgress),
             ],
+            note: 'Linking devices in v0.3 needs v0.3 on both.',
             image: (
               'concept-p2p-web.svg',
               'Concept diagram: a Morph device hosting a site, a relay, and a peer opening a weirdnet-morph link.',
