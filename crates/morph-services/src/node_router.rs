@@ -571,12 +571,24 @@ pub mod protocols {
     }
 
     /// Serves [`TASK`]: Node companion tasks, cards answered on the asking device.
-    pub struct TaskService(pub Arc<dyn TaskHost>);
+    pub struct TaskService {
+        host: Arc<dyn TaskHost>,
+        gate: DeviceCaller,
+    }
+
+    impl TaskService {
+        /// `gate` is checked while a task runs, not only when its stream is accepted: a revoke or a
+        /// lock ends the task within 250 ms.
+        pub fn new(host: Arc<dyn TaskHost>, gate: DeviceCaller) -> Self {
+            Self { host, gate }
+        }
+    }
 
     #[async_trait]
     impl LinkHandler for TaskService {
         async fn handle(&self, from: String, link: Link) {
-            if let Err(e) = remote::task::serve(channel(link), self.0.as_ref()).await {
+            let caller = Caller::new(from.clone());
+            if let Err(e) = watched(&self.gate, &caller, remote::task::serve(channel(link), self.host.as_ref())).await {
                 eprintln!("morph-agent: task for {from}: {e}");
             }
         }
@@ -804,8 +816,8 @@ mod tests {
             if v2 {
                 rt.spawn(desk.serve(protocols::INFER_V2, Arc::new(InferService::new(Models, server.clone(), Admission::new(2)).v2())).unwrap());
             }
-            rt.spawn(desk.serve(protocols::INFER, Arc::new(InferService::new(Models, server, Admission::new(2)))).unwrap());
-            rt.spawn(desk.serve(protocols::TASK, Arc::new(TaskService(Arc::new(Companions)))).unwrap());
+            rt.spawn(desk.serve(protocols::INFER, Arc::new(InferService::new(Models, server.clone(), Admission::new(2)))).unwrap());
+            rt.spawn(desk.serve(protocols::TASK, Arc::new(TaskService::new(Arc::new(Companions), server.clone()))).unwrap());
             let (phone, _, _) = up(&user, &b, &[&a.cert, &c.cert], Some(at));
             (Arc::new(DeviceRouter::new(phone)), a.cert.peer_id, c.cert.peer_id)
         }
@@ -935,6 +947,22 @@ mod tests {
             }
         }
 
+        /// A companion task host whose model takes half a minute.
+        struct SlowTasks(Arc<std::sync::atomic::AtomicUsize>);
+
+        impl TaskHost for SlowTasks {
+            fn session(&self, _request: &TaskRequest, approver: Arc<dyn Approver>) -> Result<AgentSession, RemoteError> {
+                let identity = AgentIdentity::new("atlas", "Atlas", AgentKind::Node).with_node("desk");
+                Ok(AgentSession::new(
+                    AgentConfig::new(identity),
+                    Arc::new(Slow(self.0.clone())),
+                    Arc::new(ToolRegistry::new()),
+                    Policy::new().shared(),
+                    approver,
+                ))
+            }
+        }
+
         /// A desk serving slow turns one at a time with two queued, a phone linked to it, and
         /// what it takes to revoke the phone or lock the profile.
         struct Slowed {
@@ -957,6 +985,7 @@ mod tests {
             let (a, b) = (device(&user, "desk"), device(&user, "phone"));
             let (server, st, listening) = up(&user, &a, &[&b.cert], None);
             let server = server.for_locked_profile(&home, "default");
+            let server2 = server.clone();
             let at: Multiaddr = format!("{}/p2p/{}", listening[0], server.peer_id()).parse().unwrap();
             let started = Arc::new(std::sync::atomic::AtomicUsize::new(0));
             let desk = DeviceRouter::new(server.clone());
@@ -964,6 +993,7 @@ mod tests {
                 desk.serve(protocols::INFER_V2, Arc::new(InferService::new(SlowHost(started.clone()), server, Admission::with_queue(1, 2)).v2()))
                     .unwrap(),
             );
+            rt.spawn(desk.serve(protocols::TASK, Arc::new(TaskService::new(Arc::new(SlowTasks(started.clone())), server2))).unwrap());
             let (phone, _, _) = up(&user, &b, &[&a.cert], Some(at));
             let peer = b.cert.peer_id.clone();
             let revoke = Box::new(move || drop(st.lock().unwrap().roster.revoke(&WEIRDNET, &user, &peer, 9).unwrap()));
@@ -1014,6 +1044,39 @@ mod tests {
             assert!(took < std::time::Duration::from_secs(3), "stopped in {took:?}, not after the 30 s turns");
             assert!(ended.iter().all(|t| t.is_err()), "{ended:?}");
             assert_eq!(s.started.load(std::sync::atomic::Ordering::SeqCst), 1);
+        }
+
+        #[test]
+        fn a_revoke_or_a_lock_ends_a_running_companion_task() {
+            for lock in [false, true] {
+                let s = slowed();
+                let dialer = RouterDialer(s.phone.clone());
+                let result = s.rt.block_on(async {
+                    let req = TaskRequest::new(AgentId::new("atlas"), "slowly", vec![]);
+                    let approver = ScriptedApprover::new(vec![]);
+                    let cancel = CancelToken::new();
+                    let task = weirdnet_agent::remote::task::run(&dialer, &s.desk, req, None, &approver, &cancel);
+                    let stop = async {
+                        while s.started.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+                            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                        }
+                        if lock {
+                            crate::profile_lock::lock(&s.home, "default")
+                        } else {
+                            (s.revoke)()
+                        }
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    };
+                    let at = std::time::Instant::now();
+                    futures::pin_mut!(task, stop);
+                    match futures::future::select(task, stop).await {
+                        futures::future::Either::Left((r, _)) => Some((r, at.elapsed())),
+                        futures::future::Either::Right(_) => None,
+                    }
+                });
+                let (r, _) = result.unwrap_or_else(|| panic!("the task kept running after the {}", if lock { "lock" } else { "revoke" }));
+                assert!(r.is_err(), "{r:?}");
+            }
         }
 
         #[test]
