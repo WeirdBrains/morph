@@ -736,6 +736,12 @@ fn model_card(t: Theme, status: ModelStatus, cx: &mut Context<CompanionView>) ->
                     ),
             )
         }
+        ModelStatus::CpuUnsupported { label, reason } => Some(
+            card()
+                .child(div().text_color(rgb(t.error)).child(format!("{label} cannot run on this device. {reason}.")))
+                .child(dim(t, morph_ai::CpuLimit::INSTEAD.to_string()))
+                .child(dim(t, "Settings > Agents has the details.".to_string())),
+        ),
         ModelStatus::Failed { label, error } => Some(
             card().child(div().text_color(rgb(t.error)).child(format!("{label} could not be downloaded: {error}"))).child(
                 div()

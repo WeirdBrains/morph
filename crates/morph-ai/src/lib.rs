@@ -49,4 +49,4 @@ pub use store::{
 };
 
 #[cfg(feature = "local")]
-pub use local::{EngineFactory, LocalModels, ModelStatus};
+pub use local::{CpuLimit, EngineFactory, LocalModels, ModelStatus, cpu_limit};

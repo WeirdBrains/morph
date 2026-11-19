@@ -42,6 +42,50 @@ pub enum ModelStatus {
     Unsupported {
         label: String,
     },
+    /// This CPU lacks instructions the build's llama.cpp needs, so no local model can run.
+    CpuUnsupported {
+        label: String,
+        reason: String,
+    },
+}
+
+/// Why this CPU cannot run local models: the instructions the build needs and the CPU lacks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CpuLimit {
+    /// `is_x86_feature_detected!` names, e.g. `avx2`, `fma`.
+    pub missing: Vec<String>,
+}
+
+impl CpuLimit {
+    /// The limit a failed `weirdnet_model::cpu::check()` describes; `None` when it passed (or
+    /// failed for another reason).
+    pub fn from_check(check: weirdnet_model::Result<()>) -> Option<Self> {
+        match check {
+            Err(weirdnet_model::Error::UnsupportedCpu { missing }) => Some(Self { missing }),
+            _ => None,
+        }
+    }
+
+    /// One line for Settings: "This CPU lacks AVX2/FMA needed for local models".
+    pub fn reason(&self) -> String {
+        let names: Vec<String> = self.missing.iter().map(|m| m.to_uppercase()).collect();
+        format!("This CPU lacks {} needed for local models", names.join("/"))
+    }
+
+    /// What to do instead, for the panel and Settings.
+    pub const INSTEAD: &'static str = "Use a companion that runs on another device, or send turns to a linked device that serves models (offload).";
+}
+
+/// The limit of this machine, if any. `MORPH_FORCE_UNSUPPORTED_CPU=avx2,fma` forces one (to see the
+/// screens without an old CPU).
+pub fn cpu_limit() -> Option<CpuLimit> {
+    if let Ok(forced) = std::env::var("MORPH_FORCE_UNSUPPORTED_CPU") {
+        let missing: Vec<String> = forced.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+        if !missing.is_empty() {
+            return Some(CpuLimit { missing });
+        }
+    }
+    CpuLimit::from_check(weirdnet_model::cpu::check())
 }
 
 #[derive(Default)]
@@ -57,6 +101,7 @@ pub struct LocalModels {
     store: ModelStore,
     factory: EngineFactory,
     state: Arc<Mutex<State>>,
+    cpu: Option<CpuLimit>,
 }
 
 fn spec_for(choice: &ModelChoice) -> Option<ModelSpec> {
@@ -69,11 +114,25 @@ fn spec_for(choice: &ModelChoice) -> Option<ModelSpec> {
 
 impl LocalModels {
     pub fn new(store: ModelStore, factory: EngineFactory) -> Self {
-        Self { store, factory, state: Arc::default() }
+        Self { store, factory, state: Arc::default(), cpu: cpu_limit() }
+    }
+
+    /// As [`new`](Self::new) with the CPU limit chosen by the caller (tests).
+    pub fn with_cpu_limit(mut self, cpu: Option<CpuLimit>) -> Self {
+        self.cpu = cpu;
+        self
+    }
+
+    /// Why local models cannot run here, if they cannot.
+    pub fn cpu_limit(&self) -> Option<&CpuLimit> {
+        self.cpu.as_ref()
     }
 
     pub fn status(&self, choice: &ModelChoice) -> ModelStatus {
         let label = choice.label();
+        if let Some(cpu) = &self.cpu {
+            return ModelStatus::CpuUnsupported { label, reason: cpu.reason() };
+        }
         let Some(spec) = spec_for(choice) else { return ModelStatus::Unsupported { label } };
         let st = self.state.lock().unwrap();
         if let Some((done, total)) = st.downloading.get(&spec.id) {
@@ -91,6 +150,9 @@ impl LocalModels {
     /// The user agreed: download in the background. Does nothing if it is already running or done.
     pub fn start_download(&self, choice: &ModelChoice) {
         let Some(spec) = spec_for(choice) else { return };
+        if self.cpu.is_some() {
+            return; // a model this CPU cannot run is not worth gigabytes
+        }
         {
             let mut st = self.state.lock().unwrap();
             if st.downloading.contains_key(&spec.id) || self.store.installed(&spec) {
@@ -137,6 +199,9 @@ pub fn size_label(size: u64) -> String {
 impl ModelProvider for LocalModels {
     fn open(&self, choice: &ModelChoice) -> Result<Arc<dyn ModelBackend>, ModelError> {
         let label = choice.label();
+        if let Some(cpu) = &self.cpu {
+            return Err(ModelError::Unavailable(format!("{label}: {}. {}", cpu.reason(), CpuLimit::INSTEAD)));
+        }
         let spec = spec_for(choice).ok_or_else(|| ModelError::Unavailable(format!("{label} is not a model Morph can run locally")))?;
         if !self.store.installed(&spec) {
             let why = match self.status(choice) {
@@ -180,7 +245,11 @@ mod tests {
 
     fn models(dir: &Path) -> LocalModels {
         // Port 9 refuses connections, so a download fails fast without touching the network.
-        LocalModels::new(ModelStore::new(dir).with_hub("http://127.0.0.1:9"), Arc::new(|_| Ok(Box::new(Fixed))))
+        LocalModels::new(ModelStore::new(dir).with_hub("http://127.0.0.1:9"), Arc::new(|_| Ok(Box::new(Fixed)))).with_cpu_limit(None)
+    }
+
+    fn weak_cpu() -> Option<CpuLimit> {
+        CpuLimit::from_check(Err(weirdnet_model::Error::UnsupportedCpu { missing: vec!["avx2".into(), "fma".into()] }))
     }
 
     fn install(dir: &Path, choice: &ModelChoice) {
@@ -222,6 +291,35 @@ mod tests {
             ))
             .unwrap();
         assert_eq!(turn.text, "hi there");
+    }
+
+    #[test]
+    fn a_failed_cpu_check_says_what_is_missing_and_a_passing_one_is_no_limit() {
+        let limit = weak_cpu().expect("an UnsupportedCpu error is a limit");
+        assert_eq!(limit.reason(), "This CPU lacks AVX2/FMA needed for local models");
+        assert!(CpuLimit::from_check(Ok(())).is_none());
+        assert!(
+            CpuLimit::from_check(Err(weirdnet_model::Error::Cancelled { done: "0".into(), total: "1".into() })).is_none(),
+            "another failure is not a CPU limit"
+        );
+    }
+
+    #[test]
+    fn on_a_cpu_that_cannot_run_them_local_models_are_unavailable_not_offered_for_download() {
+        let dir = tempfile::tempdir().unwrap();
+        let m = models(dir.path()).with_cpu_limit(weak_cpu());
+        for choice in [ModelChoice::Gemma4E4B, ModelChoice::Gemma4E2B] {
+            assert!(
+                matches!(m.status(&choice), ModelStatus::CpuUnsupported { reason, .. } if reason == "This CPU lacks AVX2/FMA needed for local models"),
+                "{choice:?}"
+            );
+            let err = m.open(&choice).err().expect("no local model opens").to_string();
+            assert!(err.contains("AVX2/FMA") && err.contains("another device"), "{err}");
+            m.start_download(&choice);
+        }
+        assert!(matches!(m.status(&ModelChoice::Gemma4E4B), ModelStatus::CpuUnsupported { .. }), "start_download did nothing: no download began");
+        // The same models are offered normally on a CPU that can run them.
+        assert!(matches!(models(dir.path()).status(&ModelChoice::Gemma4E4B), ModelStatus::Missing { .. }));
     }
 
     #[test]
