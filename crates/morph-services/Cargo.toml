@@ -38,3 +38,6 @@ tempfile.workspace = true
 weirdnet-device-link.workspace = true
 # Tests check no plain SHA-256 of a secret is kept.
 sha2.workspace = true
+# Loopback tests of the agent protocols over linked devices.
+weirdnet-agent = { workspace = true, features = ["testing"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }

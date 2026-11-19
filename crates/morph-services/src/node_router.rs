@@ -304,18 +304,103 @@ impl LinkRx for FrameReader {
     }
 }
 
-/// The protocols Morph runs over a [`Link`], and the glue to `weirdnet-agent`.
-///
-/// Morph pins `weirdnet-agent` `=0.1.0`, which has no `remote` module yet. With 0.2.0 the
-/// glue is: a [`Link`]'s `tx` / `rx` as `remote::FrameTx` / `remote::FrameRx` (both carry
-/// whole messages, same framing), a `remote::Dialer` that calls [`NodeRouter::open`] with
-/// [`INFER`] or [`TASK`], and [`LinkHandler`]s that call `remote::infer::serve` and
-/// `remote::task::serve`. Nothing outside this module changes.
+/// `weirdnet-agent` `remote::infer` and `remote::task` over [`NodeRouter`] links: a
+/// [`remote::Dialer`] for the asking side ([`RemoteModel`], [`remote::task::run`]) and
+/// [`LinkHandler`]s for the serving side. This is the only code that knows the protocols.
 pub mod protocols {
-    /// `weirdnet-agent` `remote::infer::PROTOCOL`: model turns for inference offload.
-    pub const INFER: &str = "/weirdnet-agent/infer/1";
-    /// `weirdnet-agent` `remote::task::PROTOCOL`: Node companion tasks.
-    pub const TASK: &str = "/weirdnet-agent/task/1";
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+    use morph_ai::remote::{LinkRx, LinkTx};
+    use morph_ai::{Link, LinkHandler, NodeRouter, OffloadPlan, RouteError};
+    use weirdnet_agent::ModelBackend;
+    use weirdnet_agent::remote::infer::{Admission, InferHost, RemoteModel};
+    use weirdnet_agent::remote::task::TaskHost;
+    use weirdnet_agent::remote::{self, Channel, Dialer, FrameRx, FrameTx, RemoteError};
+
+    /// Model turns for inference offload.
+    pub const INFER: &str = remote::infer::PROTOCOL;
+    /// Node companion tasks.
+    pub const TASK: &str = remote::task::PROTOCOL;
+
+    fn remote_error(e: RouteError) -> RemoteError {
+        match e {
+            RouteError::NotLinked(p) => RemoteError::Refused { message: format!("{p} is not one of your linked devices") },
+            RouteError::Unreachable(p) => RemoteError::Unreachable { message: p },
+            RouteError::Closed => RemoteError::Closed,
+            RouteError::Failed(m) => RemoteError::Failed { message: m },
+        }
+    }
+
+    struct Tx(Box<dyn LinkTx>);
+    struct Rx(Box<dyn LinkRx>);
+
+    #[async_trait]
+    impl FrameTx for Tx {
+        async fn send(&mut self, message: Vec<u8>) -> Result<(), RemoteError> {
+            self.0.send(message).await.map_err(remote_error)
+        }
+    }
+
+    #[async_trait]
+    impl FrameRx for Rx {
+        /// Cancel-safe because `LinkRx::recv` is.
+        async fn recv(&mut self) -> Result<Option<Vec<u8>>, RemoteError> {
+            self.0.recv().await.map_err(remote_error)
+        }
+    }
+
+    /// A link as a `weirdnet-agent` channel (both carry whole messages).
+    pub fn channel(link: Link) -> Channel {
+        Channel::new(Box::new(Tx(link.tx)), Box::new(Rx(link.rx)))
+    }
+
+    /// Dials the user's linked devices through a [`NodeRouter`].
+    pub struct RouterDialer(pub Arc<dyn NodeRouter>);
+
+    #[async_trait]
+    impl Dialer for RouterDialer {
+        async fn open(&self, node: &str, protocol: &str) -> Result<Channel, RemoteError> {
+            self.0.open(node, protocol).await.map(channel).map_err(remote_error)
+        }
+    }
+
+    /// Inference offload as planned: the plan's devices in order, then `local` when the plan
+    /// falls back (or runs here).
+    pub fn remote_model(router: Arc<dyn NodeRouter>, plan: &OffloadPlan, local: Option<Arc<dyn ModelBackend>>) -> RemoteModel {
+        let m = RemoteModel::new(Arc::new(RouterDialer(router)), plan.nodes.clone());
+        match local {
+            Some(l) if plan.fallback_local => m.with_fallback(l),
+            _ => m,
+        }
+    }
+
+    /// Serves [`INFER`]: model turns from the user's other devices, `admission` at a time.
+    pub struct InferService {
+        pub host: Arc<dyn InferHost>,
+        pub admission: Admission,
+    }
+
+    #[async_trait]
+    impl LinkHandler for InferService {
+        async fn handle(&self, from: String, link: Link) {
+            if let Err(e) = remote::infer::serve(channel(link), self.host.as_ref(), &self.admission).await {
+                eprintln!("morph-agent: inference for {from}: {e}");
+            }
+        }
+    }
+
+    /// Serves [`TASK`]: Node companion tasks, cards answered on the asking device.
+    pub struct TaskService(pub Arc<dyn TaskHost>);
+
+    #[async_trait]
+    impl LinkHandler for TaskService {
+        async fn handle(&self, from: String, link: Link) {
+            if let Err(e) = remote::task::serve(channel(link), self.0.as_ref()).await {
+                eprintln!("morph-agent: task for {from}: {e}");
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -471,5 +556,106 @@ mod tests {
         let mut cl = rt(DeviceRouter::new(from_c).open(&a.cert.peer_id, protocols::TASK)).unwrap();
         let _ = rt(cl.tx.send(b"let me in".to_vec()));
         assert!(!matches!(rt(cl.rx.recv()), Ok(Some(_))), "no reply to an unlinked device");
+    }
+
+    mod agent_protocols {
+        use super::*;
+        use morph_ai::OffloadPlan;
+        use weirdnet_agent::remote::RemoteError;
+        use weirdnet_agent::remote::infer::{Admission, InferHost, Route};
+        use weirdnet_agent::remote::task::{TaskHost, TaskRequest};
+        use weirdnet_agent::testing::{ScriptedApprover, ScriptedModel};
+        use weirdnet_agent::{
+            AgentConfig, AgentId, AgentIdentity, AgentKind, AgentSession, Approver, CancelToken, DeltaSink, Message, ModelBackend, ModelTurn, Policy,
+            StopReason, ToolRegistry,
+        };
+
+        use super::protocols::{InferService, RouterDialer, TaskService, remote_model};
+
+        fn said(text: &str) -> Arc<dyn ModelBackend> {
+            Arc::new(ScriptedModel::new(vec![ModelTurn { text: text.into(), tool_calls: vec![] }]))
+        }
+
+        struct Models;
+        impl InferHost for Models {
+            fn open(&self, _model: Option<&str>) -> Result<Arc<dyn ModelBackend>, RemoteError> {
+                Ok(said("from the desktop"))
+            }
+        }
+
+        struct Companions;
+        impl TaskHost for Companions {
+            fn session(&self, request: &TaskRequest, approver: Arc<dyn Approver>) -> Result<AgentSession, RemoteError> {
+                if request.companion != AgentId::new("atlas") {
+                    return Err(RemoteError::Refused { message: format!("{} does not run here", request.companion) });
+                }
+                let identity = AgentIdentity::new("atlas", "Atlas", AgentKind::Node).with_node("desk");
+                Ok(AgentSession::new(
+                    AgentConfig::new(identity),
+                    said("Atlas answered on the desktop"),
+                    Arc::new(ToolRegistry::new()),
+                    Policy::new().shared(),
+                    approver,
+                ))
+            }
+        }
+
+        fn tokio() -> tokio::runtime::Runtime {
+            tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap()
+        }
+
+        /// A serving desk (A) and an asking phone (B), linked; C is the user's but never linked.
+        fn devices(rt: &tokio::runtime::Runtime) -> (Arc<dyn NodeRouter>, String, String) {
+            let user = Keypair::generate_ed25519();
+            let (a, b, c) = (device(&user, "desk"), device(&user, "phone"), device(&user, "c"));
+            let (server, _, listening) = up(&user, &a, &[&b.cert], None);
+            let at: Multiaddr = format!("{}/p2p/{}", listening[0], server.peer_id()).parse().unwrap();
+            let desk = DeviceRouter::new(server);
+            rt.spawn(desk.serve(protocols::INFER, Arc::new(InferService { host: Arc::new(Models), admission: Admission::new(2) })).unwrap());
+            rt.spawn(desk.serve(protocols::TASK, Arc::new(TaskService(Arc::new(Companions)))).unwrap());
+            let (phone, _, _) = up(&user, &b, &[&a.cert, &c.cert], Some(at));
+            (Arc::new(DeviceRouter::new(phone)), a.cert.peer_id, c.cert.peer_id)
+        }
+
+        #[test]
+        fn a_model_turn_runs_on_the_linked_desktop_and_falls_back_here_when_it_cannot() {
+            let rt = tokio();
+            let (router, desk, unlinked) = devices(&rt);
+            let plan = OffloadPlan { nodes: vec![desk.clone()], fallback_local: true };
+            let model = remote_model(router.clone(), &plan, Some(said("from this phone")));
+            let turn = rt.block_on(model.complete(&[Message::user("hi")], &[], &DeltaSink::discard(), &CancelToken::new())).unwrap();
+            assert_eq!(turn.text, "from the desktop");
+            assert!(matches!(model.last_route(), Some(Route::Node { node, .. }) if node == desk));
+
+            // C is the user's device but not linked here, so the dial is refused and the turn runs locally.
+            let plan = OffloadPlan { nodes: vec![unlinked], fallback_local: true };
+            let model = remote_model(router.clone(), &plan, Some(said("from this phone")));
+            let turn = rt.block_on(model.complete(&[Message::user("hi")], &[], &DeltaSink::discard(), &CancelToken::new())).unwrap();
+            assert_eq!(turn.text, "from this phone");
+            assert_eq!(model.last_route(), Some(Route::Fallback));
+
+            // Without a fallback, the error comes back.
+            let plan = OffloadPlan { nodes: vec!["12D3KooWNotADevice".into()], fallback_local: false };
+            let model = remote_model(router, &plan, Some(said("unused")));
+            assert!(rt.block_on(model.complete(&[Message::user("hi")], &[], &DeltaSink::discard(), &CancelToken::new())).is_err());
+        }
+
+        #[test]
+        fn a_node_companion_runs_its_task_on_the_linked_desktop() {
+            let rt = tokio();
+            let (router, desk, _) = devices(&rt);
+            let dialer = RouterDialer(router);
+            let approver = ScriptedApprover::new(vec![]);
+            let req = TaskRequest::new(AgentId::new("atlas"), "what is tokio", vec![Message::user("earlier")]);
+            let got = rt.block_on(weirdnet_agent::remote::task::run(&dialer, &desk, req, None, &approver, &CancelToken::new())).unwrap();
+            assert_eq!(got.outcome.stop, StopReason::Completed);
+            assert_eq!(got.outcome.text, "Atlas answered on the desktop");
+            assert_eq!(got.messages.first(), Some(&Message::user("earlier")), "the history went over and came back");
+
+            // A companion that does not run there is refused by the host.
+            let req = TaskRequest::new(AgentId::new("local"), "q", vec![]);
+            let err = rt.block_on(weirdnet_agent::remote::task::run(&dialer, &desk, req, None, &approver, &CancelToken::new())).unwrap_err();
+            assert!(matches!(err, RemoteError::Refused { .. }), "{err:?}");
+        }
     }
 }
