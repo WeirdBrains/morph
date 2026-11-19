@@ -28,7 +28,7 @@ pub mod roster;
 pub mod settings;
 pub mod store;
 
-pub use chats::{ChatLog, ChatTurn};
+pub use chats::{CLIP_NOTE, ChatLog, ChatTurn, clip_markdown};
 pub use host::{BrowserHost, FetchedPage, HostError, PageSnapshot, ResearchHost, SearchHit};
 pub use ids::new_id;
 pub use journal::{Journal, JournalEntry, JournalKind, Journals, NOTES_ID};
