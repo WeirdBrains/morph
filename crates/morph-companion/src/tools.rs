@@ -945,6 +945,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_answer_from_search_results_alone_is_nudged_once_to_read_and_replaced() {
+        let roster = Roster::first_run(ModelChoice::Gemma4E4B);
+        let id = AgentId::new("local");
+        let model = Arc::new(weirdnet_agent::testing::ScriptedModel::new(vec![
+            turn("", vec![call("c1", "web.search", json!({ "query": "tokio shutdown" }))]),
+            turn("From the snippets [1].", vec![]),
+            // Morph's nudge: this time it reads.
+            turn("", vec![call("c2", "web.read", json!({ "url": "https://tokio.rs/tokio/topics/shutdown" }))]),
+            turn("From the page [1].", vec![]),
+            // The next question searches and answers without reading again: nudged again, once.
+            turn("", vec![call("c3", "web.search", json!({ "query": "more" }))]),
+            turn("snippets", vec![]),
+            turn("still snippets", vec![]),
+        ]));
+        let approver = Arc::new(ScriptedApprover::new(vec![ApprovalAnswer::Approve { scope: Scope::Task }; 4]));
+        let mut sessions = Sessions::new(
+            Arc::new(SharedModel(model.clone())),
+            registry(Arc::new(FakeBrowser::default()), Arc::new(FakeWeb::default())).await,
+            Policy::new().shared(),
+            approver,
+        );
+        let mut updates = Vec::new();
+        let out = sessions.run(&roster, &id, "how do I shut down tokio?", |u| updates.push(u)).await.unwrap();
+        assert_eq!(out.text, "From the page [1].");
+        assert!(out.trace.steps.iter().any(|s| matches!(s.kind, StepKind::Extract { .. })), "the answer's trace has the read");
+        assert_eq!(updates.iter().filter(|u| matches!(u, crate::ViewUpdate::Redo)).count(), 1);
+        assert_eq!(updates.iter().filter(|u| matches!(u, crate::ViewUpdate::Finished { .. })).count(), 1, "one task as the panel sees it");
+        assert!(matches!(updates.last(), Some(crate::ViewUpdate::Finished { .. })));
+        assert!(sessions.messages(&id).iter().any(|m| m.content == crate::READ_NUDGE));
+        // The panel drops the snippet answer and shows the one that read.
+        let mut conv = crate::Conversation::default();
+        conv.start_task("how do I shut down tokio?");
+        for u in updates {
+            conv.apply(u);
+        }
+        let answers: Vec<&str> =
+            conv.entries().iter().filter_map(|e| if let crate::Entry::Assistant { text, .. } = e { Some(text.as_str()) } else { None }).collect();
+        assert_eq!(answers, vec!["From the page [1]."]);
+
+        let again = sessions.run(&roster, &id, "and more?", |_| {}).await.unwrap();
+        assert_eq!(again.text, "still snippets", "one nudge only, then the answer stands");
+        assert!(!sessions.is_running(&id));
+    }
+
+    #[tokio::test]
     async fn attached_page_text_is_wrapped_and_its_instructions_stay_data() {
         let roster = Roster::first_run(ModelChoice::Gemma4E4B);
         let provider = Provider(StdMutex::new(vec![turn("", vec![call("c1", "page.text", json!({}))]), turn("It is a runtime.", vec![])]));

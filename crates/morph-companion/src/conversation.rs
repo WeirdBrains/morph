@@ -302,6 +302,19 @@ impl Conversation {
                 }
             }
             ViewUpdate::Trace(row) => self.trace.push(row),
+            ViewUpdate::Redo => {
+                // The answer from search results goes; the tool rows stay as what was done.
+                let start = self.entries.iter().rposition(|e| matches!(e, Entry::User { .. })).map_or(0, |i| i + 1);
+                let mut i = start;
+                while i < self.entries.len() {
+                    if matches!(self.entries[i], Entry::Assistant { .. }) {
+                        self.entries.remove(i);
+                    } else {
+                        i += 1;
+                    }
+                }
+                (self.doing, self.writing) = (None, false);
+            }
             ViewUpdate::Finished { status, .. } => {
                 self.running = false;
                 (self.doing, self.writing) = (None, false);

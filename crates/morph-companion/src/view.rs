@@ -54,15 +54,29 @@ pub struct TraceRowView {
 /// What the panel should do for one agent event.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ViewUpdate {
-    TaskStarted { task_id: String },
+    TaskStarted {
+        task_id: String,
+    },
     Text(String),
     Approval(ApprovalCard),
     Notice(NoticeView),
     Blocked(String),
-    ToolRunning { call_id: String, tool: String },
-    ToolDone { call_id: String, tool: String, is_error: bool },
+    ToolRunning {
+        call_id: String,
+        tool: String,
+    },
+    ToolDone {
+        call_id: String,
+        tool: String,
+        is_error: bool,
+    },
     Trace(TraceRowView),
-    Finished { task_id: String, status: String },
+    Finished {
+        task_id: String,
+        status: String,
+    },
+    /// The answer so far is replaced by a follow-on task's (Morph asked it to read pages).
+    Redo,
 }
 
 /// A search provider id as the panel names it ("duckduckgo" is "DuckDuckGo").

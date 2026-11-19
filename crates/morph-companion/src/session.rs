@@ -4,7 +4,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use morph_ai::{CompanionProfile, ModelChoice, ModelProvider, Roster};
-use weirdnet_agent::{AgentConfig, AgentId, AgentSession, Approver, Budget, CancelToken, Outcome, SharedPolicy, StepKind, ToolRegistry};
+use weirdnet_agent::{
+    AgentConfig, AgentId, AgentSession, ApprovalOutcome, Approver, Budget, CancelToken, Outcome, SharedPolicy, StepKind, StopReason, ToolRegistry,
+};
 
 use crate::view::{ViewUpdate, translate};
 
@@ -33,6 +35,23 @@ pub struct TaskOptions {
 /// What a "+5 pages" task is asked to do (the conversation so far comes with it).
 pub const MORE_PAGES_PROMPT: &str = "The page budget ran out. Read up to {n} more pages with web.read to finish the research, \
 then answer the question again in full, with footnotes for the pages you read.";
+
+/// What Morph says, once, when a research answer came from search results alone. It is a note
+/// from Morph, not a question from the user, and its task has a budget of its own.
+pub const READ_NUDGE: &str = "[Morph, not the user] You answered from search results without reading a page. Search results are only leads: \
+read the one to three best results with web.read now, then answer the question again in full, citing only the pages you read.";
+
+/// The task searched and answered without reading a page: research answers need at least one
+/// `web.read`. Not when a card was declined, a read was blocked or skipped, or the task stopped.
+pub fn answered_without_reading(outcome: &Outcome) -> bool {
+    let steps = &outcome.trace.steps;
+    let searched = steps.iter().any(|s| matches!(s.kind, StepKind::Search { .. }));
+    let read = steps.iter().any(|s| matches!(s.kind, StepKind::Fetch { .. } | StepKind::Extract { .. }));
+    let refused = steps.iter().any(|s| {
+        matches!(&s.kind, StepKind::Approval { outcome: ApprovalOutcome::Denied | ApprovalOutcome::Blocked { .. }, .. } | StepKind::Skipped { .. })
+    });
+    searched && !read && !refused && matches!(outcome.stop, StopReason::Completed) && !outcome.text.trim().is_empty()
+}
 
 /// The question a "+5 pages" task sends for `extension` pages.
 pub fn more_pages_prompt(extension: u32) -> String {
@@ -87,6 +106,35 @@ impl Canceller {
             None => false,
         }
     }
+}
+
+/// Runs one task on `session`, handing its view updates on as they come, except `Finished`,
+/// which comes back with the outcome so a follow-on task can run first.
+async fn drive(
+    session: &mut AgentSession,
+    name: &str,
+    input: &str,
+    signed_in: Option<String>,
+    cancel: CancelToken,
+    on_update: &mut impl FnMut(ViewUpdate),
+) -> (Outcome, Option<ViewUpdate>) {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    // Never saved as a default: every task says again whether it is signed in.
+    session.use_signed_in_for_next_task(signed_in);
+    let work = session.run(input, Some(tx), cancel);
+    let mut finished = None;
+    let drain = async {
+        while let Some(event) = rx.recv().await {
+            for update in translate(name, &event) {
+                match update {
+                    ViewUpdate::Finished { .. } => finished = Some(update),
+                    update => on_update(update),
+                }
+            }
+        }
+    };
+    let (outcome, ()) = tokio::join!(work, drain);
+    (outcome, finished)
 }
 
 impl Sessions {
@@ -152,19 +200,17 @@ impl Sessions {
             running.insert(companion.clone(), c.clone());
             c
         };
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let session = self.open.get_mut(companion).expect("opened above");
-        // Never saved as a default: every task says again whether it is signed in.
-        session.use_signed_in_for_next_task(options.signed_in);
-        let work = session.run(input, Some(tx), cancel);
-        let drain = async {
-            while let Some(event) = rx.recv().await {
-                for update in translate(&name, &event) {
-                    on_update(update);
-                }
-            }
-        };
-        let (outcome, ()) = tokio::join!(work, drain);
+        let (mut outcome, mut finished) = drive(session, &name, input, options.signed_in.clone(), cancel.clone(), &mut on_update).await;
+        // Research answered from snippets: one nudge to read, on Morph's account (its own task
+        // and budget), and the snippet answer gives way to the one that read pages.
+        if answered_without_reading(&outcome) && !cancel.is_cancelled() {
+            on_update(ViewUpdate::Redo);
+            (outcome, finished) = drive(session, &name, READ_NUDGE, options.signed_in, cancel, &mut on_update).await;
+        }
+        if let Some(f) = finished {
+            on_update(f);
+        }
         self.running.lock().unwrap().remove(companion);
         Ok(outcome)
     }
