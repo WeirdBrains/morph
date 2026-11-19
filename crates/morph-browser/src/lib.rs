@@ -585,6 +585,12 @@ impl Browser {
         &self.tabs.active().title
     }
 
+    /// Whether the active page has finished loading (a load started since
+    /// clears it until that one finishes).
+    pub fn active_page_finished(&self) -> bool {
+        self.active_page().finished
+    }
+
     pub fn toolbar(&self) -> Toolbar {
         let page = self.active_page();
         Toolbar { can_back: page.can_back, can_forward: page.can_forward, loading: page.loading, covered: page.cover.is_some(), popups: page.popups }

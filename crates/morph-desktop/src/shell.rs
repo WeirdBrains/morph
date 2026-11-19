@@ -197,6 +197,12 @@ pub trait Hosted {
     fn page(&self, _cx: &App) -> Option<Page> {
         None
     }
+    /// Whether the shown page can take the keyboard yet: `None` when there
+    /// is no page to give it (none, or the address bar has it), `Some(false)`
+    /// while its first load is still going.
+    fn page_ready(&self, _cx: &App) -> Option<bool> {
+        None
+    }
     /// Whether the shown page is bookmarked (drives the star).
     fn set_page_marked(&self, _marked: bool, _cx: &mut App) {}
     /// A short note at the bottom of the component (`Bookmarked`), with an
@@ -254,6 +260,10 @@ impl Hosted for Entity<BrowserView> {
         let browser = self.read(cx).browser();
         let url = browser.active_url();
         (!url.is_empty()).then(|| Page { url: url.to_string(), title: browser.active_title().to_string() })
+    }
+    fn page_ready(&self, cx: &App) -> Option<bool> {
+        let browser = self.read(cx).browser();
+        (!browser.active_url().is_empty() && !browser.address_focused()).then(|| browser.active_page_finished())
     }
     fn set_page_marked(&self, marked: bool, cx: &mut App) {
         self.update(cx, |view, cx| view.set_marked(marked, cx));
@@ -461,8 +471,8 @@ pub struct Shell {
     /// URLs from outside (a later launch, weirdnet-morph:// links) to
     /// route once the window runs.
     pending_links: Vec<String>,
-    /// Give the page the keyboard on the next tick, once the links above
-    /// have opened: a window that opens (or unlocks) on a page types into
+    /// Give the page the keyboard once the links above have opened and the
+    /// page has loaded: a window that opens (or unlocks) on a page types into
     /// it, on Wayland too, where nothing but the shell hands a page the
     /// keyboard. A blank tab keeps it in the address bar.
     focus_page_soon: bool,
@@ -1276,11 +1286,19 @@ impl Shell {
             }
             window.activate_window();
         }
-        if std::mem::take(&mut self.focus_page_soon)
-            && let Some(main) = self.main()
-            && main.page(cx).is_some()
-        {
-            main.focus_content(window, cx);
+        // Not before the page has loaded: WebView2 handed the keyboard while
+        // its first navigation was still to start never loaded the page.
+        if self.focus_page_soon {
+            match self.main().and_then(|main| main.page_ready(cx)) {
+                Some(false) => {}
+                Some(true) => {
+                    self.focus_page_soon = false;
+                    if let Some(main) = self.main() {
+                        main.focus_content(window, cx);
+                    }
+                }
+                None => self.focus_page_soon = false,
+            }
         }
         let mut shortcuts = Vec::new();
         for component in &self.components {
