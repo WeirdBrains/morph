@@ -29,7 +29,7 @@ pub mod settings;
 pub mod store;
 
 pub use chats::{CLIP_NOTE, ChatLog, ChatTurn, clip_markdown};
-pub use host::{BrowserHost, FetchedPage, HostError, PageSnapshot, ResearchHost, SearchHit};
+pub use host::{BrowserHost, FetchedPage, HostError, LIBRARY, PageLink, PageSnapshot, ResearchHost, ScrollTo, SearchHit, TabInfo};
 pub use ids::new_id;
 pub use journal::{Journal, JournalEntry, JournalKind, Journals, NOTES_ID};
 pub use mcp::{McpConfigs, McpSecrets, McpServer, McpTransport, McpValue};
