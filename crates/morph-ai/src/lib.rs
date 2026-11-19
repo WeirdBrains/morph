@@ -19,7 +19,7 @@ pub use host::{BrowserHost, FetchedPage, HostError, PageSnapshot, ResearchHost, 
 pub use model::{ModelChoice, ModelProvider, Platform, UnavailableModels};
 pub use roster::{CompanionProfile, Roster, RosterError};
 pub use settings::{AgentSettings, SearchProvider};
-pub use store::{AiStore, FileStore, Grants, MemoryStore, StoreError};
+pub use store::{AiStore, FileStore, Grants, MemoryStore, StoreError, reload_shared, revoke_shared, save_shared};
 
 #[cfg(feature = "local")]
 pub use local::{EngineFactory, LocalModels, ModelStatus};

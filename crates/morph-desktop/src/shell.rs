@@ -149,6 +149,8 @@ pub enum ShellRequest {
     /// The address bar's `>`: show the Companion panel and ask `name` (the default companion when
     /// `None`). The current tab is not attached.
     AskCompanion { name: Option<String>, question: String },
+    /// Settings > Agents changed the companions, grants or allows on disk: the Companion panel reloads them.
+    AgentsChanged,
 }
 
 /// What a new window starts with.
@@ -691,6 +693,11 @@ impl Shell {
                 }
             }
             ShellRequest::FocusShell => self.focus_shell(cx),
+            ShellRequest::AgentsChanged => {
+                if let Some(companions) = self.companions.clone() {
+                    companions.update(cx, |view, cx| view.reload_agents(cx));
+                }
+            }
             ShellRequest::AskCompanion { name, question } => self.ask_companion(name.clone(), question.clone(), window, cx),
             ShellRequest::LibraryUnlocked => self.last_marked = None,
             ShellRequest::SwitchProfile(id) => self.switch_profile(id, window, cx),
