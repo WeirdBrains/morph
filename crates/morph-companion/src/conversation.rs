@@ -63,6 +63,8 @@ pub enum Entry {
 pub enum Activity {
     /// The model is on a turn and has not written anything in it yet.
     Thinking,
+    /// The model is reasoning before it answers: its latest words.
+    Reasoning(String),
     /// The model's answer is streaming in.
     Writing,
     /// A tool call is running ("Searching DuckDuckGo…").
@@ -77,6 +79,7 @@ impl Activity {
         match (self, loading) {
             (Activity::Thinking, Some(model)) => format!("Loading {model}…"),
             (Activity::Thinking, None) => "Thinking…".into(),
+            (Activity::Reasoning(tail), _) => format!("Thinking: {tail}"),
             (Activity::Writing, _) => "Writing…".into(),
             (Activity::Doing(text), _) => text.clone(),
             (Activity::WaitingForApproval, _) => "Waiting for your approval".into(),
@@ -95,6 +98,8 @@ pub struct Conversation {
     doing: Option<String>,
     /// Text has come in since the model's turn began.
     writing: bool,
+    /// The latest words of the model's reasoning this turn (the tail only).
+    reasoning: String,
     /// When the current [`Activity`] began.
     since: Option<Instant>,
 }
@@ -129,6 +134,8 @@ impl Conversation {
             Activity::Doing(d.clone())
         } else if self.writing {
             Activity::Writing
+        } else if !self.reasoning.is_empty() {
+            Activity::Reasoning(self.reasoning.clone())
         } else {
             Activity::Thinking
         })
@@ -304,8 +311,23 @@ impl Conversation {
         match update {
             ViewUpdate::TaskStarted { .. } => self.running = true,
             ViewUpdate::Text(delta) if delta.is_empty() => {}
+            ViewUpdate::Reasoning(delta) => {
+                self.reasoning.push_str(&delta);
+                // Only the tail: one line of the panel.
+                let mut flat = String::new();
+                for ch in self.reasoning.chars() {
+                    if !ch.is_whitespace() {
+                        flat.push(ch);
+                    } else if !flat.ends_with(' ') {
+                        flat.push(' ');
+                    }
+                }
+                let n = flat.chars().count();
+                self.reasoning = flat.chars().skip(n.saturating_sub(70)).collect();
+            }
             ViewUpdate::Text(delta) => {
                 self.writing = true;
+                self.reasoning.clear();
                 match self.entries.last_mut() {
                     Some(Entry::Assistant { text, doc, .. }) => {
                         text.push_str(&delta);
@@ -325,11 +347,13 @@ impl Conversation {
                 // The tool's own step line may have come first; it says more than the name.
                 self.doing.get_or_insert_with(|| format!("Running {tool}…"));
                 self.writing = false;
+                self.reasoning.clear();
                 self.entries.push(Entry::Tool { call_id, tool, state: ToolState::Running });
             }
             ViewUpdate::ToolDone { call_id, is_error, .. } => {
                 // The model takes its next turn.
                 (self.doing, self.writing) = (None, false);
+                self.reasoning.clear();
                 if let Some(Entry::Tool { state, .. }) =
                     self.entries.iter_mut().rev().find(|e| matches!(e, Entry::Tool { call_id: c, .. } if *c == call_id))
                 {
@@ -521,6 +545,25 @@ mod tests {
         c.start_task("another question");
         c.apply(ViewUpdate::Finished { task_id: "t2".into(), status: "done".into() });
         assert_eq!(c.take_more_pages(), None, "an offer from before the last question is gone");
+    }
+
+    #[test]
+    fn reasoning_shows_its_latest_words_on_the_working_line_until_the_answer_starts() {
+        let mut c = Conversation::default();
+        c.apply(ViewUpdate::TaskStarted { task_id: "t".into() });
+        c.apply(ViewUpdate::Reasoning("Let me think about ".into()));
+        c.apply(ViewUpdate::Reasoning("the shutdown order.".into()));
+        let (a, _) = c.activity().unwrap();
+        assert_eq!(a.label(None), "Thinking: Let me think about the shutdown order.");
+        c.apply(ViewUpdate::Reasoning("word ".repeat(60)));
+        let label = c.activity().unwrap().0.label(None);
+        assert!(label.chars().count() <= "Thinking: ".len() + 70, "{label}");
+        assert!(c.entries().is_empty(), "reasoning is not part of the answer");
+        c.apply(ViewUpdate::Text("Four.".into()));
+        assert_eq!(c.activity().unwrap().0, Activity::Writing);
+        c.apply(ViewUpdate::ToolRunning { call_id: "1".into(), tool: "web.search".into() });
+        c.apply(ViewUpdate::ToolDone { call_id: "1".into(), tool: "web.search".into(), is_error: false });
+        assert_eq!(c.activity().unwrap().0, Activity::Thinking, "the next turn starts without the old reasoning");
     }
 
     #[test]

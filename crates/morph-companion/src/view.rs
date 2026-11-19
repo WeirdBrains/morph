@@ -58,6 +58,8 @@ pub enum ViewUpdate {
         task_id: String,
     },
     Text(String),
+    /// Reasoning text from the model: the working line shows its latest words; the answer does not include it.
+    Reasoning(String),
     Approval(ApprovalCard),
     Notice(NoticeView),
     Blocked(String),
@@ -233,6 +235,7 @@ pub fn translate(companion: &str, event: &AgentEvent) -> Vec<ViewUpdate> {
     match event {
         AgentEvent::TaskStarted { task_id } => vec![ViewUpdate::TaskStarted { task_id: task_id.clone() }],
         AgentEvent::TextDelta(t) => vec![ViewUpdate::Text(t.clone())],
+        AgentEvent::ReasoningDelta(t) => vec![ViewUpdate::Reasoning(t.clone())],
         AgentEvent::ApprovalRequested(p) => vec![ViewUpdate::Approval(approval_card(companion, p))],
         AgentEvent::ApprovalSkipped(n) => vec![ViewUpdate::Notice(notice(companion, n))],
         AgentEvent::Blocked { tool, reason } => vec![ViewUpdate::Blocked(block_text(tool, reason))],
