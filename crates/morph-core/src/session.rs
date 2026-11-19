@@ -106,6 +106,119 @@ pub fn save(home: impl AsRef<Path>, profile: &str, session: &Session) -> std::io
     fs::rename(tmp, path)
 }
 
+/// The windows open app-wide, each keyed by `K` and showing one profile,
+/// and the windows a profile switch put aside: together they are what each
+/// profile's `tabs.json` holds.
+///
+/// A window that switches from profile A to B leaves its tabs with A (put
+/// aside, still saved in A's file, so a crash or quit keeps them) and takes
+/// B's windows put aside before, if any. Switching back to A brings A's
+/// windows back as they were.
+#[derive(Debug, Clone)]
+pub struct OpenWindows<K> {
+    windows: Vec<OpenWindow<K>>,
+    aside: Vec<(String, WindowSession)>,
+}
+
+#[derive(Debug, Clone)]
+struct OpenWindow<K> {
+    key: K,
+    profile: String,
+    session: Option<WindowSession>,
+}
+
+impl<K> Default for OpenWindows<K> {
+    fn default() -> Self {
+        Self { windows: Vec::new(), aside: Vec::new() }
+    }
+}
+
+/// What a window's switch did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Switched {
+    /// The profile the window showed until now.
+    pub from: String,
+    /// The windows of the new profile to show: the first in the window
+    /// that switched, the others in new windows (each opened with
+    /// [`OpenWindows::add`], which takes it from the ones put aside).
+    pub windows: Vec<WindowSession>,
+}
+
+impl<K: PartialEq> OpenWindows<K> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Window `key` opened showing `profile` with `session` (a saved window
+    /// it restores, so the session keeps it before the window reports its
+    /// tabs). A window put aside with the same tabs is taken back.
+    pub fn add(&mut self, key: K, profile: &str, session: Option<WindowSession>) {
+        if let Some(session) = &session
+            && let Some(at) = self.aside.iter().position(|(p, w)| p == profile && w == session)
+        {
+            self.aside.remove(at);
+        }
+        self.windows.retain(|w| w.key != key);
+        self.windows.push(OpenWindow { key, profile: profile.to_string(), session });
+    }
+
+    /// The window shows `session` now. Returns its profile, to save.
+    pub fn update(&mut self, key: &K, session: Option<WindowSession>) -> Option<&str> {
+        let w = self.windows.iter_mut().find(|w| w.key == *key)?;
+        w.session = session;
+        Some(&w.profile)
+    }
+
+    /// The window closed while others stay open: its tabs leave the
+    /// session. Returns its profile, to save.
+    pub fn remove(&mut self, key: &K) -> Option<String> {
+        let at = self.windows.iter().position(|w| w.key == *key)?;
+        Some(self.windows.remove(at).profile)
+    }
+
+    /// The profile window `key` shows.
+    pub fn profile(&self, key: &K) -> Option<&str> {
+        self.windows.iter().find(|w| w.key == *key).map(|w| w.profile.as_str())
+    }
+
+    /// Window `key`, showing `leaving` (its tabs as they are now, taken
+    /// before its pages go), switches to profile `to`. Its tabs are put
+    /// aside for the profile it leaves; it takes the first window `to` had
+    /// put aside. `None` when there is no such window or it shows `to`
+    /// already. Save both profiles afterwards.
+    pub fn switch(&mut self, key: &K, leaving: Option<WindowSession>, to: &str) -> Option<Switched> {
+        let w = self.windows.iter_mut().find(|w| w.key == *key)?;
+        if w.profile == to {
+            return None;
+        }
+        let from = std::mem::replace(&mut w.profile, to.to_string());
+        if let Some(leaving) = leaving {
+            self.aside.push((from.clone(), leaving));
+        }
+        let windows: Vec<WindowSession> = self.aside.iter().filter(|(p, _)| p == to).map(|(_, s)| s.clone()).collect();
+        // The first one is the switching window's now; the others stay
+        // aside (and saved) until their windows open.
+        if let Some(at) = self.aside.iter().position(|(p, _)| p == to) {
+            self.aside.remove(at);
+        }
+        w.session = windows.first().cloned();
+        Some(Switched { from, windows })
+    }
+
+    /// What `profile`'s `tabs.json` should hold: its open windows, then the
+    /// ones put aside, in the order they were.
+    pub fn session(&self, profile: &str) -> Session {
+        let open = self.windows.iter().filter(|w| w.profile == profile).filter_map(|w| w.session.clone());
+        let aside = self.aside.iter().filter(|(p, _)| p == profile).map(|(_, s)| s.clone());
+        Session::new(open.chain(aside).collect())
+    }
+
+    /// Write `profile`'s windows to its `tabs.json`.
+    pub fn save(&self, home: impl AsRef<Path>, profile: &str) -> std::io::Result<()> {
+        save(home, profile, &self.session(profile))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,5 +266,91 @@ mod tests {
         let loaded = load(home.path(), "default");
         assert_eq!(loaded.windows.len(), 1);
         assert_eq!(loaded.windows[0].active_index(), 0);
+    }
+
+    fn window(tabs: &[&str], active: usize) -> WindowSession {
+        WindowSession { tabs: s(tabs), active }
+    }
+
+    /// Michael's report: switching profiles lost the tabs. A window with A's
+    /// three tabs switches to B and back: A has the same tabs and active
+    /// tab, on disk after every step (a crash or quit keeps them).
+    #[test]
+    fn a_profile_switch_and_back_keeps_the_tabs() {
+        let home = tempfile::tempdir().unwrap();
+        let a = window(&["https://a.example/", "https://b.example/", "https://c.example/"], 1);
+        let mut open = OpenWindows::new();
+        open.add(1, "A", None);
+        assert_eq!(open.update(&1, Some(a.clone())), Some("A"));
+        open.save(home.path(), "A").unwrap();
+
+        let to_b = open.switch(&1, Some(a.clone()), "B").unwrap();
+        assert_eq!(to_b, Switched { from: "A".into(), windows: vec![] }, "B had nothing put aside: a blank window");
+        open.save(home.path(), "A").unwrap();
+        open.save(home.path(), "B").unwrap();
+        assert_eq!(load(home.path(), "A").windows, vec![a.clone()], "A's tabs stay saved while B shows");
+        assert_eq!(open.profile(&1), Some("B"));
+        // B's blank tab reports no session; A's file must not change.
+        assert_eq!(open.update(&1, None), Some("B"));
+        open.save(home.path(), "B").unwrap();
+        assert_eq!(load(home.path(), "A").windows, vec![a.clone()]);
+        let b = window(&["https://work.example/"], 0);
+        open.update(&1, Some(b.clone()));
+        open.save(home.path(), "B").unwrap();
+
+        let back = open.switch(&1, Some(b.clone()), "A").unwrap();
+        assert_eq!(back, Switched { from: "B".into(), windows: vec![a.clone()] });
+        open.save(home.path(), "A").unwrap();
+        open.save(home.path(), "B").unwrap();
+        assert_eq!(load(home.path(), "A").windows, vec![a.clone()]);
+        assert_eq!(load(home.path(), "A").windows[0].active_index(), 1);
+        assert_eq!(load(home.path(), "B").windows, vec![b.clone()], "and B's tabs wait for the next switch");
+
+        // To B once more: B's tabs come back too, and the same session
+        // twice is not a switch.
+        assert_eq!(open.switch(&1, Some(a.clone()), "B").unwrap().windows, vec![b]);
+        assert_eq!(open.switch(&1, None, "B"), None);
+        assert_eq!(open.switch(&2, None, "A"), None, "no such window");
+    }
+
+    /// Two windows of A both switch to B; switching one back brings both
+    /// of A's windows back (the second in a new window, which `add` takes
+    /// from the ones put aside), and none is saved twice.
+    #[test]
+    fn every_window_of_a_profile_comes_back() {
+        let home = tempfile::tempdir().unwrap();
+        let w1 = window(&["https://one.example/", "https://two.example/"], 0);
+        let w2 = window(&["https://three.example/"], 0);
+        let mut open = OpenWindows::new();
+        open.add(1, "A", Some(w1.clone()));
+        open.add(2, "A", Some(w2.clone()));
+        open.save(home.path(), "A").unwrap();
+        assert_eq!(load(home.path(), "A").windows, vec![w1.clone(), w2.clone()]);
+
+        open.switch(&1, Some(w1.clone()), "B").unwrap();
+        open.update(&1, None);
+        open.save(home.path(), "A").unwrap();
+        // A's file lists the open window first, then the one put aside.
+        assert_eq!(load(home.path(), "A").windows, vec![w2.clone(), w1.clone()]);
+        open.switch(&2, Some(w2.clone()), "B").unwrap();
+        open.update(&2, None);
+        open.save(home.path(), "A").unwrap();
+        open.save(home.path(), "B").unwrap();
+        assert_eq!(load(home.path(), "A").windows, vec![w1.clone(), w2.clone()]);
+        assert_eq!(load(home.path(), "B").windows, vec![]);
+
+        let back = open.switch(&1, None, "A").unwrap();
+        assert_eq!(back.windows, vec![w1.clone(), w2.clone()]);
+        open.save(home.path(), "A").unwrap();
+        assert_eq!(load(home.path(), "A").windows, vec![w1.clone(), w2.clone()], "the second is saved while its window opens");
+        open.add(3, "A", Some(w2.clone()));
+        open.save(home.path(), "A").unwrap();
+        assert_eq!(load(home.path(), "A").windows, vec![w1.clone(), w2.clone()], "and once it opened, not twice");
+        assert_eq!(open.session("A").windows.len(), 2);
+
+        // Closing a window takes its tabs out; the other window stays.
+        assert_eq!(open.remove(&3).as_deref(), Some("A"));
+        open.save(home.path(), "A").unwrap();
+        assert_eq!(load(home.path(), "A").windows, vec![w1]);
     }
 }
