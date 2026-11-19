@@ -26,12 +26,8 @@ pub const DEFAULT_TYPES: &[&str] = &[BOOKMARKS, HISTORY, SETTINGS, COMPANIONS, G
 pub const SUPPORTED_TYPES: &[&str] = &[BOOKMARKS, HISTORY, SETTINGS, COMPANIONS, GRANTS, CHATS, MCP, MCP_SECRETS, JOURNAL];
 
 /// Earlier builds' default opt-ins, upgraded once to [`DEFAULT_TYPES`].
-const OLD_DEFAULTS: &[&[&str]] = &[
-    &[BOOKMARKS],
-    &[BOOKMARKS, HISTORY],
-    &[BOOKMARKS, HISTORY, SETTINGS],
-    &[BOOKMARKS, HISTORY, SETTINGS, COMPANIONS, GRANTS, CHATS, MCP, JOURNAL],
-];
+const OLD_DEFAULTS: &[&[&str]] =
+    &[&[BOOKMARKS], &[BOOKMARKS, HISTORY], &[BOOKMARKS, HISTORY, SETTINGS], &[BOOKMARKS, HISTORY, SETTINGS, COMPANIONS, GRANTS, CHATS, MCP, JOURNAL]];
 
 /// One bookmarks-log mutation. `record_id` lives on the log entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
