@@ -52,6 +52,9 @@ pub struct McpServer {
     /// Devices (peer ids) that run this server; `None` is every device.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub devices: Option<BTreeSet<String>>,
+    /// Companions (ids) that may use this server's tools; `None` is every companion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub companions: Option<BTreeSet<String>>,
 }
 
 fn yes() -> bool {
@@ -71,7 +74,15 @@ fn secret_like(name: &str, value: &str) -> bool {
 
 impl McpServer {
     pub fn new(name: &str, transport: McpTransport) -> Self {
-        Self { id: crate::ids::new_id("mcp"), name: name.to_string(), transport, enabled: true, tools_off: BTreeSet::new(), devices: None }
+        Self {
+            id: crate::ids::new_id("mcp"),
+            name: name.to_string(),
+            transport,
+            enabled: true,
+            tools_off: BTreeSet::new(),
+            devices: None,
+            companions: None,
+        }
     }
 
     fn values_mut(&mut self) -> &mut BTreeMap<String, McpValue> {
@@ -113,6 +124,11 @@ impl McpServer {
     /// Secret names this server needs on a device.
     pub fn secret_names(&self) -> Vec<String> {
         self.values().values().filter_map(|v| if let McpValue::Secret { name } = v { Some(name.clone()) } else { None }).collect()
+    }
+
+    /// Whether `companion` may use this server's tools.
+    pub fn applies_to(&self, companion: &str) -> bool {
+        self.companions.as_ref().is_none_or(|c| c.contains(companion))
     }
 
     /// Whether this device runs the server.

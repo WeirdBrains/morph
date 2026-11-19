@@ -68,10 +68,21 @@ impl ServerStatus {
 
 /// The registry of connected servers and every server's status.
 pub struct McpHub {
-    /// All connected servers' tools. Tools the user switched off are disabled in it.
+    /// The tools of the connected servers that apply to every companion. Tools the user switched
+    /// off are disabled in it.
     pub registry: Arc<ToolRegistry>,
+    /// For each companion some connected server is limited to: the shared tools plus the servers
+    /// limited to that companion. Other companions use [`registry`](Self::registry).
+    pub scoped: BTreeMap<String, Arc<ToolRegistry>>,
     /// Status by server id.
     pub statuses: BTreeMap<String, ServerStatus>,
+}
+
+impl McpHub {
+    /// The tools `companion` may use.
+    pub fn registry_for(&self, companion: &str) -> Arc<ToolRegistry> {
+        self.scoped.get(companion).unwrap_or(&self.registry).clone()
+    }
 }
 
 /// What [`connect`] needs from this machine.
@@ -152,7 +163,7 @@ async fn open(server: &McpServer, secrets: &dyn McpSecrets, timeout: Duration, o
 /// others; its status says why.
 pub async fn connect(configs: &McpConfigs, ctx: &ConnectContext<'_>) -> McpHub {
     let mut statuses = BTreeMap::new();
-    let mut registry = ToolRegistry::new();
+    let mut sources: Vec<(McpServer, Arc<McpSource>)> = Vec::new();
     let mut prefixes: Vec<String> = Vec::new();
     for server in &configs.servers {
         let status = if !server.enabled {
@@ -188,31 +199,65 @@ pub async fn connect(configs: &McpConfigs, ctx: &ConnectContext<'_>) -> McpHub {
                         })
                         .collect();
                     prefixes.push(prefix);
-                    registry.add_source(Arc::new(source));
+                    sources.push((server.clone(), Arc::new(source)));
                     ServerStatus::Connected { tools, warning }
                 }
             }
         };
         statuses.insert(server.id.clone(), status);
     }
+    // Companions some server is limited to get a registry of their own; the sources are shared.
+    let named: std::collections::BTreeSet<String> = sources.iter().filter_map(|(s, _)| s.companions.clone()).flatten().collect();
+    let shared: Vec<&(McpServer, Arc<McpSource>)> = sources.iter().filter(|(s, _)| s.companions.is_none()).collect();
     // Every added source listed fine a moment ago; a failure here (a tool name two servers share
     // despite the prefixes) is reported on every connected server rather than dropping them all.
-    if let Err(e) = registry.refresh().await {
+    let mut failure = None;
+    let registry = match build_registry(&shared, &statuses).await {
+        Ok(r) => r,
+        Err(e) => {
+            failure = Some(e);
+            Arc::new(ToolRegistry::new())
+        }
+    };
+    let mut scoped = BTreeMap::new();
+    for companion in named {
+        let picked: Vec<&(McpServer, Arc<McpSource>)> = sources.iter().filter(|(s, _)| s.applies_to(&companion)).collect();
+        match build_registry(&picked, &statuses).await {
+            Ok(r) => {
+                scoped.insert(companion, r);
+            }
+            Err(e) => failure = Some(e),
+        }
+    }
+    if let Some(e) = failure {
         for status in statuses.values_mut() {
             if matches!(status, ServerStatus::Connected { .. }) {
                 *status = ServerStatus::Failed(e.to_string());
             }
         }
-        registry = ToolRegistry::new();
+        return McpHub { registry: Arc::new(ToolRegistry::new()), scoped: BTreeMap::new(), statuses };
     }
-    for status in statuses.values() {
-        if let ServerStatus::Connected { tools, .. } = status {
+    McpHub { registry, scoped, statuses }
+}
+
+/// A registry over `picked` with the user's switched-off tools disabled.
+async fn build_registry(
+    picked: &[&(McpServer, Arc<McpSource>)],
+    statuses: &BTreeMap<String, ServerStatus>,
+) -> Result<Arc<ToolRegistry>, weirdnet_agent::RegistryError> {
+    let mut registry = ToolRegistry::new();
+    for (_, source) in picked {
+        registry.add_source(source.clone());
+    }
+    registry.refresh().await?;
+    for (server, _) in picked {
+        if let Some(ServerStatus::Connected { tools, .. }) = statuses.get(&server.id) {
             for t in tools.iter().filter(|t| !t.enabled) {
                 registry.set_tool_enabled(&t.exposed, false);
             }
         }
     }
-    McpHub { registry: Arc::new(registry), statuses }
+    Ok(Arc::new(registry))
 }
 
 #[cfg(test)]
@@ -308,6 +353,31 @@ done"#;
         assert!(matches!(st(&unreachable), ServerStatus::Failed(_)));
         assert_eq!(hub.registry.specs().len(), 2, "only the good server's tools are offered");
         assert!(st(&needs_secret).summary().contains("MCP_NAME"));
+    }
+
+    #[tokio::test]
+    async fn a_server_limited_to_a_companion_is_offered_to_that_companion_only() {
+        let secrets = MemorySecrets::default();
+        let shared = stdio("Shared", &[("MCP_NAME", plain("all"))]);
+        let mut mine = stdio("Mine", &[("MCP_NAME", plain("mine"))]);
+        mine.companions = Some(BTreeSet::from(["scout".to_string()]));
+        let mut approvals = McpApprovals::default();
+        approvals.approve(&shared);
+        approvals.approve(&mine);
+        let mut configs = McpConfigs::default();
+        configs.upsert(shared.clone());
+        configs.upsert(mine.clone());
+        let hub = run(&configs, &secrets, &approvals).await;
+        let names = |r: Arc<ToolRegistry>| r.specs().into_iter().map(|t| t.name).collect::<Vec<_>>();
+        assert_eq!(names(hub.registry_for("local")), ["shared_all_read", "shared_all_write"]);
+        assert_eq!(names(hub.registry_for("scout")), ["mine_mine_read", "mine_mine_write", "shared_all_read", "shared_all_write"]);
+        assert!(hub.registry_for("local").lookup("mine_mine_read").is_err());
+        assert!(matches!(hub.statuses[&mine.id], ServerStatus::Connected { .. }), "the server connects once, whoever may use it");
+        // The scope is part of the synced config and an old config without it means everyone.
+        let json = serde_json::to_string(&mine).unwrap();
+        assert!(json.contains("\"companions\":[\"scout\"]"));
+        let old: McpServer = serde_json::from_str(&serde_json::to_string(&shared).unwrap()).unwrap();
+        assert!(old.companions.is_none() && old.applies_to("anyone"));
     }
 
     #[test]
