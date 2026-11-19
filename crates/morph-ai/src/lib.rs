@@ -23,6 +23,8 @@ pub mod mcp_local;
 #[cfg(feature = "mcp")]
 pub mod mcp_runtime;
 pub mod model;
+#[cfg(feature = "local")]
+pub mod native_calls;
 pub mod remote;
 pub mod roster;
 pub mod settings;
@@ -35,6 +37,8 @@ pub use journal::{Journal, JournalEntry, JournalKind, Journals, NOTES_ID};
 pub use mcp::{McpConfigs, McpSecrets, McpServer, McpTransport, McpValue};
 pub use mcp_local::{FileSecrets, McpApprovals, MemorySecrets, write_private};
 pub use model::{ModelChoice, ModelProvider, Platform, UnavailableModels};
+#[cfg(feature = "local")]
+pub use native_calls::{NativeCalls, split_native_calls};
 pub use remote::{
     CompanionRoute, Link, LinkHandler, LinkedNode, NodeRouter, OffloadMode, OffloadPlan, OffloadSettings, RouteError, offload_plan, route_companion,
 };

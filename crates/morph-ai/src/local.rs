@@ -156,7 +156,8 @@ impl ModelProvider for LocalModels {
                 })
                 .clone()
         };
-        Ok(Arc::new(LocalModel::new(spec.id, worker)))
+        // Gemma 4 often calls tools in its own syntax rather than the one weirdnet-model asks for.
+        Ok(Arc::new(crate::NativeCalls::new(Arc::new(LocalModel::new(spec.id, worker)))))
     }
 }
 
