@@ -138,6 +138,17 @@ pub fn require_key(home: &Path, id: &str) -> Result<(), ProfileError> {
     Ok(())
 }
 
+/// A key for one purpose, derived from `id`'s file key with HKDF under `context` (its own
+/// string per use, such as `morph/mcp-approval/v1`), so it never equals the file key or
+/// another use's key. Only while the profile is unlocked: [`ProfileError::Locked`] otherwise.
+/// A profile without an identity has no key: `Ok(None)`.
+pub fn derive_key(home: &Path, id: &str, context: &[u8]) -> Result<Option<Key32>, ProfileError> {
+    let Some(file_key) = key_for(&profiles::profile_dir(home, id)) else {
+        return if is_sealed(home, id) { Err(ProfileError::Locked) } else { Ok(None) };
+    };
+    weirdnet_keys::kdf::hkdf(&file_key.0, None, context).map(Some).map_err(|e| ProfileError::Io(std::io::Error::other(e.to_string())))
+}
+
 /// When one of `id`'s files last changed (sealed or plain), if it exists.
 pub fn modified(path: &Path) -> Option<std::time::SystemTime> {
     fs::metadata(sealed_path(path)).or_else(|_| fs::metadata(path)).and_then(|m| m.modified()).ok()
@@ -202,6 +213,23 @@ mod tests {
         let made =
             morph_identity::profile_identity::create(&profiles::profile_dir(&home, "default"), &"a long password".to_string().into(), 1).unwrap();
         (tmp, home, made.library_key)
+    }
+
+    #[test]
+    fn derived_keys_need_the_unlocked_file_key_and_differ_by_context() {
+        let (_tmp, home, key) = home_with_identity();
+        let dir = profiles::profile_dir(&home, "default");
+        assert!(matches!(derive_key(&home, "default", b"morph/test/v1"), Err(ProfileError::Locked)));
+        remember_key(&dir, &key).unwrap();
+        let a = derive_key(&home, "default", b"morph/test/v1").unwrap().unwrap();
+        let b = derive_key(&home, "default", b"morph/other/v1").unwrap().unwrap();
+        assert_eq!(a.0, derive_key(&home, "default", b"morph/test/v1").unwrap().unwrap().0, "stable");
+        assert_ne!(a.0, b.0, "one key per context");
+        assert_ne!(a.0, key_for(&dir).unwrap().0, "never the file key itself");
+        let tmp = tempfile::tempdir().unwrap();
+        let plain = tmp.path().join("h");
+        profiles::load_catalog(&plain).unwrap();
+        assert!(derive_key(&plain, "default", b"morph/test/v1").unwrap().is_none(), "no identity, no key");
     }
 
     #[test]
