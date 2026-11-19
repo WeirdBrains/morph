@@ -6,7 +6,7 @@
 //! still listens so a later linked node can catch up through a relay.
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -22,6 +22,20 @@ use weirdnet_sync::{Device, KeyStatus, PAGE_MAX, Roster, SyncState, node_config,
 
 use crate::home::{now_ms, profile_dir};
 use crate::{Error, Result};
+
+/// Counts the times synced data or revocations were applied to a profile (a pull that brought
+/// something in, a revocation arriving or made here). Hosts that run things from synced config,
+/// such as the MCP host, watch it and re-check at once instead of waiting for their next reload.
+static APPLIED: AtomicU64 = AtomicU64::new(0);
+
+/// The current count; it only goes up. Poll it and act when it changes.
+pub fn applied_revision() -> u64 {
+    APPLIED.load(Ordering::SeqCst)
+}
+
+fn note_applied() {
+    APPLIED.fetch_add(1, Ordering::SeqCst);
+}
 
 static RELAY_OVERRIDE: Mutex<Option<Vec<Multiaddr>>> = Mutex::new(None);
 
@@ -418,6 +432,9 @@ pub fn tick(home: &Path, profile_id: &str) -> Result<usize> {
         }
         Ok(())
     });
+    if applied > 0 || state.lock().map(|st| revoked_ids(&st.roster)).unwrap_or_default() != revoked_before {
+        note_applied();
+    }
     Ok(applied)
 }
 
@@ -716,6 +733,8 @@ pub fn revoke_device(home: &Path, profile_id: &str, peer_id: &str, now_ms: i64) 
         }
         apply_revocations(lib, home, profile_id);
         core::refresh_live(&dir, lib);
+        // The live roster has the revocation now: hosts re-check what they run.
+        note_applied();
         Ok(Ok(()))
     })
     .map_err(Error::failed)?;
@@ -1141,7 +1160,9 @@ mod tests {
         assert!(listed[0].this_device && !listed[1].this_device);
         let b_peer = listed[1].peer_id.clone();
         assert!(revoke_device(&a, "p1", &listed[0].peer_id, 200).is_err(), "no self-revocation");
+        let before = applied_revision();
         revoke_device(&a, "p1", &b_peer, 200).unwrap();
+        assert!(applied_revision() > before, "a revocation made here tells the hosts watching it");
         assert_eq!(devices(&a, "p1").unwrap()[1].revoked_ms, Some(200));
         let policy_a = store_a.load_policy().unwrap().unwrap();
         assert!(policy_a.allows().is_empty(), "the revoked device's standing allow is void at once");
