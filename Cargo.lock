@@ -10388,9 +10388,9 @@ dependencies = [
 
 [[package]]
 name = "weirdnet-model"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "455bb86329cd7814392fbd2ea95a8880f8747b098632c68335e8b9e1ef5c61a3"
+checksum = "db33b7574590f07a817ce51f29b341acec7ad4967f002c381022ef068827731d"
 dependencies = [
  "async-trait",
  "dirs 6.0.0",
