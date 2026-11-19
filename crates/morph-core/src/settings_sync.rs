@@ -66,9 +66,10 @@ fn merged(lib: &Library) -> morph_store::Result<BTreeMap<String, (Hlc, String)>>
     for e in lib.sync_log()? {
         nodes.insert(e.node_id);
     }
+    let revoked = crate::sync::revoked_writers(&crate::sync::load_roster(lib)?);
     let mut out: BTreeMap<String, (Hlc, String)> = BTreeMap::new();
     for n in nodes {
-        for e in log.iter_node(&NodeId::new(n)).filter(|e| e.typ == SETTINGS) {
+        for e in log.iter_node(&NodeId::new(n)).filter(|e| e.typ == SETTINGS && !crate::sync::late_from_revoked(&revoked, e)) {
             let Some(SettingsOp::Set { value }) = decode(&e.op) else { continue };
             if !FIELDS.contains(&e.record_id.as_str()) {
                 continue;
@@ -219,6 +220,32 @@ mod tests {
         assert_eq!((s.theme, s.home_page.as_str(), s.search_engine.as_str()), (ThemeChoice::Light, "https://home.example/", "duckduckgo"));
         assert_eq!((s.sidebar_width, s.downloads_dir.as_str()), (333, "/dl"));
         assert!(!materialize(&lib, &home, "p1").unwrap(), "idempotent");
+    }
+
+    #[test]
+    fn a_revoked_devices_late_ops_are_void_and_its_earlier_ones_stand() {
+        let (_t, home, mut lib) = setup();
+        enable(&mut lib, "a", 10).unwrap();
+        remote(&mut lib, "b", 30, "theme", "light");
+        remote(&mut lib, "b", 300, "home_page", "https://late.example/");
+        let mut r = weirdnet_sync::Roster::new();
+        r.upsert(weirdnet_net::user::NodeCert {
+            user_id: "u".into(),
+            peer_id: "b".into(),
+            label: "b".into(),
+            cert: vec![],
+            issued_at: 1,
+            revoked_at: Some(100),
+            revocation: None,
+        });
+        crate::sync::save_roster(&mut lib, &r).unwrap();
+        assert!(crate::sync::revocations_unapplied(&lib).unwrap());
+        materialize(&lib, &home, "p1").unwrap();
+        let s = file(&home);
+        assert_eq!(s.theme, ThemeChoice::Light, "written before the revocation");
+        assert_eq!(s.home_page, Settings::default().home_page, "written after it, relayed: void");
+        crate::sync::mark_revocations_applied(&mut lib).unwrap();
+        assert!(!crate::sync::revocations_unapplied(&lib).unwrap());
     }
 
     #[test]

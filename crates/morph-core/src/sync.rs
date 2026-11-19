@@ -379,9 +379,10 @@ pub fn materialize(lib: &mut Library, now_ms: i64) -> morph_store::Result<()> {
         nodes.insert(e.node_id);
     }
     // Re-load via iter: we already have log in memory; walk all nodes we know.
+    let revoked = revoked_writers(&load_roster(lib)?);
     for n in &nodes {
         for e in log.iter_node(&NodeId::new(n.clone())) {
-            if e.typ == BOOKMARKS {
+            if e.typ == BOOKMARKS && !late_from_revoked(&revoked, e) {
                 entries.push(e);
             }
         }
@@ -692,6 +693,34 @@ pub fn decode_link_settings(settings: &str) -> LinkSettings {
 
 pub fn load_roster(lib: &Library) -> morph_store::Result<Roster> {
     Ok(lib.sync_meta(META_ROSTER)?.and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default())
+}
+
+/// Revoked writers and when they were revoked (ms), from the sync roster.
+pub fn revoked_writers(roster: &Roster) -> std::collections::BTreeMap<String, i64> {
+    roster.certs.iter().filter_map(|c| c.revoked_at.map(|at| (c.peer_id.clone(), at))).collect()
+}
+
+/// An op its writer made after that writer was revoked. Void in every type: a device that has
+/// not heard of the revocation may still relay it. (The types `companion_sync` treats as
+/// security-sensitive void every op of a revoked writer, whatever its time.)
+pub fn late_from_revoked(revoked: &std::collections::BTreeMap<String, i64>, e: &LogEntry) -> bool {
+    revoked.get(&e.node_id.0).is_some_and(|at| i64::try_from(e.hlc.physical_ms).unwrap_or(i64::MAX) > *at)
+}
+
+const META_REVOKED_APPLIED: &str = "revoked-applied";
+
+/// Whether the roster's revocations differ from the ones the merged rows were last built with
+/// (a materialize then drops what those devices wrote late).
+pub fn revocations_unapplied(lib: &Library) -> morph_store::Result<bool> {
+    let applied: std::collections::BTreeMap<String, i64> =
+        lib.sync_meta(META_REVOKED_APPLIED)?.and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    Ok(revoked_writers(&load_roster(lib)?) != applied)
+}
+
+/// Record that the merged rows reflect the roster's current revocations.
+pub fn mark_revocations_applied(lib: &mut Library) -> morph_store::Result<()> {
+    let now = serde_json::to_vec(&revoked_writers(&load_roster(lib)?)).expect("revoked json");
+    lib.set_sync_meta(META_REVOKED_APPLIED, &now)
 }
 
 pub fn save_roster(lib: &mut Library, roster: &Roster) -> morph_store::Result<()> {
