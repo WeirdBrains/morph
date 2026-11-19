@@ -20,9 +20,11 @@ use morph_identity::profile_identity::LibraryKey;
 use weirdnet_storage::rusqlite::{self, Connection, params};
 
 mod model;
+mod saver_store;
 mod sync_store;
 
 pub use model::{Bookmark, BookmarkSet, Folder, HistoryEntry, Tombstone};
+pub use saver_store::SavedLogin;
 pub use sync_store::{SyncConflict, SyncLogEntry, SyncLwwRow, SyncOrSetRow};
 
 /// File name inside the profile directory.
@@ -151,6 +153,25 @@ CREATE TABLE download_sessions (
 -- morph-core. NULL for plain entries and for every row written before this
 -- migration. Never edit a shipped migration; this one is appended.
 ALTER TABLE sync_log ADD COLUMN value BLOB;
+",
+    "
+-- Saved logins (the password saver). `sealed` is the password sealed under the
+-- saver key by morph-core (JSON of a weirdnet-keys Sealed), so the value is
+-- ciphertext inside the already encrypted database and syncs sealed. origin and
+-- username are plain here (the whole file is SQLCipher). hlc and node_id are
+-- empty until password sync is wired. Never edit a shipped migration; this one
+-- is appended.
+CREATE TABLE saved_logins (
+    id TEXT PRIMARY KEY NOT NULL,
+    origin TEXT NOT NULL,
+    username TEXT NOT NULL,
+    sealed BLOB NOT NULL,
+    created_ms INTEGER NOT NULL,
+    updated_ms INTEGER NOT NULL,
+    hlc TEXT NOT NULL DEFAULT '',
+    node_id TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX saved_logins_origin ON saved_logins(origin);
 ",
 ];
 

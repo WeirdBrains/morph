@@ -17,6 +17,7 @@ pub mod library_db;
 pub mod network;
 pub mod omnibox;
 pub mod page_bridge;
+pub mod password_saver;
 pub mod profile_files;
 pub mod profile_lock;
 pub mod profiles;

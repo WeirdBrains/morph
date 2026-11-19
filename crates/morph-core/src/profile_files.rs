@@ -29,7 +29,7 @@ const FILE_KEY_INFO: &[u8] = b"morph/profile-files/v1";
 /// Format tag inside a sealed file.
 pub const FORMAT: &str = "morph-sealed/v1";
 /// Morph's own files under the profile directory that are sealed.
-pub const SEALED_FILES: &[&str] = &["settings.json", "tabs.json"];
+pub const SEALED_FILES: &[&str] = &["settings.json", "tabs.json", "password-saver.json"];
 
 static KEYS: Mutex<BTreeMap<PathBuf, Key32>> = Mutex::new(BTreeMap::new());
 

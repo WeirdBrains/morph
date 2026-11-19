@@ -237,3 +237,34 @@ fn download_sessions_round_trip_encrypted_and_go_away() {
     lib.clear_download_sessions().unwrap();
     assert_eq!(lib.download_session("d2").unwrap(), None);
 }
+
+#[test]
+fn saved_logins_round_trip_and_stay_out_of_the_plain_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut lib = Library::open(tmp.path(), &key(1)).unwrap();
+    let login = |id: &str, origin: &str, user: &str| SavedLogin {
+        id: id.into(),
+        origin: origin.into(),
+        username: user.into(),
+        sealed: b"ciphertext-only".to_vec(),
+        created_ms: 1,
+        updated_ms: 2,
+        ..Default::default()
+    };
+    lib.put_login(&login("a", "https://b.example", "zed")).unwrap();
+    lib.put_login(&login("b", "https://a.example", "amy")).unwrap();
+    assert_eq!(lib.logins(None).unwrap().iter().map(|l| l.id.as_str()).collect::<Vec<_>>(), ["b", "a"]);
+    assert_eq!(lib.logins(Some("https://b.example")).unwrap().len(), 1);
+    let mut changed = login("a", "https://b.example", "zed2");
+    changed.sealed = b"new".to_vec();
+    changed.updated_ms = 9;
+    lib.put_login(&changed).unwrap();
+    let got = lib.login("a").unwrap().unwrap();
+    assert_eq!((got.username.as_str(), got.sealed.as_slice(), got.created_ms, got.updated_ms), ("zed2", b"new".as_slice(), 1, 9));
+    assert!(lib.delete_login("a").unwrap());
+    assert!(!lib.delete_login("a").unwrap());
+    assert!(lib.login("a").unwrap().is_none());
+    drop(lib);
+    let raw = std::fs::read(path(tmp.path())).unwrap();
+    assert!(!raw.windows(9).any(|w| w == b"a.example"), "the file is encrypted");
+}

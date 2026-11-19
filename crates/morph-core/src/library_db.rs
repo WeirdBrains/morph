@@ -63,6 +63,7 @@ pub fn unlock(home: impl AsRef<Path>, id: &str, key: &LibraryKey) -> Result<(), 
     let mut lib = Library::open(&dir, key)?;
     import_json(home, id, &mut lib)?;
     crate::profile_files::remember_key(&dir, key)?;
+    crate::password_saver::remember_key(&dir, key)?;
     map.insert(dir, lib);
     drop(map);
     // Settings and tabs left plaintext (before the identity, or by an older build) are sealed now.
@@ -98,6 +99,7 @@ pub fn lock(home: impl AsRef<Path>, id: &str) {
     let dir = profiles::profile_dir(home, id);
     open_map().remove(&dir);
     crate::profile_files::forget_key(&dir);
+    crate::password_saver::forget_key(&dir);
 }
 
 /// Run `f` on `id`'s open database: `Ok(None)` if the library is still
