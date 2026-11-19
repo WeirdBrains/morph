@@ -28,3 +28,5 @@ ureq = { version = "3", default-features = false, features = ["rustls"] }
 morph-keystore = { workspace = true, features = ["mock"] }
 tempfile.workspace = true
 weirdnet-device-link.workspace = true
+morph-ai.workspace = true
+weirdnet-agent.workspace = true

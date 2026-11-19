@@ -5662,6 +5662,7 @@ name = "morph-services"
 version = "0.1.0"
 dependencies = [
  "futures",
+ "morph-ai",
  "morph-core",
  "morph-identity",
  "morph-keystore",
@@ -5670,6 +5671,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "ureq",
+ "weirdnet-agent",
  "weirdnet-device-link",
  "weirdnet-net",
  "weirdnet-sync",

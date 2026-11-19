@@ -1,4 +1,4 @@
-//! Library sync (bookmarks, history and settings) between a user's linked devices, over `weirdnet-sync`.
+//! Library sync (bookmarks, history, settings and companion records) between a user's linked devices, over `weirdnet-sync`.
 //!
 //! The node respects Morph's discovery toggle and only *initiates* pulls
 //! against roster members (and manual peers that name a roster device).
@@ -10,9 +10,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
-use morph_core::library_db;
 use morph_core::network::NetworkSettings;
 use morph_core::sync::{self as core, LinkSettings};
+use morph_core::{companion_sync, library_db};
 use morph_identity::profile_identity::{self, SecretString};
 use morph_store::Library;
 use weirdnet_net::user::NodeCert;
@@ -340,12 +340,15 @@ pub fn tick(home: &Path, profile_id: &str) -> Result<usize> {
     };
     let _ = library_db::with(home, profile_id, |lib| {
         morph_core::settings_sync::backfill(lib, home, profile_id)?;
+        if let Err(e) = companion_sync::backfill(lib, &companion_sync::store(&dir), now_ms()) {
+            eprintln!("morph-sync: companions: {e}");
+        }
         core::refresh_live(&dir, lib);
         Ok(())
     });
-    let peers = {
+    let (peers, revoked_before) = {
         let st = state.lock().map_err(|_| Error::failed("sync state"))?;
-        st.roster.active().filter(|c| c.peer_id != our.to_string()).cloned().collect::<Vec<_>>()
+        (st.roster.active().filter(|c| c.peer_id != our.to_string()).cloned().collect::<Vec<_>>(), revoked_ids(&st.roster))
     };
     let mut applied = 0usize;
     for cert in peers {
@@ -388,7 +391,22 @@ pub fn tick(home: &Path, profile_id: &str) -> Result<usize> {
         });
         applied += n;
     }
+    // Companion records: merge what came in, and void a revoked device's grants as soon as a
+    // revocation arrives from another device.
+    let revoked_now = state.lock().map(|st| revoked_ids(&st.roster)).unwrap_or_default();
+    if applied > 0 || revoked_now != revoked_before {
+        let _ = library_db::with(home, profile_id, |lib| {
+            if let Err(e) = companion_sync::materialize(lib, &companion_sync::store(&dir)) {
+                eprintln!("morph-sync: companions: {e}");
+            }
+            Ok(())
+        });
+    }
     Ok(applied)
+}
+
+fn revoked_ids(roster: &Roster) -> Vec<String> {
+    roster.certs.iter().filter(|c| !c.active()).map(|c| c.peer_id.clone()).collect()
 }
 
 fn snapshot(st: &SyncState) -> SyncState {
@@ -620,6 +638,10 @@ pub fn revoke_device(home: &Path, profile_id: &str, peer_id: &str, now_ms: i64) 
         }
         core::save_roster(lib, &st.roster)?;
         core::save_epoch_keys(lib, &st.keys)?;
+        // Its grants and Node companions are void now, not on the next pass.
+        if let Err(e) = companion_sync::after_revoke(lib, &companion_sync::store(&dir), now_ms) {
+            eprintln!("morph-sync: companions after revoke: {e}");
+        }
         core::refresh_live(&dir, lib);
         Ok(Ok(()))
     })
@@ -1013,6 +1035,30 @@ mod tests {
         assert_eq!(morph_core::settings::load(&a).unwrap().theme, ThemeChoice::Light);
         assert_eq!(morph_core::settings::load(&a).unwrap().sidebar_width, 300);
 
+        // Companion records: B's companion and grants reach A, A's chat reaches B.
+        use morph_ai::AiStore;
+        use weirdnet_agent::{AgentId, AllowRule, CompanionScope, SiteLevel};
+        let store_a = companion_sync::store(&morph_core::profiles::profile_dir(&a, "p1"));
+        let store_b = companion_sync::store(&morph_core::profiles::profile_dir(&b, "p1"));
+        let mut roster_b = morph_ai::Roster::first_run(morph_ai::ModelChoice::Gemma4E2B);
+        roster_b.add(morph_ai::CompanionProfile::local("atlas", "Atlas", morph_ai::ModelChoice::Gemma4E2B)).unwrap();
+        store_b.save_roster(&roster_b).unwrap();
+        let mut policy_b = weirdnet_agent::Policy::new();
+        policy_b.set_site_level(&AgentId::new("atlas"), "tokio.rs", SiteLevel::Act);
+        policy_b.add_allow(CompanionScope::All, AllowRule::Research { provider: None }, 5);
+        store_b.save_policy(&policy_b).unwrap();
+        let mut chats_a = morph_ai::ChatLog::default();
+        chats_a.push(morph_ai::ChatTurn::new(AgentId::new("local"), "what is tokio", "an async runtime", 7));
+        store_a.save_chats(&chats_a).unwrap();
+        tick_until(&a, &b, || {
+            let roster = store_a.load_roster().ok().flatten();
+            let policy = store_a.load_policy().ok().flatten();
+            let chats = store_b.load_chats().ok().flatten();
+            roster.is_some_and(|r| r.get(&AgentId::new("atlas")).is_some())
+                && policy.is_some_and(|p| p.site_level(&AgentId::new("atlas"), "tokio.rs") == SiteLevel::Act && p.allows().len() == 1)
+                && chats.is_some_and(|c| c.turns.len() == 1)
+        });
+
         // Devices: both list each other; A revokes B, and B's later changes
         // no longer reach A, nor A's reach B.
         let listed = devices(&a, "p1").unwrap();
@@ -1022,6 +1068,10 @@ mod tests {
         assert!(revoke_device(&a, "p1", &listed[0].peer_id, 200).is_err(), "no self-revocation");
         revoke_device(&a, "p1", &b_peer, 200).unwrap();
         assert_eq!(devices(&a, "p1").unwrap()[1].revoked_ms, Some(200));
+        let policy_a = store_a.load_policy().unwrap().unwrap();
+        assert!(policy_a.allows().is_empty(), "the revoked device's standing allow is void at once");
+        assert_eq!(policy_a.site_level(&AgentId::new("atlas"), "tokio.rs"), SiteLevel::Ask, "and its site grant");
+        assert!(store_a.load_roster().unwrap().unwrap().get(&AgentId::new("atlas")).is_some(), "a Local companion it added stays");
         revoke_device(&a, "p1", &b_peer, 201).unwrap();
         assert_eq!(devices(&a, "p1").unwrap()[1].revoked_ms, Some(200), "revoking twice is a no-op");
         hist::record_visit(&b, "p1", "https://after-revoke-b.example/", "", 210).unwrap();
