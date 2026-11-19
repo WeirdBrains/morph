@@ -176,17 +176,17 @@ pub fn set_tool(companions: &Path, id: &str, tool: &str, on: bool) -> Result<(),
     })
 }
 
-/// The user's OK to start this local command on this machine, for the server as it is saved now.
-pub fn approve(companions: &Path, id: &str) -> Result<(), String> {
+/// The user's OK to start this server on this machine, for the server as it is saved now.
+pub fn approve(companions: &Path, secrets: &LocalSecrets, id: &str) -> Result<(), String> {
     let server = configs(companions).servers.into_iter().find(|s| s.id == id).ok_or("That server is gone.")?;
     let path = approvals_path(companions);
     let mut approvals = McpApprovals::load(&path);
-    approvals.approve(&server);
+    approvals.approve(&server, secrets);
     approvals.save(&path).map_err(|e| e.to_string())
 }
 
-pub fn is_approved(companions: &Path, server: &McpServer) -> bool {
-    McpApprovals::load(&approvals_path(companions)).is_approved(server)
+pub fn is_approved(companions: &Path, secrets: &LocalSecrets, server: &McpServer) -> bool {
+    McpApprovals::load(&approvals_path(companions)).is_approved(server, secrets)
 }
 
 /// What the manager knows right now.
@@ -432,7 +432,7 @@ done"#;
         let mut s = server("Wiki", env);
         s.companions = Some(["scout".to_string()].into());
         save_server(&companions, &secrets, s.clone(), &[]).unwrap();
-        approve(&companions, &s.id).unwrap();
+        approve(&companions, &secrets, &s.id).unwrap();
         manager.reload();
         let id = s.id.clone();
         wait_for(&manager, |snap| matches!(snap.statuses.get(&id), Some(ServerStatus::Connected { .. })));
@@ -466,9 +466,9 @@ done"#;
         let snap = wait_for(&manager, |s| s.statuses.len() == 1);
         assert!(matches!(snap.statuses[&s.id], ServerStatus::NeedsApproval { .. }), "{:?}", snap.statuses);
         assert!(manager.registry_for("local").specs().is_empty(), "nothing starts before the user agrees");
-        assert!(!is_approved(&companions, &configs(&companions).servers[0]));
+        assert!(!is_approved(&companions, &secrets, &configs(&companions).servers[0]));
 
-        approve(&companions, &s.id).unwrap();
+        approve(&companions, &secrets, &s.id).unwrap();
         manager.reload();
         let id = s.id.clone();
         let snap = wait_for(&manager, |snap| matches!(snap.statuses.get(&id), Some(ServerStatus::Connected { .. })));
