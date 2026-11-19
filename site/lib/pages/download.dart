@@ -4,18 +4,18 @@ import 'package:jaspr/jaspr.dart';
 import '../components/layout.dart';
 import '../site.dart';
 
-/// Files on the v0.2.0 GitHub release (name, what it is, size).
+/// Files on the v0.2.1 GitHub release (name, what it is, size).
 const _linux = [
-  ('morph-$latestVersion-x86_64-unknown-linux-gnu.tar.gz', 'Tarball', '16.1 MB'),
-  ('morph-$latestVersion-x86_64-unknown-linux-gnu.zip', 'Zip', '16.1 MB'),
-  ('morph_$latestVersion-1_amd64.deb', 'Debian package, with desktop entry', '11.4 MB'),
-  ('morph-standalone_$latestVersion-1_amd64.deb', 'Debian package, binary only', '11.4 MB'),
-  ('morph-$latestVersion-1.x86_64.rpm', 'RPM package, with desktop entry', '16.0 MB'),
-  ('morph-standalone-$latestVersion-1.x86_64.rpm', 'RPM package, binary only', '16.0 MB'),
+  ('morph-$latestVersion-x86_64-unknown-linux-gnu.tar.gz', 'Tarball', '16.2 MB'),
+  ('morph-$latestVersion-x86_64-unknown-linux-gnu.zip', 'Zip', '16.2 MB'),
+  ('morph_$latestVersion-1_amd64.deb', 'Debian package, with desktop entry', '11.5 MB'),
+  ('morph-standalone_$latestVersion-1_amd64.deb', 'Debian package, binary only', '11.5 MB'),
+  ('morph-$latestVersion-1.x86_64.rpm', 'RPM package, with desktop entry', '16.1 MB'),
+  ('morph-standalone-$latestVersion-1.x86_64.rpm', 'RPM package, binary only', '16.1 MB'),
 ];
 const _mac = [
-  ('morph-$latestVersion-universal-apple-darwin.dmg', 'Disk image', '22.6 MB'),
-  ('morph-$latestVersion-universal-apple-darwin.zip', 'Zip with Morph.app', '21.1 MB'),
+  ('morph-$latestVersion-universal-apple-darwin.dmg', 'Disk image', '22.7 MB'),
+  ('morph-$latestVersion-universal-apple-darwin.zip', 'Zip with Morph.app', '21.2 MB'),
 ];
 const _windows = [
   ('morph-$latestVersion-x86_64-pc-windows-msvc.msi', 'Installer', '9.6 MB'),

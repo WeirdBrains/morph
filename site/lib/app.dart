@@ -34,7 +34,7 @@ class App extends StatelessComponent {
             path: '/features',
             title: 'Features · $siteTitle',
             description:
-                'What Morph $latestVersion does: tabs and the system web view, downloads that resume, bookmarks and '
+                'What Morph $latestVersion does: tabs and windows in the system web view, downloads that resume, bookmarks and '
                 'history, one Weirdnet identity, linked devices and sync, relays, and what is coming next.',
             child: FeaturesPage(),
           ),
