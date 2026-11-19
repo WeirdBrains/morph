@@ -303,12 +303,20 @@ impl McpManager {
             .spawn(move || {
                 let (manager, revision, locked, dir) = watch;
                 let mut seen = (revision(), locked(&dir));
+                // The companions as of the last change, so one that vanished from the roster
+                // (a removal through sync, or whatever bumps the same counter) leaves the
+                // servers' scopes as `remove_companion` does.
+                let mut companions = Default::default();
+                let _ = morph_ai::forget_vanished_companions(&store(&dir), &mut companions);
                 loop {
                     std::thread::sleep(Duration::from_millis(250));
                     let Some(m) = manager.upgrade() else { return };
                     let now = (revision(), locked(&dir));
                     if now != seen {
                         seen = now;
+                        if let Err(e) = morph_ai::forget_vanished_companions(&store(&dir), &mut companions) {
+                            eprintln!("morph-mcp: scopes: {e}");
+                        }
                         m.reload();
                     }
                 }
@@ -535,6 +543,36 @@ done"#;
         manager.reload();
         wait_for(&manager, |_| true);
         assert!(manager.registry_for("local").specs().is_empty());
+    }
+
+    #[test]
+    fn a_companion_removed_through_sync_leaves_the_server_scopes() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let (_d, companions) = dir();
+        let mut roster = morph_ai::Roster::first_run(morph_ai::ModelChoice::Gemma4E2B);
+        roster.add(morph_ai::CompanionProfile::local("scout", "Scout", morph_ai::ModelChoice::Gemma4E2B)).unwrap();
+        store(&companions).save_roster(&roster).unwrap();
+        let mut only = McpServer::new("Only scout", McpTransport::Http { url: "https://mcp.example/".into(), headers: BTreeMap::new() });
+        only.enabled = false;
+        only.companions = Some(["scout".to_string()].into());
+        let mut all = McpConfigs::default();
+        all.upsert(only.clone());
+        save_configs(&companions, &all).unwrap();
+        let (allowed, revision) = (Arc::new(std::sync::atomic::AtomicBool::new(true)), Arc::new(std::sync::atomic::AtomicU64::new(1)));
+        let _manager = manager_with(&companions, &allowed, &revision);
+        std::thread::sleep(Duration::from_millis(400));
+
+        // Sync rewrites the roster without scout and bumps the counter; nothing calls
+        // remove_companion.
+        roster.remove(&weirdnet_agent::AgentId::new("scout")).unwrap();
+        store(&companions).save_roster(&roster).unwrap();
+        revision.fetch_add(1, SeqCst);
+        let scope = || configs(&companions).servers.into_iter().find(|s| s.id == only.id).unwrap().companions;
+        let end = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < end && scope() != Some(Default::default()) {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(scope(), Some(Default::default()), "a server only for scout is for nobody now, not for everyone");
     }
 
     #[test]

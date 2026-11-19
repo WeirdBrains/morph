@@ -34,6 +34,31 @@ pub fn remove_companion(store: &dyn AiStore, id: &weirdnet_agent::AgentId) -> Re
     Ok(removed)
 }
 
+/// Companions that left the stored roster since `seen` lose their place in the MCP servers'
+/// scopes, the same as [`remove_companion`] (a server that was only for them ends up for
+/// nobody). Whatever removed them: a removal that arrived through sync, a profile lock, any
+/// later path. The caller runs this when it learns the stored files changed; `seen` becomes
+/// the roster's ids now. A roster that cannot be read changes nothing. Returns whether the MCP
+/// configs changed.
+pub fn forget_vanished_companions(store: &dyn AiStore, seen: &mut std::collections::BTreeSet<String>) -> Result<bool, String> {
+    let Ok(Some(roster)) = store.load_roster() else { return Ok(false) };
+    let now: std::collections::BTreeSet<String> = roster.companions().iter().map(|p| p.id().as_str().to_string()).collect();
+    let gone: Vec<String> = seen.difference(&now).cloned().collect();
+    *seen = now;
+    if gone.is_empty() {
+        return Ok(false);
+    }
+    let Some(mut mcp) = store.load_mcp().map_err(|e| e.to_string())? else { return Ok(false) };
+    let mut changed = false;
+    for id in &gone {
+        changed |= mcp.forget_companion(id);
+    }
+    if changed {
+        store.save_mcp(&mcp).map_err(|e| e.to_string())?;
+    }
+    Ok(changed)
+}
+
 /// Where the roster and policy live. The app implements it over its encrypted store; tests
 /// and first runs use [`MemoryStore`] or [`FileStore`].
 pub trait AiStore: Send + Sync {
@@ -393,6 +418,38 @@ mod tests {
         assert_eq!(store.load_mcp().unwrap().unwrap(), after);
         let mut again = after.clone();
         assert!(!again.forget_companion("scout"), "nothing left to take out");
+    }
+
+    #[test]
+    fn companions_that_vanish_leave_mcp_scopes_like_a_removal() {
+        use crate::mcp::{McpConfigs, McpServer, McpTransport};
+        let store = MemoryStore::default();
+        let mut roster = Roster::first_run(crate::ModelChoice::Gemma4E2B);
+        roster.add(crate::CompanionProfile::local("scout", "Scout", crate::ModelChoice::Gemma4E2B)).unwrap();
+        roster.add(crate::CompanionProfile::local("atlas", "Atlas", crate::ModelChoice::Gemma4E2B)).unwrap();
+        store.save_roster(&roster).unwrap();
+        let server = |name: &str, scope: Option<&[&str]>| {
+            let mut s = McpServer::new(name, McpTransport::Http { url: "https://mcp.example/".into(), headers: Default::default() });
+            s.companions = scope.map(|ids| ids.iter().map(|i| i.to_string()).collect());
+            s
+        };
+        let mut mcp = McpConfigs::default();
+        mcp.upsert(server("Only scout", Some(&["scout"])));
+        mcp.upsert(server("Both", Some(&["scout", "atlas"])));
+        mcp.upsert(server("Everyone", None));
+        store.save_mcp(&mcp).unwrap();
+        let mut seen = Default::default();
+        assert!(!forget_vanished_companions(&store, &mut seen).unwrap(), "the first look only learns the roster");
+
+        // Scout leaves the roster without remove_companion (as a synced removal does).
+        roster.remove(&AgentId::new("scout")).unwrap();
+        store.save_roster(&roster).unwrap();
+        assert!(forget_vanished_companions(&store, &mut seen).unwrap());
+        let scope = |name: &str| store.load_mcp().unwrap().unwrap().servers.into_iter().find(|s| s.name == name).unwrap().companions;
+        assert_eq!(scope("Only scout"), Some(Default::default()), "for nobody, not for everyone");
+        assert_eq!(scope("Both"), Some(["atlas".to_string()].into()));
+        assert_eq!(scope("Everyone"), None);
+        assert!(!forget_vanished_companions(&store, &mut seen).unwrap(), "nothing new");
     }
 
     #[test]

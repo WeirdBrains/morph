@@ -48,7 +48,8 @@ pub use remote::{
 pub use roster::{CompanionProfile, Roster, RosterError};
 pub use settings::{AgentSettings, SearchProvider};
 pub use store::{
-    AiStore, FileStore, Grants, MemoryStore, StoreError, rebase_policy, rebase_shared, reload_shared, remove_companion, revoke_shared, save_shared,
+    AiStore, FileStore, Grants, MemoryStore, StoreError, forget_vanished_companions, rebase_policy, rebase_shared, reload_shared, remove_companion,
+    revoke_shared, save_shared,
 };
 
 #[cfg(feature = "local")]
