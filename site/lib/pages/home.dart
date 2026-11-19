@@ -179,13 +179,20 @@ class Home extends StatelessComponent {
                 'v0.3',
                 'Peer-to-peer, plus a password saver',
                 'Peers and relays, Grindvakt dynamic DNS, real peer content at weirdnet-morph://, and saved passwords.',
+                Status.inProgress,
               ),
               _milestone(
                 'v0.4',
                 'Local AI and projects',
                 'Local models, projects with code spaces, and hosting them privately or publicly.',
+                Status.inProgress,
               ),
-              _milestone('v0.5', 'Extensions', 'Chrome and Firefox extensions unchanged, each in its own sandbox.'),
+              _milestone(
+                'v0.5',
+                'Extensions',
+                'Chrome and Firefox extensions unchanged, each in its own sandbox.',
+                Status.planned,
+              ),
             ], classes: 'feature-grid'),
             p([
               a([Component.text('The full roadmap →')], href: '/roadmap', classes: 'more'),
@@ -199,13 +206,13 @@ class Home extends StatelessComponent {
   }
 }
 
-Component _milestone(String version, String title, String body) {
+Component _milestone(String version, String title, String body, Status status) {
   return a(
     [
       span([Component.text(version)], classes: 'milestone'),
       h3([Component.text(title)]),
       p([Component.text(body)]),
-      statusTag(Status.planned),
+      statusTag(status),
     ],
     href: '/roadmap#${version.replaceAll('.', '-')}',
     classes: 'card card-link',

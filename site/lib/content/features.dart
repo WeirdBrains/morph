@@ -147,7 +147,7 @@ const features = <Feature>[
     image: 'concept-passwords.svg',
     alt: 'Concept mock-up of a sign-in form with a Save this password prompt.',
     caption: 'An idea of the save prompt.',
-    status: Status.planned,
+    status: Status.inProgress,
     when: 'v0.3',
   ),
   Feature(
@@ -163,7 +163,7 @@ const features = <Feature>[
     image: 'concept-local-ai.svg',
     alt: 'Concept diagram: a web page beside a local model panel with MCP tools; AI runs on the device and can be switched off.',
     caption: 'Local AI beside the page, with MCP tools.',
-    status: Status.planned,
+    status: Status.inProgress,
     when: 'v0.4',
   ),
   Feature(

@@ -55,10 +55,6 @@ class RoadmapPage extends StatelessComponent {
               ),
               ('Switching profiles keeps each profile’s tabs and windows (0.2.2)', Status.shipped),
               ('weirdnet- links call the app over Weirdnet', Status.shipped),
-              (
-                'Key rotation on revoke, so a revoked device can’t read later sync (weirdnet-sync 0.3)',
-                Status.inProgress,
-              ),
             ],
             note: 'Released as $latestVersion. Work on 0.2.x fixes continues.',
           ),
@@ -66,12 +62,16 @@ class RoadmapPage extends StatelessComponent {
             id: 'v0-3',
             version: 'v0.3',
             title: 'Peer-to-peer, plus the password saver',
-            status: Status.planned,
+            status: Status.inProgress,
             items: [
               ('Weirdnet peers and relays in Morph', Status.planned),
               ('Grindvakt dynamic DNS, so a domain follows your device', Status.planned),
               ('weirdnet-morph:// resolves real peer content, with the shared scheme registry', Status.planned),
-              ('Password saver', Status.planned),
+              ('Password saver', Status.inProgress),
+              (
+                'Key rotation on revoke, so a revoked device can’t read later sync (weirdnet-sync 0.3)',
+                Status.inProgress,
+              ),
               ('First local AI helpers, moved up from v0.4', Status.inProgress),
             ],
             image: (
@@ -84,15 +84,15 @@ class RoadmapPage extends StatelessComponent {
             id: 'v0-4',
             version: 'v0.4',
             title: 'Local AI and projects',
-            status: Status.planned,
+            status: Status.inProgress,
             items: [
               (
                 'Local AI: models from Hugging Face, run on your device, on by default with one switch to turn it off',
-                Status.planned,
+                Status.inProgress,
               ),
               (
                 'MCP-native: MCP servers as tool sources for local models and agents, each with its own switch and approvals',
-                Status.planned,
+                Status.inProgress,
               ),
               ('Projects with templates, notes and code spaces, Rust first', Status.planned),
               ('Hosting projects, private or public, with access control', Status.planned),
