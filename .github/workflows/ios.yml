@@ -52,3 +52,15 @@ jobs:
           path: app/build/ios-artifacts/*.zip
           if-no-files-found: error
           retention-days: 14
+      # The runner keeps the checkout between runs; drop the build output
+      # (Flutter's build/, the native-assets cargo builds under
+      # .dart_tool/hooks_runner, about 11 GB together, and a root target/ if one appears) so it doesn't pile up
+      # on the Mac. Only inside this job's workspace; _work/_tool, caches and
+      # the runner itself stay.
+      - name: Clean up the build output
+        if: always()
+        working-directory: ${{ github.workspace }}
+        run: |
+          df -h . | tail -1
+          rm -rf app/build app/.dart_tool/hooks_runner app/.dart_tool/flutter_build target
+          df -h . | tail -1
