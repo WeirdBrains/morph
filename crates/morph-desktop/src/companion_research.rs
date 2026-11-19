@@ -158,8 +158,8 @@ pub fn body(t: Theme, state: &ResearchState, companion: &str, cx: &mut Context<C
                     .flex()
                     .flex_row()
                     .gap(px(6.))
-                    .child(div().flex_1().text_size(px(13.)).text_color(rgb(t.text_primary)).child(p.title.clone()))
-                    .child(div().text_size(px(11.)).text_color(rgb(color(t))).child(label)),
+                    .child(div().flex_1().min_w(px(0.)).overflow_hidden().text_size(px(13.)).text_color(rgb(t.text_primary)).child(p.title.clone()))
+                    .child(div().flex_shrink_0().text_size(px(11.)).text_color(rgb(color(t))).child(label)),
             )
             .child(div().text_size(px(11.)).text_color(rgb(t.text_secondary)).child(format!(
                 "{} · step {done} of {total} · {} pages{}{}",
