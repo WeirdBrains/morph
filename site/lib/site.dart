@@ -15,8 +15,8 @@ const ogImageUrl = '$siteUrl/images/morph-icon-512.png';
 const ogImageAlt = 'The Morph app icon: a white M with cyan and magenta glitch slices.';
 
 /// The latest published release (GitHub release, not a pre-release).
-const latestVersion = '0.2.1';
-const latestDate = 'November 18, 2026';
+const latestVersion = '0.2.2';
+const latestDate = 'November 19, 2026';
 const releasesUrl = '$githubUrl/releases';
 const latestReleaseUrl = '$githubUrl/releases/tag/v$latestVersion';
 const changelogUrl = '$githubUrl/blob/main/CHANGELOG.md';

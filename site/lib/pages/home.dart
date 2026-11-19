@@ -66,7 +66,7 @@ class Home extends StatelessComponent {
           div([
             h2([Component.text('A look at Morph')]),
             p([
-              Component.text('Real screenshots of Morph $latestVersion, taken with a demo profile.'),
+              Component.text('Real screenshots of Morph 0.2, taken with a demo profile.'),
             ], classes: 'intro'),
             div([
               shot(

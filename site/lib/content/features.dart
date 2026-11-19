@@ -41,7 +41,9 @@ const features = <Feature>[
         'and a page per crashed tab while the rest keep running. Pages render in the system web view: '
         'WebKitGTK on Linux, WKWebView on macOS, WebView2 on Windows and Android WebView. Since 0.2.1: '
         'more than one window (Ctrl+N, ⌘N on macOS), Move to new window from the tab menu, and Morph '
-        'reopens the windows and tabs that were open when it quit.',
+        'reopens the windows and tabs that were open when it quit. Since 0.2.2, switching a window to another '
+        'profile keeps its tabs: they stay saved with the profile it left and come back in order when you '
+        'switch back.',
     image: 'screenshot-main-tabs.webp',
     alt: 'Morph on Linux with four tabs open and a tide pool field guide page loaded.',
     caption: 'Morph 0.2.0 on Linux with four tabs open.',

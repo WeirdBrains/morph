@@ -53,6 +53,7 @@ class RoadmapPage extends StatelessComponent {
                 'More than one window: new window, move a tab to a new window, windows and tabs reopen at launch (0.2.1)',
                 Status.shipped,
               ),
+              ('Switching profiles keeps each profile’s tabs and windows (0.2.2)', Status.shipped),
               ('weirdnet- links call the app over Weirdnet', Status.shipped),
               (
                 'Key rotation on revoke, so a revoked device can’t read later sync (weirdnet-sync 0.3)',
