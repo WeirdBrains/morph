@@ -370,7 +370,7 @@ pub fn tick(home: &Path, profile_id: &str) -> Result<usize> {
     };
     let _ = library_db::with(home, profile_id, |lib| {
         morph_core::settings_sync::backfill(lib, home, profile_id)?;
-        if let Err(e) = companion_sync::backfill_with(lib, &companion_sync::store(&dir), Some(&*companion_sync::secrets_for(&dir)), now_ms()) {
+        if let Err(e) = companion_sync::backfill_with(lib, &companion_sync::store(&dir), companion_sync::secrets_for(&dir).as_deref(), now_ms()) {
             eprintln!("morph-sync: companions: {e}");
         }
         core::refresh_live(&dir, lib);
@@ -441,7 +441,7 @@ pub fn tick(home: &Path, profile_id: &str) -> Result<usize> {
             // security-sensitive companion types).
             apply_revocations(lib, home, profile_id);
         } else if (applied > 0 || companion_sync::revocations_pending(lib))
-            && let Err(e) = companion_sync::materialize_with(lib, &companion_sync::store(&dir), Some(&*companion_sync::secrets_for(&dir)))
+            && let Err(e) = companion_sync::materialize_with(lib, &companion_sync::store(&dir), companion_sync::secrets_for(&dir).as_deref())
         {
             eprintln!("morph-sync: companions: {e}");
         }
@@ -464,7 +464,7 @@ fn apply_revocations(lib: &mut Library, home: &Path, profile_id: &str) {
     if let Err(e) = morph_core::settings_sync::materialize(lib, home, profile_id) {
         eprintln!("morph-sync: settings: {e}");
     }
-    if let Err(e) = companion_sync::materialize_with(lib, &companion_sync::store(&dir), Some(&*companion_sync::secrets_for(&dir))) {
+    if let Err(e) = companion_sync::materialize_with(lib, &companion_sync::store(&dir), companion_sync::secrets_for(&dir).as_deref()) {
         eprintln!("morph-sync: companions: {e}");
         return;
     }
@@ -743,7 +743,7 @@ pub fn revoke_device(home: &Path, profile_id: &str, peer_id: &str, now_ms: i64) 
         core::save_roster(lib, &st.roster)?;
         core::save_epoch_keys(lib, &st.keys)?;
         // Its grants and Node companions are void now, not on the next pass.
-        if let Err(e) = companion_sync::after_revoke(lib, &companion_sync::store(&dir), Some(&*companion_sync::secrets_for(&dir)), now_ms) {
+        if let Err(e) = companion_sync::after_revoke(lib, &companion_sync::store(&dir), companion_sync::secrets_for(&dir).as_deref(), now_ms) {
             eprintln!("morph-sync: companions after revoke: {e}");
         }
         apply_revocations(lib, home, profile_id);

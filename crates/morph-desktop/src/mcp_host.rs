@@ -37,7 +37,7 @@ fn approvals_path(companions: &Path) -> PathBuf {
 }
 
 fn secrets_path(companions: &Path) -> PathBuf {
-    profile_dir(companions).join(morph_services::companion_sync::SECRETS_FILE)
+    profile_dir(companions).join("mcp-secrets.local.json")
 }
 
 type Index = BTreeMap<String, BTreeMap<String, String>>;

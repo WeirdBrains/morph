@@ -45,9 +45,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
 
-use morph_ai::{
-    AgentSettings, AiStore, ChatLog, ChatTurn, FileSecrets, FileStore, Journals, McpConfigs, McpSecrets, Roster as Companions, StoreError,
-};
+use morph_ai::{AgentSettings, AiStore, ChatLog, ChatTurn, FileStore, Journals, McpConfigs, McpSecrets, Roster as Companions, StoreError};
 use morph_store::Library;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -105,24 +103,21 @@ pub fn store(profile_dir: &Path) -> FileStore {
     FileStore::new(profile_dir.join("companions"))
 }
 
-/// This device's MCP secrets file, beside the profile (outside `companions/`, never synced as a
-/// file).
-pub const SECRETS_FILE: &str = "mcp-secrets.local.json";
-
 static SECRETS: Mutex<Vec<(PathBuf, Weak<dyn McpSecrets>)>> = Mutex::new(Vec::new());
 
-/// Use `secrets` as the profile's MCP secrets store while it lives (the MCP host's own, so
-/// what sync writes is what it reads, with no second copy of the file in memory).
+/// Use `secrets` as the profile's MCP secrets store while it lives: the MCP host's own
+/// (`LocalSecrets`), so what sync writes is what it reads and the storage (a user-only file,
+/// encrypted at rest later) stays behind [`McpSecrets`]. Sync never reads that storage itself.
 pub fn share_secrets(profile_dir: &Path, secrets: &Arc<dyn McpSecrets>) {
     let mut all = SECRETS.lock().unwrap_or_else(|p| p.into_inner());
     all.retain(|(p, w)| p != profile_dir && w.strong_count() > 0);
     all.push((profile_dir.to_path_buf(), Arc::downgrade(secrets)));
 }
 
-/// The profile's MCP secrets store: the shared one, else [`SECRETS_FILE`] read now.
-pub fn secrets_for(profile_dir: &Path) -> Arc<dyn McpSecrets> {
-    let shared = SECRETS.lock().unwrap_or_else(|p| p.into_inner()).iter().find(|(p, _)| p == profile_dir).and_then(|(_, w)| w.upgrade());
-    shared.unwrap_or_else(|| Arc::new(FileSecrets::open(profile_dir.join(SECRETS_FILE))))
+/// The profile's shared MCP secrets store, if the host has one open. None: sync leaves the
+/// secrets as they were merged last (it neither reads a missing store as empty nor writes).
+pub fn secrets_for(profile_dir: &Path) -> Option<Arc<dyn McpSecrets>> {
+    SECRETS.lock().unwrap_or_else(|p| p.into_inner()).iter().find(|(p, _)| p == profile_dir).and_then(|(_, w)| w.upgrade())
 }
 
 /// Secret values by record (`k/<server id>`), name to value. Only ever in memory: the
@@ -1410,6 +1405,18 @@ mod tests {
         copy_entries(&a, &mut b, |e| e.typ == MCP_SECRETS && e.hlc.physical_ms >= 300);
         assert!(materialize_with(&mut b, &store_b, Some(&sec_b)).unwrap());
         assert_eq!(sec_b.get("srv", "TOKEN"), None);
+    }
+
+    #[test]
+    fn sync_uses_only_the_secrets_store_the_host_shares() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(secrets_for(dir.path()).is_none(), "nothing shared: secrets are left alone");
+        let shared: Arc<dyn McpSecrets> = Arc::new(morph_ai::MemorySecrets::default());
+        share_secrets(dir.path(), &shared);
+        shared.set("srv", "TOKEN", "t");
+        assert_eq!(secrets_for(dir.path()).unwrap().get("srv", "TOKEN").as_deref(), Some("t"));
+        drop(shared);
+        assert!(secrets_for(dir.path()).is_none(), "only while the host holds it");
     }
 
     #[test]
