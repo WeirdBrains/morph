@@ -1,0 +1,163 @@
+import 'package:jaspr/dom.dart';
+import 'package:jaspr/jaspr.dart';
+
+import '../components/layout.dart';
+import '../site.dart';
+
+/// Files on the v0.2.0 GitHub release (name, what it is, size).
+const _linux = [
+  ('morph-$latestVersion-x86_64-unknown-linux-gnu.tar.gz', 'Tarball', '16.1 MB'),
+  ('morph-$latestVersion-x86_64-unknown-linux-gnu.zip', 'Zip', '16.1 MB'),
+  ('morph_$latestVersion-1_amd64.deb', 'Debian package, with desktop entry', '11.4 MB'),
+  ('morph-standalone_$latestVersion-1_amd64.deb', 'Debian package, binary only', '11.4 MB'),
+  ('morph-$latestVersion-1.x86_64.rpm', 'RPM package, with desktop entry', '16.0 MB'),
+  ('morph-standalone-$latestVersion-1.x86_64.rpm', 'RPM package, binary only', '16.0 MB'),
+];
+const _mac = [
+  ('morph-$latestVersion-universal-apple-darwin.dmg', 'Disk image', '22.6 MB'),
+  ('morph-$latestVersion-universal-apple-darwin.zip', 'Zip with Morph.app', '21.1 MB'),
+];
+const _windows = [
+  ('morph-$latestVersion-x86_64-pc-windows-msvc.msi', 'Installer', '9.6 MB'),
+  ('morph-$latestVersion-x86_64-pc-windows-msvc.zip', 'Zip, no installation', '11.0 MB'),
+];
+const _android = [
+  ('morph-$latestVersion-android-arm64.apk', 'arm64 release APK, signed with a test key', '22.7 MB'),
+  ('morph-$latestVersion-android-debug.apk', 'Debug APK', '128.8 MB'),
+];
+
+class DownloadPage extends StatelessComponent {
+  const DownloadPage({super.key});
+
+  @override
+  Component build(BuildContext context) {
+    return Component.fragment([
+      pageHero(
+        eyebrow: 'Download',
+        title: 'Get Morph $latestVersion',
+        lede:
+            'Released $latestDate. Every file is on the GitHub release, listed in SHA256SUMS so you can check it '
+            'before you open it.',
+      ),
+      section([
+        div([
+          div([
+            extLink('Release notes', latestReleaseUrl),
+            extLink('SHA256SUMS', assetUrl('SHA256SUMS')),
+            extLink('Changelog', changelogUrl),
+            extLink('All releases', releasesUrl),
+          ], classes: 'pill-links'),
+          _platform('linux', 'Linux', 'x86_64. Needs WebKitGTK 4.1, GTK 3 and a Vulkan driver.', _linux, [
+            h3([Component.text('Arch Linux')]),
+            p([
+              Component.text('The prebuilt '),
+              code([Component.text('morph-bin')]),
+              Component.text(' package ($latestVersion-1) is on '),
+              extLink('the WeirdBrains TAUR server', taurUrl),
+              Component.text(':'),
+            ]),
+            pre([
+              code([Component.text('yay --aururl https://pkg.taur.weirdbrains.com -S morph-bin')]),
+            ]),
+            h3([Component.text('Nix')]),
+            p([Component.text('The flake in the repository packages the release tarball:')]),
+            pre([
+              code([Component.text('nix run github:WeirdBrains/morph')]),
+            ]),
+          ]),
+          _platform('macos', 'macOS', 'Universal (Apple silicon and Intel), macOS 11 or later.', _mac, [
+            p([
+              Component.text(
+                'The app is ad-hoc signed, not notarized, so macOS warns before the first start. ',
+              ),
+              extLink('How to open it', unsignedDocsUrl),
+              Component.text('.'),
+            ], classes: 'callout'),
+          ]),
+          _platform(
+            'windows',
+            'Windows',
+            'x64, Windows 10 21H2 or later, or Windows 11. Uses the WebView2 runtime.',
+            _windows,
+            [
+              p([
+                Component.text('The files are not code-signed yet, so SmartScreen asks before the first start. '),
+                extLink('How to run it', unsignedDocsUrl),
+                Component.text('.'),
+              ], classes: 'callout'),
+            ],
+          ),
+          _platform('android', 'Android', 'Sideload the APK. Store and F-Droid builds are planned.', _android, []),
+          section(
+            [
+              h2([Component.text('iOS')]),
+              p([
+                Component.text(
+                  'iOS builds run in CI, but there is no public iOS build yet. TestFlight and the App Store are planned.',
+                ),
+              ]),
+            ],
+            classes: 'platform',
+            id: 'ios',
+          ),
+          section(
+            [
+              h2([Component.text('Build from source')]),
+              p([
+                Component.text('You need Rust 1.99 or newer, and Flutter 3.50 (Dart 3.14) for the phone app in '),
+                code([Component.text('app/')]),
+                Component.text('. On Arch, the desktop shell needs these libraries:'),
+              ]),
+              pre([
+                code([
+                  Component.text(
+                    'sudo pacman -S --needed webkit2gtk-4.1 gtk3 libxkbcommon-x11 libxcb vulkan-icd-loader \\\n'
+                    '  fontconfig freetype2 clang cmake pkgconf',
+                  ),
+                ]),
+              ]),
+              p([Component.text('Then build and run the desktop shell, with its data in a separate folder:')]),
+              pre([
+                code([
+                  Component.text(
+                    'git clone https://github.com/WeirdBrains/morph.git\n'
+                    'cd morph\n'
+                    'MORPH_HOME=\$(mktemp -d) cargo run -p morph-desktop --release -- example.com',
+                  ),
+                ]),
+              ]),
+              p([
+                Component.text('On Debian or Ubuntu, the build packages are listed in '),
+                code([Component.text('DESKTOP_DEPS')]),
+                Component.text(' in the CI workflow. See the '),
+                extLink('README', '$githubUrl#build'),
+                Component.text(' for the rest.'),
+              ]),
+            ],
+            classes: 'platform',
+            id: 'source',
+          ),
+        ], classes: 'wrap'),
+      ], classes: 'band'),
+    ]);
+  }
+}
+
+Component _platform(String id, String name, String about, List<(String, String, String)> files, List<Component> extra) {
+  return section(
+    [
+      h2([Component.text(name)]),
+      p([Component.text(about)]),
+      ul([
+        for (final (file, what, size) in files)
+          li([
+            a([Component.text(file)], href: assetUrl(file), classes: 'file'),
+            span([Component.text('$what · $size')], classes: 'file-meta'),
+          ]),
+      ], classes: 'files'),
+      ...extra,
+    ],
+    classes: 'platform',
+    id: id,
+  );
+}

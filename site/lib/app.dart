@@ -1,76 +1,81 @@
 import 'package:jaspr/dom.dart';
 import 'package:jaspr/jaspr.dart';
+import 'package:jaspr_router/jaspr_router.dart';
 
+import 'components/layout.dart';
+import 'pages/download.dart';
+import 'pages/features.dart';
 import 'pages/home.dart';
+import 'pages/roadmap.dart';
 import 'site.dart';
 
+/// Every page of the site. Static mode renders each route to its own HTML file.
 class App extends StatelessComponent {
   const App({super.key});
 
   @override
   Component build(BuildContext context) {
-    return Component.fragment([
-      a([Component.text('Skip to content')], href: '#content', classes: 'skip-link'),
-      header([
-        div([
-          a(
-            [
-              Component.element(
-                tag: 'picture',
-                children: [
-                  source(
-                    attributes: {
-                      'srcset': 'images/morph-wordmark-light.svg',
-                      'media': '(prefers-color-scheme: light)',
-                    },
-                  ),
-                  img(src: 'images/morph-wordmark.svg', alt: siteTitle, classes: 'wordmark'),
-                ],
-              ),
-            ],
-            href: '/',
-            classes: 'logo',
+    return Router(
+      routes: [
+        Route(
+          path: '/',
+          title: '$siteTitle: $siteTagline',
+          builder: (_, _) => const Layout(
+            path: '/',
+            title: '$siteTitle: $siteTagline',
+            description: siteDescription,
+            child: Home(),
           ),
-          nav([
-            a([Component.text('What Morph is')], href: '#about'),
-            a([Component.text('Features')], href: '#features'),
-            a([Component.text("How it's built")], href: '#built'),
-            a([Component.text('Platforms')], href: '#platforms'),
-            a([Component.text('Install')], href: '#install'),
-            a(
-              [Component.text('GitHub')],
-              href: githubUrl,
-              target: Target.blank,
-              attributes: {'rel': 'noopener noreferrer'},
-            ),
-          ], classes: 'site-nav'),
-        ], classes: 'header-inner wrap'),
-      ], classes: 'site-header'),
-      const Home(),
-      footer([
-        div([
+        ),
+        Route(
+          path: '/features',
+          title: 'Features · $siteTitle',
+          builder: (_, _) => const Layout(
+            path: '/features',
+            title: 'Features · $siteTitle',
+            description:
+                'What Morph $latestVersion does: tabs and the system web view, downloads that resume, bookmarks and '
+                'history, one Weirdnet identity, linked devices and sync, relays, and what is coming next.',
+            child: FeaturesPage(),
+          ),
+        ),
+        Route(
+          path: '/roadmap',
+          title: 'Roadmap · $siteTitle',
+          builder: (_, _) => const Layout(
+            path: '/roadmap',
+            title: 'Roadmap · $siteTitle',
+            description:
+                'Morph’s roadmap: v0.3 peer-to-peer and a password saver, v0.4 local AI and projects, v0.5 '
+                'extensions, and platform status.',
+            child: RoadmapPage(),
+          ),
+        ),
+        Route(
+          path: '/download',
+          title: 'Download Morph $latestVersion · $siteTitle',
+          builder: (_, _) => const Layout(
+            path: '/download',
+            title: 'Download Morph $latestVersion · $siteTitle',
+            description:
+                'Download Morph $latestVersion for Linux, macOS, Windows and Android, install morph-bin from TAUR, '
+                'or build from source.',
+            child: DownloadPage(),
+          ),
+        ),
+      ],
+      errorBuilder: (_, _) => Layout(
+        path: '',
+        title: 'Not found · $siteTitle',
+        description: siteDescription,
+        child: section([
+          h1([Component.text('Not found')]),
           p([
-            Component.text(
-              'Morph is a Weird Brains project, released under the BSD 3-Clause License.',
-            ),
-          ]),
-          div([
-            a(
-              [Component.text('GitHub')],
-              href: githubUrl,
-              target: Target.blank,
-              attributes: {'rel': 'noopener noreferrer'},
-            ),
-            a(
-              [Component.text('TAUR packages')],
-              href: taurUrl,
-              target: Target.blank,
-              attributes: {'rel': 'noopener noreferrer'},
-            ),
-            a([Component.text(siteUrl.replaceFirst('https://', ''))], href: '$siteUrl/'),
-          ], classes: 'footer-links'),
-        ], classes: 'footer-inner wrap'),
-      ], classes: 'site-footer'),
-    ]);
+            Component.text('That page is not here. '),
+            a([Component.text('Back home')], href: '/'),
+          ], classes: 'lede'),
+        ], classes: 'hero page-hero wrap'),
+      ),
+    );
   }
 }

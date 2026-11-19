@@ -11,6 +11,28 @@ GitHub Pages set to Source: GitHub Actions, custom domain
 This package uses Jaspr `0.24.0-beta.1`. That is the version that resolves on
 Dart 3.14 (the SDK that ships with Flutter 3.50). Jaspr `0.23.5` does not.
 
+## Pages
+
+- `/`: what Morph is, a few screenshots, the latest version and a Coming soon teaser
+- `/features`: one card per feature, each with one image (`lib/content/features.dart`)
+- `/roadmap`: milestones and statuses from `PRIORITIES.md` and `docs/handoff.md`
+- `/download`: the files on the latest GitHub release, TAUR, Nix and building from source
+
+Old one-page anchors (`/#features`, `/#install` and so on) still land on a section of `/`.
+
+## Images
+
+Screenshots in `web/images/screenshot-*.webp` are of the released app (not `main`), taken
+in a private Xvfb display with a demo profile and local test pages, never on a live
+desktop (collective `AGENTS.md`). `web/images/concept-*.svg` are illustrations of planned
+features, labeled Concept; they are not screenshots.
+
+## After a release
+
+Bump `latestVersion` and `latestDate` in `lib/site.dart`, the file sizes in
+`lib/pages/download.dart`, and move shipped items in `lib/content/features.dart` and
+`lib/pages/roadmap.dart`. Retake screenshots of anything whose look changed.
+
 ## Prerequisites
 
 Dart 3.14, or the Dart SDK from Flutter 3.50. Then:
