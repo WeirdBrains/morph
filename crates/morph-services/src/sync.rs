@@ -213,6 +213,10 @@ pub fn start(home: &Path, profile_id: &str) -> Result<()> {
 pub fn start_with(home: &Path, profile_id: &str, cfg: NodeConfig) -> Result<()> {
     let dir = morph_core::profiles::profile_dir(home, profile_id);
     stop(home, profile_id);
+    // A locked profile never syncs (docs/profile-lock.md).
+    if crate::profile_lock::is_locked(home, profile_id) {
+        return Err(Error::Locked);
+    }
     let built = library_db::with(home, profile_id, |lib| Ok(build_state(lib))).map_err(Error::failed)?;
     let Some(Some((state, node_key))) = built else {
         return Ok(());

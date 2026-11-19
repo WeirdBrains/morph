@@ -33,6 +33,9 @@ pub const CALL_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DeviceCallError {
+    /// The profile is locked (its password has not been entered): no device calls either way.
+    #[error("profile locked")]
+    Locked,
     /// No sync node runs for this profile (locked, or it does not sync yet).
     #[error("this profile is not linked to other devices yet")]
     NotSyncing,
@@ -76,22 +79,38 @@ pub struct DeviceCaller {
     node: Arc<SyncNode>,
     state: Arc<Mutex<SyncState>>,
     addrs: Arc<AddrsFor>,
+    /// The profile (home, id) it acts for: every call, stream and served request is refused
+    /// while it is locked, even by a caller made before the lock.
+    profile: Option<Arc<(std::path::PathBuf, String)>>,
 }
 
 impl DeviceCaller {
     /// The caller of a profile whose sync node runs (after unlock), reaching devices the way
     /// sync does (added peers, then relay circuits).
     pub fn for_profile(home: &Path, profile_id: &str) -> Result<Self, DeviceCallError> {
+        if crate::profile_lock::is_locked(home, profile_id) {
+            return Err(DeviceCallError::Locked);
+        }
         let (node, state) = crate::sync::live(home, profile_id).ok_or(DeviceCallError::NotSyncing)?;
         let net = morph_core::network::load(home).unwrap_or_default();
         let addrs = move |cert: &NodeCert| crate::sync::addrs_for(cert, &net, &crate::sync::configured_relays());
-        Ok(Self::new(node, state, addrs))
+        let mut caller = Self::new(node, state, addrs);
+        caller.profile = Some(Arc::new((home.to_path_buf(), profile_id.to_string())));
+        Ok(caller)
     }
 
     /// A caller over a running sync node and its live state; `addrs` gives a device's
     /// addresses (tests: an in-memory listener).
     pub fn new(node: Arc<SyncNode>, state: Arc<Mutex<SyncState>>, addrs: impl Fn(&NodeCert) -> Vec<Multiaddr> + Send + Sync + 'static) -> Self {
-        Self { node, state, addrs: Arc::new(addrs) }
+        Self { node, state, addrs: Arc::new(addrs), profile: None }
+    }
+
+    /// Refuse while the profile is locked.
+    fn unlocked(&self) -> Result<(), DeviceCallError> {
+        match &self.profile {
+            Some(p) if crate::profile_lock::is_locked(&p.0, &p.1) => Err(DeviceCallError::Locked),
+            _ => Ok(()),
+        }
     }
 
     fn with_state<T>(&self, f: impl FnOnce(&SyncState) -> T) -> T {
@@ -140,6 +159,7 @@ impl DeviceCaller {
 
     /// An app call to a linked device, carrying this device's cert.
     pub async fn call(&self, peer: &str, req: AppRequest, timeout: Duration) -> Result<AppResponse, DeviceCallError> {
+        self.unlocked()?;
         let (id, addrs) = self.target(peer)?;
         let cert = serde_json::to_string(&self.cert()).map_err(|e| DeviceCallError::Failed(e.to_string()))?;
         let mut req = req;
@@ -151,6 +171,7 @@ impl DeviceCaller {
     /// A raw stream to a linked device on `protocol` (for message channels such as
     /// `morph-ai` `NodeRouter::open`). The far end checks us by peer id when it accepts.
     pub async fn open_stream(&self, peer: &str, protocol: &str, limits: Limits) -> Result<Stream, DeviceCallError> {
+        self.unlocked()?;
         let (id, addrs) = self.target(peer)?;
         self.node.open_stream_async(id, &addrs, protocol, limits).await.map_err(|e| DeviceCallError::Unreachable(e.to_string()))
     }
@@ -158,6 +179,7 @@ impl DeviceCaller {
     /// Serve `app` to linked devices only: every call is checked against the live roster
     /// (and the cert it carries) before `handler` sees it; others get `Refused(reason)`.
     pub fn serve(&self, app: &str, handler: Arc<dyn AppHandler>) -> Result<(), DeviceCallError> {
+        self.unlocked()?;
         let gate = self.clone();
         let gated = move |peer: PeerId, req: AppRequest| {
             let presented = req.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(CERT_HEADER)).map(|(_, v)| serde_json::from_str::<NodeCert>(v));
@@ -167,7 +189,11 @@ impl DeviceCaller {
                 None => gate.check(&peer.to_string(), None),
             };
             let handler = handler.clone();
+            let locked = gate.unlocked().is_err();
             async move {
+                if locked {
+                    return Err(AppError::Refused("profile locked".into()));
+                }
                 match check.reason() {
                     Some(reason) => Err(AppError::Refused(reason.into())),
                     None => handler.handle(peer, req).await,
@@ -179,6 +205,7 @@ impl DeviceCaller {
 
     /// Accept streams on `protocol` from linked devices only (others are reset unread).
     pub fn accept_streams(&self, protocol: &str, limits: Limits) -> Result<LinkedStreams, DeviceCallError> {
+        self.unlocked()?;
         let incoming = self.node.accept_streams(protocol, limits).map_err(|e| DeviceCallError::Failed(e.to_string()))?;
         Ok(LinkedStreams { incoming, gate: self.clone() })
     }
@@ -195,7 +222,7 @@ impl LinkedStreams {
     pub async fn next(&mut self) -> Option<Stream> {
         loop {
             let s = self.incoming.next().await?;
-            if self.gate.check(&s.peer().to_string(), None) == CallerCheck::Linked {
+            if self.gate.unlocked().is_ok() && self.gate.check(&s.peer().to_string(), None) == CallerCheck::Linked {
                 return Some(s);
             }
             s.reset();

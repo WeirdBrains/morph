@@ -320,8 +320,12 @@ mod tests {
         profile_identity::load(&profile_dir(home, id)).unwrap().unwrap().user_id
     }
 
+    fn password_off(home: &str, id: &str, password: &str) {
+        morph_services::profile_lock::set_require_password(std::path::Path::new(home), id, &SecretString::from(password.to_string()), false).unwrap();
+    }
+
     #[test]
-    fn a_new_identity_encrypts_the_library_and_keeps_its_key() {
+    fn a_new_identity_encrypts_the_library_and_asks_for_its_password() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("h").display().to_string();
         let h = || Some(home.clone());
@@ -334,9 +338,17 @@ mod tests {
         crate::api::identity::create_profile_identity(h(), "p1".into(), "long enough".into()).unwrap();
         assert!(matches!(library_state(h(), "p1".into()).unwrap(), LibraryStateView::Unlocked));
         assert_eq!(list_bookmarks(h(), "p1".into()).unwrap().len(), 1, "moved in");
-        assert!(morph_keystore::load(&profile_dir(&home, "p1"), &user_id(&home, "p1")).unwrap().is_some());
+        assert!(morph_keystore::load(&profile_dir(&home, "p1"), &user_id(&home, "p1")).unwrap().is_none(), "the password is on by default");
 
-        // Next launch: the keystore opens it with no password.
+        // Next launch asks for the password (docs/profile-lock.md).
+        lock_library(h(), "p1".into()).unwrap();
+        let open = open_library(h(), "p1".into()).unwrap();
+        assert!(!open.ready && open.needs_password);
+        let unlocked = unlock_library(h(), "p1".into(), "long enough".into()).unwrap();
+        assert!(!unlocked.remembered);
+
+        // With the password turned off, the keystore opens it with no password.
+        password_off(&home, "p1", "long enough");
         lock_library(h(), "p1".into()).unwrap();
         let open = open_library(h(), "p1".into()).unwrap();
         assert!(open.ready && !open.needs_password);
@@ -350,6 +362,7 @@ mod tests {
         let h = || Some(home.clone());
         crate::api::profiles::create_profile(h(), "Work".into()).unwrap();
         crate::api::identity::create_profile_identity(h(), "p1".into(), "long enough".into()).unwrap();
+        password_off(&home, "p1", "long enough");
         add_bookmark(h(), "p1".into(), "https://w.test".into(), "W".into()).unwrap();
         lock_library(h(), "p1".into()).unwrap();
         morph_keystore::forget(&profile_dir(&home, "p1")).unwrap();
@@ -391,6 +404,9 @@ mod tests {
         crate::api::profiles::create_profile(h(), "Work".into()).unwrap();
         crate::api::identity::create_profile_identity(h(), "p1".into(), "long enough".into()).unwrap();
         crate::api::identity::create_profile_identity(h(), "default".into(), "other enough".into()).unwrap();
+        // Saved keys exist only for profiles whose password was turned off.
+        password_off(&home, "p1", "long enough");
+        password_off(&home, "default", "other enough");
         let (work, default) = (profile_dir(&home, "p1"), profile_dir(&home, "default"));
         let (work_user, default_user) = (user_id(&home, "p1"), user_id(&home, "default"));
         assert_ne!(morph_keystore::account(&work), morph_keystore::account(&default));

@@ -17,6 +17,7 @@ pub mod identity;
 pub mod library;
 pub mod network;
 pub mod node_router;
+pub mod profile_lock;
 pub mod profiles;
 pub mod relays;
 pub mod sync;
@@ -32,6 +33,16 @@ pub enum Error {
     /// A device-link session id that ended or never existed.
     #[error("this link has ended; start again")]
     LinkGone,
+    /// The profile password was wrong (the count goes toward the backoff).
+    #[error("that password is not right")]
+    WrongPassword,
+    /// Too many wrong passwords: wait before the next try.
+    #[error("too many wrong passwords; try again in {} s", (wait_ms + 999) / 1000)]
+    TooSoon { wait_ms: i64 },
+    /// The profile is locked: it has an identity and has not been unlocked
+    /// with its password in this process.
+    #[error("profile locked: unlock it with its password first")]
+    Locked,
     /// A failure from the layer below, as its message.
     #[error("{0}")]
     Failed(String),

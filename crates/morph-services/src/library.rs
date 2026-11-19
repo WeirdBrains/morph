@@ -2,12 +2,15 @@
 //!
 //! A profile's library is plaintext until the profile gets a Weirdnet
 //! identity; from then on it is an encrypted database whose key comes from
-//! the identity and the profile password. The key is kept in the system
-//! keystore so later launches open the library without a prompt.
+//! the identity and the profile password. By default the profile asks for
+//! that password every time it opens (`morph_core::profile_lock`); only when
+//! the user turned that off in Settings is the key kept in the system
+//! keystore so the profile opens without a prompt. See `docs/profile-lock.md`.
 
 use std::path::Path;
 
 use morph_core::library_db::{self, LibraryState};
+use morph_core::profile_lock;
 use morph_core::profiles::ProfileError;
 use morph_identity::profile_identity::{self, LibraryKey, SecretString};
 
@@ -29,6 +32,9 @@ pub enum LibraryOpen {
 pub struct Unlocked {
     /// The key is in the system keystore, so the next launch needs no password.
     pub remembered: bool,
+    /// The profile asks for its password every time it opens, so the key was
+    /// deliberately not kept (not a keystore failure).
+    pub password_required: bool,
     /// Why it could not be kept, if it was not. Never secret.
     pub reason: Option<String>,
 }
@@ -49,6 +55,12 @@ pub fn open(home: &Path, profile_id: &str) -> Result<LibraryOpen> {
     if state(home, profile_id)? == LibraryState::Unlocked {
         let _ = crate::sync::on_open(home, profile_id);
         return Ok(LibraryOpen::Ready);
+    }
+    if profile_lock::requires_password(home, profile_id) {
+        // A key an older build (or the password being off) left in the keystore goes:
+        // with the password on, nothing but the password opens the profile.
+        let _ = morph_keystore::forget(&dir);
+        return Ok(LibraryOpen::NeedsPassword { reason: None });
     }
     match morph_keystore::load(&dir, &identity.user_id) {
         Ok(Some(key)) => match library_db::unlock(home, profile_id, &key) {
@@ -73,26 +85,56 @@ pub fn open(home: &Path, profile_id: &str) -> Result<LibraryOpen> {
 pub fn unlock(home: &Path, profile_id: &str, password: &SecretString) -> Result<Unlocked> {
     let dir = profile_dir(home, profile_id)?;
     let identity = profile_identity::load(&dir).map_err(Error::failed)?.ok_or(Error::NoIdentity)?;
-    let key = profile_identity::library_key(&dir, password).map_err(Error::failed)?;
+    let key = check_password(home, profile_id, password)?;
     library_db::unlock(home, profile_id, &key).map_err(Error::failed)?;
     let _ = crate::sync::on_password(home, profile_id, password);
+    if profile_lock::requires_password(home, profile_id) {
+        let _ = morph_keystore::forget(&dir);
+        return Ok(Unlocked { remembered: false, password_required: true, reason: None });
+    }
     Ok(match morph_keystore::save(&dir, &identity.user_id, &key) {
-        Ok(()) => Unlocked { remembered: true, reason: None },
-        Err(e) => Unlocked { remembered: false, reason: Some(e.to_string()) },
+        Ok(()) => Unlocked { remembered: true, password_required: false, reason: None },
+        Err(e) => Unlocked { remembered: false, password_required: false, reason: Some(e.to_string()) },
     })
 }
 
+/// Check `password` against the profile's sealed identity and return its
+/// library key, with the wrong-password backoff: refused with
+/// [`Error::TooSoon`] while a wait is running (without trying, so a guess
+/// costs the wait), and every wrong password counted.
+pub fn check_password(home: &Path, profile_id: &str, password: &SecretString) -> Result<LibraryKey> {
+    let dir = profile_dir(home, profile_id)?;
+    let wait_ms = profile_lock::wait_ms(home, profile_id, now_ms());
+    if wait_ms > 0 {
+        return Err(Error::TooSoon { wait_ms });
+    }
+    match profile_identity::library_key(&dir, password) {
+        Ok(key) => {
+            let _ = profile_lock::record_success(home, profile_id);
+            Ok(key)
+        }
+        Err(_) => {
+            let _ = profile_lock::record_failure(home, profile_id, now_ms());
+            Err(Error::WrongPassword)
+        }
+    }
+}
+
 /// A profile just got an identity (created, imported, restored or linked)
-/// and its key is in hand: encrypt the library now and keep the key in the
-/// keystore. Neither failing undoes the identity; the next launch asks for
-/// the password instead.
+/// and its key is in hand: encrypt the library and the profile files now.
+/// From here the profile asks for its password whenever it opens, unless the
+/// user turned that off, in which case the key is kept in the keystore.
+/// Neither failing undoes the identity; the next launch asks for the password.
 pub fn adopt_new_identity(home: &Path, profile_id: &str, user_id: &str, key: &LibraryKey) {
     let dir = morph_core::profiles::profile_dir(home, profile_id);
     if let Err(e) = library_db::unlock_new_identity(home, profile_id, key, now_ms()) {
         eprintln!("Morph: could not open the library of profile {profile_id}: {e}");
         return;
     }
-    if let Err(e) = morph_keystore::save(&dir, user_id, key) {
+    // The password is on by default: the key goes to the keystore only if the user turned it off.
+    if profile_lock::requires_password(home, profile_id) {
+        let _ = morph_keystore::forget(&dir);
+    } else if let Err(e) = morph_keystore::save(&dir, user_id, key) {
         eprintln!("Morph: library key not kept for profile {profile_id}: {e}");
     }
 }
@@ -135,12 +177,16 @@ mod tests {
     }
 
     #[test]
-    fn a_new_identity_encrypts_and_the_keystore_reopens_it() {
+    fn a_new_identity_encrypts_and_with_the_password_off_the_keystore_reopens_it() {
         let (_tmp, home) = home_with_work();
         library::add_bookmark(&home, "p1", "https://w.test", "W", 1).unwrap();
         identity::create(&home, "p1", &pw("long enough")).unwrap();
         assert_eq!(state(&home, "p1").unwrap(), LibraryState::Unlocked);
         assert_eq!(library::bookmarks(&home, "p1").unwrap().len(), 1, "moved in");
+        lock(&home, "p1");
+        assert_eq!(open(&home, "p1").unwrap(), LibraryOpen::NeedsPassword { reason: None }, "the password is on by default");
+        unlock(&home, "p1", &pw("long enough")).unwrap();
+        crate::profile_lock::set_require_password(&home, "p1", &pw("long enough"), false).unwrap();
         lock(&home, "p1");
         assert_eq!(state(&home, "p1").unwrap(), LibraryState::Locked);
         assert_eq!(open(&home, "p1").unwrap(), LibraryOpen::Ready);
@@ -151,6 +197,7 @@ mod tests {
     fn without_a_saved_key_the_password_unlocks_and_keeps_it_again() {
         let (_tmp, home) = home_with_work();
         identity::create(&home, "p1", &pw("long enough")).unwrap();
+        crate::profile_lock::set_require_password(&home, "p1", &pw("long enough"), false).unwrap();
         lock(&home, "p1");
         let dir = morph_core::profiles::profile_dir(&home, "p1");
         morph_keystore::forget(&dir).unwrap();
@@ -158,7 +205,7 @@ mod tests {
         assert!(unlock(&home, "p1", &pw("wrong password")).is_err());
         assert_eq!(state(&home, "p1").unwrap(), LibraryState::Locked);
         let unlocked = unlock(&home, "p1", &pw("long enough")).unwrap();
-        assert_eq!(unlocked, Unlocked { remembered: true, reason: None });
+        assert_eq!(unlocked, Unlocked { remembered: true, password_required: false, reason: None });
         assert!(morph_keystore::load(&dir, &user_id(&home, "p1")).unwrap().is_some());
         lock(&home, "p1");
         assert_eq!(open(&home, "p1").unwrap(), LibraryOpen::Ready, "kept again");
@@ -168,6 +215,7 @@ mod tests {
     fn a_saved_key_that_no_longer_fits_is_forgotten() {
         let (_tmp, home) = home_with_work();
         identity::create(&home, "p1", &pw("long enough")).unwrap();
+        crate::profile_lock::set_require_password(&home, "p1", &pw("long enough"), false).unwrap();
         lock(&home, "p1");
         let dir = morph_core::profiles::profile_dir(&home, "p1");
         // A key from another identity, saved under this profile's owner.

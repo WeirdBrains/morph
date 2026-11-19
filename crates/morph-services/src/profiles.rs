@@ -49,6 +49,10 @@ mod tests {
         profiles::create(&home, "Work").unwrap();
         crate::identity::create(&home, "p1", &SecretString::from("long enough".to_string())).unwrap();
         crate::identity::create(&home, "default", &SecretString::from("other enough".to_string())).unwrap();
+        // Saved keys exist only for profiles whose password was turned off.
+        for (id, password) in [("p1", "long enough"), ("default", "other enough")] {
+            crate::profile_lock::set_require_password(&home, id, &SecretString::from(password.to_string()), false).unwrap();
+        }
         let (work, default) = (profiles::profile_dir(&home, "p1"), profiles::profile_dir(&home, "default"));
         let (work_user, default_user) = (user_id(&home, "p1"), user_id(&home, "default"));
         let after = delete(&home, "p1").unwrap();

@@ -5595,6 +5595,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "uuid",
+ "weirdnet-keys",
  "weirdnet-net",
  "weirdnet-schemes",
  "weirdnet-sync",
