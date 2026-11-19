@@ -38,6 +38,29 @@ relay yet.
 3. Identity on the new device now reads "Linked from another device." with
    the same user id and fingerprint as the existing one.
 
+## Opening a code as a link
+
+A new device's code opened as a link (clicked in another app, or the camera
+app's QR result) goes straight to the existing device's **Add device** with
+the code filled in: Morph registers `weirdnet-morph://` with every OS. The
+password and the six digits still come first; nothing is dialled before the
+password, and a locked profile refuses the code (on the desktop it says so
+once unlocked: open it again). A profile with no identity has nothing to add
+the device to and says so.
+
+## Ymir nodes
+
+A Ymir node (github.com/WeirdBrains/ymir) joins the same way: `ymirctl pool
+link` shows a `weirdnet-ymir://link/…` code made by the same
+weirdnet-device-link (only the scheme differs, and the scheme is not part of
+what is signed). Open or paste it in **Add device**; Morph names it "Ymir on
+<its name>", the node's terminal asks for the same six digits, and the node
+joins the profile's devices like any other. Morph registers
+`weirdnet-ymir://` too (Linux desktop entry and `mimeapps.list` only when
+nothing else handles it, macOS as an alternate handler, Windows, Android and
+iOS), since Ymir has no window of its own. Only `link/` codes mean anything
+to Morph; other `weirdnet-ymir://` links are refused with a note.
+
 ## Good to know
 
 - The QR holds only public keys, addresses and a signature. The identity
