@@ -6,6 +6,8 @@
 //!   source the app fills from discovery and companion settings.
 //! - [`DeviceRouter::open`] opens a stream ([`DeviceCaller::open_stream`]) and frames messages on
 //!   it ([`frames`]): only an active linked device is dialled.
+//! - [`for_profile`] is the app's router: it serves this device's [`Capabilities`] to linked
+//!   devices on [`DEVICE_APP`] and fills [`NodeInfo`] from theirs ([`NodeDirectory`]).
 //! - [`DeviceRouter::serve`] accepts streams ([`DeviceCaller::accept_streams`], linked devices
 //!   only) and runs a [`LinkHandler`] for each, concurrently, without a runtime of its own.
 //!
@@ -120,6 +122,111 @@ impl NodeRouter for DeviceRouter {
         let stream = self.caller.open_stream(peer, protocol, self.limits).await.map_err(route_error)?;
         Ok(frames(stream))
     }
+}
+
+/// The app each device serves to its linked siblings (only) with what it can do.
+pub const DEVICE_APP: &str = "morph-device";
+
+/// What a device says about itself on [`DEVICE_APP`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Capabilities {
+    pub platform: Platform,
+    /// It has a local model it serves to the user's other devices.
+    pub serves_models: bool,
+}
+
+/// [`Capabilities`] on the wire.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CapsWire {
+    platform: String,
+    serves_models: bool,
+}
+
+impl Capabilities {
+    fn to_json(self) -> Vec<u8> {
+        let platform = match self.platform {
+            Platform::Phone => "phone",
+            Platform::Desktop => "desktop",
+        };
+        serde_json::to_vec(&CapsWire { platform: platform.into(), serves_models: self.serves_models }).unwrap_or_default()
+    }
+
+    /// Unknown platforms read as desktop.
+    fn from_json(bytes: &[u8]) -> Option<Self> {
+        let w: CapsWire = serde_json::from_slice(bytes).ok()?;
+        Some(Self { platform: if w.platform == "phone" { Platform::Phone } else { Platform::Desktop }, serves_models: w.serves_models })
+    }
+}
+
+/// Answer [`DEVICE_APP`] on this device: `GET /caps` gives `mine()` as JSON. Linked devices
+/// only ([`DeviceCaller::serve`] refuses the rest before this runs).
+pub fn serve_capabilities(caller: &DeviceCaller, mine: impl Fn() -> Capabilities + Send + Sync + 'static) -> Result<(), DeviceCallError> {
+    let mine = Arc::new(mine);
+    let handler = move |_peer: weirdnet_net::PeerId, req: weirdnet_net::AppRequest| {
+        let caps = mine();
+        async move {
+            if req.path_with_query != "/caps" {
+                return Ok(weirdnet_net::AppResponse::new(404));
+            }
+            Ok(weirdnet_net::AppResponse::new(200).body(caps.to_json()))
+        }
+    };
+    caller.serve(DEVICE_APP, Arc::new(handler))
+}
+
+/// What the router knows about each linked device, from asking it ([`NodeDirectory::refresh`]).
+/// A device that answered is online with what it said; one that did not is offline; one not
+/// asked yet gets [`NodeInfo::default`].
+#[derive(Clone, Default)]
+pub struct NodeDirectory {
+    known: Arc<std::sync::Mutex<std::collections::HashMap<String, Option<Capabilities>>>>,
+}
+
+impl NodeDirectory {
+    pub fn info(&self, device: &LinkedDevice) -> NodeInfo {
+        match self.known.lock().unwrap_or_else(|p| p.into_inner()).get(&device.peer_id) {
+            Some(Some(c)) => NodeInfo { platform: c.platform, online: true, serves_models: c.serves_models },
+            Some(None) => NodeInfo { online: false, ..NodeInfo::default() },
+            None => NodeInfo::default(),
+        }
+    }
+
+    /// Ask every other linked device what it can do (each within `timeout`), and forget
+    /// devices that are no longer linked.
+    pub async fn refresh(&self, caller: &DeviceCaller, timeout: std::time::Duration) {
+        let others: Vec<LinkedDevice> = caller.linked_devices().into_iter().filter(|d| !d.this_device).collect();
+        let asks = others.iter().map(|d| async move {
+            let caps = match caller.call(&d.peer_id, weirdnet_net::AppRequest::new(DEVICE_APP, "GET", "/caps"), timeout).await {
+                Ok(r) if r.status == 200 => r.body.collect().await.ok().and_then(|b| Capabilities::from_json(&b)),
+                _ => None,
+            };
+            (d.peer_id.clone(), caps)
+        });
+        let found = futures::future::join_all(asks).await;
+        let mut known = self.known.lock().unwrap_or_else(|p| p.into_inner());
+        known.clear();
+        known.extend(found);
+    }
+
+    /// [`Self::refresh`] on this thread (for apps without an async runtime at hand).
+    pub fn refresh_blocking(&self, caller: &DeviceCaller, timeout: std::time::Duration) {
+        futures::executor::block_on(self.refresh(caller, timeout));
+    }
+}
+
+/// The app's router for a profile whose sync node runs: it serves this device's
+/// capabilities, and fills [`NodeInfo`] from what the others said (call
+/// [`NodeDirectory::refresh`] when the panel opens or the devices change).
+pub fn for_profile(
+    home: &std::path::Path,
+    profile_id: &str,
+    mine: impl Fn() -> Capabilities + Send + Sync + 'static,
+) -> Result<(DeviceRouter, NodeDirectory), DeviceCallError> {
+    let caller = DeviceCaller::for_profile(home, profile_id)?;
+    serve_capabilities(&caller, mine)?;
+    let directory = NodeDirectory::default();
+    let d = directory.clone();
+    Ok((DeviceRouter::new(caller).with_info(move |dev| d.info(dev)), directory))
 }
 
 /// `DeviceCallError` as the router reports it.
@@ -311,6 +418,30 @@ mod tests {
             s.roster.upsert(gone);
         }
         assert!(router.nodes().iter().all(|n| n.label != "Gone"));
+    }
+
+    #[test]
+    fn node_info_comes_from_what_each_linked_device_says_about_itself() {
+        let user = Keypair::generate_ed25519();
+        let (a, b, c) = (device(&user, "desk"), device(&user, "phone"), device(&user, "gone"));
+        let (desk, _, listening) = up(&user, &a, &[&b.cert, &c.cert], None);
+        let at: Multiaddr = format!("{}/p2p/{}", listening[0], desk.peer_id()).parse().unwrap();
+        serve_capabilities(&desk, || Capabilities { platform: Platform::Desktop, serves_models: true }).unwrap();
+        // The phone knows the desk at `at`; C is linked but never answers (no node at that address for it).
+        let (phone, _, _) = up(&user, &b, &[&a.cert, &c.cert], Some(at));
+        let directory = NodeDirectory::default();
+        let d = directory.clone();
+        let router = DeviceRouter::new(phone.clone()).with_info(move |dev| d.info(dev));
+        assert!(router.nodes().iter().all(|n| !n.serves_models), "nothing is offloaded to on a guess");
+        rt(directory.refresh(&phone, std::time::Duration::from_secs(3)));
+        let nodes = router.nodes();
+        let by = |label: &str| nodes.iter().find(|n| n.label == label).unwrap().clone();
+        assert_eq!((by("desk").platform, by("desk").online, by("desk").serves_models), (Platform::Desktop, true, true));
+        assert!(!by("gone").online && !by("gone").serves_models);
+        assert!(by("phone").this_device && by("phone").online);
+        // So offload from the phone picks the desk.
+        let plan = morph_ai::offload_plan(&morph_ai::OffloadSettings::default(), Platform::Phone, &nodes);
+        assert_eq!(plan.nodes, std::slice::from_ref(&a.cert.peer_id));
     }
 
     #[test]
