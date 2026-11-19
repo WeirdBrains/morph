@@ -1453,7 +1453,7 @@ def page_clipboard(r, binary, display, base, wayland):
         m2.stop()
 
 
-MAIN_MENU = ["New tab", "New window", "Find in page", "Bookmarks", "History", "Downloads", "Identity", "Profiles", "Settings", "About Morph", "Quit"]
+MAIN_MENU = ["New tab", "New window", "Find in page", "Bookmarks", "History", "Downloads", "Identity", "Profiles", "Lock profile", "Settings", "About Morph", "Quit"]
 MENU_SEPARATED = {"Find in page", "Identity", "About Morph", "Quit"}
 
 
@@ -1473,6 +1473,8 @@ def main_menu(r, binary, display):
         raise KeyError(label)
 
     for label in MAIN_MENU:
+        if label == "Lock profile":
+            continue  # a fresh profile has no identity to lock; the profile-lock check covers it
         m2 = Driver(binary, display, tempfile.mkdtemp(prefix="morph-xvfb-menu-"))
         try:
             win = wait_for(lambda: m2.own_window(), 20)
@@ -2092,19 +2094,18 @@ def identity_shards_restore(r, binary, display, user_id, shards):
 
 
 def identity_relaunch(m, r):
-    """With an identity the library is encrypted; without a keyring (as
-    under Xvfb) the next launch opens the library asking for the password.
-    The password unlocks it; Escape closes it; the page has the keyboard."""
+    """With an identity the profile is locked (no keyring here, so no saved
+    key): the next launch opens the lock screen with no page, the identity's
+    password unlocks it and the page loads with the keyboard."""
     win = wait_for(m.own_window, 20)
-    r.check("identity", "after a relaunch the page loads", wait_for(lambda: state(m), 20))
-    w = (state(m) or {}).get("w", 0)
-    m.activate(win)
-    r.check("identity", "the locked library asks for the password beside the page", w and w < 1190, str(w))
+    r.check("identity", "after a relaunch the profile is locked", wait_for(lambda: m.lines(r"^morph-event profile locked"), 20))
+    r.check("identity", "nothing of the page loads while it is locked", state(m) is None, str(state(m)))
+    if win:
+        m.activate(win)
     m.type(PASSWORD)
     m.key("Return", delay=1.0)
-    r.check("identity", "the identity's password unlocks it", wait_for(lambda: m.lines(r"morph-event library unlocked")), "not unlocked")
-    m.key("Escape", delay=1.0)
-    r.check("identity", "Escape closes it", wait_for(lambda: (state(m) or {}).get("w", 0) > w), str((state(m) or {}).get("w")))
+    r.check("identity", "the identity's password unlocks it", wait_for(lambda: m.lines(r"^morph-event profile unlocked"), 20), "not unlocked")
+    r.check("identity", "and then the page loads", wait_for(lambda: state(m), 20))
     r.check("identity", "and the page has the keyboard", page_takes_key(m, "z", "KeyZ"), str(state(m)))
 
 
