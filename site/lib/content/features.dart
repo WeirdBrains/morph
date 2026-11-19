@@ -39,7 +39,9 @@ const features = <Feature>[
     body:
         'Tabs, an address bar that searches when you type a phrase, back and forward, find in page, '
         'and a page per crashed tab while the rest keep running. Pages render in the system web view: '
-        'WebKitGTK on Linux, WKWebView on macOS, WebView2 on Windows and Android WebView.',
+        'WebKitGTK on Linux, WKWebView on macOS, WebView2 on Windows and Android WebView. Since 0.2.1: '
+        'more than one window (Ctrl+N, ⌘N on macOS), Move to new window from the tab menu, and Morph '
+        'reopens the windows and tabs that were open when it quit.',
     image: 'screenshot-main-tabs.webp',
     alt: 'Morph on Linux with four tabs open and a tide pool field guide page loaded.',
     caption: 'Morph 0.2.0 on Linux with four tabs open.',
@@ -52,7 +54,8 @@ const features = <Feature>[
     body:
         'A downloads panel next to the menu (Ctrl+Shift+Y) with progress, speed and time left, and Pause, '
         'Resume, Cancel, Retry and Show in folder. Downloads behind a login resume with the page’s session, '
-        'which is kept encrypted and deleted when the download ends.',
+        'which is kept encrypted and deleted when the download ends. Since 0.2.1 that includes sites that sign '
+        'you in with JavaScript: Morph retries with the page’s sign-in token, and never logs it.',
     image: 'screenshot-downloads.webp',
     alt: 'The Morph downloads panel showing a file at 24.2 of 41.9 MB with Pause and Cancel buttons.',
     caption: 'The downloads panel during a download.',
