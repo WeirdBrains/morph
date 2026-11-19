@@ -555,7 +555,19 @@ pub fn materialize(lib: &mut Library, store: &dyn AiStore) -> Result<bool> {
     drop_revoked_hosts(&mut st, &base, &revoked);
     let changed = write_files(store, &mut st, &types)?;
     save_snapshot(lib, &st)?;
+    if changed {
+        APPLIED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
     Ok(changed)
+}
+
+static APPLIED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// How many merges in this process wrote changed companion files (any profile). The panel
+/// compares it with the last value it saw and, when it moved, reloads what it holds in memory
+/// (the roster and the policy), so a later save does not push stale values back.
+pub fn applied() -> u64 {
+    APPLIED.load(std::sync::atomic::Ordering::SeqCst)
 }
 
 /// Whether the sync roster has revocations the last merge did not see (a pass then
@@ -910,6 +922,18 @@ mod tests {
         backfill(&mut l, &s, 200).unwrap();
         assert!(ours(&l, CHATS).is_empty(), "the clipped copy is not re-clipped and logged back");
         assert_eq!(synced_turn(&full), clipped, "deterministic, so the full copy is recognised");
+    }
+
+    #[test]
+    fn a_merge_that_changes_files_moves_the_applied_counter() {
+        let (_t, mut l, s) = setup();
+        backfill(&mut l, &s, 100).unwrap();
+        let before = applied();
+        let turn = ChatTurn::new(AgentId::new("local"), "q", "a", 1);
+        remote(&mut l, "b", 50, CHATS, &format!("t/{}", turn.id), put(&turn));
+        assert!(materialize(&mut l, &s).unwrap());
+        assert!(applied() > before);
+        assert!(!materialize(&mut l, &s).unwrap(), "nothing new to write, so nothing to reload");
     }
 
     #[test]

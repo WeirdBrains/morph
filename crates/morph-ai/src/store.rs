@@ -264,6 +264,82 @@ pub fn revoke_shared(store: &dyn AiStore, policy: &SharedPolicy, allow_id: u64) 
     Ok(found)
 }
 
+/// This device's policy changes since `base` (what it last loaded or saved), replayed onto
+/// `theirs` (what is stored now, which sync or Settings may have changed). Site levels this
+/// device changed take its value; allows it added or removed are added or removed there (an
+/// added allow gets that policy's next id); external approvals likewise. Everything else is
+/// `theirs`, so a grant sync voided is not brought back by a stale copy.
+pub fn rebase_policy(base: &Policy, mine: &Policy, theirs: &Policy) -> Policy {
+    use serde_json::Value;
+    use std::collections::{BTreeMap, BTreeSet};
+    let mut out = theirs.clone();
+    let grants = |p: &Policy| -> BTreeMap<(String, String), Value> {
+        let v = serde_json::to_value(p).unwrap_or_default();
+        let mut m = BTreeMap::new();
+        for (agent, sites) in v.get("grants").and_then(Value::as_object).into_iter().flatten() {
+            for (site, level) in sites.as_object().into_iter().flatten() {
+                m.insert((agent.clone(), site.clone()), level.clone());
+            }
+        }
+        m
+    };
+    let (gb, gm) = (grants(base), grants(mine));
+    for key in gb.keys().chain(gm.keys()).collect::<BTreeSet<_>>() {
+        if gb.get(key) != gm.get(key) {
+            let level = gm.get(key).and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or(SiteLevel::Ask);
+            out.set_site_level(&AgentId::new(key.0.as_str()), &key.1, level);
+        }
+    }
+    let same = |a: &StandingAllow, b: &StandingAllow| a.companion == b.companion && a.rule == b.rule;
+    for b in base.allows() {
+        if !mine.allows().iter().any(|m| m.id == b.id && same(m, b)) {
+            let gone: Vec<u64> = out.allows().iter().filter(|o| same(o, b)).map(|o| o.id).collect();
+            gone.into_iter().for_each(|id| {
+                out.revoke(id);
+            });
+        }
+    }
+    for m in mine.allows() {
+        if !base.allows().iter().any(|b| b.id == m.id && same(b, m)) {
+            out.add_allow(m.companion.clone(), m.rule.clone(), m.created_unix_ms);
+        }
+    }
+    let ext = |p: &Policy| -> BTreeSet<String> {
+        let v = serde_json::to_value(p).unwrap_or_default();
+        v.get("approved_external").and_then(Value::as_array).into_iter().flatten().filter_map(|a| a.as_str().map(String::from)).collect()
+    };
+    let (eb, em) = (ext(base), ext(mine));
+    if eb != em {
+        let mut set = ext(&out);
+        set.extend(em.difference(&eb).cloned());
+        set.retain(|a| !(eb.contains(a) && !em.contains(a)));
+        let mut v = serde_json::to_value(&out).unwrap_or_default();
+        v["approved_external"] = set.into_iter().map(Value::String).collect();
+        if let Ok(p) = serde_json::from_value(v) {
+            out = p;
+        }
+    }
+    out
+}
+
+/// Save the live policy without undoing what changed on disk meanwhile: this device's changes
+/// since `base` are replayed onto the stored policy ([`rebase_policy`]), the result becomes the
+/// live policy and is saved. Returns it, the new `base`. Holds the policy's write lock
+/// throughout, so an approval made meanwhile is not lost.
+pub fn rebase_shared(store: &dyn AiStore, policy: &SharedPolicy, base: &Policy) -> Result<Policy, StoreError> {
+    let mut live = policy.write().unwrap_or_else(|e| e.into_inner());
+    let stored = store.load_policy()?;
+    let merged = match &stored {
+        Some(theirs) => rebase_policy(base, &live, theirs),
+        None => live.clone(),
+    };
+    if stored.as_ref() != Some(&merged) {
+        store.save_policy(&merged)?;
+    }
+    *live = merged.clone();
+    Ok(merged)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -381,5 +457,52 @@ mod tests {
         // Nothing stored: the live policy is left alone.
         reload_shared(&MemoryStore::default(), &live).unwrap();
         assert_eq!(live.read().unwrap().site_level(&AgentId::new("local"), "a.com"), SiteLevel::Off);
+    }
+
+    #[test]
+    fn a_stale_policy_keeps_its_own_changes_and_takes_the_rest_from_disk() {
+        let (a, b) = (AgentId::new("local"), AgentId::new("atlas"));
+        let mut base = Policy::new();
+        base.set_site_level(&a, "old.example", SiteLevel::Act);
+        let kept = base.add_allow(CompanionScope::All, AllowRule::Research { provider: None }, 1);
+        let voided = base.add_allow(CompanionScope::One(b.clone()), AllowRule::Navigate { site: None }, 2);
+        // On disk, sync voided a revoked device's allow and site grant and added one of its own.
+        let mut theirs = base.clone();
+        theirs.revoke(voided);
+        theirs.set_site_level(&a, "old.example", SiteLevel::Ask);
+        let synced = theirs.add_allow(CompanionScope::One(a.clone()), AllowRule::Navigate { site: Some("docs.rs".into()) }, 3);
+        // Here, meanwhile, an approval added an allow and Settings turned a site off.
+        let mut mine = base.clone();
+        mine.add_allow(CompanionScope::All, AllowRule::Navigate { site: Some("tokio.rs".into()) }, 4);
+        mine.set_site_level(&a, "bad.example", SiteLevel::Off);
+        mine.revoke(kept);
+
+        let out = rebase_policy(&base, &mine, &theirs);
+        assert_eq!(out.site_level(&a, "old.example"), SiteLevel::Ask, "the voided grant does not come back");
+        assert_eq!(out.site_level(&a, "bad.example"), SiteLevel::Off, "this device's change stays");
+        let rules: Vec<_> = out.allows().iter().map(|x| x.rule.clone()).collect();
+        assert!(!out.allows().iter().any(|x| x.id == voided || x.id == kept), "{rules:?}");
+        assert!(out.allows().iter().any(|x| x.id == synced));
+        let added = out.allows().iter().find(|x| x.rule == AllowRule::Navigate { site: Some("tokio.rs".into()) }).expect("the new allow is kept");
+        assert!(added.id > synced, "a fresh id, not one sync gave out");
+        // Nothing changed here: the disk wins outright.
+        assert_eq!(rebase_policy(&base, &base, &theirs), theirs);
+    }
+
+    #[test]
+    fn rebase_shared_saves_the_merge_and_makes_it_the_live_policy() {
+        let store = MemoryStore::default();
+        let a = AgentId::new("local");
+        let base = Policy::new();
+        let mut theirs = Policy::new();
+        theirs.set_site_level(&a, "synced.example", SiteLevel::Act);
+        store.save_policy(&theirs).unwrap();
+        let live = Policy::new().shared();
+        live.write().unwrap().set_site_level(&a, "mine.example", SiteLevel::Off);
+        let new_base = rebase_shared(&store, &live, &base).unwrap();
+        let stored = store.load_policy().unwrap().unwrap();
+        assert_eq!(stored, new_base);
+        assert_eq!(*live.read().unwrap(), new_base);
+        assert_eq!((stored.site_level(&a, "synced.example"), stored.site_level(&a, "mine.example")), (SiteLevel::Act, SiteLevel::Off));
     }
 }
