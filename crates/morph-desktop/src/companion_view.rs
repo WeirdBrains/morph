@@ -309,7 +309,7 @@ impl CompanionView {
             guards: HashMap::new(),
             timed_out: HashSet::new(),
             research_tab: false,
-            research: crate::companion_research::ResearchState { projects: Default::default(), open: None, steering_only: false },
+            research: crate::companion_research::ResearchState::empty(),
             project_run: None,
             autosteer: std::env::var("MORPH_COMPANION_AUTOSTEER").ok().filter(|q| !q.trim().is_empty()),
         };
@@ -629,6 +629,14 @@ impl CompanionView {
         cx.notify();
     }
 
+    /// Makes this device the project's owner: it was running or paused on another device.
+    pub(crate) fn research_take_over(&mut self, id: String, cx: &mut Context<Self>) {
+        if self.research.take_over(&id) {
+            self.save_research();
+        }
+        cx.notify();
+    }
+
     pub(crate) fn research_undo(&mut self, id: String, replan: String, cx: &mut Context<Self>) {
         self.research.undo_replan(&id, &replan);
         self.save_research();
@@ -743,8 +751,13 @@ impl CompanionView {
             self.research.steer(&id, morph_ai::steer::Steer::Brief { text: scope });
             self.save_research();
         }
-        let mut changed = false;
+        // Steers other devices queued for projects this device owns are taken in first.
+        let mut changed = self.research.projects.drain_queued(now) > 0;
+        let device = self.research.projects.device.clone();
         for p in &mut self.research.projects.projects {
+            if !p.owned_by(&device) {
+                continue;
+            }
             changed |= p.apply_pending(now);
             changed |= p.maybe_checkin(now);
         }
@@ -760,6 +773,9 @@ impl CompanionView {
             return;
         }
         let Some(run) = self.project_run.take() else { return };
+        if !self.research.mine(&run.id) {
+            return; // taken over elsewhere meanwhile: the step's result is not kept here
+        }
         let now = crate::companion_research::now_ms();
         let end = match (ended, error) {
             (Some((o, text, cites)), _) => {
@@ -1204,6 +1220,15 @@ impl CompanionView {
         if synced != self.synced {
             self.synced = synced;
             self.reload_agents(cx);
+            // Research projects: a project taken over on another device stops here.
+            for lost in self.research.reload(&self.store) {
+                if self.project_run.as_ref().is_some_and(|r| r.id == lost)
+                    && let Some(run) = self.project_run.take()
+                {
+                    self.worker.cancel(&run.companion);
+                }
+            }
+            cx.notify();
         }
         self.devices.tick();
         self.follow_lock();

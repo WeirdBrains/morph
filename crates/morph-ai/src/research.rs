@@ -305,6 +305,15 @@ impl Projects {
         Ok(me)
     }
 
+    /// From the saved bytes exactly as they are: nothing is recovered (a project another device
+    /// owns must not be changed here).
+    pub fn from_bytes_raw(bytes: Option<&[u8]>) -> Result<Self, StoreError> {
+        match bytes {
+            Some(b) => serde_json::from_slice(b).map_err(|e| StoreError::Io(e.to_string())),
+            None => Ok(Self::default()),
+        }
+    }
+
     pub fn to_bytes(&self) -> Result<Vec<u8>, StoreError> {
         serde_json::to_vec_pretty(self).map_err(|e| StoreError::Io(e.to_string()))
     }
