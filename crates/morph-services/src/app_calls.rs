@@ -15,7 +15,10 @@
 //! into the peers that serve the app, connecting to each (directly, else
 //! through a relay circuit); then [`Node::app_call_via`] sends the request
 //! to the first that answers. Both block, so the shells call this off the UI
-//! thread ([`morph_core::app_call::fetch`]). The body streams: reading it
+//! thread ([`morph_core::app_call::fetch`]). Finding the peers is bounded by
+//! [`RESOLVE_TIMEOUT`]: a name's `_weirdnet` TXT lookup goes to the system's
+//! DNS, which can stall for over a minute (seen on CI runners), and the
+//! address bar should say it couldn't reach the name long before that. The body streams: reading it
 //! waits for the next chunk, and dropping it resets the call.
 
 use std::io::Read;
@@ -35,6 +38,17 @@ pub const CALL_TIMEOUT: Duration = Duration::from_secs(30);
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long finding and connecting to a peer may wait on one request.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+/// How long turning a locator into peers may take in all (the DNS lookup of
+/// a name, the names servers, the DHT, connecting), before the call gives up
+/// as unreachable.
+pub const RESOLVE_TIMEOUT: Duration = Duration::from_secs(25);
+
+/// DNS servers for names (`MORPH_DNS_SERVERS`, comma-separated `ip:port`),
+/// for checks that must not depend on the machine's resolver; empty: the
+/// system's.
+fn dns_servers() -> Vec<std::net::SocketAddr> {
+    std::env::var("MORPH_DNS_SERVERS").map(|v| v.split(',').filter_map(|a| a.trim().parse().ok()).collect()).unwrap_or_default()
+}
 
 /// The app-call node's identifiers: Weirdnet's own (so names servers and
 /// the DHT are the ones Weirdnet apps use), on a thread of its own name.
@@ -50,6 +64,7 @@ pub fn caller_config(relays: Vec<Multiaddr>) -> NodeConfig {
         request_timeout: CONNECT_TIMEOUT,
         app_idle_timeout: IDLE_TIMEOUT,
         app_body_max: app_call::BODY_MAX + 1,
+        dns_servers: dns_servers(),
         ..Default::default()
     }
 }
@@ -76,6 +91,8 @@ pub struct NetAppCaller {
     /// pass their own [`NetAppCaller::with_config`].
     use_install_network: bool,
     running: Mutex<Option<Running>>,
+    /// [`RESOLVE_TIMEOUT`] (shorter in tests).
+    resolve_timeout: Duration,
 }
 
 impl Default for NetAppCaller {
@@ -95,7 +112,7 @@ impl NetAppCaller {
 
     /// A caller whose node runs with `config()` (tests: an in-memory network).
     pub fn with_config(config: impl Fn() -> NodeConfig + Send + Sync + 'static) -> Self {
-        Self { config: Box::new(config), use_install_network: false, running: Mutex::new(None) }
+        Self { config: Box::new(config), use_install_network: false, running: Mutex::new(None), resolve_timeout: RESOLVE_TIMEOUT }
     }
 
     fn install_network() -> NetworkSettings {
@@ -126,6 +143,34 @@ impl NetAppCaller {
         let node = Arc::new(node);
         *running = Some(Running { relays, discovery: net.discovery_enabled(), peers: net.peers().to_vec(), node: node.clone() });
         Ok(node)
+    }
+
+    /// Give up finding a locator's peers after `wait` instead of [`RESOLVE_TIMEOUT`].
+    pub fn with_resolve_timeout(mut self, wait: Duration) -> Self {
+        self.resolve_timeout = wait;
+        self
+    }
+
+    /// [`Node::resolve_app`] on a thread of its own, given up after
+    /// [`Self::resolve_timeout`] (the thread then ends on its own when the
+    /// lookup does; the node outlives it).
+    fn resolve(&self, node: &Arc<Node<(), ()>>, request: &AppRequest) -> Result<Vec<(PeerId, Vec<Multiaddr>)>, AppCallError> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (node, app, who) = (node.clone(), request.app_name().to_string(), locator(&request.locator));
+        std::thread::Builder::new()
+            .name("morph-app-resolve".into())
+            .spawn(move || {
+                let _ = tx.send(node.resolve_app(&app, &who));
+            })
+            .map_err(|e| AppCallError::Unreachable(format!("could not start a lookup: {e}")))?;
+        match rx.recv_timeout(self.resolve_timeout) {
+            Ok(found) => found.map_err(|e| map_error(e, request)),
+            Err(_) => Err(AppCallError::Unreachable(format!(
+                "finding {} took more than {} s (DNS or the names servers did not answer)",
+                request.locator,
+                self.resolve_timeout.as_secs()
+            ))),
+        }
     }
 
     /// Stop the node (it starts again on the next call).
@@ -178,7 +223,7 @@ impl AppCaller for NetAppCaller {
             return Err(AppCallError::InvalidApp(app));
         }
         let node = self.node()?;
-        let peers = node.resolve_app(&app, &locator(&request.locator)).map_err(|e| map_error(e, &request))?;
+        let peers = self.resolve(&node, &request)?;
         let mut last = AppCallError::NotFound(request.locator.clone());
         for (peer, addrs) in peers {
             let mut req = weirdnet_net::AppRequest::new(&app, &request.method, &request.path);
@@ -270,6 +315,47 @@ mod tests {
             ]
         );
         assert!(rank(&AppCallError::NoHandler("x".into())) > rank(&AppCallError::NotFound("x".into())));
+    }
+
+    /// A DNS server on loopback: answers every query NXDOMAIN, or nothing.
+    fn dns_stub(answer: bool) -> std::net::SocketAddr {
+        let sock = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let at = sock.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 512];
+            while let Ok((n, from)) = sock.recv_from(&mut buf) {
+                if answer && n >= 12 {
+                    let mut out = buf[..n].to_vec();
+                    out[2] = 0x81 | (buf[2] & 0x01); // a response, recursion desired as asked
+                    out[3] = 0x83; // recursion available, NXDOMAIN
+                    out[6..12].fill(0); // no answers, authority or additional records
+                    let _ = sock.send_to(&out, from);
+                }
+            }
+        });
+        at
+    }
+
+    fn memory_caller(dns: std::net::SocketAddr, wait: Duration) -> NetAppCaller {
+        NetAppCaller::with_config(move || NodeConfig { memory: true, dns_servers: vec![dns], ..Default::default() }).with_resolve_timeout(wait)
+    }
+
+    /// A name with no `_weirdnet` TXT record is not found, quickly; a DNS
+    /// server that never answers makes the call unreachable after the
+    /// resolve timeout rather than hanging on the resolver's retries.
+    #[test]
+    fn a_name_lookup_is_bounded() {
+        let t = Instant::now();
+        let quick = memory_caller(dns_stub(true), Duration::from_secs(20)).call(req("muninn", "alice"));
+        assert!(matches!(quick, Err(AppCallError::NotFound(ref who)) if who == "alice"), "{:?}", quick.err());
+        assert!(t.elapsed() < Duration::from_secs(10), "{:?}", t.elapsed());
+
+        let t = Instant::now();
+        let stalled = memory_caller(dns_stub(false), Duration::from_secs(2)).call(req("muninn", "alice"));
+        let Err(AppCallError::Unreachable(why)) = stalled else { panic!("{:?}", stalled.err()) };
+        assert!(why.contains("finding alice took more than 2 s"), "{why}");
+        assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
+        assert!(app_call::error_text("weirdnet-muninn://alice/x", &AppCallError::Unreachable(why)).0.starts_with("Couldn't reach alice"));
     }
 
     #[test]

@@ -2665,6 +2665,7 @@ def main():
     ap.add_argument("--only", choices=["downloads", "windows", "popups", "omnibox", "relays", "profile-lock"], help="run just this check")
     ap.add_argument("--screenshots", help="save screenshots of checks that take them (X11) here")
     args = ap.parse_args()
+    start_dns_stub()
     relay = start_local_relay(args.local_relay) if args.local_relay else None
     app = start_app_server(args.app_server) if relay and args.app_server else None
     try:
@@ -2674,6 +2675,30 @@ def main():
             if proc:
                 proc.stdin.close()
                 proc.terminate()
+
+
+def start_dns_stub():
+    """Answer every DNS query from Morph NXDOMAIN, on loopback
+    (MORPH_DNS_SERVERS, inherited by every Morph started here): a name typed
+    as a weirdnet-<app>:// link has its _weirdnet TXT record looked up, and
+    the runner's resolver has stalled on that for over a minute, failing the
+    "couldn't find alice" check. Morph bounds the lookup itself
+    (app_calls::RESOLVE_TIMEOUT); this keeps the check off the network."""
+    import socket
+    import threading
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(("127.0.0.1", 0))
+
+    def serve():
+        while True:
+            data, peer = sock.recvfrom(512)
+            if len(data) >= 12:
+                sock.sendto(data[:2] + bytes([0x81 | (data[2] & 1), 0x83]) + data[4:6] + bytes(6) + data[12:], peer)
+
+    threading.Thread(target=serve, daemon=True).start()
+    os.environ["MORPH_DNS_SERVERS"] = "127.0.0.1:%d" % sock.getsockname()[1]
+    print(f"INFO  dns  names resolve through a local NXDOMAIN stub at {os.environ['MORPH_DNS_SERVERS']}", flush=True)
 
 
 def start_app_server(binary):
