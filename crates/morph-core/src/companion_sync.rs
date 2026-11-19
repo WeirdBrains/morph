@@ -93,11 +93,13 @@ fn to_value<T: Serialize>(v: &T) -> Value {
     serde_json::to_value(v).expect("record json")
 }
 
-/// Largest synced chat op (its JSON). A sealed page travels hex-encoded, so one op must stay
-/// under half of `weirdnet_sync::PAGE_MAX` (the reply cap) with room for the envelope.
+/// Largest synced chat op (its JSON). A sealed page travels hex-encoded inside CBOR that
+/// sends bytes as an integer array (about four times the plaintext on the wire), so one op
+/// must stay under a quarter of `weirdnet_sync::PAGE_MAX` (the reply cap) with room for the
+/// envelope.
 /// `ChatTurn::for_sync` bounds the answer's bytes, not its JSON (escaped quotes, newlines and
 /// control characters grow it up to sixfold), nor the question or sources.
-const MAX_SYNCED_TURN: usize = 96 * 1024;
+const MAX_SYNCED_TURN: usize = 56 * 1024;
 const MAX_SYNCED_QUESTION: usize = 8 * 1024;
 const MAX_SYNCED_SOURCES: usize = 64;
 const MAX_SYNCED_SOURCE: usize = 2048;
@@ -832,7 +834,7 @@ mod tests {
         turn.sources = (0..2000).map(|i| format!("https://example.com/{i}/{}", "\u{3}".repeat(4000))).collect();
         let synced = synced_turn(&turn);
         assert!(op_len(&synced) <= MAX_SYNCED_TURN, "{}", op_len(&synced));
-        const { assert!(MAX_SYNCED_TURN + 1024 < (weirdnet_sync::PAGE_MAX - 8 * 1024) / 2, "fits one hex-sealed page") };
+        const { assert!(MAX_SYNCED_TURN + 1024 < (weirdnet_sync::PAGE_MAX - 16 * 1024) / 4, "fits one sealed page on the wire") };
         assert!(synced.answer.ends_with("ran it)*"));
         assert_eq!(synced_turn(&turn), synced, "deterministic");
         let mut log = ChatLog::default();
