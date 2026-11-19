@@ -12,6 +12,11 @@ $meta = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
 $version = ($meta.packages | Where-Object { $_.name -eq "morph-desktop" }).version
 $name = "morph-$version-x86_64-pc-windows-msvc"
 
+# llama.cpp (local models) for an explicit x86-64-v3 baseline rather than the
+# build machine's CPU: AVX, AVX2, FMA, F16C and BMI2, no AVX-512. weirdnet-model
+# refuses local models cleanly on older CPUs.
+$env:GGML_NATIVE = "OFF"; $env:GGML_AVX = "ON"; $env:GGML_AVX2 = "ON"; $env:GGML_FMA = "ON"
+$env:GGML_F16C = "ON"; $env:GGML_BMI2 = "ON"; $env:GGML_AVX512 = "OFF"
 cargo build --locked --release -p morph-desktop
 if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
 
