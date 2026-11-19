@@ -496,6 +496,8 @@ mod tests {
         assert_eq!((p.steering.pending.len(), p.steering.replans.len(), p.steering.wait_for_me), (1, 1, true));
         let rid = p.steering.replans[0].id.clone();
         let mut back = back;
-        assert!(!back.undo_replan(&id, &rid), "the plan moved on: a step is running");
+        // The step in flight went back to the queue on load, so the plan is what the replan made.
+        assert!(back.undo_replan(&id, &rid));
+        assert_eq!(back.projects.get(&id).unwrap().brief, "How does Tokio cancel a task?");
     }
 }
