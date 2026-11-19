@@ -23,7 +23,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use morph_ai::{AgentSettings, AiStore, ChatLog, FileStore, Journals, McpConfigs, Roster as Companions, StoreError};
+use morph_ai::{AgentSettings, AiStore, ChatLog, ChatTurn, FileStore, Journals, McpConfigs, Roster as Companions, StoreError};
 use morph_store::Library;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -59,6 +59,10 @@ struct State {
     allow_ids: BTreeMap<String, u64>,
     #[serde(default)]
     next_allow_id: u64,
+    /// Revoked devices as of the last merge, so a revocation that arrives with no new ops
+    /// still voids that device's grants on the next pass.
+    #[serde(default)]
+    revoked: BTreeSet<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -89,10 +93,62 @@ fn to_value<T: Serialize>(v: &T) -> Value {
     serde_json::to_value(v).expect("record json")
 }
 
+/// Largest synced chat op (its JSON). A sealed page travels hex-encoded, so one op must stay
+/// under half of `weirdnet_sync::PAGE_MAX` (the reply cap) with room for the envelope.
+/// `ChatTurn::for_sync` bounds the answer's bytes, not its JSON (escaped quotes, newlines and
+/// control characters grow it up to sixfold), nor the question or sources.
+const MAX_SYNCED_TURN: usize = 96 * 1024;
+const MAX_SYNCED_QUESTION: usize = 8 * 1024;
+const MAX_SYNCED_SOURCES: usize = 64;
+const MAX_SYNCED_SOURCE: usize = 2048;
+
+fn clip_str(s: &mut String, max: usize) {
+    if s.len() > max {
+        let mut cut = max;
+        while !s.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        s.truncate(cut);
+    }
+}
+
+fn op_len(turn: &ChatTurn) -> usize {
+    serde_json::to_vec(&RecOp::Put { value: to_value(turn) }).map_or(usize::MAX, |b| b.len())
+}
+
+/// The copy of a turn that syncs: [`ChatTurn::for_sync`], then clipped further until its op
+/// fits [`MAX_SYNCED_TURN`]. Deterministic, so the device with the full turn recognises it.
+fn synced_turn(turn: &ChatTurn) -> ChatTurn {
+    const CLIPPED: &str = "\n\n*(clipped on this device; the full answer is on the device that ran it)*";
+    let mut t = turn.for_sync();
+    if op_len(&t) <= MAX_SYNCED_TURN {
+        return t;
+    }
+    clip_str(&mut t.question, MAX_SYNCED_QUESTION);
+    t.sources.truncate(MAX_SYNCED_SOURCES);
+    t.sources.iter_mut().for_each(|s| clip_str(s, MAX_SYNCED_SOURCE));
+    // Then the answer, shorter each round (to the marker alone at worst), so this ends;
+    // then the last sources.
+    let answer = t.answer.clone();
+    let mut keep = answer.len();
+    loop {
+        let len = op_len(&t);
+        if len <= MAX_SYNCED_TURN || keep == 0 {
+            break;
+        }
+        keep = keep * MAX_SYNCED_TURN / len / 2;
+        t.answer = answer.clone();
+        clip_str(&mut t.answer, keep);
+        t.answer.push_str(CLIPPED);
+    }
+    while op_len(&t) > MAX_SYNCED_TURN && t.sources.pop().is_some() {}
+    t
+}
+
 /// Records from the files. Allows get a sync key: the one they were synced under, else
 /// `<our node>/<local id>`.
 fn read_files(store: &dyn AiStore, our: &str, base: &State) -> Result<State> {
-    let mut st = State { allow_ids: BTreeMap::new(), next_allow_id: base.next_allow_id, recs: BTreeMap::new() };
+    let mut st = State { allow_ids: BTreeMap::new(), next_allow_id: base.next_allow_id, recs: BTreeMap::new(), revoked: base.revoked.clone() };
     let mut c = BTreeMap::new();
     if let Some(r) = store.load_roster()? {
         for p in r.companions() {
@@ -135,8 +191,17 @@ fn read_files(store: &dyn AiStore, our: &str, base: &State) -> Result<State> {
     st.recs.insert(GRANTS.into(), g);
 
     let mut t = BTreeMap::new();
+    let synced = base.recs.get(CHATS);
     for turn in store.load_chats()?.unwrap_or_default().turns {
-        t.insert(format!("t/{}", turn.id), to_value(&turn.for_sync()));
+        let id = format!("t/{}", turn.id);
+        // A turn this device only has as the merged (clipped) copy is logged as it came, not
+        // clipped again: re-clipping a clipped answer changes it, and that newer copy would
+        // replace the full answer on the device that ran it.
+        let v = match synced.and_then(|b| b.get(&id)) {
+            Some(prev) if serde_json::from_value::<ChatTurn>(prev.clone()).is_ok_and(|p| p == turn) => prev.clone(),
+            _ => to_value(&synced_turn(&turn)),
+        };
+        t.insert(id, v);
     }
     st.recs.insert(CHATS.into(), t);
 
@@ -406,7 +471,7 @@ fn write_files(store: &dyn AiStore, st: &mut State, types: &[&str]) -> Result<bo
         let current = store.load_chats()?;
         if let Some(cur) = &current {
             for t in log.turns.iter_mut() {
-                if let Some(full) = cur.turns.iter().find(|c| c.id == t.id && c.for_sync() == *t) {
+                if let Some(full) = cur.turns.iter().find(|c| c.id == t.id && synced_turn(c) == *t) {
                     *t = full.clone();
                 }
             }
@@ -444,7 +509,7 @@ pub fn materialize(lib: &mut Library, store: &dyn AiStore) -> Result<bool> {
     let Some(base) = load_snapshot(lib)? else { return Ok(false) };
     let log = load_log(lib)?;
     let revoked: BTreeSet<String> = load_roster(lib)?.certs.iter().filter(|c| !c.active()).map(|c| c.peer_id.clone()).collect();
-    let mut st = State { recs: base.recs.clone(), allow_ids: base.allow_ids.clone(), next_allow_id: base.next_allow_id };
+    let mut st = State { recs: base.recs.clone(), allow_ids: base.allow_ids.clone(), next_allow_id: base.next_allow_id, revoked: revoked.clone() };
     for typ in &types {
         st.recs.insert(typ.to_string(), merge_type(lib, &log, typ, &revoked)?);
     }
@@ -452,6 +517,20 @@ pub fn materialize(lib: &mut Library, store: &dyn AiStore) -> Result<bool> {
     let changed = write_files(store, &mut st, &types)?;
     save_snapshot(lib, &st)?;
     Ok(changed)
+}
+
+/// Whether the sync roster has revocations the last merge did not see (a pass then
+/// materializes even when no new ops came in).
+pub fn revocations_pending(lib: &Library) -> bool {
+    if on(lib).is_empty() {
+        return false;
+    }
+    let Ok(Some(base)) = load_snapshot(lib) else { return false };
+    let revoked: BTreeSet<String> = match load_roster(lib) {
+        Ok(r) => r.certs.iter().filter(|c| !c.active()).map(|c| c.peer_id.clone()).collect(),
+        Err(_) => return false,
+    };
+    revoked != base.revoked
 }
 
 /// A device was revoked on this device: void its grants now, not on the next pass.
@@ -725,6 +804,65 @@ mod tests {
         backfill(&mut l, &s, 100).unwrap();
         materialize(&mut l, &s).unwrap();
         assert_eq!(s.load_chats().unwrap().unwrap().turns[0], long);
+    }
+
+    #[test]
+    fn a_clipped_answer_is_not_clipped_again_where_only_the_clipped_copy_is() {
+        let (_t, mut l, s) = setup();
+        backfill(&mut l, &s, 100).unwrap();
+        // Multi-byte text, so the clip lands short of the byte limit.
+        let full = ChatTurn::new(AgentId::new("local"), "q", "é".repeat(morph_ai::chats::MAX_SYNCED_ANSWER), 1);
+        let clipped = synced_turn(&full);
+        assert!(clipped.answer.len() < full.answer.len());
+        remote(&mut l, "b", 50, CHATS, &format!("t/{}", full.id), put(&clipped));
+        materialize(&mut l, &s).unwrap();
+        assert_eq!(s.load_chats().unwrap().unwrap().turns, std::slice::from_ref(&clipped));
+        backfill(&mut l, &s, 200).unwrap();
+        assert!(ours(&l, CHATS).is_empty(), "the clipped copy is not re-clipped and logged back");
+        // On the device that ran it, the full answer stays.
+        assert_eq!(synced_turn(&full), clipped);
+    }
+
+    #[test]
+    fn every_synced_turn_fits_a_sync_page() {
+        let (_t, mut l, s) = setup();
+        // Control characters escape to six bytes each in JSON; the question and sources are
+        // not bounded by `for_sync`.
+        let mut turn = ChatTurn::new(AgentId::new("local"), "\u{1}".repeat(300 * 1024), "\u{2}\"".repeat(morph_ai::chats::MAX_SYNCED_ANSWER), 1);
+        turn.sources = (0..2000).map(|i| format!("https://example.com/{i}/{}", "\u{3}".repeat(4000))).collect();
+        let synced = synced_turn(&turn);
+        assert!(op_len(&synced) <= MAX_SYNCED_TURN, "{}", op_len(&synced));
+        const { assert!(MAX_SYNCED_TURN + 1024 < (weirdnet_sync::PAGE_MAX - 8 * 1024) / 2, "fits one hex-sealed page") };
+        assert!(synced.answer.ends_with("ran it)*"));
+        assert_eq!(synced_turn(&turn), synced, "deterministic");
+        let mut log = ChatLog::default();
+        log.push(turn.clone());
+        s.save_chats(&log).unwrap();
+        backfill(&mut l, &s, 100).unwrap();
+        let ops = load_log(&l).unwrap().iter_node(&NodeId::new("a")).filter(|e| e.typ == CHATS).map(|e| e.op.len()).collect::<Vec<_>>();
+        assert_eq!(ops.len(), 1);
+        assert!(ops[0] <= MAX_SYNCED_TURN);
+        materialize(&mut l, &s).unwrap();
+        assert_eq!(s.load_chats().unwrap().unwrap().turns[0], turn, "the full turn stays here");
+        backfill(&mut l, &s, 101).unwrap();
+        assert_eq!(ours(&l, CHATS).len(), 1, "and is not logged again");
+    }
+
+    #[test]
+    fn a_revocation_with_no_new_ops_is_still_applied() {
+        let (_t, mut l, s) = setup();
+        backfill(&mut l, &s, 100).unwrap();
+        let allow = json!({"companion": "all", "rule": {"tier": "research", "provider": null}, "created_unix_ms": 3});
+        remote(&mut l, "b", 202, GRANTS, "allow/b/0", RecOp::Put { value: allow });
+        materialize(&mut l, &s).unwrap();
+        assert_eq!(s.load_policy().unwrap().unwrap().allows().len(), 1);
+        assert!(!revocations_pending(&l));
+        // The revocation reaches the roster (a peer's hello), with no ops to apply.
+        revoke(&mut l, "b");
+        assert!(revocations_pending(&l));
+        materialize(&mut l, &s).unwrap();
+        assert!(s.load_policy().unwrap().unwrap().allows().is_empty());
+        assert!(!revocations_pending(&l));
     }
 
     #[test]

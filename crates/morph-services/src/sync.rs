@@ -393,15 +393,17 @@ pub fn tick(home: &Path, profile_id: &str) -> Result<usize> {
     }
     // Companion records: merge what came in, and void a revoked device's grants as soon as a
     // revocation arrives from another device.
+    // `revocations_pending` also catches one that reached the library without new ops, or
+    // whose void failed on an earlier pass.
     let revoked_now = state.lock().map(|st| revoked_ids(&st.roster)).unwrap_or_default();
-    if applied > 0 || revoked_now != revoked_before {
-        let _ = library_db::with(home, profile_id, |lib| {
-            if let Err(e) = companion_sync::materialize(lib, &companion_sync::store(&dir)) {
-                eprintln!("morph-sync: companions: {e}");
-            }
-            Ok(())
-        });
-    }
+    let _ = library_db::with(home, profile_id, |lib| {
+        if (applied > 0 || revoked_now != revoked_before || companion_sync::revocations_pending(lib))
+            && let Err(e) = companion_sync::materialize(lib, &companion_sync::store(&dir))
+        {
+            eprintln!("morph-sync: companions: {e}");
+        }
+        Ok(())
+    });
     Ok(applied)
 }
 
