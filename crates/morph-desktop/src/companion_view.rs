@@ -93,6 +93,8 @@ pub struct CompanionView {
     /// The panel is folded to a slim strip (kept per profile in `companions/panel.json`, which
     /// does not sync).
     collapsed: bool,
+    /// The outline the waiting card put on the page.
+    outline: crate::companion_host::CardOutline,
 }
 
 /// Width of the folded panel's strip, in logical pixels.
@@ -140,8 +142,10 @@ enum Op {
         pending: Pending<morph_webview::page_read::ReadResult>,
         reply: Reply<(PageSnapshot, Option<u16>)>,
     },
-    /// A page action on the active tab (`reply` is `None` for a card's highlight).
+    /// A page action on the active tab (`reply` is `None` for a card's highlight and for
+    /// clearing it; `outline` is set for the card's highlight).
     Act {
+        outline: bool,
         pending: Pending<morph_webview::ActionResult>,
         reply: Option<Reply<ActedOn>>,
     },
@@ -270,6 +274,7 @@ impl CompanionView {
             exported: None,
             activity_frame: None,
             collapsed: false,
+            outline: Default::default(),
         };
         view.collapsed = load_collapsed(&view.store);
         if std::env::var_os("MORPH_COMPANION_DEMO").is_some_and(|v| v == "1") {
@@ -629,8 +634,14 @@ impl CompanionView {
                         let _ = reply.send(result.map(|d| (snapshot(d), None)).map_err(read_error));
                     }
                 },
-                Op::Act { pending, reply } => match pending.try_take() {
-                    None => self.ops.push(Op::Act { pending, reply }),
+                Op::Act { pending, reply, outline } => match pending.try_take() {
+                    None => self.ops.push(Op::Act { pending, reply, outline }),
+                    Some(result) if outline => {
+                        let id = result.ok().and_then(|o| o.highlight);
+                        if let Some(clear) = self.outline.shown(id) {
+                            self.act_quietly(clear, cx);
+                        }
+                    }
                     Some(result) => {
                         if let Some(reply) = reply {
                             let _ = reply.send(acted(result));
@@ -677,14 +688,23 @@ impl CompanionView {
                 let r = self.with_browser(cx, |b| b.load(&url));
                 let _ = reply.send(r.ok_or(HostError::Gone));
             }
-            HostCall::Act { request, reply } => match self.with_browser(cx, |b| b.active_tab_action(request)) {
-                Some(pending) => self.ops.push(Op::Act { pending, reply }),
-                None => {
-                    if let Some(reply) = reply {
-                        let _ = reply.send(gone());
+            HostCall::Act { request, reply } => {
+                let outline = reply.is_none() && matches!(request.action, morph_webview::Action::Highlight { .. });
+                if outline && let Some(clear) = self.outline.asked(&request) {
+                    self.act_quietly(clear, cx);
+                }
+                match self.with_browser(cx, |b| b.active_tab_action(request)) {
+                    Some(pending) => self.ops.push(Op::Act { pending, reply, outline }),
+                    None => {
+                        if outline {
+                            self.outline.shown(None);
+                        }
+                        if let Some(reply) = reply {
+                            let _ = reply.send(gone());
+                        }
                     }
                 }
-            },
+            }
             HostCall::Find(query, reply) => {
                 if self
                     .with_browser(cx, |b| {
@@ -749,7 +769,22 @@ impl CompanionView {
         let _ = self.store.append_line("tool-log.jsonl", &line.to_string());
     }
 
+    /// A page action nobody waits for (clearing the card's outline).
+    fn act_quietly(&mut self, request: morph_webview::ActionRequest, cx: &mut Context<Self>) {
+        if let Some(pending) = self.with_browser(cx, |b| b.active_tab_action(request)) {
+            self.ops.push(Op::Act { pending, reply: None, outline: false });
+        }
+    }
+
+    /// The card is answered or the task ended: its outline goes now, not after its 30 s fade.
+    fn clear_outline(&mut self, cx: &mut Context<Self>) {
+        if let Some(clear) = self.outline.done() {
+            self.act_quietly(clear, cx);
+        }
+    }
+
     fn stop(&mut self, cx: &mut Context<Self>) {
+        self.clear_outline(cx);
         self.worker.cancel(&self.selected);
         cx.notify();
     }
@@ -761,6 +796,7 @@ impl CompanionView {
             None => ("Declined".to_string(), ApprovalAnswer::Deny),
         };
         self.conversation().answer_card(&label);
+        self.clear_outline(cx);
         self.worker.answer(answer);
         cx.notify();
     }
@@ -815,6 +851,7 @@ impl CompanionView {
                     self.card_detail.insert(id, detail);
                 }
                 Msg::Done(id, Ok(outcome)) => {
+                    self.clear_outline(cx);
                     // Footnotes the trace backs stay; unbacked ones go with their markers.
                     let f = parse_citations(&outcome.text, &outcome.trace);
                     let notes = footnotes(&outcome.trace, f.citations.clone());
@@ -837,7 +874,10 @@ impl CompanionView {
                     shown.text = f.text;
                     self.last.insert(id, (question, shown, f.citations));
                 }
-                Msg::Done(id, Err(e)) => self.conversations.entry(id).or_default().fail(&e.to_string()),
+                Msg::Done(id, Err(e)) => {
+                    self.clear_outline(cx);
+                    self.conversations.entry(id).or_default().fail(&e.to_string());
+                }
             }
         }
         // One parse of each streaming tail per tick, however many deltas arrived.

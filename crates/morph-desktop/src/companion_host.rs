@@ -175,6 +175,70 @@ pub fn highlight_request(target: &PageTarget, approved_url: &str) -> ActionReque
     on_approved(Action::Highlight { target: locator(target), duration: HIGHLIGHT }, approved_url)
 }
 
+/// The outline a waiting card put on its target ([`highlight_request`]). The panel clears that
+/// one outline (`ClearHighlightOne`) once the card is answered or the task ends, rather than
+/// leaving it to fade. The clear goes to the origin the outline was set on, so it never acts on
+/// another site; an outline that is already gone makes it a no-op.
+#[derive(Debug, Default, PartialEq)]
+pub struct CardOutline(Outline);
+
+#[derive(Debug, Default, PartialEq)]
+enum Outline {
+    #[default]
+    None,
+    /// The highlight was sent; the page has not answered yet.
+    Asked {
+        origin: Option<String>,
+        done: bool,
+    },
+    Shown {
+        id: morph_webview::HighlightId,
+        origin: Option<String>,
+    },
+}
+
+fn clear_one(id: morph_webview::HighlightId, origin: Option<String>) -> ActionRequest {
+    ActionRequest { expect_origin: origin, ..ActionRequest::new(Action::ClearHighlightOne(id)) }
+}
+
+impl CardOutline {
+    /// `request` went to the page: when it is a highlight, it is the card's outline now (and an
+    /// earlier one still up is cleared).
+    pub fn asked(&mut self, request: &ActionRequest) -> Option<ActionRequest> {
+        if !matches!(request.action, Action::Highlight { .. }) {
+            return None;
+        }
+        let earlier = self.done();
+        self.0 = Outline::Asked { origin: request.expect_origin.clone(), done: false };
+        earlier
+    }
+
+    /// The page answered the highlight with `id` (`None`: it failed). The clear to send when the
+    /// card was already answered.
+    pub fn shown(&mut self, id: Option<morph_webview::HighlightId>) -> Option<ActionRequest> {
+        let Outline::Asked { origin, done } = std::mem::take(&mut self.0) else { return None };
+        let id = id?;
+        if done {
+            return Some(clear_one(id, origin));
+        }
+        self.0 = Outline::Shown { id, origin };
+        None
+    }
+
+    /// The card was answered (allowed or declined) or the task ended: the clear to send now, if
+    /// the outline is up; one still on its way is cleared when it arrives.
+    pub fn done(&mut self) -> Option<ActionRequest> {
+        match std::mem::take(&mut self.0) {
+            Outline::Shown { id, origin } => Some(clear_one(id, origin)),
+            Outline::Asked { origin, .. } => {
+                self.0 = Outline::Asked { origin, done: true };
+                None
+            }
+            Outline::None => None,
+        }
+    }
+}
+
 /// Whether the profile is locked now (Lead Dev's profile lock): the hosts then refuse every
 /// call with [`HostError::Locked`], as `DeviceCaller` and the MCP host fail closed.
 pub type LockCheck = Arc<dyn Fn() -> bool + Send + Sync>;
@@ -940,6 +1004,43 @@ mod tests {
             assert!(matches!(research.fetch("https://a.example/", None).await, Err(HostError::Locked)));
         });
         assert!(call_rx.try_recv().is_err(), "nothing reached the panel");
+    }
+
+    #[test]
+    fn a_card_outline_is_cleared_once_on_its_origin_whenever_the_card_is_done() {
+        use morph_webview::HighlightId;
+        let highlight = highlight_request(&PageTarget::label("Sign in"), "https://a.example/login?next=1");
+        let clear =
+            |id| ActionRequest { expect_origin: Some("https://a.example".into()), ..ActionRequest::new(Action::ClearHighlightOne(HighlightId(id))) };
+
+        // Shown, then the card is answered: that one outline is cleared, once.
+        let mut o = CardOutline::default();
+        assert_eq!(o.asked(&highlight), None);
+        assert_eq!(o.shown(Some(HighlightId(7))), None);
+        assert_eq!(o.done(), Some(clear(7)));
+        assert_eq!(o.done(), None, "cleared once");
+
+        // Answered before the page said which outline: cleared when the id arrives.
+        let mut o = CardOutline::default();
+        o.asked(&highlight);
+        assert_eq!(o.done(), None);
+        assert_eq!(o.shown(Some(HighlightId(8))), Some(clear(8)));
+        assert_eq!(o.done(), None);
+
+        // A highlight that failed leaves nothing to clear.
+        let mut o = CardOutline::default();
+        o.asked(&highlight);
+        assert_eq!(o.shown(None), None);
+        assert_eq!(o.done(), None);
+
+        // A new card's outline clears the one before; other actions are not outlines.
+        let mut o = CardOutline::default();
+        o.asked(&highlight);
+        o.shown(Some(HighlightId(1)));
+        assert_eq!(o.asked(&highlight), Some(clear(1)));
+        assert_eq!(o.asked(&on_approved(Action::Click(locator(&PageTarget::label("x"))), "https://a.example/")), None);
+        assert_eq!(o.shown(Some(HighlightId(2))), None);
+        assert_eq!(o.done(), Some(clear(2)));
     }
 
     #[test]
