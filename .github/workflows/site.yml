@@ -11,6 +11,12 @@ on:
 permissions:
   contents: read
 
+# One Pages deploy at a time, in push order, so a slower older run cannot
+# overwrite a newer page.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-22.04
