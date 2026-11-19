@@ -127,11 +127,44 @@ pub fn secrets_for(profile_dir: &Path) -> Option<Arc<dyn McpSecrets>> {
 /// snapshot holds [`secret_summary`] instead.
 type SecretValues = BTreeMap<String, BTreeMap<String, String>>;
 
-/// What the snapshot keeps of a server's secrets: their names and a digest of the values.
-fn secret_summary(map: &BTreeMap<String, String>) -> Value {
-    use sha2::{Digest, Sha256};
-    let digest = Sha256::digest(serde_json::to_vec(map).expect("secrets json"));
-    json!({ "names": map.keys().collect::<Vec<_>>(), "digest": digest.iter().map(|b| format!("{b:02x}")).collect::<String>() })
+/// HKDF context of the key the snapshot's secret digests are keyed with.
+const SECRET_DIGEST_CONTEXT: &[u8] = b"morph/mcp-secret-digest/v1";
+/// Format of [`secret_summary`]; summaries without it are the old unkeyed form.
+const SUMMARY_V: u64 = 1;
+
+/// The key for secret digests, from the head epoch key (HKDF, salt the user id), so a rotation
+/// changes every digest and the next pass writes each secret again under the new key. None
+/// before the first rotation, when no secret can be written anyway.
+fn digest_key(sync: &SyncState) -> Option<weirdnet_keys::Key32> {
+    let id = sync.current_key().id?;
+    let key = sync.keys.get(&id)?;
+    weirdnet_keys::kdf::hkdf(&key.0, Some(sync.user_id.as_bytes()), SECRET_DIGEST_CONTEXT).ok()
+}
+
+/// What the snapshot keeps of a server's secrets: their names and a keyed BLAKE3 digest of the
+/// values (names only while there is no key). Never the values, nor a digest one could test
+/// guesses against without the epoch key.
+fn secret_summary(map: &BTreeMap<String, String>, key: Option<&weirdnet_keys::Key32>) -> Value {
+    let names = map.keys().collect::<Vec<_>>();
+    match key {
+        Some(k) => {
+            let bytes = weirdnet_keys::Zeroizing::new(serde_json::to_vec(map).expect("secrets json"));
+            json!({ "v": SUMMARY_V, "names": names, "digest": blake3::keyed_hash(&k.0, &bytes).to_hex().to_string() })
+        }
+        None => json!({ "v": SUMMARY_V, "names": names }),
+    }
+}
+
+/// Drop the digests of summaries in the old form (an unkeyed SHA-256): they are never saved
+/// again, and each such record counts as changed once, so the next pass writes it anew.
+fn scrub_old_summaries(st: &mut State) {
+    for v in st.recs.get_mut(MCP_SECRETS).into_iter().flat_map(|r| r.values_mut()) {
+        if v.get("v").and_then(Value::as_u64) != Some(SUMMARY_V)
+            && let Some(o) = v.as_object_mut()
+        {
+            o.remove("digest");
+        }
+    }
 }
 
 fn summary_names(v: &Value) -> impl Iterator<Item = String> + '_ {
@@ -139,7 +172,12 @@ fn summary_names(v: &Value) -> impl Iterator<Item = String> + '_ {
 }
 
 /// This device's secrets for every server its configs or the last merge know of.
-fn read_secrets(store: &dyn AiStore, secrets: &dyn McpSecrets, base: &State) -> Result<(BTreeMap<String, Value>, SecretValues)> {
+fn read_secrets(
+    store: &dyn AiStore,
+    secrets: &dyn McpSecrets,
+    base: &State,
+    key: Option<&weirdnet_keys::Key32>,
+) -> Result<(BTreeMap<String, Value>, SecretValues)> {
     let mut names: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for s in store.load_mcp()?.unwrap_or_default().servers {
         names.entry(s.id.clone()).or_default().extend(s.secret_names());
@@ -154,7 +192,7 @@ fn read_secrets(store: &dyn AiStore, secrets: &dyn McpSecrets, base: &State) -> 
         let map: BTreeMap<String, String> = names.into_iter().filter_map(|n| secrets.get(&id, &n).map(|v| (n, v))).collect();
         if !map.is_empty() {
             let rid = format!("k/{id}");
-            recs.insert(rid.clone(), secret_summary(&map));
+            recs.insert(rid.clone(), secret_summary(&map, key));
             values.insert(rid, map);
         }
     }
@@ -172,6 +210,7 @@ fn write_secrets(
     merged: &BTreeMap<String, Value>,
     base: &State,
     unreadable: &BTreeSet<String>,
+    key: Option<&weirdnet_keys::Key32>,
 ) -> (BTreeMap<String, Value>, bool) {
     let empty = BTreeMap::new();
     let before = base.recs.get(MCP_SECRETS).unwrap_or(&empty);
@@ -199,7 +238,7 @@ fn write_secrets(
             }
             changed = true;
         }
-        out.insert(rid.clone(), secret_summary(&map));
+        out.insert(rid.clone(), secret_summary(&map, key));
     }
     for rid in before.keys().filter(|r| !merged.contains_key(*r) && !unreadable.contains(*r)) {
         if let Some(id) = rid.strip_prefix("k/") {
@@ -367,7 +406,13 @@ fn records_state(lib: &Library) -> Result<SyncState> {
 
 /// Records from the files. Allows get a sync key: the one they were synced under, else
 /// `<our node>/<local id>`.
-fn read_files(store: &dyn AiStore, secrets: Option<&dyn McpSecrets>, our: &str, base: &State) -> Result<(State, SecretValues)> {
+fn read_files(
+    store: &dyn AiStore,
+    secrets: Option<&dyn McpSecrets>,
+    key: Option<&weirdnet_keys::Key32>,
+    our: &str,
+    base: &State,
+) -> Result<(State, SecretValues)> {
     let mut st = State {
         allow_ids: BTreeMap::new(),
         next_allow_id: base.next_allow_id,
@@ -432,7 +477,7 @@ fn read_files(store: &dyn AiStore, secrets: Option<&dyn McpSecrets>, our: &str, 
     let mut values = SecretValues::new();
     let k = match secrets {
         Some(secrets) => {
-            let (k, v) = read_secrets(store, secrets, base)?;
+            let (k, v) = read_secrets(store, secrets, base, key)?;
             values = v;
             k
         }
@@ -468,7 +513,11 @@ fn first_run_value(typ: &str, record: &str, value: &Value) -> bool {
 }
 
 fn load_snapshot(lib: &Library) -> Result<Option<State>> {
-    Ok(lib.sync_meta(META_SNAPSHOT)?.and_then(|b| serde_json::from_slice(&b).ok()))
+    let mut st: Option<State> = lib.sync_meta(META_SNAPSHOT)?.and_then(|b| serde_json::from_slice(&b).ok());
+    if let Some(st) = &mut st {
+        scrub_old_summaries(st);
+    }
+    Ok(st)
 }
 
 fn save_snapshot(lib: &mut Library, st: &State) -> Result<()> {
@@ -492,8 +541,9 @@ pub fn backfill_with(lib: &mut Library, store: &dyn AiStore, secrets: Option<&dy
     let base = load_snapshot(lib)?;
     let first = base.is_none();
     let base = base.unwrap_or_default();
-    let (mut file, secret_values) = read_files(store, secrets, &our, &base)?;
     let mut sync = records_state(lib)?;
+    let key = digest_key(&sync);
+    let (mut file, secret_values) = read_files(store, secrets, key.as_ref(), &our, &base)?;
     let node = sync.our_node.clone();
     let mut wrote = false;
     for typ in &types {
@@ -822,7 +872,7 @@ pub fn materialize_with(lib: &mut Library, store: &dyn AiStore, secrets: Option<
             let summaries = match secrets {
                 Some(secrets) => {
                     let values = merged.into_iter().map(|(id, (v, _))| (id, v)).collect();
-                    let (summaries, changed) = write_secrets(secrets, &values, &base, &unreadable);
+                    let (summaries, changed) = write_secrets(secrets, &values, &base, &unreadable, digest_key(&sync).as_ref());
                     secrets_changed = changed;
                     summaries
                 }
@@ -1453,6 +1503,54 @@ mod tests {
         // Unlocked again, nothing changed.
         backfill_with(&mut l, &store, Some(&sec), 300).unwrap();
         assert_eq!(count(&l), 1);
+    }
+
+    #[test]
+    fn secret_digests_are_keyed_change_on_rotation_and_old_ones_migrate() {
+        use morph_ai::MemorySecrets;
+        use sha2::{Digest, Sha256};
+        let (_t, mut l) = lib();
+        bind_device(&mut l, [6; 32], &weirdnet_net::Keypair::generate_ed25519(), "a");
+        rotate(&mut l);
+        let store = MemoryStore::default();
+        let mut cfg = McpConfigs::default();
+        cfg.upsert(secret_server());
+        store.save_mcp(&cfg).unwrap();
+        let sec = MemorySecrets::default();
+        sec.set("srv", "TOKEN", "Bearer t-1");
+        let values = serde_json::to_vec(&BTreeMap::from([("TOKEN".to_string(), "Bearer t-1".to_string())])).unwrap();
+        let plain_sha: String = Sha256::digest(&values).iter().map(|b| format!("{b:02x}")).collect();
+        let unkeyed = blake3::hash(&values).to_hex().to_string();
+        let snapshot = |l: &Library| String::from_utf8(l.sync_meta(META_SNAPSHOT).unwrap().unwrap()).unwrap();
+        let digest = |l: &Library| load_snapshot(l).unwrap().unwrap().recs[MCP_SECRETS]["k/srv"]["digest"].as_str().unwrap().to_string();
+        let count = |l: &Library| load_log(l).unwrap().iter().filter(|e| e.typ == MCP_SECRETS).count();
+
+        backfill_with(&mut l, &store, Some(&sec), 100).unwrap();
+        let first = digest(&l);
+        let raw = snapshot(&l);
+        assert!(raw.contains(&first) && first.len() == 64, "a keyed digest is kept");
+        assert!(!raw.contains(&plain_sha) && !raw.contains(&unkeyed) && !raw.contains("t-1"), "no plain digest, no value");
+
+        // A rotation changes the digest, so the secret is written again under the new key.
+        let mut st = records_state(&l).unwrap();
+        st.rotate(5).unwrap();
+        save_roster(&mut l, &st.roster).unwrap();
+        morph_core::sync::save_epoch_keys(&mut l, &st.keys).unwrap();
+        backfill_with(&mut l, &store, Some(&sec), 200).unwrap();
+        let second = digest(&l);
+        assert_ne!(first, second, "the digest follows the epoch key");
+        assert_eq!(count(&l), 2);
+
+        // A snapshot from before (an unkeyed SHA-256): read as changed once, never kept.
+        let mut old: Value = serde_json::from_str(&snapshot(&l)).unwrap();
+        old["recs"][MCP_SECRETS]["k/srv"] = json!({ "names": ["TOKEN"], "digest": plain_sha });
+        l.set_sync_meta(META_SNAPSHOT, &serde_json::to_vec(&old).unwrap()).unwrap();
+        backfill_with(&mut l, &store, Some(&sec), 300).unwrap();
+        assert_eq!(count(&l), 3, "written once more");
+        assert!(!snapshot(&l).contains(&plain_sha), "the old digest is gone");
+        assert_eq!(digest(&l), second);
+        backfill_with(&mut l, &store, Some(&sec), 301).unwrap();
+        assert_eq!(count(&l), 3, "and only once");
     }
 
     #[test]
