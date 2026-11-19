@@ -547,6 +547,11 @@ impl BrowserView {
         &self.browser
     }
 
+    /// The browser, for the companion hosts (tab actions, page reads, host pages).
+    pub fn browser_mut(&mut self) -> &mut Browser {
+        &mut self.browser
+    }
+
     pub fn theme(&self) -> Theme {
         self.theme
     }

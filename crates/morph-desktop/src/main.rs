@@ -18,6 +18,7 @@ mod cli;
 mod companion_host;
 mod companion_markdown;
 mod companion_view;
+mod companion_web;
 mod default_browser;
 mod dialogs;
 mod identity;

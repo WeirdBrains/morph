@@ -557,6 +557,7 @@ impl Shell {
             }
             WindowStart::Moved(tab) => (tab.url, tab.session, Vec::new(), 0, tab.engine),
         };
+        let mut browser_entity: Option<Entity<BrowserView>> = None;
         self.error = match BrowserView::create(&home, &profile, &url, session, window, &keystrokes) {
             Ok(mut browser) => {
                 // Each window's tabs read apart in the event log.
@@ -577,6 +578,7 @@ impl Shell {
                     let any: AnyView = settings.clone().into();
                     view.update(cx, |v, cx| v.set_settings_view(any, cx));
                 }
+                browser_entity = Some(view.clone());
                 self.components.insert(0, Box::new(view));
                 None
             }
@@ -596,6 +598,10 @@ impl Shell {
         self.components.push(Box::new(identity.clone()));
         self.identity = Some(identity);
         let companions = cx.new(|cx| CompanionView::new(&home, &profile, theme, window, cx));
+        if let Some(view) = &browser_entity {
+            // The companion tools act on this window's tabs and read its pages (docs/bridge-api.md).
+            companions.update(cx, |c, _| c.set_browser(view.downgrade()));
+        }
         self.profile_subscriptions.push(cx.subscribe_in(&companions, window, |shell, _, request, window, cx| shell.request(request, window, cx)));
         self.components.push(Box::new(companions.clone()));
         self.companions = Some(companions);
