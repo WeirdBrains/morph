@@ -93,6 +93,17 @@ pub trait AiStore: Send + Sync {
     fn save_journals(&self, _journals: &Journals) -> Result<(), StoreError> {
         Err(StoreError::Io("this store does not keep journals".into()))
     }
+    /// Research projects as saved (not recovered: steps in flight stay as they are), for sync.
+    fn load_research(&self) -> Result<Option<crate::research::Projects>, StoreError> {
+        Ok(None)
+    }
+    fn save_research(&self, _projects: &crate::research::Projects) -> Result<(), StoreError> {
+        Err(StoreError::Io("this store does not keep research projects".into()))
+    }
+    /// This install's research device id (never synced).
+    fn load_research_device(&self) -> Result<Option<crate::lease::Device>, StoreError> {
+        Ok(None)
+    }
 }
 
 #[derive(Default)]
@@ -103,6 +114,15 @@ pub struct MemoryStore {
     chats: Mutex<Option<ChatLog>>,
     mcp: Mutex<Option<McpConfigs>>,
     journals: Mutex<Option<Journals>>,
+    research: Mutex<Option<crate::research::Projects>>,
+    research_device: Mutex<Option<crate::lease::Device>>,
+}
+
+impl MemoryStore {
+    /// Sets this store's research device id (a test seam; the files keep it in `research-device.json`).
+    pub fn set_research_device(&self, device: crate::lease::Device) {
+        *self.research_device.lock().unwrap() = Some(device);
+    }
 }
 
 impl AiStore for MemoryStore {
@@ -147,6 +167,16 @@ impl AiStore for MemoryStore {
     fn save_journals(&self, journals: &Journals) -> Result<(), StoreError> {
         *self.journals.lock().unwrap() = Some(journals.clone());
         Ok(())
+    }
+    fn load_research(&self) -> Result<Option<crate::research::Projects>, StoreError> {
+        Ok(self.research.lock().unwrap().clone())
+    }
+    fn save_research(&self, projects: &crate::research::Projects) -> Result<(), StoreError> {
+        *self.research.lock().unwrap() = Some(projects.clone());
+        Ok(())
+    }
+    fn load_research_device(&self) -> Result<Option<crate::lease::Device>, StoreError> {
+        Ok(self.research_device.lock().unwrap().clone())
     }
 }
 
@@ -236,6 +266,15 @@ impl AiStore for FileStore {
     }
     fn save_journals(&self, journals: &Journals) -> Result<(), StoreError> {
         self.write("journals.json", journals)
+    }
+    fn load_research(&self) -> Result<Option<crate::research::Projects>, StoreError> {
+        self.read(crate::research::FILE)
+    }
+    fn save_research(&self, projects: &crate::research::Projects) -> Result<(), StoreError> {
+        self.write(crate::research::FILE, projects)
+    }
+    fn load_research_device(&self) -> Result<Option<crate::lease::Device>, StoreError> {
+        self.read(crate::lease::DEVICE_FILE)
     }
 }
 

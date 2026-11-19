@@ -17,6 +17,7 @@ mod file_io;
 pub mod host;
 mod ids;
 pub mod journal;
+pub mod lease;
 #[cfg(feature = "local")]
 pub mod local;
 #[cfg(feature = "local")]

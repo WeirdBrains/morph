@@ -13,7 +13,7 @@ use crate::companion_view::CompanionView;
 use crate::widgets::{button, chip};
 
 /// Where the projects are kept, in the profile's `companions/` directory.
-pub const FILE: &str = "research.json";
+pub use morph_ai::research::FILE;
 
 pub fn now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or_default()

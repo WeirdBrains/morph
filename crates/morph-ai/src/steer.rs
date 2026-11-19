@@ -185,6 +185,9 @@ pub struct Steering {
     /// "Wait for me": a check-in holds the project (Needs you) until it is answered.
     #[serde(default)]
     pub wait_for_me: bool,
+    /// Ids of steers that came from other devices and were already taken in (so a late copy is ignored).
+    #[serde(default)]
+    pub seen_remote: Vec<String>,
     /// Plan version (see [`Replan::version`]).
     #[serde(default = "one")]
     pub plan_version: u32,
@@ -209,6 +212,7 @@ impl Default for Steering {
             checkin_every_ms: DAY_MS,
             last_checkin_ms: 0,
             wait_for_me: false,
+            seen_remote: Vec::new(),
             plan_version: 1,
         }
     }

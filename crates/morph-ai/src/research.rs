@@ -25,6 +25,9 @@ use crate::ids::new_id;
 pub use crate::steer::Steering;
 use crate::store::StoreError;
 
+/// Where the projects are kept, in the profile's `companions/` directory.
+pub const FILE: &str = "research.json";
+
 const HOUR_MS: u64 = 3_600_000;
 const DAY_MS: u64 = 24 * HOUR_MS;
 
@@ -142,6 +145,9 @@ pub struct ResearchProject {
     /// The living report's revisions (slice 4d).
     #[serde(default)]
     pub reports: Vec<crate::report::ReportRevision>,
+    /// The device that runs this project (the lease, see `lease.rs`); `None` before sync.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<crate::lease::Owner>,
     pub created_ms: u64,
 }
 
@@ -186,6 +192,7 @@ impl ResearchProject {
             findings: Vec::new(),
             steering: Steering::default(),
             reports: Vec::new(),
+            owner: None,
             created_ms: now,
         }
     }
@@ -261,11 +268,17 @@ impl ResearchProject {
 /// Every project, and the setting that applies Always allow to all of them. One file.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Projects {
+    /// This device's id (runtime only): projects owned by another device are not run here.
+    #[serde(skip)]
+    pub device: String,
     #[serde(default)]
     pub projects: Vec<ResearchProject>,
     /// "Apply Always allow to all projects".
     #[serde(default)]
     pub always_allow_all: bool,
+    /// Steers made on a device that does not own the project, waiting for its owner.
+    #[serde(default)]
+    pub queued: Vec<crate::lease::QueuedSteer>,
 }
 
 impl Projects {
@@ -596,7 +609,7 @@ pub enum Next {
 /// setting) skips the caps; the site rate and the power rules are the caller's.
 pub fn next_action(projects: &Projects, caps: &Caps, now: u64) -> Next {
     for p in &projects.projects {
-        if p.state != ProjectState::Running {
+        if p.state != ProjectState::Running || !projects.mine(p) {
             continue;
         }
         let Some(i) = p.next_step() else { return Next::Finish(p.id.clone()) };
@@ -1157,7 +1170,7 @@ mod tests {
         assert_eq!((p.state, p.plan.len(), p.always_allow, p.signed_in), (ProjectState::Paused, 3, false, false));
         assert_eq!(title_of(&"x".repeat(80)).chars().count(), 61);
         assert_eq!(title_of(""), "Research project");
-        let bytes = Projects { projects: vec![p], always_allow_all: false }.to_bytes().unwrap();
+        let bytes = Projects { projects: vec![p], ..Default::default() }.to_bytes().unwrap();
         assert_eq!(Projects::from_bytes(Some(&bytes), 9).unwrap().projects.len(), 1);
         assert!(Projects::from_bytes(None, 9).unwrap().projects.is_empty());
     }
