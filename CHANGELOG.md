@@ -7,7 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Updated to weirdnet-sync 0.4.0 and weirdnet-net 0.7.0. Linked-device calls use weirdnet-sync's own caller check.
+- Local models on an older x86 CPU (without AVX2, most from before 2013) are refused with a clear message instead of crashing Morph; use remote inference there. Release builds for x86_64 (Linux tarball, deb, rpm, Arch, Nix, Windows, the Intel half of the macOS app) build llama.cpp for a fixed x86-64-v3 baseline (AVX, AVX2, FMA, F16C, BMI2, no AVX-512) instead of the build machine's CPU. ARM builds are unchanged.
+
+- Updated to weirdnet-sync 0.4.0, weirdnet-net 0.7.0 and weirdnet-model 0.2.0. Linked-device calls use weirdnet-sync's own caller check.
 
 - A revoked device can no longer change your companions, grants or MCP servers: everything it wrote to them is void, from before the revocation too, and the last version from your other devices comes back. Anything it wrote after the revocation is ignored everywhere, even when another device relays it late. A synced MCP server that runs a local command starts only if it came from this device or a linked device that is not revoked (docs/library-sync.md).
 
