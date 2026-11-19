@@ -106,17 +106,25 @@ pub fn store(profile_dir: &Path) -> FileStore {
 static SECRETS: Mutex<Vec<(PathBuf, Weak<dyn McpSecrets>)>> = Mutex::new(Vec::new());
 
 /// Use `secrets` as the profile's MCP secrets store while it lives: the MCP host's own
-/// (`LocalSecrets`), so what sync writes is what it reads and the storage (a user-only file,
-/// encrypted at rest later) stays behind [`McpSecrets`]. Sync never reads that storage itself.
+/// (`LocalSecrets`, sealed at rest through `FileIo`), so what sync writes is what it reads and
+/// the storage stays behind [`McpSecrets`]. Sync never reads that storage itself.
 pub fn share_secrets(profile_dir: &Path, secrets: &Arc<dyn McpSecrets>) {
     let mut all = SECRETS.lock().unwrap_or_else(|p| p.into_inner());
     all.retain(|(p, w)| p != profile_dir && w.strong_count() > 0);
     all.push((profile_dir.to_path_buf(), Arc::downgrade(secrets)));
 }
 
-/// The profile's shared MCP secrets store, if the host has one open. None: sync leaves the
-/// secrets as they were merged last (it neither reads a missing store as empty nor writes).
+/// The profile's shared MCP secrets store, if the host has one open and the profile is
+/// unlocked (a locked store reads empty, which must never look like deleted secrets). None:
+/// sync leaves the secrets as they were merged last, reading and writing nothing.
 pub fn secrets_for(profile_dir: &Path) -> Option<Arc<dyn McpSecrets>> {
+    if crate::profile_lock::is_locked_in(&profile_dir.join("companions")) {
+        return None;
+    }
+    shared_secrets(profile_dir)
+}
+
+fn shared_secrets(profile_dir: &Path) -> Option<Arc<dyn McpSecrets>> {
     SECRETS.lock().unwrap_or_else(|p| p.into_inner()).iter().find(|(p, _)| p == profile_dir).and_then(|(_, w)| w.upgrade())
 }
 
@@ -155,6 +163,9 @@ fn read_secrets(store: &dyn AiStore, secrets: &dyn McpSecrets, base: &State) -> 
             values.insert(rid, map);
         }
     }
+    // Locked while reading: the values may have read empty. A locked read fails here
+    // (`StoreError::Locked`), so the pass stops before it logs anything.
+    store.load_mcp()?;
     Ok((recs, values))
 }
 
@@ -1410,13 +1421,14 @@ mod tests {
     #[test]
     fn sync_uses_only_the_secrets_store_the_host_shares() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(secrets_for(dir.path()).is_none(), "nothing shared: secrets are left alone");
+        assert!(shared_secrets(dir.path()).is_none(), "nothing shared: secrets are left alone");
         let shared: Arc<dyn McpSecrets> = Arc::new(morph_ai::MemorySecrets::default());
         share_secrets(dir.path(), &shared);
         shared.set("srv", "TOKEN", "t");
-        assert_eq!(secrets_for(dir.path()).unwrap().get("srv", "TOKEN").as_deref(), Some("t"));
+        assert_eq!(shared_secrets(dir.path()).unwrap().get("srv", "TOKEN").as_deref(), Some("t"));
+        assert!(secrets_for(dir.path()).is_none(), "not an unlocked profile: no secrets for sync");
         drop(shared);
-        assert!(secrets_for(dir.path()).is_none(), "only while the host holds it");
+        assert!(shared_secrets(dir.path()).is_none(), "only while the host holds it");
     }
 
     #[test]
