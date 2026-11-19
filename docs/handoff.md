@@ -110,6 +110,20 @@ macOS and Windows now, so the tools' page-world note can go (keep it for `PageWo
   `morph --version` from Program Files, checks the Start menu shortcut and
   uninstalls. The macOS smoke screenshot shows the tab strip, address bar and
   the page in place.
+- **macOS runner (2026-11-19):** with the repo variable `MAC_RUNNER=on`,
+  pushes to main, tags and manual runs build
+  `desktop-macos` (clippy, tests, `scripts/macos-dist.sh`) on
+  m3talsmith's Apple silicon Mac, the repo runner `mac-runner-ios` (label
+  `weirdbrains-mac`; it also runs `ios.yml`), with a throwaway `HOME`,
+  `MORPH_HOME` and target dir deleted after the job, and nothing installed.
+  Pull requests and `release/**` pushes build on `macos-latest`. The smoke
+  test is its own job, `desktop-macos-smoke`, always on `macos-latest`
+  (windows and screenshots never on m3talsmith's Mac); it downloads the
+  `morph-macos-universal` artifact. Moving the runner to the WeirdBrains org
+  waits on m3talsmith's `admin:org` sign-in. `MAC_RUNNER` is unset for now:
+  the Mac lacks Xcode 26's Metal Toolchain (GPUI's build-time shaders;
+  `xcodebuild -downloadComponent MetalToolchain`, needs m3talsmith's OK), so
+  every macOS build is hosted until it is installed.
 - **Not verified:** real use by a person on either OS (typing into pages,
   IME, Retina scaling, multi-monitor, dark mode), popups (`window.open`
   opens the engine's own window, not counted on the tab), crash/hang panels

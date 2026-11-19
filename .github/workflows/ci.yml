@@ -242,15 +242,17 @@ jobs:
   # shell's tests, then a universal Morph.app (arm64 + x86_64) in a zip and a
   # dmg (scripts/macos-dist.sh). Pull requests build on GitHub's macOS
   # runners. Pushes to main, tags and manual runs build on m3talsmith's
-  # Apple silicon Mac (self-hosted, label weirdbrains-mac): never pull requests, so
-  # a fork's code never runs on a personal machine. On the Mac nothing is
+  # Apple silicon Mac (self-hosted, label weirdbrains-mac) when the repo variable
+  # MAC_RUNNER is "on" (gh variable set MAC_RUNNER --body on; unset or
+  # anything else keeps them hosted): never pull requests, so a fork's code
+  # never runs on a personal machine. On the Mac nothing is
   # installed (Rust, both darwin targets, clippy, Xcode CLT and cmake are
   # already there), HOME and MORPH_HOME point at a throwaway dir, and the
   # target dir and dist/ are deleted at the end so builds don't pile up.
   # The smoke test (windows, screenshots) is desktop-macos-smoke, always on
   # GitHub's runners.
   desktop-macos:
-    runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) && fromJSON('["self-hosted","macOS","ARM64","weirdbrains-mac"]') || 'macos-latest' }}
+    runs-on: ${{ vars.MAC_RUNNER == 'on' && github.event_name != 'pull_request' && (github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) && fromJSON('["self-hosted","macOS","ARM64","weirdbrains-mac"]') || 'macos-latest' }}
     timeout-minutes: 150
     env:
       CARGO_INCREMENTAL: "0"
@@ -281,6 +283,9 @@ jobs:
           for target in aarch64-apple-darwin x86_64-apple-darwin; do
             rustup target list --installed | grep -qx "$target" || { echo "::error::Rust target $target is missing on the self-hosted Mac (not installing it)"; exit 1; }
           done
+          # GPUI compiles its Metal shaders at build time; Xcode 26 ships the
+          # Metal Toolchain separately (xcodebuild -downloadComponent MetalToolchain).
+          xcrun metal --version >/dev/null 2>&1 || { echo "::error::the Xcode Metal Toolchain is missing on the self-hosted Mac (not installing it)"; exit 1; }
           rustc --version; cmake --version | head -1; clang --version | head -1
           df -h "$RUNNER_TEMP" | tail -1
           work="$RUNNER_TEMP/morph-ci"
