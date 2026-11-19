@@ -8,10 +8,12 @@
 
 pub mod conversation;
 pub mod export;
+pub mod markdown;
 pub mod session;
 pub mod view;
 
 pub use conversation::{AttachedPage, Conversation, Entry, ToolState};
 pub use export::export_markdown;
+pub use markdown::{Block, Link, Markdown, Span};
 pub use session::{Canceller, SessionError, Sessions};
 pub use view::{ApprovalCard, FootnoteView, NoticeView, OfferView, TraceRowView, ViewUpdate, footnotes, trace_rows, translate};
