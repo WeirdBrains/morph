@@ -22,6 +22,7 @@ use weirdnet_agent::{Budget, CancelToken};
 
 use crate::file_io::FileIo;
 use crate::ids::new_id;
+pub use crate::steer::Steering;
 use crate::store::StoreError;
 
 const HOUR_MS: u64 = 3_600_000;
@@ -94,6 +95,9 @@ impl Usage {
 pub struct LogEntry {
     pub at_ms: u64,
     pub text: String,
+    /// A steering entry (steer, replan, undo, check-in): the steering history is the log filtered by this.
+    #[serde(default)]
+    pub steer: bool,
 }
 
 /// What a finished step found: the answer text with its footnotes, and the pages it read.
@@ -132,6 +136,9 @@ pub struct ResearchProject {
     pub log: Vec<LogEntry>,
     #[serde(default)]
     pub findings: Vec<Finding>,
+    /// Steers, source rules, feedback, replans and check-ins (slices 4a to 4c).
+    #[serde(default)]
+    pub steering: Steering,
     pub created_ms: u64,
 }
 
@@ -174,17 +181,18 @@ impl ResearchProject {
             notes: Vec::new(),
             log: Vec::new(),
             findings: Vec::new(),
+            steering: Steering::default(),
             created_ms: now,
         }
     }
 
     pub fn log(&mut self, now: u64, text: impl Into<String>) {
-        self.log.push(LogEntry { at_ms: now, text: text.into() });
+        self.log.push(LogEntry { at_ms: now, text: text.into(), steer: false });
     }
 
     /// A note from the user; it shapes the next step (steering, slice 4a).
     pub fn add_note(&mut self, now: u64, text: &str) {
-        self.notes.push(LogEntry { at_ms: now, text: text.into() });
+        self.notes.push(LogEntry { at_ms: now, text: text.into(), steer: false });
         self.log(now, format!("note: {text}"));
     }
 
@@ -205,10 +213,20 @@ impl ResearchProject {
                 p.push_str(&format!("- {}\n", clip(&n.text, 300)));
             }
         }
+        p.push_str(&self.steering.source_prompt());
         if !self.findings.is_empty() {
             p.push_str("What earlier steps found:\n");
-            for f in self.findings.iter().rev().take(3).rev() {
-                p.push_str(&format!("- {}: {}\n", f.step, clip(&f.text, 600)));
+            let first = self.findings.len().saturating_sub(3);
+            for (n, f) in self.findings.iter().enumerate().skip(first) {
+                match self.steering.verdict_of(n) {
+                    Some(crate::steer::Verdict::Wrong) => p.push_str(&format!("- {}: the user says this was WRONG; do not rely on it\n", f.step)),
+                    v => p.push_str(&format!(
+                        "- {}: {}{}\n",
+                        f.step,
+                        clip(&f.text, 600),
+                        if v == Some(crate::steer::Verdict::Useful) { " (the user found this useful)" } else { "" }
+                    )),
+                }
             }
         }
         p.push_str(&format!("\nDo only this step now: {}\nUse web.search and web.read as needed and cite every claim with [n] and a Sources list. Keep the answer short.", self.plan[i].title));
@@ -521,6 +539,11 @@ pub fn finish_step(p: &mut ResearchProject, i: usize, end: StepEnd, now: u64) {
             p.plan[i].status = StepStatus::Done;
             p.usage.record(now, pages, tool_ms);
             p.log(now, format!("done: {title} ({pages} pages)"));
+            let before = sources.len();
+            let sources: Vec<String> = sources.into_iter().filter(|u| !p.steering.excluded(u)).collect();
+            if sources.len() < before {
+                p.log(now, format!("{} excluded source(s) left out of the findings", before - sources.len()));
+            }
             p.findings.push(Finding { step: title, text, sources, at_ms: now });
         }
         StepEnd::Completed { pages, tool_ms, .. } => {

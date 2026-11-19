@@ -32,6 +32,7 @@ pub mod remote;
 pub mod research;
 pub mod roster;
 pub mod settings;
+pub mod steer;
 pub mod store;
 
 pub use chats::{CLIP_NOTE, ChatLog, ChatTurn, clip_markdown};
