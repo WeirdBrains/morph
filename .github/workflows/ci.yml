@@ -364,7 +364,7 @@ jobs:
           plist=/tmp/smoke/Morph.app/Contents/Info.plist
           plutil -lint "$plist"
           test "$(plutil -extract CFBundleIdentifier raw "$plist")" = com.weirdbrains.morph
-          plutil -convert json -o - "$plist" | python3 -c 'import json,sys; p=json.load(sys.stdin); s={x for t in p["CFBundleURLTypes"] for x in t["CFBundleURLSchemes"]}; d={x for t in p["CFBundleDocumentTypes"] for x in t["LSItemContentTypes"]}; assert {"http","https","weirdnet-morph"} <= s, s; assert {"public.html","public.xhtml"} <= d, d; print("Info.plist ok:", sorted(s), sorted(d))'
+          plutil -convert json -o - "$plist" | python3 -c 'import json,sys; p=json.load(sys.stdin); s={x for t in p["CFBundleURLTypes"] for x in t["CFBundleURLSchemes"]}; d={x for t in p["CFBundleDocumentTypes"] for x in t["LSItemContentTypes"]}; assert {"http","https","weirdnet-morph","weirdnet-ymir"} <= s, s; assert {"public.html","public.xhtml"} <= d, d; print("Info.plist ok:", sorted(s), sorted(d))'
           # A mount point of our own: the last line of attach's output does
           # not always name the volume.
           mnt=/tmp/morph-dmg
@@ -447,10 +447,13 @@ jobs:
           if ($null -eq $proto.'URL Protocol') { throw "weirdnet-morph is not a URL protocol" }
           $cmd = (Get-ItemProperty 'HKLM:\Software\Classes\weirdnet-morph\shell\open\command').'(default)'
           if ($cmd -notlike '*morph.exe*%1*') { throw "weirdnet-morph command: $cmd" }
+          $ymir = (Get-ItemProperty 'HKLM:\Software\Classes\weirdnet-ymir\shell\open\command').'(default)'
+          if ($ymir -notlike '*morph.exe*%1*') { throw "weirdnet-ymir command: $ymir" }
           $p = Start-Process msiexec -ArgumentList "/x `"$msi`" /qn" -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "uninstall failed: $($p.ExitCode)" }
           if (Test-Path $exe) { throw "morph.exe left behind" }
           if (Test-Path 'HKLM:\Software\Classes\weirdnet-morph') { throw "weirdnet-morph registration left behind" }
+          if (Test-Path 'HKLM:\Software\Classes\weirdnet-ymir') { throw "weirdnet-ymir registration left behind" }
           if (Test-Path 'HKLM:\Software\Clients\StartMenuInternet\Morph') { throw "browser registration left behind" }
       - uses: actions/upload-artifact@v4
         if: always()

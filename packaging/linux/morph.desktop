@@ -8,5 +8,5 @@ Icon=morph
 Terminal=false
 StartupWMClass=morph
 Categories=Network;WebBrowser;
-MimeType=text/html;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;x-scheme-handler/weirdnet-morph;
+MimeType=text/html;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;x-scheme-handler/weirdnet-morph;x-scheme-handler/weirdnet-ymir;
 Keywords=browser;web;internet;

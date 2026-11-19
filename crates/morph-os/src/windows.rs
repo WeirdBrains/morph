@@ -39,7 +39,8 @@ fn value(key: &str, name: &str, data: &str) -> Value {
 }
 
 /// Every value that registers Morph (at `exe`) as a browser and as the
-/// `weirdnet-morph://` handler.
+/// `weirdnet-morph://` handler, and the `weirdnet-ymir://` one (Ymir is a
+/// headless node app; its device-link codes open in Morph).
 pub fn registration(exe: &str) -> Vec<Value> {
     let icon = format!("{exe},0");
     let open = format!("\"{exe}\" \"%1\"");
@@ -55,6 +56,7 @@ pub fn registration(exe: &str) -> Vec<Value> {
         value(&format!(r"{caps}\URLAssociations"), "http", PROG_ID),
         value(&format!(r"{caps}\URLAssociations"), "https", PROG_ID),
         value(&format!(r"{caps}\URLAssociations"), "weirdnet-morph", "weirdnet-morph"),
+        value(&format!(r"{caps}\URLAssociations"), "weirdnet-ymir", "weirdnet-ymir"),
         value(&format!(r"{caps}\FileAssociations"), ".htm", PROG_ID),
         value(&format!(r"{caps}\FileAssociations"), ".html", PROG_ID),
         value(r"Software\RegisteredApplications", APP_NAME, &caps),
@@ -65,6 +67,10 @@ pub fn registration(exe: &str) -> Vec<Value> {
         value(r"Software\Classes\weirdnet-morph", "URL Protocol", ""),
         value(r"Software\Classes\weirdnet-morph\DefaultIcon", "", &icon),
         value(r"Software\Classes\weirdnet-morph\shell\open\command", "", &open),
+        value(r"Software\Classes\weirdnet-ymir", "", "URL:weirdnet-ymir"),
+        value(r"Software\Classes\weirdnet-ymir", "URL Protocol", ""),
+        value(r"Software\Classes\weirdnet-ymir\DefaultIcon", "", &icon),
+        value(r"Software\Classes\weirdnet-ymir\shell\open\command", "", &open),
     ]
 }
 
@@ -180,6 +186,8 @@ mod tests {
         assert_eq!(get(r"Software\Classes\MorphHTML\shell\open\command", "").unwrap(), format!("\"{exe}\" \"%1\""));
         assert_eq!(get(r"Software\Classes\weirdnet-morph", "URL Protocol").as_deref(), Some(""));
         assert!(get(r"Software\Classes\weirdnet-morph\shell\open\command", "").unwrap().ends_with("\"%1\""));
+        assert_eq!(get(r"Software\Classes\weirdnet-ymir", "URL Protocol").as_deref(), Some(""));
+        assert!(get(r"Software\Classes\weirdnet-ymir\shell\open\command", "").unwrap().ends_with("\"%1\""));
     }
 
     #[test]

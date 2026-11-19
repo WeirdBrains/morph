@@ -468,9 +468,13 @@ pub struct Shell {
     /// Actions `MORPH_TEST_ACTIONS` asks for (comma-separated names, run
     /// one per tick from the first), for the smoke tests.
     test_actions: Vec<Action>,
-    /// URLs from outside (a later launch, weirdnet-morph:// links) to
+    /// URLs from outside (a later launch, weirdnet-morph:// and
+    /// weirdnet-ymir:// links) to
     /// route once the window runs.
     pending_links: Vec<String>,
+    /// A device-link code arrived while the profile was locked and was
+    /// refused; said once it is unlocked.
+    refused_code: bool,
     /// Give the page the keyboard once the links above have opened and the
     /// page has loaded: a window that opens (or unlocks) on a page types into
     /// it, on Wayland too, where nothing but the shell hands a page the
@@ -553,6 +557,7 @@ impl Shell {
                 .filter_map(|name| Action::from_name(name.trim()))
                 .collect(),
             pending_links: Vec::new(),
+            refused_code: false,
             focus_page_soon: true,
             last_session: None,
             log_base: 1000 * Windows::opened(cx) as u64,
@@ -1231,6 +1236,11 @@ impl Shell {
             return;
         }
         let note = match scheme::parse(url).map(scheme::route) {
+            Some(scheme::Route::DeviceLink(code)) => return self.open_device_code(&code, window, cx),
+            Some(scheme::Route::Unknown(link)) if link.scheme == scheme::YMIR_SCHEME => {
+                eprintln!("morph: no handler for {}", link.describe());
+                "Morph opens only Ymir's device-link codes (weirdnet-ymir://link/…)"
+            }
             Some(scheme::Route::Unknown(link)) => {
                 // Only the log-safe form: a link's query may carry tokens.
                 eprintln!("morph: no handler for {} yet", link.describe());
@@ -1247,6 +1257,26 @@ impl Shell {
         if let Some(main) = self.main() {
             main.toast(note, None, cx);
         }
+    }
+
+    /// A new device's code (Morph's or a Ymir node's) opened from outside:
+    /// the Identity panel's Add a device, with the code filled in. The
+    /// password and the six-digit check still come first. Never reached
+    /// while the profile is locked (see [`Self::tick`]).
+    fn open_device_code(&mut self, code: &morph_core::scheme::DeviceLink, window: &mut Window, cx: &mut Context<Self>) {
+        if std::env::var_os("MORPH_LOG_EVENTS").is_some_and(|v| v == "1") {
+            println!("morph-event link code app={}", code.app.name());
+        }
+        let Some(identity) = self.identity.clone() else {
+            return;
+        };
+        let kind = KindId::new(component::IDENTITY);
+        if self.layout.shown(Slot::Sidebar) != Some(&kind) {
+            self.layout.toggle_kind(Slot::Sidebar, kind);
+            self.save_layout();
+        }
+        identity.update(cx, |view, cx| view.open_code(&code.code, code.app.name(), window, cx));
+        cx.notify();
     }
 
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1271,6 +1301,14 @@ impl Shell {
                 crate::single::Request::Open(url) => Some(url),
                 _ => None,
             }));
+            // Except device-link codes: a locked profile refuses them, and
+            // says so once it is unlocked (the code is short-lived anyway).
+            let before = self.pending_links.len();
+            self.pending_links.retain(|url| morph_core::scheme::device_link_code(url).is_none());
+            if self.pending_links.len() != before {
+                eprintln!("morph: refused a device-link code while the profile is locked");
+                self.refused_code = true;
+            }
             if self.pending_links.len() > 64 {
                 self.pending_links.drain(..self.pending_links.len() - 64);
             }
@@ -1280,6 +1318,11 @@ impl Shell {
             return;
         }
         handed.extend(self.pending_links.drain(..).map(crate::single::Request::Open));
+        if std::mem::take(&mut self.refused_code)
+            && let Some(main) = self.main()
+        {
+            main.toast("A device's link code was opened while this profile was locked and was refused. Open it again.", None, cx);
+        }
         for request in handed {
             if let crate::single::Request::Open(url) = &request {
                 self.open_external(url, window, cx);

@@ -5632,7 +5632,9 @@ dependencies = [
  "unicode-segmentation",
  "ureq",
  "weirdnet-agent",
+ "weirdnet-device-link",
  "weirdnet-model",
+ "weirdnet-net",
  "windows-sys 0.61.2",
 ]
 

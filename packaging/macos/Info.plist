@@ -30,7 +30,8 @@
   <string>public.app-category.productivity</string>
   <!-- A browser: macOS lists Morph under Default web browser (System
        Settings, Desktop & Dock) for the http/https URL types and the HTML
-       documents below. weirdnet-morph:// links reach Morph by Apple Events. -->
+       documents below. weirdnet-morph:// links reach Morph by Apple Events, and
+       so do weirdnet-ymir:// device-link codes from Ymir nodes. -->
   <key>CFBundleURLTypes</key>
   <array>
     <dict>
@@ -56,6 +57,18 @@
       <key>CFBundleURLSchemes</key>
       <array>
         <string>weirdnet-morph</string>
+      </array>
+    </dict>
+    <dict>
+      <key>CFBundleURLName</key>
+      <string>Ymir device link</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>CFBundleURLSchemes</key>
+      <array>
+        <string>weirdnet-ymir</string>
       </array>
     </dict>
   </array>

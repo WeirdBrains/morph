@@ -102,6 +102,14 @@ impl IdentityView {
         cx.emit(ShellRequest::FocusShell);
     }
 
+    /// A new device's code opened from outside: Add a device with it filled
+    /// in ([`Identity::open_code`]), the keyboard in the password field.
+    pub fn open_code(&mut self, code: &str, app: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.model.open_code(code, app);
+        self.enter_step(window, cx);
+        cx.notify();
+    }
+
     /// Follow a link session; called by the host's tick.
     pub fn poll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.model.poll_relays();

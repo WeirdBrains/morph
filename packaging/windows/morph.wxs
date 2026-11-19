@@ -33,7 +33,7 @@
         <Component Id="MorphIconFile" Guid="*">
           <File Source="$(var.Source)\Morph.ico" KeyPath="yes" />
         </Component>
-        <!-- Morph as a browser and the weirdnet-morph:// handler, for every
+        <!-- Morph as a browser and the weirdnet-morph:// (and weirdnet-ymir://) handler, for every
              user (the app writes the same keys under HKCU for zip installs,
              crates/morph-desktop/src/default_browser.rs). -->
         <Component Id="MorphBrowserRegistration" Guid="*">
@@ -48,6 +48,7 @@
               <RegistryValue Key="URLAssociations" Name="http" Type="string" Value="MorphHTML" />
               <RegistryValue Key="URLAssociations" Name="https" Type="string" Value="MorphHTML" />
               <RegistryValue Key="URLAssociations" Name="weirdnet-morph" Type="string" Value="weirdnet-morph" />
+              <RegistryValue Key="URLAssociations" Name="weirdnet-ymir" Type="string" Value="weirdnet-ymir" />
               <RegistryValue Key="FileAssociations" Name=".htm" Type="string" Value="MorphHTML" />
               <RegistryValue Key="FileAssociations" Name=".html" Type="string" Value="MorphHTML" />
               <RegistryValue Key="StartMenu" Name="StartMenuInternet" Type="string" Value="Morph" />
@@ -62,6 +63,13 @@
           </RegistryKey>
           <RegistryKey Root="HKLM" Key="Software\Classes\weirdnet-morph">
             <RegistryValue Type="string" Value="URL:weirdnet-morph" />
+            <RegistryValue Name="URL Protocol" Type="string" Value="" />
+            <RegistryValue Key="DefaultIcon" Type="string" Value="[INSTALLFOLDER]morph.exe,0" />
+            <RegistryValue Key="shell\open\command" Type="string" Value="&quot;[INSTALLFOLDER]morph.exe&quot; &quot;%1&quot;" />
+          </RegistryKey>
+          <!-- Ymir's device-link codes (weirdnet-ymir://link/…) open in Morph. -->
+          <RegistryKey Root="HKLM" Key="Software\Classes\weirdnet-ymir">
+            <RegistryValue Type="string" Value="URL:weirdnet-ymir" />
             <RegistryValue Name="URL Protocol" Type="string" Value="" />
             <RegistryValue Key="DefaultIcon" Type="string" Value="[INSTALLFOLDER]morph.exe,0" />
             <RegistryValue Key="shell\open\command" Type="string" Value="&quot;[INSTALLFOLDER]morph.exe&quot; &quot;%1&quot;" />

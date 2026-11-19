@@ -201,22 +201,38 @@ pub fn make_default(dirs: &Dirs, run: Runner) -> Result<(), String> {
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub const SCHEME_TYPE: &str = "x-scheme-handler/weirdnet-morph";
 
+/// Ymir's scheme (`weirdnet-ymir://`): Ymir is a headless node app, and its
+/// device-link codes (`ymirctl pool link`) are opened in Morph.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub const YMIR_SCHEME_TYPE: &str = "x-scheme-handler/weirdnet-ymir";
+
+/// The schemes Morph claims when nothing handles them yet.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub const SCHEME_TYPES: &[&str] = &[SCHEME_TYPE, YMIR_SCHEME_TYPE];
+
 /// `text` with Morph handling [`SCHEME_TYPE`] when nothing does yet;
 /// `None` when the list already names a handler (the user's choice stays).
+#[cfg(test)]
+fn with_scheme(text: &str) -> Option<String> {
+    with_scheme_type(text, SCHEME_TYPE)
+}
+
+/// `text` with Morph handling `scheme_type` when nothing does yet; `None`
+/// when the list already names a handler (the user's choice stays).
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-pub fn with_scheme(text: &str) -> Option<String> {
-    if default_in(text, SCHEME_TYPE).is_some() {
+pub fn with_scheme_type(text: &str, scheme_type: &str) -> Option<String> {
+    if default_in(text, scheme_type).is_some() {
         return None;
     }
     let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
     match lines.iter().position(|l| l.trim() == format!("[{DEFAULTS}]")) {
-        Some(i) => lines.insert(i + 1, format!("{SCHEME_TYPE}={DESKTOP_ID}")),
+        Some(i) => lines.insert(i + 1, format!("{scheme_type}={DESKTOP_ID}")),
         None => {
             if lines.last().is_some_and(|l| !l.trim().is_empty()) {
                 lines.push(String::new());
             }
             lines.push(format!("[{DEFAULTS}]"));
-            lines.push(format!("{SCHEME_TYPE}={DESKTOP_ID}"));
+            lines.push(format!("{scheme_type}={DESKTOP_ID}"));
         }
     }
     let mut out = lines.join("\n");
@@ -224,20 +240,28 @@ pub fn with_scheme(text: &str) -> Option<String> {
     Some(out)
 }
 
-/// Register `weirdnet-morph://` for Morph in the user's `mimeapps.list`
-/// when no list names a handler for it (at start, off the UI thread).
+/// Register `weirdnet-morph://` and `weirdnet-ymir://` for Morph in the
+/// user's `mimeapps.list`, each only when no list names a handler for it
+/// (at start, off the UI thread). Whether anything was written.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn ensure_scheme(dirs: &Dirs) -> Result<bool, String> {
     let lists = dirs.lists();
-    if lists.iter().filter_map(|p| std::fs::read_to_string(p).ok()).any(|t| default_in(&t, SCHEME_TYPE).is_some()) {
-        return Ok(false);
-    }
+    let texts: Vec<String> = lists.iter().filter_map(|p| std::fs::read_to_string(p).ok()).collect();
     let common = dirs.config.join("mimeapps.list");
     let old = std::fs::read_to_string(&common).unwrap_or_default();
-    match with_scheme(&old) {
-        Some(new) => write_atomic(&common, &new).map(|_| true).map_err(|e| format!("could not write {}: {e}", common.display())),
-        None => Ok(false),
+    let mut text = old.clone();
+    for scheme_type in SCHEME_TYPES {
+        if texts.iter().any(|t| default_in(t, scheme_type).is_some()) {
+            continue;
+        }
+        if let Some(new) = with_scheme_type(&text, scheme_type) {
+            text = new;
+        }
     }
+    if text == old {
+        return Ok(false);
+    }
+    write_atomic(&common, &text).map(|_| true).map_err(|e| format!("could not write {}: {e}", common.display()))
 }
 
 /// The real runner: run the command, with a time limit, and capture its
@@ -489,6 +513,33 @@ mod tests {
         assert_eq!(with_scheme(other), None, "another handler stays");
         let kept = with_scheme("[Default Applications]\ntext/html=firefox.desktop\n").unwrap();
         assert!(kept.contains("text/html=firefox.desktop\n") && kept.contains("weirdnet-morph=morph.desktop\n"), "{kept}");
+    }
+
+    #[test]
+    fn ymir_codes_open_in_morph_unless_something_else_handles_them() {
+        let (_t, d) = dirs(&[]);
+        assert_eq!(ensure_scheme(&d), Ok(true));
+        let text = std::fs::read_to_string(d.config.join("mimeapps.list")).unwrap();
+        assert_eq!(default_in(&text, YMIR_SCHEME_TYPE).as_deref(), Some(DESKTOP_ID));
+        assert_eq!(default_in(&text, SCHEME_TYPE).as_deref(), Some(DESKTOP_ID));
+        // A list that already names a Ymir handler keeps it; Morph's own is still added.
+        let (_t2, d2) = dirs(&[]);
+        std::fs::create_dir_all(&d2.config).unwrap();
+        std::fs::write(d2.config.join("mimeapps.list"), "[Default Applications]\nx-scheme-handler/weirdnet-ymir=bragi.desktop\n").unwrap();
+        assert_eq!(ensure_scheme(&d2), Ok(true));
+        let text = std::fs::read_to_string(d2.config.join("mimeapps.list")).unwrap();
+        assert_eq!(default_in(&text, YMIR_SCHEME_TYPE).as_deref(), Some("bragi.desktop"));
+        assert_eq!(default_in(&text, SCHEME_TYPE).as_deref(), Some(DESKTOP_ID));
+        assert_eq!(ensure_scheme(&d2), Ok(false));
+    }
+
+    #[test]
+    fn the_desktop_entry_declares_both_schemes() {
+        let entry = include_str!("../../../packaging/linux/morph.desktop");
+        let mime = entry.lines().find_map(|l| l.strip_prefix("MimeType=")).unwrap();
+        for ty in SCHEME_TYPES {
+            assert!(mime.split(';').any(|m| m == *ty), "{ty} in {mime}");
+        }
     }
 
     #[test]

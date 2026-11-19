@@ -57,3 +57,6 @@ morph-keystore = { workspace = true, features = ["mock"] }
 tempfile.workspace = true
 # Reads the identity QR codes back.
 rqrr = "0.9"
+# A Ymir node's link code, made as `ymirctl pool link` makes it.
+weirdnet-device-link.workspace = true
+weirdnet-net.workspace = true

@@ -166,6 +166,9 @@ pub struct Identity {
     relays_read: Option<std::time::Instant>,
     /// A link node still starting (see [`Starting`]).
     starting: Option<Starting>,
+    /// A new device's code opened from outside (a `weirdnet-morph://link/…`
+    /// or `weirdnet-ymir://link/…` link), put in Add a device's link field.
+    opened: Option<String>,
 }
 
 impl Identity {
@@ -185,6 +188,7 @@ impl Identity {
             relay_line: None,
             relays_read: None,
             starting: None,
+            opened: None,
         };
         this.reload();
         this
@@ -229,6 +233,7 @@ impl Identity {
     pub fn defaults(&self) -> Vec<String> {
         match self.step {
             Step::Export => vec![String::new(), String::new(), suggested_backup_path(&self.profile_name)],
+            Step::AddDevice => self.opened.iter().map(|code| vec![String::new(), code.clone()]).next().unwrap_or_default(),
             _ => Vec::new(),
         }
     }
@@ -238,11 +243,35 @@ impl Identity {
     pub fn start(&mut self, step: Step) {
         self.error = None;
         self.notice = None;
+        self.opened = None;
         self.end_sessions();
         self.step = step;
         if self.step == Step::AddDevice {
             self.start_invite();
         }
+    }
+
+    /// A new device's code opened from outside (`app` showed it: Morph or
+    /// Ymir): Add a device with the code in its link field. Nothing is
+    /// dialled until the user types the profile password and presses Pair,
+    /// and the six-digit check follows as for a pasted code. A profile with
+    /// no identity has nothing to add the device to.
+    pub fn open_code(&mut self, code: &str, app: &str) {
+        self.reload();
+        if self.identity.is_none() {
+            self.start(Step::Choose);
+            self.error = Some(format!(
+                "A {app} device's link code was opened, but this profile has no identity to add it to. Create or restore one first, or open the code in a profile that has one."
+            ));
+            return;
+        }
+        // No QR of this device's own: the new device already showed its code.
+        self.start(Step::Overview);
+        self.step = Step::AddDevice;
+        self.opened = Some(code.to_string());
+        self.notice = Some(format!(
+            "Opened a code from {app}. Type this profile's password and press Pair, then check that both devices show the same six digits."
+        ));
     }
 
     /// Add a device: listen for a new device that scans this device's QR.
@@ -1001,6 +1030,60 @@ mod tests {
         assert_eq!(new.submit(&s(&["new password"])), Outcome::IdentityChanged, "{:?}", new.error);
         assert_eq!(new.identity.as_ref().unwrap().user_id, old.identity.as_ref().unwrap().user_id);
         assert_eq!(new.identity.as_ref().unwrap().source, Source::Linked);
+    }
+
+    /// A Ymir node's code opened from outside (`weirdnet-ymir://link/…`,
+    /// made as `ymirctl pool link` makes it): Add a device opens with the
+    /// code filled in, pairs only after the password, and the node gets the
+    /// identity once the six digits are confirmed on both sides.
+    #[test]
+    fn an_opened_ymir_code_goes_to_add_a_device() {
+        use morph_identity::device_link::{YMIR_SCHEME, net_config};
+        use weirdnet_device_link::{HostNode, HostStatus};
+        let (_a, old_home) = home();
+        let mut old = Identity::new(&old_home, "p1", "Work", links());
+        // No identity yet: nothing to add a device to.
+        old.open_code("weirdnet-ymir://link/abc", "Ymir");
+        assert_eq!(old.step, Step::Choose);
+        assert!(old.error.as_deref().unwrap().contains("no identity"), "{:?}", old.error);
+        old.start(Step::Create);
+        old.submit(&s(&["old password", "old password"]));
+        old.submit(&[]);
+
+        let mut cfg = net_config();
+        cfg.relays.clear();
+        cfg.listen = vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()];
+        let ymir = HostNode::start(YMIR_SCHEME, weirdnet_net::Keypair::generate_ed25519(), cfg, "ymir").unwrap();
+        let code = morph_core::scheme::device_link_code(ymir.link()).expect("a device-link code");
+        assert_eq!(code.app, morph_core::scheme::LinkApp::Ymir);
+        old.open_code(&code.code, code.app.name());
+        assert_eq!(old.step, Step::AddDevice);
+        assert_eq!(old.defaults(), ["", ymir.link()], "the code is in the link field");
+        assert_eq!(old.invite_link(), None);
+        assert!(!old.is_starting(), "no QR of its own");
+        assert!(old.notice.as_deref().unwrap().contains("Ymir"));
+        assert_eq!(ymir.status(), HostStatus::Waiting, "nothing dialled before the password");
+
+        old.submit(&s(&["wrong password", ymir.link()]));
+        assert_eq!(old.step, Step::AddDevice);
+        assert_eq!(ymir.status(), HostStatus::Waiting);
+        old.submit(&s(&["old password", ymir.link()]));
+        let Step::Adding { sas, device, .. } = old.step.clone() else { panic!("{:?} {:?}", old.step, old.error) };
+        assert_eq!(device, "Ymir");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let ymir_sas = loop {
+            if let HostStatus::Paired { sas } = ymir.status() {
+                break sas;
+            }
+            assert!(std::time::Instant::now() < deadline, "Ymir never paired");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        };
+        assert_eq!(ymir_sas, sas);
+        ymir.confirm();
+        old.submit(&[]);
+        assert_eq!(old.step, Step::Overview, "{:?}", old.error);
+        assert!(old.notice.as_deref().unwrap().contains("Ymir"));
+        assert_eq!(ymir.take().unwrap().user_id, old.identity.as_ref().unwrap().user_id);
     }
 
     /// The other direction: the existing device's Add a device shows a QR,
