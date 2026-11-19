@@ -29,7 +29,7 @@ pub fn set_relays_for_tests(addrs: Option<Vec<Multiaddr>>) {
     *RELAY_OVERRIDE.lock().unwrap_or_else(|p| p.into_inner()) = addrs;
 }
 
-fn configured_relays() -> Vec<Multiaddr> {
+pub(crate) fn configured_relays() -> Vec<Multiaddr> {
     if let Some(v) = RELAY_OVERRIDE.lock().unwrap_or_else(|p| p.into_inner()).clone() {
         return v;
     }
@@ -460,7 +460,7 @@ fn merge_back(st: &mut SyncState, work: &SyncState) {
 
 /// Addresses we may dial for a roster member: matching manual peers, plus
 /// relays (for a circuit). Discovered strangers are never listed.
-fn addrs_for(cert: &NodeCert, net: &NetworkSettings, relays: &[Multiaddr]) -> Vec<Multiaddr> {
+pub(crate) fn addrs_for(cert: &NodeCert, net: &NetworkSettings, relays: &[Multiaddr]) -> Vec<Multiaddr> {
     let mut addrs = Vec::new();
     for p in net.peers() {
         if p.peer_id == cert.peer_id {
@@ -483,6 +483,16 @@ fn addrs_for(cert: &NodeCert, net: &NetworkSettings, relays: &[Multiaddr]) -> Ve
         }
     }
     addrs
+}
+
+/// The running sync node of a profile and its live state, for calls between linked devices
+/// on this device's identity ([`crate::device_calls`]).
+pub(crate) type Live = (Arc<Node<Vec<u8>, Vec<u8>>>, Arc<Mutex<SyncState>>);
+
+/// See [`Live`].
+pub(crate) fn live(home: &Path, profile_id: &str) -> Option<Live> {
+    let dir = morph_core::profiles::profile_dir(home, profile_id);
+    nodes().iter().find(|(p, _)| p == &dir).map(|(_, r)| (r.node.clone(), r.state.clone()))
 }
 
 /// The running node's status, if any (tests wait for a relay reservation).
