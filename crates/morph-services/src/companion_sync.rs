@@ -9,9 +9,16 @@
 //! | `morph-companions` | `c/<id>` companion (OR-set), `default` and `settings` (LWW)     |
 //! | `morph-grants`     | `site/<agent>\u{1f}<site>` level (LWW), `allow/<key>` standing allow and `ext/<agent>` external approval (OR-set) |
 //! | `morph-chats`      | `t/<id>` chat turn (OR-set; long turns chunked, whole)          |
+//! |                    | `p/<id>` research project, `q/<project>/<steer>` queued steer   |
 //! | `morph-mcp`        | `s/<id>` server config without secret values (OR-set)           |
 //! | `morph-mcp-secrets`| `k/<id>` a server's secret values, name to value (OR-set; sealed) |
 //! | `morph-journal`    | `j/<id>` journal and `e/<id>` entry (OR-set)                    |
+//!
+//! Research projects ride on the chats type (a new type would need a change to the sync
+//! defaults in `morph-core`): `p/<id>` is a project's whole body, written by the device that
+//! owns it (the lease, `morph_ai::lease`), chunked when large; `q/<project>/<steer>` is a steer
+//! another device queued, taken in and removed by the owner. `signed_in` and `always_allow`
+//! never travel. Peers on an older Morph cannot read these as chat turns and skip them.
 //!
 //! Every record is written with `SyncState::write` and read with `SyncState::read`, so a value
 //! over the type's `inline_max` is chunked and travels whole (a chat turn with a long answer).
@@ -465,6 +472,15 @@ fn read_files(
     for turn in store.load_chats()?.unwrap_or_default().turns {
         t.insert(format!("t/{}", turn.id), to_value(&turn));
     }
+    // Research projects and queued steers (see the module docs).
+    if let Some(rs) = store.load_research()? {
+        for p in &rs.projects {
+            t.insert(format!("p/{}", p.id), to_value(&morph_ai::research::Projects::synced_copy(p)));
+        }
+        for q in &rs.queued {
+            t.insert(format!("q/{}", q.key()), to_value(q));
+        }
+    }
     st.recs.insert(CHATS.into(), t);
 
     let mut m = BTreeMap::new();
@@ -734,7 +750,7 @@ fn write_if_changed<T: PartialEq>(current: Option<T>, next: T, save: impl FnOnce
     Ok(true)
 }
 
-fn write_files(store: &dyn AiStore, st: &mut State, types: &[&str], chat_inline_max: usize) -> Result<bool> {
+fn write_files(store: &dyn AiStore, st: &mut State, base: &State, types: &[&str], chat_inline_max: usize) -> Result<bool> {
     let mut changed = false;
     let mut kept = Vec::new();
     let recs = |t: &str| st.recs.get(t).cloned().unwrap_or_default();
@@ -801,7 +817,9 @@ fn write_files(store: &dyn AiStore, st: &mut State, types: &[&str], chat_inline_
         }
     }
     if types.contains(&CHATS) {
-        let mut log = ChatLog { turns: recs(CHATS).into_values().filter_map(|v| serde_json::from_value(v).ok()).collect() };
+        let mut log = ChatLog {
+            turns: recs(CHATS).into_iter().filter(|(k, _)| k.starts_with("t/")).filter_map(|(_, v)| serde_json::from_value(v).ok()).collect(),
+        };
         log.sort();
         // Keep this device's whole turn where the merged copy is only its clipped fallback
         // (its chunks are on their way, or it was too large to sync whole). The snapshot
@@ -816,6 +834,7 @@ fn write_files(store: &dyn AiStore, st: &mut State, types: &[&str], chat_inline_
             }
         }
         changed |= write_if_changed(current, log, |l| store.save_chats(l))?;
+        changed |= write_research(store, &recs(CHATS), base)?;
     }
     if types.contains(&MCP) {
         let mut cfg = McpConfigs::default();
@@ -838,6 +857,29 @@ fn write_files(store: &dyn AiStore, st: &mut State, types: &[&str], chat_inline_
         st.recs.entry(CHATS.to_string()).or_default().extend(kept);
     }
     Ok(changed)
+}
+
+/// The merged research records into the projects file (see `Projects::merged`). Nothing is
+/// written when there is nothing and no file yet.
+fn write_research(store: &dyn AiStore, merged: &BTreeMap<String, Value>, base: &State) -> Result<bool> {
+    use morph_ai::lease::QueuedSteer;
+    use morph_ai::research::{Projects, ResearchProject};
+    let remote: Vec<ResearchProject> =
+        merged.iter().filter(|(k, _)| k.starts_with("p/")).filter_map(|(_, v)| serde_json::from_value(v.clone()).ok()).collect();
+    let queued: Vec<QueuedSteer> =
+        merged.iter().filter(|(k, _)| k.starts_with("q/")).filter_map(|(_, v)| serde_json::from_value(v.clone()).ok()).collect();
+    let current = store.load_research()?;
+    if current.is_none() && remote.is_empty() && queued.is_empty() {
+        return Ok(false);
+    }
+    let known = |key: &str| base.recs.get(CHATS).is_some_and(|r| r.contains_key(key));
+    let mut cur = current.clone();
+    if let Some(c) = cur.as_mut() {
+        c.device = store.load_research_device()?.map(|d| d.id).unwrap_or_default();
+    }
+    let mut next = Projects::merged(cur, remote, queued, &known);
+    next.device = String::new();
+    write_if_changed(current, next, |p| store.save_research(p))
 }
 
 /// Write the merged records into the files. Returns whether any file changed (the panel and
@@ -887,7 +929,7 @@ pub fn materialize_with(lib: &mut Library, store: &dyn AiStore, secrets: Option<
         st.recs.insert(typ.to_string(), merged.into_iter().map(|(id, (v, _))| (id, v)).collect());
     }
     drop_revoked_hosts(&mut st, &base, &revoked);
-    let changed = write_files(store, &mut st, &types, sync.options(CHATS).limits.inline_max)? | secrets_changed;
+    let changed = write_files(store, &mut st, &base, &types, sync.options(CHATS).limits.inline_max)? | secrets_changed;
     save_snapshot(lib, &st)?;
     if changed {
         APPLIED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -1676,5 +1718,203 @@ mod tests {
         s.save_roster(&Companions::first_run(ModelChoice::Gemma4E4B)).unwrap();
         assert!(!materialize(&mut l, &s).unwrap());
         assert!(s.load_roster().unwrap().is_some());
+    }
+
+    // ---- research projects ----
+
+    use morph_ai::lease::Device;
+    use morph_ai::research::{Finding, ProjectState, Projects, ResearchProject};
+    use morph_ai::steer::Steer;
+
+    fn device_store(d: &Device) -> MemoryStore {
+        let s = MemoryStore::default();
+        s.set_research_device(d.clone());
+        s
+    }
+
+    /// One pass on a device: log what changed, then write the merged result.
+    fn pass(l: &mut Library, s: &MemoryStore, now: i64) {
+        backfill(l, s, now).unwrap();
+        materialize(l, s).unwrap();
+    }
+
+    fn research(s: &MemoryStore) -> Projects {
+        s.load_research().unwrap().unwrap_or_default()
+    }
+
+    fn save_research_as(s: &MemoryStore, d: &Device, mut ps: Projects) {
+        ps.device = d.id.clone();
+        s.save_research(&ps).unwrap();
+    }
+
+    fn two_devices() -> (tempfile::TempDir, Library, tempfile::TempDir, Library) {
+        let (ta, mut a) = lib();
+        enable(&mut a, "a", 10).unwrap();
+        let (tb, mut b) = lib();
+        enable(&mut b, "b", 10).unwrap();
+        (ta, a, tb, b)
+    }
+
+    #[test]
+    fn a_project_syncs_to_another_device_without_signed_in_or_always_allow() {
+        let (_ta, mut a, _tb, mut b) = two_devices();
+        let (da, db) = (Device { id: "dev-a".into(), name: "my-desktop".into() }, Device { id: "dev-b".into(), name: "laptop".into() });
+        let (sa, sb) = (device_store(&da), device_store(&db));
+        let mut p = ResearchProject::from_question("How does Tokio cancel a task?", "atlas", 1);
+        p.claim(&da, 1);
+        p.signed_in = true;
+        p.always_allow = true;
+        p.findings.push(Finding { step: "s".into(), text: "found".into(), sources: vec!["https://tokio.rs/".into()], at_ms: 2 });
+        p.milestone(3, "step done");
+        let id = p.id.clone();
+        save_research_as(&sa, &da, Projects { projects: vec![p.clone()], ..Default::default() });
+        pass(&mut a, &sa, 100);
+        // What was logged has neither device choice.
+        let logged = ours(&a, CHATS);
+        let RecOp::Put { value } = &logged.iter().find(|(k, _)| k == &format!("p/{id}")).unwrap().1 else { panic!("put") };
+        assert_eq!((value["signed_in"].as_bool(), value["always_allow"].as_bool()), (Some(false), Some(false)));
+
+        pass(&mut b, &sb, 100);
+        copy_entries(&a, &mut b, |_| true);
+        materialize(&mut b, &sb).unwrap();
+        let got = research(&sb);
+        let q = got.get(&id).expect("the project arrived");
+        assert_eq!((q.findings.len(), q.reports.len(), q.owner.as_ref().map(|o| o.name.as_str())), (1, p.reports.len(), Some("my-desktop")));
+        assert!(!q.signed_in && !q.always_allow, "device choices never travel");
+        // Nothing is logged back by the receiver.
+        backfill(&mut b, &sb, 200).unwrap();
+        assert!(load_log(&b).unwrap().iter_node(&NodeId::new("b")).all(|e| e.typ != CHATS), "nothing logged back");
+        // The chat log is unaffected by research records.
+        assert!(sb.load_chats().unwrap().unwrap_or_default().turns.is_empty());
+    }
+
+    #[test]
+    fn a_steer_queued_on_another_device_reaches_the_owner_once_and_is_cleared() {
+        let (_ta, mut a, _tb, mut b) = two_devices();
+        let (da, db) = (Device { id: "dev-a".into(), name: "my-desktop".into() }, Device { id: "dev-b".into(), name: "laptop".into() });
+        let (sa, sb) = (device_store(&da), device_store(&db));
+        let mut p = ResearchProject::from_question("How does Tokio cancel a task?", "atlas", 1);
+        p.claim(&da, 1);
+        p.state = ProjectState::Running;
+        let id = p.id.clone();
+        save_research_as(&sa, &da, Projects { projects: vec![p], ..Default::default() });
+        pass(&mut a, &sa, 100);
+        pass(&mut b, &sb, 100);
+        copy_entries(&a, &mut b, |_| true);
+        materialize(&mut b, &sb).unwrap();
+
+        // The laptop steers: it queues, the owner's body is not touched.
+        let mut on_b = research(&sb);
+        on_b.device = db.id.clone();
+        assert!(on_b.queue_steer(&id, &db, 150, Steer::Note { text: "only 2022 and later".into() }));
+        save_research_as(&sb, &db, on_b);
+        pass(&mut b, &sb, 200);
+        copy_entries(&b, &mut a, |_| true);
+        materialize(&mut a, &sa).unwrap();
+        let mut on_a = research(&sa);
+        assert_eq!(on_a.queued.len(), 1, "it arrived at the owner");
+        on_a.device = da.id.clone();
+        assert_eq!(on_a.drain_queued(250), 1);
+        on_a.get_mut(&id).unwrap().apply_pending(251);
+        assert!(on_a.get(&id).unwrap().step_prompt(0).contains("only 2022 and later"));
+        save_research_as(&sa, &da, on_a);
+        pass(&mut a, &sa, 300);
+
+        // The owner's removal and new body go back; the laptop's queue empties and a second pass changes nothing.
+        copy_entries(&a, &mut b, |_| true);
+        materialize(&mut b, &sb).unwrap();
+        assert!(research(&sb).queued.is_empty(), "taken in and cleared");
+        assert!(research(&sb).get(&id).unwrap().steering.seen_remote.len() == 1);
+        pass(&mut a, &sa, 400);
+        assert!(research(&sa).queued.is_empty());
+    }
+
+    #[test]
+    fn a_takeover_moves_the_lease_and_the_old_owner_follows_keeping_its_own_choices() {
+        let (_ta, mut a, _tb, mut b) = two_devices();
+        let (da, db) = (Device { id: "dev-a".into(), name: "my-desktop".into() }, Device { id: "dev-b".into(), name: "laptop".into() });
+        let (sa, sb) = (device_store(&da), device_store(&db));
+        let mut p = ResearchProject::from_question("How does Tokio cancel a task?", "atlas", 1);
+        p.claim(&da, 1);
+        p.always_allow = true;
+        p.state = ProjectState::Running;
+        let id = p.id.clone();
+        save_research_as(&sa, &da, Projects { projects: vec![p], ..Default::default() });
+        pass(&mut a, &sa, 100);
+        pass(&mut b, &sb, 100);
+        copy_entries(&a, &mut b, |_| true);
+        materialize(&mut b, &sb).unwrap();
+
+        let mut on_b = research(&sb);
+        assert!(on_b.get_mut(&id).unwrap().take_over(&db, 150));
+        save_research_as(&sb, &db, on_b);
+        pass(&mut b, &sb, 200);
+        copy_entries(&b, &mut a, |_| true);
+        materialize(&mut a, &sa).unwrap();
+        let got = research(&sa);
+        let p = got.get(&id).unwrap();
+        assert!(p.owned_by(&db.id) && !p.owned_by(&da.id), "the old owner follows the new one");
+        assert_eq!(p.state, ProjectState::Paused);
+        assert!(p.always_allow, "its own always_allow stays");
+    }
+
+    #[test]
+    fn a_large_project_syncs_whole_in_chunks() {
+        let (_ta, mut a, _tb, mut b) = two_devices();
+        let da = Device { id: "dev-a".into(), name: "my-desktop".into() };
+        let db = Device { id: "dev-b".into(), name: "laptop".into() };
+        let (sa, sb) = (device_store(&da), device_store(&db));
+        let mut p = ResearchProject::from_question("A big one", "atlas", 1);
+        p.claim(&da, 1);
+        for i in 0..40 {
+            p.findings.push(Finding {
+                step: format!("step {i}"),
+                text: format!("{i} ").repeat(8_000),
+                sources: vec![format!("https://example.org/{i}")],
+                at_ms: i,
+            });
+            p.milestone(i, "step done");
+        }
+        let id = p.id.clone();
+        save_research_as(&sa, &da, Projects { projects: vec![p.clone()], ..Default::default() });
+        pass(&mut a, &sa, 100);
+        assert!(load_log(&a).unwrap().iter().any(|e| e.typ == weirdnet_sync::chunk_type(CHATS)), "the project is chunked");
+        pass(&mut b, &sb, 100);
+        copy_entries(&a, &mut b, |_| true);
+        materialize(&mut b, &sb).unwrap();
+        let got = research(&sb);
+        let q = got.get(&id).unwrap();
+        assert_eq!((q.findings.len(), q.reports.len()), (40, p.reports.len()));
+        assert_eq!(q.findings[39].text, p.findings[39].text, "whole, not clipped");
+        assert_eq!(q.reports.last().unwrap().markdown, p.reports.last().unwrap().markdown);
+    }
+
+    #[test]
+    fn local_projects_new_since_the_last_pass_are_not_dropped_by_a_merge() {
+        let (_ta, mut a, _tb, mut b) = two_devices();
+        let (da, db) = (Device { id: "dev-a".into(), name: "my-desktop".into() }, Device { id: "dev-b".into(), name: "laptop".into() });
+        let (sa, sb) = (device_store(&da), device_store(&db));
+        let mut one = ResearchProject::from_question("one", "atlas", 1);
+        one.claim(&da, 1);
+        save_research_as(&sa, &da, Projects { projects: vec![one.clone()], ..Default::default() });
+        pass(&mut a, &sa, 100);
+        pass(&mut b, &sb, 100);
+        copy_entries(&a, &mut b, |_| true);
+        // A project made here after the last backfill, then a merge arrives.
+        let mut two = ResearchProject::from_question("two", "atlas", 2);
+        two.claim(&db, 2);
+        let mut on_b = research(&sb);
+        on_b.projects.push(two.clone());
+        save_research_as(&sb, &db, on_b);
+        materialize(&mut b, &sb).unwrap();
+        let ids: Vec<String> = research(&sb).projects.iter().map(|p| p.id.clone()).collect();
+        assert!(ids.contains(&one.id) && ids.contains(&two.id), "{ids:?}");
+        backfill(&mut b, &sb, 200).unwrap();
+        assert!(ours_on(&b, "b", CHATS).iter().any(|k| k == &format!("p/{}", two.id)), "and it is logged by the next pass");
+    }
+
+    fn ours_on(lib: &Library, node: &str, typ: &str) -> Vec<String> {
+        let sync = records_state(lib).unwrap();
+        sync.log.iter_node(&NodeId::new(node)).filter(|e| e.typ == typ).map(|e| e.record_id.clone()).collect()
     }
 }
