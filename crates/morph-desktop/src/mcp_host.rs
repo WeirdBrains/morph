@@ -222,8 +222,25 @@ pub struct McpManager {
     handle: tokio::runtime::Handle,
 }
 
+type MayStart = Arc<dyn Fn(&Path, &str) -> bool + Send + Sync>;
+
+/// What the manager asks the sync layer. The defaults are Lead Dev's; tests give their own.
+#[derive(Clone)]
+struct Hooks {
+    /// Whether a synced local command may start (a linked, unrevoked device wrote its config).
+    may_start: MayStart,
+    /// Changes whenever synced data or a revocation was applied.
+    revision: Arc<dyn Fn() -> u64 + Send + Sync>,
+}
+
+impl Hooks {
+    fn sync() -> Self {
+        Self { may_start: Arc::new(morph_services::sync::mcp_may_start_in), revision: Arc::new(morph_services::sync::applied_revision) }
+    }
+}
+
 impl McpManager {
-    fn start(companions: &Path) -> Arc<Self> {
+    fn start(companions: &Path, hooks: Hooks) -> Arc<Self> {
         let (tx, rx) = mpsc::channel::<()>();
         let state = Arc::new(Mutex::new(State { registry: Arc::new(ToolRegistry::new()), scoped: BTreeMap::new(), snapshot: Snapshot::default() }));
         let secrets = Arc::new(LocalSecrets::open(companions));
@@ -237,6 +254,8 @@ impl McpManager {
         let handle = rt.handle().clone();
         let manager = Arc::new(Self { secrets: secrets.clone(), trigger: Mutex::new(tx), state: state.clone(), handle });
         let dir = companions.to_path_buf();
+        let watch = (Arc::downgrade(&manager), hooks.revision.clone());
+        let hooks = hooks.clone();
         std::thread::Builder::new()
             .name("morph-mcp".into())
             .spawn(move || {
@@ -247,7 +266,7 @@ impl McpManager {
                     // A synced local command never starts unless this device or a linked,
                     // unrevoked one wrote its config (Lead Dev's sync layer decides).
                     for s in configs.servers.iter_mut() {
-                        if matches!(s.transport, McpTransport::Stdio { .. }) && !morph_services::sync::mcp_may_start_in(&dir, &s.id) {
+                        if matches!(s.transport, McpTransport::Stdio { .. }) && !(hooks.may_start)(&dir, &s.id) {
                             s.enabled = false;
                         }
                     }
@@ -264,6 +283,24 @@ impl McpManager {
                 }
             })
             .expect("spawn the MCP thread");
+        // A revocation (or any synced change) re-checks every server at once: a running local
+        // command whose writer was just revoked stops now, not at the next reload.
+        std::thread::Builder::new()
+            .name("morph-mcp-watch".into())
+            .spawn(move || {
+                let (manager, revision) = watch;
+                let mut seen = revision();
+                loop {
+                    std::thread::sleep(Duration::from_millis(250));
+                    let Some(m) = manager.upgrade() else { return };
+                    let now = revision();
+                    if now != seen {
+                        seen = now;
+                        m.reload();
+                    }
+                }
+            })
+            .expect("spawn the MCP watcher");
         manager
     }
 
@@ -314,7 +351,7 @@ pub fn get(companions: &Path) -> Arc<McpManager> {
     let mut all = lock(static_managers());
     all.entry(companions.to_path_buf())
         .or_insert_with(|| {
-            let m = McpManager::start(companions);
+            let m = McpManager::start(companions, Hooks::sync());
             m.reload();
             m
         })
@@ -420,6 +457,67 @@ done"#;
         let bad_url = McpServer::new("a", McpTransport::Http { url: "ftp://x".into(), headers: BTreeMap::new() });
         assert!(save_server(&companions, &secrets, bad_url, &[]).unwrap_err().contains("https://"));
         assert!(configs(&companions).servers.is_empty());
+    }
+
+    /// A manager whose sync answers are the test's.
+    fn manager_with(
+        companions: &Path,
+        allowed: &Arc<std::sync::atomic::AtomicBool>,
+        revision: &Arc<std::sync::atomic::AtomicU64>,
+    ) -> Arc<McpManager> {
+        use std::sync::atomic::Ordering::SeqCst;
+        let (allowed, revision) = (allowed.clone(), revision.clone());
+        let hooks = Hooks { may_start: Arc::new(move |_, _| allowed.load(SeqCst)), revision: Arc::new(move || revision.load(SeqCst)) };
+        let m = McpManager::start(companions, hooks);
+        m.reload();
+        m
+    }
+
+    #[cfg(target_os = "linux")]
+    fn alive(pid: &str) -> bool {
+        std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|s| !s.rsplit(") ").next().unwrap_or("").starts_with('Z'))
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_revocation_stops_a_running_local_server_at_once_and_never_restarts_it() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let (d, companions) = dir();
+        let (allowed, revision) = (Arc::new(std::sync::atomic::AtomicBool::new(true)), Arc::new(std::sync::atomic::AtomicU64::new(1)));
+        let manager = manager_with(&companions, &allowed, &revision);
+        let secrets = manager.secrets().clone();
+        let pidfile = d.path().join("pid");
+        let mut env = BTreeMap::new();
+        env.insert("MCP_NAME".to_string(), plain("sync"));
+        let mut s = server("Synced", env);
+        if let McpTransport::Stdio { args, .. } = &mut s.transport {
+            args[1] = format!("echo $$ > '{}'; exec sh -c '{}'", pidfile.display(), SCRIPT.replace('\'', "'\\''"));
+        }
+        save_server(&companions, &secrets, s.clone(), &[]).unwrap();
+        approve(&companions, &secrets, &s.id).unwrap();
+        manager.reload();
+        let id = s.id.clone();
+        wait_for(&manager, |snap| matches!(snap.statuses.get(&id), Some(ServerStatus::Connected { .. })));
+        assert_eq!(manager.registry_for("local").specs().len(), 2);
+        let pid = std::fs::read_to_string(&pidfile).unwrap().trim().to_string();
+        assert!(alive(&pid), "the server runs");
+
+        // The writer of this config is revoked: the sync layer says no and bumps its revision.
+        // Nothing reloads the manager by hand.
+        allowed.store(false, SeqCst);
+        revision.fetch_add(1, SeqCst);
+        let end = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < end && (alive(&pid) || !manager.registry_for("local").specs().is_empty()) {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(!alive(&pid), "the process was stopped");
+        assert!(manager.registry_for("local").specs().is_empty(), "its tools are gone from the sessions");
+        let snap = wait_for(&manager, |snap| snap.statuses.get(&id) == Some(&ServerStatus::Off));
+        assert_eq!(snap.statuses[&id], ServerStatus::Off);
+        // Later reloads keep it off while the sync layer refuses it.
+        manager.reload();
+        wait_for(&manager, |_| true);
+        assert!(manager.registry_for("local").specs().is_empty());
     }
 
     #[test]
