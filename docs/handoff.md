@@ -629,7 +629,7 @@ Built on `wip/alpha10`, a commit per feature, then merged to `main`.
   on Windows in GPUI.
 - Two-way device linking: `weirdnet_device_link::invite` (an existing
   device's `weirdnet-morph://invite/…`: peer, addresses, a 16-byte token,
-  120 s expiry; served on `/weirdnet/link-invite/1`). The new device answers
+  120 s expiry; served on `/weirdnet/link-invite/2`). The new device answers
   with its usual signed offer link; the existing device then pairs with it
   exactly as if scanned, so the SAS and the sealed transfer are unchanged.
   An invite holds no secret and takes one answer. `MORPH_TEST_IDENTITY=offer`

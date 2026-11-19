@@ -1,7 +1,7 @@
 //! The other direction: the **existing device** shows an invite as a QR code
 //! or link (`<scheme>invite/…`) and the **new device** scans it. The invite
 //! is only a meeting point: the new device answers it with its own signed
-//! [`Offer`](crate::Offer) link over `/weirdnet/link-invite/1`, and from there
+//! [`Offer`](crate::Offer) link over `/weirdnet/link-invite/2`, and from there
 //! the link runs exactly as before: the existing device dials the offer,
 //! both screens show the same six-digit code, and nothing moves until the
 //! user confirms it on both. An invite holds no secret; whoever answers it
@@ -24,7 +24,7 @@ use crate::wire::LinkReply;
 use crate::{Error, OFFER_TTL_MS, Result, VERSION, decode_link};
 
 /// The invite's own stream id: offers are pushed here, not on `/weirdnet/link/1`.
-pub static INVITE_PROFILE: Profile = Profile { protocol: "/weirdnet/link-invite/1", thread: "weirdnet-link-invite", ..WEIRDNET };
+pub static INVITE_PROFILE: Profile = Profile { protocol: "/weirdnet/link-invite/2", thread: "weirdnet-link-invite", ..WEIRDNET };
 
 /// Longest invite text accepted.
 const MAX_INVITE: usize = 2048;
