@@ -494,6 +494,7 @@ impl Browser {
             bounds: self.page_area,
             visible: active && self.shown,
             session: session.filter(|_| !target.is_empty()),
+            background: false,
         })?;
         self.by_view.insert(view.id(), id);
         let blank = target.is_empty();

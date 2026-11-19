@@ -7,6 +7,8 @@
 pub enum Message {
     /// The page bridge posted this (JSON).
     Bridge(String),
+    /// The host script posted this envelope (see [`crate::bridge::check_host`]).
+    Host(String),
     /// The page took focus.
     Focused,
     /// A shell shortcut was pressed in the page (canonical notation).
@@ -24,6 +26,7 @@ impl Message {
         let (kind, rest) = body.split_at_checked(2)?;
         match kind {
             "b:" => Some(Message::Bridge(rest.to_string())),
+            "h:" => Some(Message::Host(rest.to_string())),
             "f:" => Some(Message::Focused),
             "k:" if !rest.is_empty() => Some(Message::Shortcut(rest.to_string())),
             "u:" if !rest.is_empty() => Some(Message::Url(rest.to_string())),
@@ -156,6 +159,7 @@ mod tests {
     #[test]
     fn page_messages_parse() {
         assert_eq!(Message::parse(r#"b:{"id":"1"}"#), Some(Message::Bridge(r#"{"id":"1"}"#.into())));
+        assert_eq!(Message::parse(r#"h:{"t":"x"}"#), Some(Message::Host(r#"{"t":"x"}"#.into())));
         assert_eq!(Message::parse("f:"), Some(Message::Focused));
         assert_eq!(Message::parse("k:ctrl-t"), Some(Message::Shortcut("ctrl-t".into())));
         assert_eq!(Message::parse("u:https://example.com/#a"), Some(Message::Url("https://example.com/#a".into())));

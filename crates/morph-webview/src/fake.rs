@@ -28,6 +28,8 @@ pub enum Call {
     ClearData,
     /// A script run with [`WebView::evaluate`].
     Evaluate(String),
+    /// A script run with [`WebView::evaluate_isolated`].
+    EvaluateIsolated(String),
     Dropped,
 }
 
@@ -44,6 +46,13 @@ struct Shared {
     /// What [`WebView::evaluate`] answers in pages whose address starts with
     /// the key (else `None`).
     script_answers: Vec<(String, String)>,
+    /// What page reads ([`crate::page_read`]) answer in pages whose address
+    /// starts with the key: the page side's JSON.
+    page_reads: Vec<(String, String)>,
+    /// Page reads get no answer (to test timeouts).
+    hold_reads: bool,
+    /// Chunks of answers under way, by read key.
+    read_chunks: std::collections::HashMap<String, Vec<String>>,
 }
 
 /// The fake backend. Clone it to keep a handle for assertions after handing
@@ -121,6 +130,53 @@ impl FakeBackend {
         self.shared.borrow_mut().script_answers.push((url_prefix.into(), result.into()));
     }
 
+    /// Page reads in pages whose address starts with `url_prefix` answer
+    /// `json` (what the page side would: `url`, `origin`, `frame`, and the
+    /// parts asked for) from now on.
+    pub fn answer_page_reads(&self, url_prefix: &str, json: &str) {
+        self.shared.borrow_mut().page_reads.push((url_prefix.into(), json.into()));
+    }
+
+    /// Page reads get no answer from now on.
+    pub fn hold_page_reads(&self) {
+        self.shared.borrow_mut().hold_reads = true;
+    }
+
+    /// The page side of a page read, for `script` in a page at `url`.
+    fn page_read(&self, url: &str, script: &str) -> Option<String> {
+        let mut shared = self.shared.borrow_mut();
+        if shared.hold_reads {
+            return None;
+        }
+        let head = script.strip_prefix("/*morph-read:")?.split("*/").next()?.to_string();
+        let parts: Vec<&str> = head.split(':').collect();
+        match parts.as_slice() {
+            ["begin", key, chunk] => {
+                let chunk: usize = chunk.parse().ok()?;
+                let Some(json) = shared.page_reads.iter().rev().find(|(p, _)| url.starts_with(p.as_str())).map(|(_, j)| j.clone()) else {
+                    return Some("Eno page".into());
+                };
+                let units: Vec<u16> = json.encode_utf16().collect();
+                let chunks: Vec<String> = units.chunks(chunk.max(1)).map(String::from_utf16_lossy).collect();
+                let first = chunks.first().cloned().unwrap_or_default();
+                let n = chunks.len().max(1);
+                if n > 1 {
+                    shared.read_chunks.insert(key.to_string(), chunks);
+                }
+                Some(format!("B{n}\n{first}"))
+            }
+            ["chunk", key, k] => {
+                let k: usize = k.parse().ok()?;
+                Some(shared.read_chunks.get(*key).and_then(|c| c.get(k)).map(|c| format!("C{c}")).unwrap_or_else(|| "Egone".into()))
+            }
+            ["forget", key] => {
+                shared.read_chunks.remove(*key);
+                Some(String::new())
+            }
+            _ => None,
+        }
+    }
+
     /// Scripts run in `id`, oldest first.
     pub fn scripts(&self, id: ViewId) -> Vec<String> {
         self.calls_for(id)
@@ -196,6 +252,20 @@ impl WebView for FakeView {
         let answer = self.backend.shared.borrow().script_answers.iter().rev().find(|(p, _)| url.starts_with(p.as_str())).map(|(_, r)| r.clone());
         done(answer);
         true
+    }
+    fn isolation(&self) -> crate::Isolation {
+        crate::Isolation::ScriptWorld
+    }
+    fn evaluate_isolated(&self, script: &str, done: crate::ScriptDone) -> bool {
+        self.backend.record(self.id, Call::EvaluateIsolated(script.into()));
+        let url = self.url.borrow().clone();
+        if let Some(answer) = self.backend.page_read(&url, script) {
+            done(Some(answer));
+        }
+        true
+    }
+    fn engine_url(&self) -> Option<String> {
+        Some(self.url.borrow().clone())
     }
     fn load_url(&self, url: &str) -> Result<()> {
         self.backend.record(self.id, Call::Load(url.into()));

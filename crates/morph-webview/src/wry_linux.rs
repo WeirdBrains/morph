@@ -17,10 +17,13 @@ use gtk::glib::translate::ToGlibPtr;
 use gtk::prelude::*;
 use javascriptcore::ValueExt;
 use raw_window_handle::{HandleError, HasWindowHandle, RawWindowHandle, WindowHandle, XlibWindowHandle};
-use webkit2gtk::{FindControllerExt, FindOptions, LoadEvent, UserContentManagerExt, WebViewExt};
+use webkit2gtk::{
+    FindControllerExt, FindOptions, LoadEvent, UserContentInjectedFrames, UserContentManagerExt, UserScript, UserScriptInjectionTime, WebViewExt,
+};
 use wry::dpi::{LogicalPosition, LogicalSize};
 use wry::{NewWindowFeatures, NewWindowResponse, WebContext, WebViewBuilder, WebViewBuilderExtUnix, WebViewExtUnix};
 
+use crate::bridge::{self, HostTransport, ViewBridge};
 use crate::{Backend, Error, Event, LoadError, PageBridge, Rect, Result, Spec, ViewId, WebView, deliver_script, errors};
 
 /// Start GTK on this thread. Call once, before [`WryBackend::new`].
@@ -881,8 +884,11 @@ pub(crate) fn with_bridge<'a>(builder: WebViewBuilder<'a>, bridge: &Option<PageB
 }
 
 /// Answer the bridge's messages from `engine`'s pages in the page that sent
-/// them.
-pub(crate) fn attach_bridge(engine: &webkit2gtk::WebView, bridge: &Option<PageBridge>) {
+/// them, with `view`'s context. With `host`, also run the bridge's host
+/// scripts in Morph's own script world ([`bridge::HOST_WORLD`], main frame
+/// only) and answer their messages there: page scripts can neither see that
+/// world's `MorphHost` nor post on its message handler.
+pub(crate) fn attach_bridge(engine: &webkit2gtk::WebView, bridge: &Option<PageBridge>, view: &ViewBridge, host: bool) {
     let Some(bridge) = bridge.clone() else {
         return;
     };
@@ -890,16 +896,61 @@ pub(crate) fn attach_bridge(engine: &webkit2gtk::WebView, bridge: &Option<PageBr
         return;
     };
     let target = engine.downgrade();
-    manager.connect_script_message_received(Some("morphBridge"), move |_, message| {
+    let (page_bridge, page_view) = (bridge.clone(), view.clone());
+    manager.connect_script_message_received(Some(bridge::PAGE_HANDLER), move |_, message| {
         let Some(body) = message.js_value().map(|v| v.to_str().to_string()) else {
             return;
         };
-        let (Some(reply), Some(engine)) = ((bridge.handler)(&body), target.upgrade()) else {
+        let Some(engine) = target.upgrade() else {
             return;
         };
-        engine.run_javascript(&deliver_script(&reply), None::<&webkit2gtk::gio::Cancellable>, |_| {});
+        let url = engine.uri().map(|u| u.to_string()).unwrap_or_default();
+        if let Some(reply) = page_bridge.answer_page(&page_view, &url, &body) {
+            engine.run_javascript(&deliver_script(&reply), None::<&webkit2gtk::gio::Cancellable>, |_| {});
+        }
     });
-    manager.register_script_message_handler("morphBridge");
+    manager.register_script_message_handler(bridge::PAGE_HANDLER);
+    if !host || bridge.host_scripts.is_empty() {
+        return;
+    }
+    let script = bridge::host_script(view, HostTransport::WebKitWorld, &bridge.host_scripts);
+    manager.add_script(&UserScript::for_world(
+        &script,
+        UserContentInjectedFrames::TopFrame,
+        UserScriptInjectionTime::Start,
+        bridge::HOST_WORLD,
+        &[],
+        &[],
+    ));
+    let target = engine.downgrade();
+    let view = view.clone();
+    manager.connect_script_message_received(Some(bridge::HOST_HANDLER), move |_, message| {
+        let Some(body) = message.js_value().map(|v| v.to_str().to_string()) else {
+            return;
+        };
+        let Some(engine) = target.upgrade() else {
+            return;
+        };
+        let url = engine.uri().map(|u| u.to_string()).unwrap_or_default();
+        if let Some(reply) = bridge.answer_host(&view, &url, None, &body) {
+            engine.run_javascript_in_world(
+                &bridge::host_deliver_script(&view, &reply),
+                bridge::HOST_WORLD,
+                None::<&webkit2gtk::gio::Cancellable>,
+                |_| {},
+            );
+        }
+    });
+    manager.register_script_message_handler_in_world(bridge::HOST_HANDLER, bridge::HOST_WORLD);
+}
+
+/// [`WebView::evaluate_isolated`] on WebKitGTK: `script` runs in the main
+/// frame in [`bridge::HOST_WORLD`]; its string result is handed over as it is.
+pub(crate) fn evaluate_in_host_world(engine: &webkit2gtk::WebView, script: &str, done: crate::ScriptDone) -> bool {
+    engine.run_javascript_in_world(script, bridge::HOST_WORLD, None::<&webkit2gtk::gio::Cancellable>, move |result| {
+        done(result.ok().and_then(|r| r.js_value()).map(|v| v.to_str().to_string()));
+    });
+    true
 }
 
 /// Handles `window.open` from a page of tab `tab`: Morph makes the popup
@@ -911,8 +962,14 @@ pub(crate) fn popup_handler(
     queue: Queue,
     popups: Popups,
     bridge: Option<PageBridge>,
+    view_bridge: ViewBridge,
 ) -> impl Fn(String, NewWindowFeatures) -> NewWindowResponse + 'static {
+    let view_bridge = view_bridge.for_popup();
     move |url, features| {
+        // A page no one sees opens no windows.
+        if view_bridge.background {
+            return NewWindowResponse::Deny;
+        }
         let window = gtk::Window::new(gtk::WindowType::Toplevel);
         let (w, h) = features.size.map(|s| (s.width as i32, s.height as i32)).unwrap_or((800, 600));
         window.set_default_size(w.max(200), h.max(150));
@@ -923,7 +980,7 @@ pub(crate) fn popup_handler(
             .with_related_view(features.opener.webview.clone())
             .with_initialization_script(UNDO_REDO_SCRIPT)
             .with_initialization_script(CONTROL_SCHEME_SCRIPT)
-            .with_new_window_req_handler(popup_handler(tab, queue.clone(), popups.clone(), bridge.clone()));
+            .with_new_window_req_handler(popup_handler(tab, queue.clone(), popups.clone(), bridge.clone(), view_bridge.clone()));
         let built = with_bridge(builder, &bridge).build_gtk(&vbox);
         let view = match built {
             Ok(view) => view,
@@ -934,7 +991,7 @@ pub(crate) fn popup_handler(
             }
         };
         let engine = view.webview();
-        attach_bridge(&engine, &bridge);
+        attach_bridge(&engine, &bridge, &view_bridge, false);
         let title_window = window.clone();
         let q = queue.clone();
         engine.connect_title_notify(move |v| {
@@ -989,6 +1046,7 @@ impl Backend for WryBackend {
     fn create(&mut self, spec: Spec) -> Result<Box<dyn WebView>> {
         self.next += 1;
         let id = ViewId(self.next);
+        let view_bridge = ViewBridge::new(id, spec.visible, spec.background);
         let context = self.contexts.entry(spec.data_dir.clone()).or_insert_with(|| WebContext::new(spec.data_dir.clone()));
         let url = if spec.url.is_empty() { "about:blank".to_string() } else { spec.url.clone() };
         let builder = WebViewBuilder::new_with_web_context(context);
@@ -999,12 +1057,12 @@ impl Backend for WryBackend {
             .with_initialization_script(UNDO_REDO_SCRIPT)
             .with_initialization_script(CONTROL_SCHEME_SCRIPT)
             .with_initialization_script(crate::icons::ICON_SCRIPT)
-            .with_visible(spec.visible)
-            .with_new_window_req_handler(popup_handler(id, self.queue.clone(), self.popups.clone(), self.bridge.clone()));
+            .with_visible(spec.visible && !spec.background)
+            .with_new_window_req_handler(popup_handler(id, self.queue.clone(), self.popups.clone(), self.bridge.clone(), view_bridge.clone()));
         let view = with_bridge(builder, &self.bridge).build_as_child(&self.parent).map_err(backend_err)?;
         let engine = view.webview();
         hook_downloads(&engine, id, &mut self.hooked, &spec.data_dir, &self.downloads, &self.queue);
-        attach_bridge(&engine, &self.bridge);
+        attach_bridge(&engine, &self.bridge, &view_bridge, true);
         watch(&engine, id, &self.queue, &self.shortcuts);
         watch_links(&engine, id, &self.queue);
         link_menu_entries(&engine, id, &self.queue);
@@ -1046,7 +1104,15 @@ impl Backend for WryBackend {
             let keys = self.keys.clone();
             top.connect_key_release_event(move |_, e| if keys.forward(e, false) { Propagation::Stop } else { Propagation::Proceed });
         }
-        Ok(Box::new(WryView { id, view, popups: self.popups.clone(), keys: self.keys.clone(), bounds: Cell::new(spec.bounds), chooser }))
+        Ok(Box::new(WryView {
+            id,
+            view,
+            popups: self.popups.clone(),
+            keys: self.keys.clone(),
+            bounds: Cell::new(spec.bounds),
+            chooser,
+            bridge: view_bridge,
+        }))
     }
 
     fn poll(&mut self) -> Vec<(ViewId, Event)> {
@@ -1099,11 +1165,21 @@ struct WryView {
     keys: HostKeys,
     bounds: Cell<Rect>,
     chooser: Chooser,
+    bridge: ViewBridge,
 }
 
 impl WebView for WryView {
     fn evaluate(&self, script: &str, done: crate::ScriptDone) -> bool {
         crate::wry_evaluate(&self.view, script, done)
+    }
+    fn isolation(&self) -> crate::Isolation {
+        crate::Isolation::ScriptWorld
+    }
+    fn evaluate_isolated(&self, script: &str, done: crate::ScriptDone) -> bool {
+        evaluate_in_host_world(&self.view.webview(), script, done)
+    }
+    fn engine_url(&self) -> Option<String> {
+        self.view.webview().uri().map(|u| u.to_string())
     }
 
     fn id(&self) -> ViewId {
@@ -1171,6 +1247,9 @@ impl WebView for WryView {
         Some(crate::Frame { width: width as u32, height: height as u32, pixels })
     }
     fn set_visible(&self, visible: bool) -> Result<()> {
+        // A background view is never shown.
+        let visible = visible && !self.bridge.background;
+        self.bridge.set_visible(visible);
         self.view.set_visible(visible).map_err(backend_err)?;
         if visible {
             // Showing the GTK window again sizes it to its default (1x1).

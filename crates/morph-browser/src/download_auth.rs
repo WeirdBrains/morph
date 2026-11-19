@@ -117,6 +117,7 @@ impl Browser {
                 bounds: Rect::new(0.0, 0.0, 1.0, 1.0),
                 visible: false,
                 session: None,
+                background: true,
             };
             match self.backend.create(spec) {
                 Ok(view) if !origins.is_empty() => {

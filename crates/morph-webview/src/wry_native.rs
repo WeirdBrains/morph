@@ -23,6 +23,7 @@ use raw_window_handle::{HandleError, HasWindowHandle, RawWindowHandle, WindowHan
 use wry::dpi::{LogicalPosition, LogicalSize};
 use wry::{NewWindowResponse, PageLoadEvent, WebContext, WebViewBuilder};
 
+use crate::bridge::{self, HostTransport, ViewBridge};
 use crate::native_page::{Message, PAGE_SCRIPT, canonical, find_script, keys_script};
 use crate::{Backend, Error, Event, PageBridge, Rect, Result, Spec, ViewId, WebView, deliver_script};
 
@@ -44,9 +45,19 @@ type Queue = Rc<RefCell<Vec<(ViewId, Event)>>>;
 /// history state need refreshing).
 #[derive(Default)]
 struct Pending {
-    replies: Vec<String>,
+    /// Page-channel messages, answered in `poll` with the view's context.
+    page: Vec<String>,
+    /// Host-channel envelopes and the address of the frame that sent each.
+    host: Vec<(String, String)>,
     loaded: bool,
 }
+
+/// The host script travels in the page's world here: wry has no content
+/// worlds (docs/bridge-api.md, "Per-platform status").
+#[cfg(target_os = "macos")]
+const TRANSPORT: HostTransport = HostTransport::WebKitIpc;
+#[cfg(target_os = "windows")]
+const TRANSPORT: HostTransport = HostTransport::WebView2;
 
 pub struct NativeBackend {
     parent: Parent,
@@ -115,6 +126,7 @@ fn with_downloads<'a>(builder: WebViewBuilder<'a>, id: ViewId, downloads: &Rc<Do
 struct Shared {
     view: wry::WebView,
     pending: Rc<RefCell<Pending>>,
+    bridge: ViewBridge,
 }
 
 impl NativeBackend {
@@ -152,16 +164,22 @@ impl Backend for NativeBackend {
         let id = ViewId(self.next);
         let url = if spec.url.is_empty() { "about:blank".to_string() } else { spec.url.clone() };
         let pending: Rc<RefCell<Pending>> = Rc::default();
+        let view_bridge = ViewBridge::new(id, spec.visible, spec.background);
         let context = self.contexts.entry(spec.data_dir.clone()).or_insert_with(|| WebContext::new(spec.data_dir.clone()));
         let mut builder = WebViewBuilder::new_with_web_context(context)
             .with_url(url)
             .with_bounds(wry_rect(spec.bounds))
-            .with_visible(spec.visible)
+            .with_visible(spec.visible && !spec.background)
             .with_initialization_script_for_main_only(PAGE_SCRIPT, true)
             .with_initialization_script_for_main_only(crate::icons::ICON_SCRIPT, true);
         builder = with_downloads(builder, id, &self.downloads, &self.queue);
         if let Some(bridge) = &self.bridge {
             builder = builder.with_initialization_script(&*bridge.script);
+            if !bridge.host_scripts.is_empty() {
+                // After wry's own `ipc` script, which it adds first; the
+                // host script captures what it needs before pages run.
+                builder = builder.with_initialization_script_for_main_only(bridge::host_script(&view_bridge, TRANSPORT, &bridge.host_scripts), true);
+            }
         }
         #[cfg(target_os = "macos")]
         {
@@ -197,14 +215,18 @@ impl Backend for NativeBackend {
             }
         });
         // Popups are the engine's own windows (see the module comment).
-        builder = builder.with_new_window_req_handler(|_, _| NewWindowResponse::Allow);
-        let (q, p, bridge) = (self.queue.clone(), pending.clone(), self.bridge.clone());
+        // A page no one sees opens no windows.
+        let background = spec.background;
+        builder = builder.with_new_window_req_handler(move |_, _| if background { NewWindowResponse::Deny } else { NewWindowResponse::Allow });
+        let (q, p) = (self.queue.clone(), pending.clone());
         builder = builder.with_ipc_handler(move |request| {
             let event = match Message::parse(request.body()) {
                 Some(Message::Bridge(body)) => {
-                    if let Some(reply) = bridge.as_ref().and_then(|b| (b.handler)(&body)) {
-                        p.borrow_mut().replies.push(reply);
-                    }
+                    p.borrow_mut().page.push(body);
+                    return;
+                }
+                Some(Message::Host(body)) => {
+                    p.borrow_mut().host.push((body, request.uri().to_string()));
                     return;
                 }
                 Some(Message::Focused) => Event::Focused,
@@ -223,7 +245,7 @@ impl Backend for NativeBackend {
             q.borrow_mut().push((id, event));
         });
         let view = builder.build_as_child(&self.parent).map_err(backend_err)?;
-        let shared = Rc::new(Shared { view, pending });
+        let shared = Rc::new(Shared { view, pending, bridge: view_bridge });
         self.views.retain(|(_, v)| v.strong_count() > 0);
         self.views.push((id, Rc::downgrade(&shared)));
         Ok(Box::new(NativeView { id, shared, bounds: Cell::new(spec.bounds) }))
@@ -234,12 +256,24 @@ impl Backend for NativeBackend {
         // is left is answering their handlers where a view is needed.
         let keys = keys_script(&self.shortcuts);
         for (id, shared) in self.views.iter().filter_map(|(id, v)| Some((*id, v.upgrade()?))) {
-            let (replies, loaded) = {
+            let (page, host, loaded) = {
                 let mut p = shared.pending.borrow_mut();
-                (std::mem::take(&mut p.replies), std::mem::take(&mut p.loaded))
+                (std::mem::take(&mut p.page), std::mem::take(&mut p.host), std::mem::take(&mut p.loaded))
             };
-            for reply in replies {
-                let _ = shared.view.evaluate_script(&deliver_script(&reply));
+            if let Some(bridge) = &self.bridge
+                && !(page.is_empty() && host.is_empty())
+            {
+                let url = shared.view.url().unwrap_or_default();
+                for body in page {
+                    if let Some(reply) = bridge.answer_page(&shared.bridge, &url, &body) {
+                        let _ = shared.view.evaluate_script(&deliver_script(&reply));
+                    }
+                }
+                for (body, frame_url) in host {
+                    if let Some(reply) = bridge.answer_host(&shared.bridge, &url, Some(&frame_url), &body) {
+                        let _ = shared.view.evaluate_script(&bridge::host_deliver_script(&shared.bridge, &reply));
+                    }
+                }
             }
             if loaded {
                 let _ = shared.view.evaluate_script(&keys);
@@ -319,6 +353,15 @@ impl WebView for NativeView {
     fn evaluate(&self, script: &str, done: crate::ScriptDone) -> bool {
         crate::wry_evaluate(self.view(), script, done)
     }
+    fn isolation(&self) -> crate::Isolation {
+        crate::Isolation::PageWorld
+    }
+    fn evaluate_isolated(&self, script: &str, done: crate::ScriptDone) -> bool {
+        crate::wry_evaluate_string(self.view(), script, done)
+    }
+    fn engine_url(&self) -> Option<String> {
+        self.view().url().ok()
+    }
 
     fn id(&self) -> ViewId {
         self.id
@@ -343,6 +386,9 @@ impl WebView for NativeView {
         self.view().set_bounds(wry_rect(bounds)).map_err(backend_err)
     }
     fn set_visible(&self, visible: bool) -> Result<()> {
+        // A background view is never shown.
+        let visible = visible && !self.shared.bridge.background;
+        self.shared.bridge.set_visible(visible);
         self.view().set_visible(visible).map_err(backend_err)?;
         if visible {
             self.view().set_bounds(wry_rect(self.bounds.get())).map_err(backend_err)?;

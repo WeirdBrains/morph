@@ -10,6 +10,9 @@ description = "Morph's web view boundary: a WebView trait and events, wry backen
 publish = false
 
 [dependencies]
+getrandom.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 
 # The wry backends (ARCHITECTURE.md section 2.0): webkit2gtk on Linux,
@@ -26,3 +29,8 @@ x11-dl.workspace = true
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 raw-window-handle.workspace = true
 wry.workspace = true
+
+# The bridge in a real WebKitGTK page; needs a display (xvfb-run), skips without one.
+[[test]]
+name = "bridge_webkit"
+harness = false
