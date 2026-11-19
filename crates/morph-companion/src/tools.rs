@@ -243,20 +243,20 @@ impl BrowserTool {
             }
             "page.scroll" => ToolSpec::new(
                 name,
-                "Scroll the current page up, down, to the top or bottom, or to an element (give its `target` label or `selector`).",
+                "Scroll the user's current tab (the page they are looking at; no need to attach it) up, down, to the top or bottom, or to an element (give its `target` label or `selector`).",
             )
             .tier(Tier::Navigate)
             .schema(target_schema(json!({ "to": { "type": "string", "enum": ["up", "down", "top", "bottom", "element"] } }), &["to"])),
-            "browser.find" => ToolSpec::new(name, "Find and highlight a phrase on the current page; returns the number of matches.")
+            "browser.find" => ToolSpec::new(name, "Find and highlight a phrase on the user's current tab; returns the number of matches.")
                 .tier(Tier::Navigate)
                 .schema(schema(json!({ "query": { "type": "string" } }), &["query"])),
             "library.bookmark" => ToolSpec::new(name, "Bookmark a page in the user's Library.")
                 .tier(Tier::Navigate)
                 .schema(schema(json!({ "url": { "type": "string" }, "title": { "type": "string" } }), &["url"])),
-            "page.click" => ToolSpec::new(name, "Click the link or button with this label on the current page.")
+            "page.click" => ToolSpec::new(name, "Click the link or button with this label on the user's current tab (the page they are looking at; no need to attach it).")
                 .tier(Tier::Interact)
                 .schema(target_schema(json!({}), &["target"])),
-            "page.fill" => ToolSpec::new(name, "Type text into the field with this label on the current page (never submits).")
+            "page.fill" => ToolSpec::new(name, "Type text into the field with this label on the user's current tab (the page they are looking at; no need to attach it). Never submits.")
                 .tier(Tier::Interact)
                 .schema(target_schema(json!({ "value": { "type": "string" } }), &["target", "value"])),
             other => unreachable!("no browser tool {other}"),

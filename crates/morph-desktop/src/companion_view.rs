@@ -20,7 +20,7 @@ use morph_ai::{
 use morph_browser::{HostPageId, HostPageRequest, HostPageState};
 use morph_companion::{
     Activity, ApprovalCard, AttachedPage, Conversation, Entry, FootnoteView, NoticeView, OfferView, TaskOptions, ToolState, TraceRowView, ViewUpdate,
-    export_markdown, footnotes, more_pages_prompt, parse_citations, ran_out_of_pages,
+    export_markdown, footnotes, more_pages_prompt, parse_citations, ran_out_of_pages, with_current_tab,
 };
 use morph_core::tabs::TabId;
 use morph_ui::theme::Theme;
@@ -532,9 +532,13 @@ impl CompanionView {
             return;
         }
         let attached = conv.attached().cloned();
-        let input = match &attached {
-            Some(p) => format!("I attached the page \"{}\" <{}>; read it with page.text.\n\n{text}", p.title.replace('"', "'"), p.url),
-            None => text.clone(),
+        let page = self.page.clone();
+        let conv = self.conversation();
+        let input = match (&attached, &page) {
+            (Some(p), _) => format!("I attached the page \"{}\" <{}>; read it with page.text.\n\n{text}", p.title.replace('"', "'"), p.url),
+            // The tab the user is on, so page.click, page.fill and page.scroll need no attaching.
+            (None, Some(p)) if !p.url.is_empty() && p.url != "about:blank" => with_current_tab(&text, &p.url, &p.title),
+            (None, _) => text.clone(),
         };
         conv.start_task(&text);
         // Signed-in research is chosen per task and never kept.

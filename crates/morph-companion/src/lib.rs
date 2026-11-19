@@ -23,7 +23,7 @@ pub use export::{chat_turn, export_markdown, journal_entry};
 pub use markdown::{Block, Link, Markdown, Span};
 pub use session::{
     Canceller, MORE_PAGES_PROMPT, READ_NUDGE, SYSTEM_PROMPT, SessionError, Sessions, TaskOptions, answered_without_reading, more_pages_prompt,
-    ran_out_of_pages,
+    ran_out_of_pages, with_current_tab,
 };
 pub use tools::{BROWSER, PendingTarget, WEB, browser_tools, untrusted, web_tools};
 pub use view::{
