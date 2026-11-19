@@ -33,6 +33,8 @@ pub struct CompanionView {
     input: Entity<TextInput>,
     worker: Worker,
     models: Arc<LocalModels>,
+    /// The policy the worker enforces; Settings changes reach it through [`Self::reload_agents`].
+    policy: weirdnet_agent::SharedPolicy,
     /// `MORPH_COMPANION_AUTOASK=<question>`: a dev flag that sends one question when the panel first polls.
     autoask: Option<String>,
     store: FileStore,
@@ -57,7 +59,7 @@ impl CompanionView {
                 .map(|e| Box::new(e) as Box<dyn weirdnet_model::Engine>)
         });
         let models = Arc::new(LocalModels::new(weirdnet_model::ModelStore::from_env(), factory));
-        let worker = Worker::start(models.clone(), policy);
+        let worker = Worker::start(models.clone(), policy.clone());
         let selected = roster.default_companion().map(|c| c.id().clone()).unwrap_or_else(|| AgentId::new("local"));
         let input = cx.new(|cx| TextInput::new("Ask a companion", theme, cx));
         let sub = cx.subscribe_in(&input, window, |this, _, event, _, cx| match event {
@@ -76,6 +78,7 @@ impl CompanionView {
             input,
             worker,
             models,
+            policy,
             autoask: std::env::var("MORPH_COMPANION_AUTOASK").ok().filter(|q| !q.trim().is_empty()),
             store,
             focus: cx.focus_handle(),
@@ -126,6 +129,27 @@ impl CompanionView {
 
     pub(crate) fn focus_footnote(&mut self, n: u32, cx: &mut Context<Self>) {
         self.focus_note = if self.focus_note == Some(n) { None } else { Some(n) };
+        cx.notify();
+    }
+
+    /// Settings changed the roster, grants or allows on disk: take them in.
+    pub fn reload_agents(&mut self, cx: &mut Context<Self>) {
+        if let Ok(Some(r)) = self.store.load_roster()
+            && r.default_companion().is_some()
+        {
+            self.roster = r;
+        }
+        if self.roster.get(&self.selected).is_none() {
+            self.selected = self.roster.default_companion().map(|c| c.id().clone()).unwrap_or_else(|| AgentId::new("local"));
+        }
+        let _ = morph_ai::reload_shared(&self.store, &self.policy);
+        cx.notify();
+    }
+
+    /// Stop on a skipped-approval notice: revoke that Always allow and end the running task.
+    fn stop_notice(&mut self, allow_id: u64, cx: &mut Context<Self>) {
+        let _ = morph_ai::revoke_shared(&self.store, &self.policy, allow_id);
+        self.worker.cancel(&self.selected);
         cx.notify();
     }
 
@@ -230,6 +254,7 @@ impl CompanionView {
             conv.settle();
         }
         let _ = self.store.save_roster(&self.roster);
+        let _ = morph_ai::save_shared(&self.store, &self.policy);
         cx.notify();
     }
 }
@@ -338,15 +363,23 @@ fn trace_row(t: Theme, r: &TraceRowView) -> gpui::Div {
         .child(div().text_color(rgb(if r.session == "logged out" { t.text_secondary } else { t.accent_alt })).child(r.session.clone()))
 }
 
-fn notice_row(t: Theme, n: &NoticeView) -> gpui::Div {
+fn notice_row(t: Theme, i: usize, n: &NoticeView, running: bool, cx: &mut Context<CompanionView>) -> gpui::Div {
+    let allow_id = n.allow_id;
     div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(6.))
         .p(px(6.))
         .rounded(px(6.))
         .text_size(px(11.))
         .border_1()
         .border_color(rgb(t.surface_variant))
         .text_color(rgb(t.text_secondary))
-        .child(n.text.clone())
+        .child(div().flex_1().child(n.text.clone()))
+        .children(running.then(|| {
+            chip(t, ("companion-notice-stop", i), "Stop", false).on_click(cx.listener(move |this, _, _, cx| this.stop_notice(allow_id, cx)))
+        }))
 }
 
 impl Render for CompanionView {
@@ -368,6 +401,7 @@ impl Render for CompanionView {
         let model = self.roster.get(&self.selected).and_then(|c| c.model.as_ref()).map(|m| m.label()).unwrap_or_else(|| "its own model".into());
 
         let focus_note = self.focus_note;
+        let running = conv.is_running();
         let entries: Vec<gpui::AnyElement> = conv
             .entries()
             .iter()
@@ -394,7 +428,7 @@ impl Render for CompanionView {
                     }))
                     .into_any_element(),
                 Entry::Card { card, answer } => approval_card(t, i, card, answer.as_deref(), cx).into_any_element(),
-                Entry::Notice(n) => notice_row(t, n).into_any_element(),
+                Entry::Notice(n) => notice_row(t, i, n, running, cx).into_any_element(),
                 Entry::Blocked(text) => div().text_size(px(11.)).text_color(rgb(t.error)).child(text.clone()).into_any_element(),
                 Entry::Tool { tool, state, .. } => {
                     let (mark, color) = match state {

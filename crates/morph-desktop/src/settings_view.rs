@@ -27,6 +27,8 @@ use morph_services::device_link::Links;
 use morph_services::relays::{RelayReport, RelayStatus};
 use morph_services::sync::DeviceView;
 
+mod agents;
+
 use crate::default_browser::{self, Status};
 use crate::shell::ShellRequest;
 use crate::text_input::{TextInput, TextInputEvent};
@@ -39,6 +41,7 @@ impl Section {
         Some(match name {
             "downloads" => Section::Downloads,
             "relays" => Section::Relays,
+            "agents" => Section::Agents,
             "search" => Section::Search,
             "identity" => Section::Identity,
             "devices" => Section::Devices,
@@ -62,11 +65,12 @@ pub enum Section {
     Identity,
     Devices,
     Relays,
+    Agents,
     About,
 }
 
 impl Section {
-    pub const ALL: [Section; 12] = [
+    pub const ALL: [Section; 13] = [
         Section::Profile,
         Section::Browser,
         Section::Search,
@@ -78,6 +82,7 @@ impl Section {
         Section::Identity,
         Section::Devices,
         Section::Relays,
+        Section::Agents,
         Section::About,
     ];
 
@@ -94,6 +99,7 @@ impl Section {
             Section::Identity => "Identity and backup",
             Section::Devices => "Linked devices",
             Section::Relays => "Relays",
+            Section::Agents => "Agents",
             Section::About => "About",
         }
     }
@@ -114,6 +120,7 @@ impl Section {
             Section::Relays => {
                 "relays relay network weirdnet connected connection reservation slot link devices nat peer discovery mdns dht corporate lan"
             }
+            Section::Agents => "agents companions ai model gemma grants permissions always allow site research search provider mcp",
             Section::About => "about version licence license notices",
         }
     }
@@ -152,6 +159,7 @@ pub enum Item {
     CheckRelays,
     Discovery,
     ManualPeers,
+    DefaultCompanion,
     OpenAbout,
 }
 
@@ -169,11 +177,12 @@ impl Item {
             Item::OpenIdentity => Section::Identity,
             Item::Devices => Section::Devices,
             Item::CheckRelays | Item::Discovery | Item::ManualPeers => Section::Relays,
+            Item::DefaultCompanion => Section::Agents,
             Item::OpenAbout => Section::About,
         }
     }
 
-    pub const ALL: [Item; 20] = [
+    pub const ALL: [Item; 21] = [
         Item::OpenBookmarks,
         Item::OpenHistory,
         Item::ClearHistory,
@@ -193,12 +202,13 @@ impl Item {
         Item::CheckRelays,
         Item::Discovery,
         Item::ManualPeers,
+        Item::DefaultCompanion,
         Item::OpenAbout,
     ];
 
     /// Whether ←/→ change it.
     fn is_choice(self) -> bool {
-        matches!(self, Item::Engine | Item::TabPosition | Item::Theme | Item::SideWidth | Item::Collapsed | Item::Discovery)
+        matches!(self, Item::Engine | Item::TabPosition | Item::Theme | Item::SideWidth | Item::Collapsed | Item::Discovery | Item::DefaultCompanion)
     }
 }
 
@@ -249,6 +259,7 @@ pub struct SettingsView {
     peer_input: Entity<TextInput>,
     /// The shown profile's linked devices (its sync roster).
     devices: Vec<DeviceView>,
+    agents: agents::State,
     /// A device whose Revoke was pressed once and waits for Confirm.
     confirm_revoke: Option<String>,
     _subscriptions: Vec<gpui::Subscription>,
@@ -261,7 +272,9 @@ impl SettingsView {
         let search = cx.new(|cx| TextInput::new("Search settings", theme, cx));
         let home_page = cx.new(|cx| TextInput::new("Blank page", theme, cx));
         let peer_input = cx.new(|cx| TextInput::new("/ip4/…/tcp/…/p2p/<peer id>", theme, cx));
-        let subscriptions = vec![
+        let agents_state = agents::State::new(theme, cx);
+        let mut subscriptions = agents::subscribe(&agents_state, window, cx);
+        subscriptions.extend(vec![
             cx.subscribe_in(&search, window, |this, _, event, window, cx| match event {
                 TextInputEvent::Changed => {
                     this.current = None;
@@ -304,7 +317,7 @@ impl SettingsView {
                 }
                 TextInputEvent::Changed => {}
             }),
-        ];
+        ]);
         let mut view = Self {
             home: home.to_path_buf(),
             settings: Settings::default(),
@@ -327,6 +340,7 @@ impl SettingsView {
             network: netprefs::load(home).unwrap_or_default(),
             peer_input,
             devices: Vec::new(),
+            agents: agents_state,
             confirm_revoke: None,
             _subscriptions: subscriptions,
         };
@@ -376,6 +390,7 @@ impl SettingsView {
     /// Read the shown profile's settings again (after a profile switch).
     pub fn reload(&mut self, cx: &mut Context<Self>) {
         self.reload_quietly();
+        self.agents_reload(cx);
         let saved = self.settings.home_page.clone();
         self.home_page.update(cx, |i, cx| i.set_text(&saved, cx));
         cx.notify();
@@ -389,6 +404,9 @@ impl SettingsView {
         self.theme = theme;
         self.search.update(cx, |i, cx| i.set_theme(theme, cx));
         self.home_page.update(cx, |i, cx| i.set_theme(theme, cx));
+        for input in [&self.agents.rename, &self.agents.custom_model, &self.agents.site] {
+            input.update(cx, |i, cx| i.set_theme(theme, cx));
+        }
         cx.notify();
     }
 
@@ -613,6 +631,7 @@ impl SettingsView {
                 window.focus(&self.peer_input.focus_handle(cx), cx);
                 self.peer_input.update(cx, |i, cx| i.select_all(cx));
             }
+            Item::DefaultCompanion => self.agents_step_default(true, cx),
             Item::OpenAbout => cx.emit(ShellRequest::Run(Action::ShowAbout)),
         }
         cx.notify();
@@ -630,6 +649,7 @@ impl SettingsView {
             Item::SideWidth => self.change(if forward { SettingsChange::Wider } else { SettingsChange::Narrower }, cx),
             Item::Collapsed => self.change(SettingsChange::ToggleCollapsed, cx),
             Item::Discovery => self.set_discovery(forward, cx),
+            Item::DefaultCompanion => self.agents_step_default(forward, cx),
             _ => {}
         }
     }
@@ -1223,6 +1243,7 @@ impl SettingsView {
             ],
             Section::Devices => self.device_rows(cx),
             Section::Relays => self.relay_rows(cx),
+            Section::Agents => self.agents_rows(cx),
             Section::About => vec![
                 self.row(
                     Item::OpenAbout,

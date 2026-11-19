@@ -174,6 +174,28 @@ impl Grants {
     }
 }
 
+/// Write the live policy to the store (the panel does this after each task, since approvals can
+/// add Always allow entries).
+pub fn save_shared(store: &dyn AiStore, policy: &SharedPolicy) -> Result<(), StoreError> {
+    store.save_policy(&policy.read().unwrap_or_else(|e| e.into_inner()))
+}
+
+/// Replace the live policy with what is stored (Settings changed it on disk).
+pub fn reload_shared(store: &dyn AiStore, policy: &SharedPolicy) -> Result<(), StoreError> {
+    if let Some(fresh) = store.load_policy()? {
+        *policy.write().unwrap_or_else(|e| e.into_inner()) = fresh;
+    }
+    Ok(())
+}
+
+/// Stop on a skipped-approval notice: revoke that Always allow in the live policy and save it.
+/// Returns whether the allow existed.
+pub fn revoke_shared(store: &dyn AiStore, policy: &SharedPolicy, allow_id: u64) -> Result<bool, StoreError> {
+    let found = policy.write().unwrap_or_else(|e| e.into_inner()).revoke(allow_id);
+    save_shared(store, policy)?;
+    Ok(found)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -243,5 +265,28 @@ mod tests {
         let id1 = g.add_allow(CompanionScope::One(a.clone()), AllowRule::Navigate { site: Some("tokio.rs".into()) }, 1).unwrap();
         let id2 = g.add_allow(CompanionScope::All, AllowRule::Research { provider: Some("duckduckgo".into()) }, 2).unwrap();
         assert_eq!(g.allows().iter().map(|x| x.id).collect::<Vec<_>>(), [id1, id2]);
+    }
+
+    #[test]
+    fn stop_revokes_in_the_live_policy_and_the_store_and_settings_changes_reload() {
+        let store = MemoryStore::default();
+        let g = Grants::load(Arc::new(MemoryStore::default())).unwrap();
+        let live = g.shared();
+        let id = g.add_allow(CompanionScope::All, AllowRule::Research { provider: None }, 1).unwrap();
+        save_shared(&store, &live).unwrap();
+        assert!(revoke_shared(&store, &live, id).unwrap());
+        assert!(live.read().unwrap().allows().is_empty());
+        assert!(store.load_policy().unwrap().unwrap().allows().is_empty());
+        assert!(!revoke_shared(&store, &live, id).unwrap(), "a second Stop finds nothing");
+
+        // Settings wrote a site level on disk; the panel's live policy picks it up.
+        let mut on_disk = Policy::new();
+        on_disk.set_site_level(&AgentId::new("local"), "a.com", SiteLevel::Off);
+        store.save_policy(&on_disk).unwrap();
+        reload_shared(&store, &live).unwrap();
+        assert_eq!(live.read().unwrap().site_level(&AgentId::new("local"), "a.com"), SiteLevel::Off);
+        // Nothing stored: the live policy is left alone.
+        reload_shared(&MemoryStore::default(), &live).unwrap();
+        assert_eq!(live.read().unwrap().site_level(&AgentId::new("local"), "a.com"), SiteLevel::Off);
     }
 }
