@@ -15,6 +15,7 @@ mod backend;
 mod brand;
 mod browser_view;
 mod cli;
+mod companion_devices;
 mod companion_host;
 mod companion_markdown;
 mod companion_view;
