@@ -25,7 +25,7 @@ pub fn dir(home: &Path, profile: &str) -> PathBuf {
 }
 
 fn store(dir: &Path) -> FileStore {
-    FileStore::new(dir)
+    morph_services::profile_io::file_store(dir)
 }
 
 /// The roster as the panel has it (a first-run roster when nothing is saved).

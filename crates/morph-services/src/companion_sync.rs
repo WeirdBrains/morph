@@ -100,7 +100,7 @@ pub type Result<T> = std::result::Result<T, CompanionSyncError>;
 
 /// The companions directory of a profile, where the panel and Settings read these files.
 pub fn store(profile_dir: &Path) -> FileStore {
-    FileStore::new(profile_dir.join("companions"))
+    crate::profile_io::file_store(&profile_dir.join("companions"))
 }
 
 static SECRETS: Mutex<Vec<(PathBuf, Weak<dyn McpSecrets>)>> = Mutex::new(Vec::new());

@@ -65,6 +65,7 @@ pub fn open(home: &Path, profile_id: &str) -> Result<LibraryOpen> {
     match morph_keystore::load(&dir, &identity.user_id) {
         Ok(Some(key)) => match library_db::unlock(home, profile_id, &key) {
             Ok(()) => {
+                crate::profile_io::seal_existing(home, profile_id);
                 let _ = crate::sync::on_open(home, profile_id);
                 Ok(LibraryOpen::Ready)
             }
@@ -87,6 +88,7 @@ pub fn unlock(home: &Path, profile_id: &str, password: &SecretString) -> Result<
     let identity = profile_identity::load(&dir).map_err(Error::failed)?.ok_or(Error::NoIdentity)?;
     let key = check_password(home, profile_id, password)?;
     library_db::unlock(home, profile_id, &key).map_err(Error::failed)?;
+    crate::profile_io::seal_existing(home, profile_id);
     let _ = crate::sync::on_password(home, profile_id, password);
     if profile_lock::requires_password(home, profile_id) {
         let _ = morph_keystore::forget(&dir);
@@ -131,6 +133,7 @@ pub fn adopt_new_identity(home: &Path, profile_id: &str, user_id: &str, key: &Li
         eprintln!("Morph: could not open the library of profile {profile_id}: {e}");
         return;
     }
+    crate::profile_io::seal_existing(home, profile_id);
     // The password is on by default: the key goes to the keystore only if the user turned it off.
     if profile_lock::requires_password(home, profile_id) {
         let _ = morph_keystore::forget(&dir);

@@ -13,8 +13,8 @@
 //! - [`remote`]: [`NodeRouter`], routing for Node companions and inference offload.
 
 pub mod chats;
-pub mod host;
 mod file_io;
+pub mod host;
 mod ids;
 pub mod journal;
 #[cfg(feature = "local")]

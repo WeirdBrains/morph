@@ -12,6 +12,10 @@ use crate::store::StoreError;
 pub trait FileIo: Send + Sync {
     fn read(&self, path: &Path) -> Result<Option<Vec<u8>>, StoreError>;
     fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), StoreError>;
+    /// Whether sealed files cannot be opened right now (so what was read earlier must be dropped).
+    fn locked(&self) -> bool {
+        false
+    }
 }
 
 /// Plain files (readable by the user only), for tests and profiles with no identity.

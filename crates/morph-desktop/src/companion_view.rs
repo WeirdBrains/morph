@@ -166,15 +166,16 @@ impl EventEmitter<ShellRequest> for CompanionView {}
 
 impl CompanionView {
     pub fn new(home: &Path, profile: &str, theme: Theme, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let store = FileStore::new(morph_core::profiles::profile_dir(home, profile).join("companions"));
+        let store = morph_services::profile_io::file_store(&morph_core::profiles::profile_dir(home, profile).join("companions"));
         let (roster, roster_unsaved) = match store.load_roster() {
             Ok(Some(r)) if r.default_companion().is_some() => (r, false),
             _ => (Roster::first_run(ModelChoice::default_for(Platform::Desktop)), true),
         };
         let synced = morph_services::companion_sync::applied();
-        let policy = Grants::load(Arc::new(FileStore::new(morph_core::profiles::profile_dir(home, profile).join("companions"))))
-            .map(|g| g.shared())
-            .unwrap_or_else(|_| weirdnet_agent::Policy::new().shared());
+        let policy =
+            Grants::load(Arc::new(morph_services::profile_io::file_store(&morph_core::profiles::profile_dir(home, profile).join("companions"))))
+                .map(|g| g.shared())
+                .unwrap_or_else(|_| weirdnet_agent::Policy::new().shared());
         let factory: EngineFactory = Arc::new(|path| {
             weirdnet_model::llama::LlamaEngine::load(path, weirdnet_model::llama::LlamaOptions::default())
                 .map(|e| Box::new(e) as Box<dyn weirdnet_model::Engine>)
@@ -192,7 +193,7 @@ impl CompanionView {
                     calls.clone(),
                     home.to_path_buf(),
                     profile.to_string(),
-                    FileStore::new(morph_core::profiles::profile_dir(home, profile).join("companions")),
+                    morph_services::profile_io::file_store(&morph_core::profiles::profile_dir(home, profile).join("companions")),
                 )
                 .locked_when(lock.clone()),
             ),
@@ -613,10 +614,11 @@ impl CompanionView {
         let Some((question, outcome, citations)) = self.last.get(&self.selected) else { return };
         let who = self.roster.get(&self.selected).map(|c| c.name().to_string()).unwrap_or_default();
         let md = export_markdown(&who, question, outcome, citations.clone());
-        let dir = morph_core::profiles::profile_dir(&self.home, &self.profile).join("companions").join("exports");
-        let path = dir.join(format!("{}.md", outcome.task_id));
-        self.exported = Some(match std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&path, &md)) {
-            Ok(()) => format!("Saved {} and copied it", path.display()),
+        // Sealed with the profile's file key, like the rest of `companions/`.
+        let name = format!("exports/{}.md", outcome.task_id);
+        self.exported = Some(match self.store.write_file(&name, md.as_bytes()) {
+            Ok(()) => format!("Saved {name} in the companions folder and copied it"),
+            Err(morph_ai::StoreError::Locked) => "The profile is locked; unlock it to save".to_string(),
             Err(e) => format!("Could not save: {e}"),
         });
         cx.write_to_clipboard(ClipboardItem::new_string(md));
@@ -626,11 +628,7 @@ impl CompanionView {
     /// Appends a finished task's trace (steps and sessions, never page bodies) to the tool log.
     fn log_task(&self, companion: &AgentId, outcome: &Outcome) {
         let line = serde_json::json!({ "companion": companion, "task": outcome.task_id, "stop": outcome.stop, "usage": outcome.usage, "trace": outcome.trace });
-        let path = morph_core::profiles::profile_dir(&self.home, &self.profile).join("companions").join("tool-log.jsonl");
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-            use std::io::Write;
-            let _ = writeln!(f, "{line}");
-        }
+        let _ = self.store.append_line("tool-log.jsonl", &line.to_string());
     }
 
     fn stop(&mut self, cx: &mut Context<Self>) {

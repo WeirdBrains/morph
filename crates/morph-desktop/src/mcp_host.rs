@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use morph_ai::mcp_runtime::{ConnectContext, ServerStatus, connect};
-use morph_ai::{AiStore, FileStore, McpApprovals, McpConfigs, McpSecrets, McpServer, McpTransport, McpValue, write_private};
+use morph_ai::{AiStore, FileSecrets, FileStore, McpApprovals, McpConfigs, McpSecrets, McpServer, McpTransport, McpValue};
 use weirdnet_agent::ToolRegistry;
 
 /// This device as `McpServer::devices` names it. Configs made here run everywhere (`devices` is
@@ -32,6 +32,18 @@ pub fn profile_dir(companions: &Path) -> PathBuf {
     companions.parent().map(Path::to_path_buf).unwrap_or_else(|| companions.to_path_buf())
 }
 
+fn approvals_io(companions: &Path) -> std::sync::Arc<dyn morph_ai::FileIo> {
+    morph_services::profile_io::io_beside(&profile_dir(companions))
+}
+
+fn load_approvals(companions: &Path) -> McpApprovals {
+    McpApprovals::load_with(&approvals_path(companions), approvals_io(companions).as_ref())
+}
+
+fn save_approvals(approvals: &McpApprovals, companions: &Path) -> Result<(), String> {
+    approvals.save_with(&approvals_path(companions), approvals_io(companions).as_ref()).map_err(|e| e.to_string())
+}
+
 fn approvals_path(companions: &Path) -> PathBuf {
     profile_dir(companions).join("mcp-approved.local.json")
 }
@@ -40,14 +52,12 @@ fn secrets_path(companions: &Path) -> PathBuf {
     profile_dir(companions).join("mcp-secrets.local.json")
 }
 
-type Index = BTreeMap<String, BTreeMap<String, String>>;
-
-/// This machine's MCP secrets, in `mcp-secrets.local.json` beside the profile (readable by the user
-/// only, never synced, outside `companions/`). It implements [`McpSecrets`], so the system
-/// keystore can take over by implementing the same trait once it holds MCP secrets.
+/// This machine's MCP secrets, in `mcp-secrets.local.json` beside the profile (sealed with the
+/// profile's file key, never synced, outside `companions/`). It implements [`McpSecrets`], so the
+/// system keystore can take over by implementing the same trait once it holds MCP secrets. While
+/// the profile is locked it holds nothing and writes nothing; it reads the file once it unlocks.
 pub struct LocalSecrets {
-    companions: PathBuf,
-    index: Mutex<Index>,
+    file: FileSecrets,
 }
 
 impl std::fmt::Debug for LocalSecrets {
@@ -59,47 +69,32 @@ impl std::fmt::Debug for LocalSecrets {
 impl LocalSecrets {
     /// Secrets for the profile whose companions directory is `companions`.
     pub fn open(companions: &Path) -> Self {
-        let index = std::fs::read(secrets_path(companions)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
-        Self { companions: companions.to_path_buf(), index: Mutex::new(index) }
-    }
-
-    fn save(&self, index: &Index) {
-        if let Ok(bytes) = serde_json::to_vec_pretty(index) {
-            let _ = write_private(&secrets_path(&self.companions), &bytes);
-        }
+        let dir = profile_dir(companions);
+        Self { file: FileSecrets::open_with(secrets_path(companions), morph_services::profile_io::io_beside(&dir)) }
     }
 
     /// Forgets one secret.
     pub fn remove(&self, server: &str, name: &str) {
-        let mut index = lock(&self.index);
-        if let Some(m) = index.get_mut(server) {
-            m.remove(name);
-        }
-        index.retain(|_, m| !m.is_empty());
-        self.save(&index);
+        self.file.remove(server, name);
     }
 }
 
 impl McpSecrets for LocalSecrets {
     fn get(&self, server: &str, name: &str) -> Option<String> {
-        lock(&self.index).get(server)?.get(name).cloned()
+        self.file.get(server, name)
     }
 
     fn set(&self, server: &str, name: &str, value: &str) {
-        let mut index = lock(&self.index);
-        index.entry(server.to_string()).or_default().insert(name.to_string(), value.to_string());
-        self.save(&index);
+        self.file.set(server, name, value);
     }
 
     fn remove_server(&self, server: &str) {
-        let mut index = lock(&self.index);
-        index.remove(server);
-        self.save(&index);
+        self.file.remove_server(server);
     }
 }
 
 fn store(companions: &Path) -> FileStore {
-    FileStore::new(companions)
+    morph_services::profile_io::file_store(companions)
 }
 
 /// The configured servers (none when nothing is saved).
@@ -149,9 +144,9 @@ pub fn remove_server(companions: &Path, secrets: &LocalSecrets, id: &str) -> Res
     all.remove(id);
     save_configs(companions, &all)?;
     secrets.remove_server(id);
-    let mut approvals = McpApprovals::load(&approvals_path(companions));
+    let mut approvals = load_approvals(companions);
     approvals.revoke(id);
-    approvals.save(&approvals_path(companions)).map_err(|e| e.to_string())
+    save_approvals(&approvals, companions)
 }
 
 fn edit_server(companions: &Path, id: &str, f: impl FnOnce(&mut McpServer)) -> Result<(), String> {
@@ -179,14 +174,13 @@ pub fn set_tool(companions: &Path, id: &str, tool: &str, on: bool) -> Result<(),
 /// The user's OK to start this server on this machine, for the server as it is saved now.
 pub fn approve(companions: &Path, secrets: &LocalSecrets, id: &str) -> Result<(), String> {
     let server = configs(companions).servers.into_iter().find(|s| s.id == id).ok_or("That server is gone.")?;
-    let path = approvals_path(companions);
-    let mut approvals = McpApprovals::load(&path);
+    let mut approvals = load_approvals(companions);
     approvals.approve(&server, secrets);
-    approvals.save(&path).map_err(|e| e.to_string())
+    save_approvals(&approvals, companions)
 }
 
 pub fn is_approved(companions: &Path, secrets: &LocalSecrets, server: &McpServer) -> bool {
-    McpApprovals::load(&approvals_path(companions)).is_approved(server, secrets)
+    load_approvals(companions).is_approved(server, secrets)
 }
 
 /// What the manager knows right now.
@@ -283,7 +277,7 @@ impl McpManager {
                             s.enabled = false;
                         }
                     }
-                    let approvals = McpApprovals::load(&approvals_path(&dir));
+                    let approvals = load_approvals(&dir);
                     let ctx = ConnectContext { secrets: &*secrets, approvals: &approvals, device: DEVICE, timeout: Duration::from_secs(15) };
                     let hub = rt.block_on(connect(&configs, &ctx));
                     // Dropping the old servers stops their processes; do it inside the runtime.

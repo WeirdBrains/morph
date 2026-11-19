@@ -7,7 +7,7 @@ use std::path::Path;
 use std::rc::Rc;
 
 use gpui::{MouseButton, MouseDownEvent, SharedString, Window, anchored, deferred, div, point, prelude::*, px, rgb};
-use morph_ai::{AiStore, FileStore, ModelChoice, Platform, Roster};
+use morph_ai::{AiStore, ModelChoice, Platform, Roster};
 use morph_core::suggest::{self, Ask, Index, Source, Suggestion};
 
 use super::{BrowserView, Context};
@@ -52,7 +52,7 @@ pub fn companion_rows(ask: &Ask, names: &[String], default: &str) -> Vec<Row> {
 
 /// Companion names and the default one's name for the profile, as the Companion panel has them.
 pub fn load_companions(home: &Path, profile: &str) -> (Vec<String>, String) {
-    let store = FileStore::new(morph_core::profiles::profile_dir(home, profile).join("companions"));
+    let store = morph_services::profile_io::file_store(&morph_core::profiles::profile_dir(home, profile).join("companions"));
     let roster = match store.load_roster() {
         Ok(Some(r)) if r.default_companion().is_some() => r,
         _ => Roster::first_run(ModelChoice::default_for(Platform::Desktop)),

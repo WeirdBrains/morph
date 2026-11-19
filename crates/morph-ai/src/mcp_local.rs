@@ -72,12 +72,9 @@ impl Loaded {
         if self.ready {
             return;
         }
-        match io.read(path) {
-            Ok(bytes) => {
-                self.map = bytes.and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
-                self.ready = true;
-            }
-            Err(_) => {}
+        if let Ok(bytes) = io.read(path) {
+            self.map = bytes.and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+            self.ready = true;
         }
     }
 }
@@ -104,17 +101,32 @@ impl FileSecrets {
     }
 
     fn save(&self, cache: &Loaded) {
-        if cache.ready {
-            if let Ok(bytes) = serde_json::to_vec_pretty(&cache.map) {
-                let _ = self.io.write(&self.path, &bytes);
-            }
+        if let (true, Ok(bytes)) = (cache.ready, serde_json::to_vec_pretty(&cache.map)) {
+            let _ = self.io.write(&self.path, &bytes);
         }
     }
 
     fn cache(&self) -> std::sync::MutexGuard<'_, Loaded> {
         let mut c = lock(&self.cache);
+        if self.io.locked() {
+            // Locked since it was read: forget the values, read them again after the unlock.
+            *c = Loaded::default();
+        }
         c.load(self.io.as_ref(), &self.path);
         c
+    }
+
+    /// Forgets one secret.
+    pub fn remove(&self, server: &str, name: &str) {
+        let mut c = self.cache();
+        if !c.ready {
+            return;
+        }
+        if let Some(m) = c.map.get_mut(server) {
+            m.remove(name);
+        }
+        c.map.retain(|_, m| !m.is_empty());
+        self.save(&c);
     }
 
     /// Whether anything is kept for `server` (names only, never values).
