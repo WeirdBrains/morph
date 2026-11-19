@@ -84,14 +84,18 @@ class RoadmapPage extends StatelessComponent {
                 'Local AI: models from Hugging Face, run on your device, on by default with one switch to turn it off',
                 Status.planned,
               ),
+              (
+                'MCP-native: MCP servers as tool sources for local models and agents, each with its own switch and approvals',
+                Status.planned,
+              ),
               ('Projects with templates, notes and code spaces, Rust first', Status.planned),
               ('Hosting projects, private or public, with access control', Status.planned),
               ('Optional HTTPS for public projects through weirdnet-tls', Status.planned),
             ],
             image: (
               'concept-local-ai.svg',
-              'Concept diagram: a web page beside a local model panel.',
-              'Local AI beside the page.',
+              'Concept diagram: a web page beside a local model panel with MCP tools.',
+              'Local AI beside the page, with MCP tools.',
             ),
           ),
           _milestone(
