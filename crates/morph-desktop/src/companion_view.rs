@@ -372,7 +372,7 @@ impl CompanionView {
             let mut c = Conversation::default();
             c.start_task("How does Tokio cancel a task?");
             c.apply(morph_companion::ViewUpdate::Reasoning(
-                "The user wants to know how cancellation works in Tokio, so I should look at abort and drop.".into(),
+                "The user wants to know how cancellation works in Tokio. First I should explain that dropping a future cancels it at its next await point, then abort on a JoinHandle, then cooperative cancellation with a CancellationToken, and finally how select! drops the losing branch.".into(),
             ));
             c.queue("Also compare it with async-std.");
             view.conversations.insert(id, c);
@@ -1528,19 +1528,21 @@ fn activity_row(t: Theme, activity: &Activity, since: Instant, loading: Option<&
     div()
         .flex()
         .flex_row()
-        .items_center()
+        .items_start()
         .gap(px(6.))
         .text_size(px(12.))
         .text_color(rgb(if waiting { t.accent_alt } else { t.text_secondary }))
         .child(
             div()
+                .mt(px(4.))
+                .flex_none()
                 .size(px(8.))
                 .rounded(px(4.))
                 .bg(rgb(if waiting { t.accent_alt } else { t.accent }))
                 .opacity(0.35 + 0.65 * (1. - (pulse - 1.5).abs() / 1.5)),
         )
-        .child(activity.label_on(loading, device))
-        .child(div().text_color(rgb(t.text_secondary)).child(format!("{} s", elapsed.as_secs())))
+        .child(div().flex_1().min_w(px(0.)).max_h(px(54.)).overflow_hidden().child(activity.label_on(loading, device)))
+        .child(div().flex_none().text_color(rgb(t.text_secondary)).child(format!("{} s", elapsed.as_secs())))
 }
 
 fn notice_row(t: Theme, i: usize, n: &NoticeView, running: bool, cx: &mut Context<CompanionView>) -> gpui::Div {

@@ -96,6 +96,27 @@ impl Activity {
     }
 }
 
+/// How much of the model's latest reasoning the working line shows: about three lines of the
+/// panel, whatever its width.
+const REASONING_SHOWN: usize = 100;
+
+/// The last [`REASONING_SHOWN`] characters of `text`, from a word start, with the ellipsis at the
+/// start when the beginning was cut.
+fn reasoning_tail(text: &str) -> String {
+    let text = text.trim();
+    let n = text.chars().count();
+    if n <= REASONING_SHOWN {
+        return text.to_string();
+    }
+    let tail: String = text.chars().skip(n - REASONING_SHOWN).collect();
+    // Drop a word cut in half.
+    let tail = match tail.find(' ') {
+        Some(i) if text.chars().nth(n - REASONING_SHOWN - 1) != Some(' ') => &tail[i + 1..],
+        _ => tail.as_str(),
+    };
+    format!("…{}", tail.trim_start())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Conversation {
     entries: Vec<Entry>,
@@ -167,7 +188,7 @@ impl Conversation {
         } else if self.writing {
             Activity::Writing
         } else if !self.reasoning.is_empty() {
-            Activity::Reasoning(self.reasoning.clone())
+            Activity::Reasoning(reasoning_tail(&self.reasoning))
         } else {
             Activity::Thinking
         })
@@ -355,7 +376,7 @@ impl Conversation {
                     }
                 }
                 let n = flat.chars().count();
-                self.reasoning = flat.chars().skip(n.saturating_sub(70)).collect();
+                self.reasoning = flat.chars().skip(n.saturating_sub(400)).collect();
             }
             ViewUpdate::Text(delta) => {
                 self.writing = true;
@@ -616,7 +637,9 @@ mod tests {
         assert_eq!(a.label(None), "Thinking: Let me think about the shutdown order.");
         c.apply(ViewUpdate::Reasoning("word ".repeat(60)));
         let label = c.activity().unwrap().0.label(None);
-        assert!(label.chars().count() <= "Thinking: ".len() + 70, "{label}");
+        assert!(label.chars().count() <= "Thinking: …".len() + REASONING_SHOWN, "{label}");
+        assert!(label.starts_with("Thinking: …word"), "the ellipsis is at the start, on a word: {label}");
+        assert!(!label.ends_with('…'));
         assert!(c.entries().is_empty(), "reasoning is not part of the answer");
         c.apply(ViewUpdate::Text("Four.".into()));
         assert_eq!(c.activity().unwrap().0, Activity::Writing);
