@@ -108,6 +108,14 @@ pub enum Action {
         target: Locator,
         duration: Duration,
     },
+    /// Clear every outline Morph set on the page with [`Action::Highlight`]
+    /// (from this world only), now. Idempotent: with none left it still
+    /// succeeds. The answer's `matches` is how many it cleared.
+    ClearHighlight,
+    /// Clear one outline, by the [`HighlightId`] [`Action::Highlight`]
+    /// answered with. Idempotent: an id that already faded, was cleared or
+    /// belongs to an earlier page clears nothing and succeeds.
+    ClearHighlightOne(HighlightId),
     /// Scroll by `dx`, `dy` CSS pixels (positive: right, down): the page,
     /// or when the page can't move that way, the scrollable box under the
     /// middle of the view.
@@ -199,11 +207,14 @@ pub struct ActionOutcome {
     pub url: String,
     pub origin: String,
     pub isolation: Isolation,
-    /// How many elements matched the locator (0 for [`Action::ScrollBy`]).
+    /// How many elements matched the locator (0 for [`Action::ScrollBy`]; for the
+    /// clear-highlight actions, how many outlines were cleared).
     pub matches: usize,
     /// The element acted on, read back after the action.
     pub element: Option<Element>,
     pub scroll: ScrollState,
+    /// What [`Action::Highlight`] drew, to clear with [`Action::ClearHighlightOne`].
+    pub highlight: Option<HighlightId>,
 }
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -240,6 +251,11 @@ pub type ActionDone = Box<dyn FnOnce(ActionResult)>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ActionId(pub u64);
 
+/// Names one [`Action::Highlight`] outline, for [`Action::ClearHighlightOne`].
+/// Only meaningful on the page it came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Deserialize)]
+pub struct HighlightId(pub u64);
+
 /// What the page side gets (JSON).
 #[derive(Serialize)]
 struct Wire<'a> {
@@ -256,6 +272,7 @@ struct Wire<'a> {
 /// Check `request` and build its page side; `origin` is the engine's.
 pub fn script(request: &ActionRequest, origin: &str, id: u64) -> Result<String, ActionError> {
     let bad = |m: &str| Err(ActionError::BadRequest(m.into()));
+    let hl_id;
     let (op, target, value, (dx, dy), ms) = match &request.action {
         Action::Click(l) => ("click", Some(l), None, (0.0, 0.0), 0),
         Action::Fill { target, value } => {
@@ -267,6 +284,11 @@ pub fn script(request: &ActionRequest, origin: &str, id: u64) -> Result<String, 
         Action::Focus(l) => ("focus", Some(l), None, (0.0, 0.0), 0),
         Action::Read(l) => ("read", Some(l), None, (0.0, 0.0), 0),
         Action::Highlight { target, duration } => ("highlight", Some(target), None, (0.0, 0.0), duration.min(&HIGHLIGHT_MAX).as_millis() as u64),
+        Action::ClearHighlight => ("clearHighlight", None, None, (0.0, 0.0), 0),
+        Action::ClearHighlightOne(h) => {
+            hl_id = h.0.to_string();
+            ("clearHighlight", None, Some(hl_id.as_str()), (0.0, 0.0), 0)
+        }
         Action::ScrollBy { dx, dy } => {
             if !dx.is_finite() || !dy.is_finite() {
                 return bad("scroll by a finite distance");
@@ -294,6 +316,7 @@ struct Raw {
     element: Option<Element>,
     #[serde(default)]
     scroll: ScrollState,
+    highlight: Option<HighlightId>,
 }
 
 /// The page side's answer (`O<json>` or `E<code>:<detail>`) as a result.
@@ -322,7 +345,16 @@ pub fn parse_answer(view: ViewId, isolation: Isolation, started_url: &str, answe
     if page_origin != origin {
         return Err(ActionError::Navigated { from: started_url.into(), to: raw.url });
     }
-    Ok(ActionOutcome { view, url: raw.url, origin, isolation, matches: raw.matches, element: raw.element, scroll: raw.scroll })
+    Ok(ActionOutcome {
+        view,
+        url: raw.url,
+        origin,
+        isolation,
+        matches: raw.matches,
+        element: raw.element,
+        scroll: raw.scroll,
+        highlight: raw.highlight,
+    })
 }
 
 /// Script answers, from whatever thread the engine calls back on.
@@ -539,6 +571,17 @@ const ACTION_BODY: &str = r##"const fail = (code, detail) => { throw { morph: co
       out.scroll = scrollState(box, before[0] !== box.scrollLeft || before[1] !== box.scrollTop);
       return "O" + JSON.stringify(out);
     }
+    // An outline is a Web Animation named "morph-hl:<id>": it ends by itself
+    // after its duration, clearing is cancelling it, and nothing depends on
+    // this world's globals surviving between scripts.
+    const mine = () => document.getAnimations().filter((a) => typeof a.id === "string" && a.id.startsWith("morph-hl:"));
+    if (req.op === "clearHighlight") {
+      const want = req.value != null ? "morph-hl:" + req.value : null;
+      let n = 0;
+      for (const a of mine()) if (want === null || a.id === want) { a.cancel(); n++; }
+      out.matches = n;
+      return "O" + JSON.stringify(out);
+    }
     const hits = find(req.target);
     out.matches = hits.length;
     const e = hits[req.target.nth || 0];
@@ -583,9 +626,13 @@ const ACTION_BODY: &str = r##"const fail = (code, detail) => { throw { morph: co
     } else if (req.op === "highlight" || req.op === "scrollTo") {
       jump(se, () => e.scrollIntoView({ block: "center", inline: "nearest" }));
       if (req.op === "highlight") {
-        const st = e.style, was = [st.outline, st.outlineOffset];
-        st.outline = "3px solid #f5a623"; st.outlineOffset = "2px";
-        setTimeout(() => { st.outline = was[0]; st.outlineOffset = was[1]; }, req.ms);
+        for (const a of e.getAnimations()) if (typeof a.id === "string" && a.id.startsWith("morph-hl:")) a.cancel();
+        const taken = new Set(mine().map((a) => a.id));
+        let id = Date.now() * 1000;
+        while (taken.has("morph-hl:" + id)) id++;
+        const frame = { outline: "3px solid #f5a623", outlineOffset: "2px" };
+        e.animate([frame, frame], { duration: Math.max(req.ms, 1), fill: "none", id: "morph-hl:" + id });
+        out.highlight = id;
       }
     } else if (req.op !== "read") fail("bad", "unknown action " + req.op);
     out.element = describe(e);
@@ -630,6 +677,30 @@ mod tests {
         assert!(s.contains("window !== window.top"), "main frame only");
         let h = script(&ActionRequest::new(Action::Highlight { target: Locator::text("x"), duration: Duration::from_secs(600) }), "null", 1).unwrap();
         assert!(h.contains(r#""ms":30000"#), "capped at HIGHLIGHT_MAX");
+    }
+
+    #[test]
+    fn clear_highlight_scripts_carry_no_target_and_the_id() {
+        let all = script(&ActionRequest::new(Action::ClearHighlight), "null", 1).unwrap();
+        let json = |s: &str| -> serde_json::Value {
+            let a = s.find("const req = ").unwrap() + "const req = ".len();
+            serde_json::from_str(&s[a..a + s[a..].find(";\n").unwrap()]).unwrap()
+        };
+        let v = json(&all);
+        assert_eq!((v["op"].as_str(), v["target"].is_null(), v["value"].is_null()), (Some("clearHighlight"), true, true));
+        let one = script(&ActionRequest::new(Action::ClearHighlightOne(HighlightId(7))), "null", 2).unwrap();
+        let v = json(&one);
+        assert_eq!((v["op"].as_str(), v["value"].as_str()), (Some("clearHighlight"), Some("7")));
+        assert!(all.contains("morph-hl:"), "outlines are named animations");
+    }
+
+    #[test]
+    fn a_highlight_answer_carries_its_handle() {
+        let u = "https://example.com/";
+        let a = parse_answer(ViewId(1), Isolation::ScriptWorld, u, Some(&ok(u, r#","highlight":3"#))).unwrap();
+        assert_eq!(a.highlight, Some(HighlightId(3)));
+        let b = parse_answer(ViewId(1), Isolation::ScriptWorld, u, Some(&ok(u, ""))).unwrap();
+        assert_eq!(b.highlight, None);
     }
 
     #[test]

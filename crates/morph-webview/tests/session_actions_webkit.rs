@@ -18,7 +18,7 @@ mod linux {
     use std::time::{Duration, Instant};
 
     use morph_webview::offscreen::OffscreenBackend;
-    use morph_webview::page_action::{Action, ActionError, ActionRequest, ActionResult, Locator, PageActions};
+    use morph_webview::page_action::{Action, ActionError, ActionRequest, ActionResult, HighlightId, Locator, PageActions};
     use morph_webview::page_read::{PageReads, ReadResult};
     use morph_webview::{Backend, Event, Isolation, ReadRequest, Rect, Spec, Storage, ViewId, Want, WebView};
 
@@ -265,6 +265,38 @@ Element.prototype.getBoundingClientRect = function () { return { x: 0, y: 0, lef
         let r = to.element.unwrap().rect.unwrap();
         assert!(r.y >= 0.0 && r.y < 700.0, "the element is in view: {r:?}");
         eprintln!("session_actions_webkit: scroll {} then {}", by.scroll.y, to.scroll.y);
+
+        // Highlight and clear it: all at once, one by id, idempotently.
+        let outline = |backend: &mut OffscreenBackend, sel: &str| -> String {
+            let (tx, rx) = std::sync::mpsc::channel();
+            assert!(v.evaluate(&format!("(e => getComputedStyle(e).outlineStyle + '|' + e.getAnimations().map(a => a.id + a.playState).join())(document.querySelector({sel:?}))"), Box::new(move |r| drop(tx.send(r)))));
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while Instant::now() < deadline {
+                backend.poll();
+                if let Ok(r) = rx.try_recv() {
+                    return r.unwrap_or_default().trim_matches('"').split('|').next().unwrap_or_default().to_string();
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            panic!("the page never answered");
+        };
+        let hl = |target: &str| Action::Highlight { target: Locator::selector(target), duration: Duration::from_secs(30) };
+        let a = act(&mut backend, &mut actions, v, hl("#send")).expect("highlight").highlight.expect("a handle");
+        let b = act(&mut backend, &mut actions, v, hl("#out")).expect("highlight").highlight.expect("a handle");
+        assert_ne!(a, b);
+        assert!(outline(&mut backend, "#send") == "solid" && outline(&mut backend, "#out") == "solid");
+        let one = act(&mut backend, &mut actions, v, Action::ClearHighlightOne(a)).expect("clear one");
+        assert_eq!(one.matches, 1);
+        assert_ne!(outline(&mut backend, "#send"), "solid", "only that one cleared");
+        assert_eq!(outline(&mut backend, "#out"), "solid");
+        assert_eq!(act(&mut backend, &mut actions, v, Action::ClearHighlightOne(a)).expect("again").matches, 0, "idempotent");
+        assert_eq!(act(&mut backend, &mut actions, v, Action::ClearHighlightOne(HighlightId(999))).expect("unknown").matches, 0);
+        act(&mut backend, &mut actions, v, hl("#send")).expect("highlight");
+        let all = act(&mut backend, &mut actions, v, Action::ClearHighlight).expect("clear all");
+        assert_eq!(all.matches, 2);
+        assert!(outline(&mut backend, "#send") != "solid" && outline(&mut backend, "#out") != "solid");
+        assert_eq!(act(&mut backend, &mut actions, v, Action::ClearHighlight).expect("none left").matches, 0, "idempotent");
+        eprintln!("session_actions_webkit: highlight, clear one, clear all");
 
         drop(view);
         drop(profile);

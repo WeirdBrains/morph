@@ -958,6 +958,7 @@ mod tests {
                 ..Default::default()
             }),
             scroll: Default::default(),
+            highlight: None,
         };
         let a = acted(Ok(outcome)).unwrap();
         let el = a.element.unwrap();

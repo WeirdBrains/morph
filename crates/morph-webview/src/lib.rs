@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 pub use bridge::{BridgeContext, ContextHandler, FrameKind, Trust};
-pub use page_action::{Action, ActionError, ActionOutcome, ActionRequest, ActionResult, Locator, PageActions};
+pub use page_action::{Action, ActionError, ActionOutcome, ActionRequest, ActionResult, HighlightId, Locator, PageActions};
 pub use page_read::{Isolation, PageData, PageReads, ReadError, ReadRequest, Want};
 
 #[cfg(target_os = "linux")]

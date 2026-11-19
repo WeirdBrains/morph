@@ -75,13 +75,16 @@ pub struct Locator { pub selector: Option<String>, pub role: Option<String>, pub
 // Locator::selector("#q"), Locator::role("button", Some("Send")), Locator::name("Email"), Locator::text("Sign in").nth(1)
 pub enum Action {
     Click(Locator), Fill { target: Locator, value: String }, Focus(Locator), Read(Locator),
-    Highlight { target: Locator, duration: Duration /* ≤ 30 s */ },
+    Highlight { target: Locator, duration: Duration /* ≤ 30 s */ },   // the answer's `highlight: Option<HighlightId>` names the outline
+    ClearHighlight,                      // clear every outline Morph set on the page; idempotent (`matches` = how many)
+    ClearHighlightOne(HighlightId),      // clear just that one; an id already gone clears nothing and succeeds
     ScrollBy { dx: f64, dy: f64 }, ScrollTo(Locator),
 }
 pub struct ActionRequest { pub action: Action, pub expect_origin: Option<String>, pub allow_page_world: bool, pub timeout: Duration }
 // ActionRequest::new(action).on_origin("https://shop.test")
 pub struct ActionOutcome { pub view: ViewId, pub url: String, pub origin: String, pub isolation: Isolation,
-    pub matches: usize, pub element: Option<Element>, pub scroll: ScrollState }
+    pub matches: usize, pub element: Option<Element>, pub scroll: ScrollState,
+    pub highlight: Option<HighlightId> /* Highlight only */ }
 pub struct Element { pub tag, pub role, pub name, pub text /* ≤ 4000 chars */, pub value: Option<String>, pub secret: bool /* password: no value */,
     pub checked: Option<bool>, pub disabled, pub editable, pub visible, pub href: Option<String>, pub rect: Option<Bounds> }
 pub struct ScrollState { pub x, pub y, pub max_x, pub max_y, pub moved: bool, pub inner: bool /* a box in the page scrolled */ }
@@ -186,7 +189,14 @@ page-read chunks and timeouts. Futures are `!Send` and resolve on the UI thread.
   `input` and `change`, picks a `<select>` option by value or text, and types into
   contenteditable with `insertText`. Events are synthetic (`isTrusted` false). Scrolls jump
   (whatever the page's `scroll-behavior`), the page or, when it can't move that way, the
-  scrollable box under the middle of the view. The answer (≤ 64 KiB) reads the element back
+  scrollable box under the middle of the view. Highlight outlines the element for its
+  duration (≤ 30 s) and answers with a `HighlightId`; `ClearHighlight` removes every outline
+  Morph set on the page now, `ClearHighlightOne(id)` just that one, both restoring the
+  element's own outline, both idempotent (nothing to clear still succeeds, `matches` says how
+  many went). An outline is a named Web Animation (`morph-hl:<id>`, no timer and no state in the world's
+  globals, so it works even where the world is not kept between scripts), ended by the
+  duration or cancelled by a clear; a new document starts with none. Highlighting an element again replaces
+  its earlier outline. The answer (≤ 64 KiB) reads the element back
   after the action; password values are never read back (`secret`). A timed-out action may
   still have run. There is no bridge message for any of this; `host.*` types stay refused on
   the page channel.
@@ -217,7 +227,7 @@ throwaway storage, tab and host page actions); the real-engine tests are
 `crates/morph-webview/tests/session_actions_webkit.rs` (an ephemeral page sees neither the
 profile's cookie nor its localStorage, nor another ephemeral page's; fill by role and
 label, password not read back, `<select>` by text, contenteditable, click seen by the
-page's listener, covered/disabled/missing/bad-selector refusals, scroll by and to, on a
+page's listener, covered/disabled/missing/bad-selector refusals, scroll by and to, highlight and clear (one, all, repeated), on a
 page that poisons `HTMLInputElement.prototype.value`, `dispatchEvent`, `querySelectorAll`,
 `JSON.stringify` and `getBoundingClientRect`), which need a display:
 
