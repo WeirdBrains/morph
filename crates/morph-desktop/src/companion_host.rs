@@ -1266,7 +1266,7 @@ mod tests {
         servers.set_tool_enabled("srv.off", false);
         let (calls, _rx) = std::sync::mpsc::channel();
         let browser: Arc<dyn BrowserHost> = Arc::new(DesktopBrowser::new(calls, Seen::default()));
-        let sources: Vec<Arc<dyn ToolSource>> = vec![Arc::new(browser_tools(browser, PendingTarget::default()))];
+        let sources: Vec<Arc<dyn ToolSource>> = vec![Arc::new(browser_tools_with(browser, PendingTarget::default(), Exclusions::default()))];
         let both = rt.block_on(with_hosts(&sources, Arc::new(servers)));
         let names: Vec<String> = both.specs().into_iter().map(|s| s.name).collect();
         assert!(names.contains(&"page.text".to_string()) && names.contains(&"srv.ping".to_string()));
