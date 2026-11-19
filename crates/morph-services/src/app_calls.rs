@@ -6,7 +6,9 @@
 //! nothing), which reaches the same relays device links use
 //! ([`crate::relays::relay_addrs`], every address of each at once) and asks
 //! them, as names servers, where users are. The node then stays up for the
-//! next call, and is started again if the relay list changes.
+//! next call, and is started again if the relay list changes. That throwaway key is
+//! deliberate: public calls are anonymous. Calls to the user's own linked devices use
+//! [`crate::device_calls::DeviceCaller`], on the device's node key and cert, instead.
 //!
 //! One call: [`Node::resolve_app`] turns the locator (a peer id, a 32-hex
 //! user id, or a name bound to a user by a `_weirdnet.<name>` TXT record)
