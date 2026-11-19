@@ -31,6 +31,8 @@ pub struct CompanionView {
     input: Entity<TextInput>,
     worker: Worker,
     models: Arc<LocalModels>,
+    /// `MORPH_COMPANION_AUTOASK=<question>`: a dev flag that sends one question when the panel first polls.
+    autoask: Option<String>,
     store: FileStore,
     focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
@@ -71,6 +73,7 @@ impl CompanionView {
             input,
             worker,
             models,
+            autoask: std::env::var("MORPH_COMPANION_AUTOASK").ok().filter(|q| !q.trim().is_empty()),
             store,
             focus: cx.focus_handle(),
             _subscriptions: vec![sub],
@@ -193,6 +196,9 @@ impl CompanionView {
 
     /// Pump what the worker sent. Returns whether the panel changed.
     pub fn poll(&mut self, cx: &mut Context<Self>) {
+        if let Some(q) = self.autoask.take() {
+            self.send(q, cx);
+        }
         let msgs = self.worker.poll();
         if matches!(self.models.status(&self.model_choice()), ModelStatus::Downloading { .. }) {
             cx.notify(); // progress
