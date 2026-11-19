@@ -49,7 +49,7 @@ already reads and writes.
   identity has no node key yet.
 - **Transport:** `morph_identity::device_link::net_config` / `PUBLIC_RELAYS`
   (and `MORPH_LINK_RELAYS`) already dial TCP and QUIC together and fall back
-  to a relay circuit. `crates/weirdnet-device-link/examples/local-relay.rs`
+  to a relay circuit. the `local-relay` example of `weirdnet-device-link` 0.3.0 (crates.io; CI installs it with `cargo install --example local-relay`)
   and `scripts/xvfb-check.py --local-relay` are the CI pattern to reuse.
 - **Now in the tree:** per-record HLCs and node ids, the op log and cursors in
   `library.db`, history row ids and tombstones, a self-issued `NodeCert` on the
@@ -266,7 +266,7 @@ the same official relay and talk through it. Do not send library pages as
 `weirdnet-<app>://` app calls; those are for opening a peer's app in a tab.
 
 Wire format `weirdnet-sync/v1`, length-prefixed CBOR, one request/reply at a
-time (same style as `/weirdnet/link/1`). After the authenticated channel is
+time (same style as `/weirdnet/link/2`). After the authenticated channel is
 up, every payload that carries records is sealed with `SyncKey(type)`.
 
 Messages:

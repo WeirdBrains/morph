@@ -84,7 +84,7 @@ Packages and tests:
 - `crates/morph-identity` — paths, Weirdnet user and node identity helpers
 - `crates/morph-store`, `crates/morph-keystore` — encrypted library database and its key
 - `crates/morph-webview-control` — in-process gRPC control layer for web views
-- `crates/weirdnet-device-link` — device linking, moving to its own Weirdnet repo
+- `weirdnet-device-link` (crates.io 0.3.0, WeirdBrains/weirdnet-device-link) — device linking; no longer in this tree
 - `crates/morph-services` — the logic both shells share: Morph home, profiles, identity onboarding, the encrypted library's unlock, device linking
 - `crates/morph-bridge` — thin flutter_rust_bridge surface over `morph-services` (mobile shell)
 - `crates/morph-ui` — UI component model without a toolkit: kinds, layout slots, actions, keymap, text field, theme

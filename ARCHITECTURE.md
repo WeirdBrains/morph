@@ -2163,8 +2163,7 @@ copies each Flutter frame, which is the accepted cost.
 
 ### 2026-11-12 — Login over QR (device linking) is built
 
-`weirdnet-device-link` (in-tree until WeirdBrains/weirdnet-device-link
-exists) carries the protocol of `docs/identity-recovery.md` section 4;
+`weirdnet-device-link` (crates.io `=0.3.0` since 2026-11-19; in-tree before) carries the protocol of `docs/identity-recovery.md` section 4;
 `morph-identity::device_link` ties it to profiles: the new device stores the
 seed as `Source::Linked` plus its own password-sealed node key and the node
 cert the user key signed. The new device checks the password and that the
@@ -2865,3 +2864,16 @@ record, or a name via `_weirdnet` TXT) and calls one through a relay
   `serve_app` accepts 64-character names that can't be linked; and
   `weirdnet-schemes` 0.1.0 `Link::parse` lowercases the authority, so
   Morph takes peer-id locators from the raw address.
+
+### 2026-11-19 — device-link comes from crates.io 0.3.0
+
+Morph pins `weirdnet-device-link =0.3.0` (tag v0.3.0, 332ade3) and the in-tree
+`crates/weirdnet-device-link` is gone. 0.3.0 folds in Morph's copy (compact v2
+codes, reach, relays and relay tests, `local-relay` example) and moves the
+link protocol to `/weirdnet/link/2` (`LINK_PROFILE`; invites stay on
+`/weirdnet/link-invite/2`), so 0.2.x/older builds do not link with this one.
+`Error::OlderCode` and `Error::NewerCode` are generic in the crate; Morph words
+them ("The other device runs an older Morph. Update it to link.") in
+`morph-identity::device_link::link_error`. The relay round trip lookup name is
+`weirdnet-relay-check`. CI installs the `local-relay` example with `cargo
+install`. Cargo.lock has one `weirdnet-keys` 0.1.0 and `weirdnet-net` 0.8.0.
