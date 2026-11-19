@@ -130,6 +130,8 @@ fn tier_verb(tier: Tier) -> &'static str {
         Tier::Research => "search and read pages in the background",
         Tier::Interact => "act on the page",
         Tier::Never => "do something not allowed",
+        // Non-exhaustive upstream: a tier this build does not know is described plainly.
+        _ => "do something this version does not know",
     }
 }
 
@@ -146,6 +148,7 @@ pub fn scope_label(scope: &Scope, site: Option<&str>) -> String {
             let what = if *provider_only { "this search engine" } else { "research" };
             format!("Always allow {what} for {}", who(all_companions))
         }
+        _ => "Allow".into(),
     }
 }
 
@@ -183,6 +186,7 @@ fn session_text(s: &SessionMark) -> String {
     match s {
         SessionMark::LoggedOut => "logged out".into(),
         SessionMark::SignedIn { profile } => format!("signed in as {profile}"),
+        _ => "unknown session".into(),
     }
 }
 
@@ -202,6 +206,7 @@ fn step_text(kind: &StepKind) -> String {
             ApprovalOutcome::AutoAllowed { allow_id: None } => format!("{tool} allowed by a grant or earlier approval"),
             ApprovalOutcome::Denied => format!("You declined {tool}"),
             ApprovalOutcome::Blocked { reason } => block_text(tool, reason),
+            _ => format!("{tool}: decided"),
         },
         StepKind::Skipped { reason, url } => match url {
             Some(u) => format!("Skipped {u}: {reason}"),
@@ -209,6 +214,7 @@ fn step_text(kind: &StepKind) -> String {
         },
         StepKind::Notice { text } => text.clone(),
         StepKind::Cancelled => "Stopped".into(),
+        _ => "A step this version does not know how to show".into(),
     }
 }
 
@@ -218,6 +224,7 @@ fn stop_text(stop: &StopReason) -> String {
         StopReason::Cancelled => "stopped".into(),
         StopReason::Budget { exceeded } => format!("stopped: {exceeded}"),
         StopReason::Model { error } => format!("model error: {error}"),
+        _ => "stopped".into(),
     }
 }
 
@@ -235,6 +242,8 @@ pub fn translate(companion: &str, event: &AgentEvent) -> Vec<ViewUpdate> {
         }
         AgentEvent::Step(s) => vec![ViewUpdate::Trace(TraceRowView { step: s.id.0, text: step_text(&s.kind), session: session_text(&s.session) })],
         AgentEvent::Finished { task_id, stop } => vec![ViewUpdate::Finished { task_id: task_id.clone(), status: stop_text(stop) }],
+        // Events newer than this build knows show nothing.
+        _ => Vec::new(),
     }
 }
 
@@ -253,6 +262,7 @@ pub fn footnotes(trace: &Trace, citations: Vec<Citation>) -> Vec<FootnoteView> {
             let (label, url) = match &c.target {
                 CitationTarget::Url { url, .. } => (url.clone(), Some(url.clone())),
                 CitationTarget::ToolResult { source, tool } => (format!("{source}.{tool}"), None),
+                _ => ("source".to_string(), None),
             };
             FootnoteView { n: c.n, label, url, steps: c.steps.iter().map(|s| s.0).collect() }
         })

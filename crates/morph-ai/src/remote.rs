@@ -104,6 +104,8 @@ pub fn route_companion(profile: &CompanionProfile, nodes: &[LinkedNode]) -> Comp
                 None => CompanionRoute::Unavailable { reason: format!("{} ran on a device that is no longer linked", profile.name()) },
             }
         }
+        // `AgentKind` is non-exhaustive: a kind this build does not know cannot be routed.
+        _ => CompanionRoute::Unavailable { reason: format!("{} is a kind of companion this version cannot run", profile.name()) },
     }
 }
 

@@ -219,10 +219,12 @@ pub fn describe_allow(a: &StandingAllow, roster: &Roster) -> (String, String) {
         AllowRule::Navigate { site: None } => "Navigate everywhere".to_string(),
         AllowRule::Research { provider: None } => "Research with any provider".to_string(),
         AllowRule::Research { provider: Some(p) } => format!("Research with {p}"),
+        _ => "A rule this version does not know".to_string(),
     };
     let who = match &a.companion {
         CompanionScope::All => "all companions".to_string(),
         CompanionScope::One(id) => roster.get(id).map(|c| c.name().to_string()).unwrap_or_else(|| format!("{id} (removed)")),
+        _ => "some companions".to_string(),
     };
     (what, format!("for {who} · since {}", date_of(a.created_unix_ms)))
 }
@@ -232,6 +234,7 @@ pub fn level_label(l: SiteLevel) -> &'static str {
         SiteLevel::Off => "Off",
         SiteLevel::Ask => "Ask",
         SiteLevel::Act => "Act",
+        _ => "Other",
     }
 }
 

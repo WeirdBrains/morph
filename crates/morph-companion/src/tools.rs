@@ -199,7 +199,8 @@ impl Exclusions {
 fn signed_in(ctx: &ToolContext) -> Option<&str> {
     match &ctx.session {
         SessionMark::SignedIn { profile } => Some(profile.as_str()),
-        SessionMark::LoggedOut => None,
+        // `SessionMark` is non-exhaustive: a mark this build does not know counts as not signed in.
+        _ => None,
     }
 }
 

@@ -313,19 +313,26 @@ pub mod protocols {
     use async_trait::async_trait;
     use morph_ai::remote::{LinkRx, LinkTx};
     use morph_ai::{Link, LinkHandler, NodeRouter, OffloadPlan, RouteError};
+    use weirdnet_agent::Caller;
     use weirdnet_agent::ModelBackend;
     use weirdnet_agent::remote::infer::{Admission, InferHost, RemoteModel};
     use weirdnet_agent::remote::task::TaskHost;
     use weirdnet_agent::remote::{self, Channel, Dialer, FrameRx, FrameTx, RemoteError};
 
+    use crate::device_calls::DeviceCaller;
+
     /// Model turns for inference offload.
     pub const INFER: &str = remote::infer::PROTOCOL;
+    /// Model turns, infer/2: queueing, reasoning, tools, sampling (the pool asks it first).
+    pub const INFER_V2: &str = remote::infer::v2::PROTOCOL;
     /// Node companion tasks.
     pub const TASK: &str = remote::task::PROTOCOL;
 
     fn remote_error(e: RouteError) -> RemoteError {
         match e {
             RouteError::NotLinked(p) => RemoteError::Refused { message: format!("{p} is not one of your linked devices") },
+            // A device from before infer/2 does not accept its protocol: the pool then asks it infer/1.
+            RouteError::Unreachable(m) if m.contains("does not accept") => RemoteError::Unsupported { message: m },
             RouteError::Unreachable(p) => RemoteError::Unreachable { message: p },
             RouteError::Closed => RemoteError::Closed,
             RouteError::Failed(m) => RemoteError::Failed { message: m },
@@ -375,16 +382,102 @@ pub mod protocols {
         }
     }
 
-    /// Serves [`INFER`]: model turns from the user's other devices, `admission` at a time.
+    /// Wraps an [`InferHost`] so only this user's current, non-revoked linked devices may use
+    /// it, and nobody may while the profile is locked. `authorize` runs first on every request
+    /// (the agent crate calls it before anything else) and `open` and friends check again, so
+    /// a host cannot be reached around the gate. The rule is the one [`DeviceCaller`] applies to
+    /// streams and app calls: [`weirdnet_sync::Roster::check_caller`] on the live roster.
+    pub struct RosterHost<H> {
+        inner: H,
+        gate: DeviceCaller,
+        /// The profile (home, id) whose lock refuses everything.
+        profile: Option<(std::path::PathBuf, String)>,
+    }
+
+    impl<H: InferHost> RosterHost<H> {
+        pub fn new(inner: H, gate: DeviceCaller, profile: Option<(std::path::PathBuf, String)>) -> Self {
+            Self { inner, gate, profile }
+        }
+
+        /// The gate: the profile is unlocked, and `caller` (the Noise-authenticated peer, plus
+        /// the certificate it presented, if any) is a current linked device.
+        pub fn check(&self, caller: &Caller) -> Result<(), RemoteError> {
+            if let Some((home, id)) = &self.profile
+                && crate::profile_lock::is_locked(home, id)
+            {
+                return Err(RemoteError::refused("profile-locked"));
+            }
+            let presented = match caller.cert_bytes.as_deref().map(weirdnet_agent::serve::decode_cert) {
+                None => None,
+                Some(Ok(cert)) => Some(cert),
+                Some(Err(_)) => return Err(RemoteError::refused("wrong-user")),
+            };
+            match self.gate.check(&caller.peer, presented.as_ref()).reason() {
+                None => Ok(()),
+                Some(reason) => Err(RemoteError::refused(reason)),
+            }
+        }
+    }
+
+    impl<H: InferHost> InferHost for RosterHost<H> {
+        fn authorize(&self, caller: &Caller) -> Result<(), RemoteError> {
+            self.check(caller)?;
+            self.inner.authorize(caller)
+        }
+
+        fn open(&self, caller: &Caller, model: Option<&str>) -> Result<Arc<dyn ModelBackend>, RemoteError> {
+            self.check(caller)?;
+            self.inner.open(caller, model)
+        }
+
+        fn open_request(
+            &self,
+            caller: &Caller,
+            request: &remote::infer::v2::Request,
+        ) -> Result<Arc<dyn remote::infer::v2::InferBackend>, RemoteError> {
+            self.check(caller)?;
+            self.inner.open_request(caller, request)
+        }
+
+        fn open_embed(&self, caller: &Caller, model: Option<&str>) -> Result<Arc<dyn remote::infer::v2::EmbedBackend>, RemoteError> {
+            self.check(caller)?;
+            self.inner.open_embed(caller, model)
+        }
+    }
+
+    /// Serves [`INFER`]: model turns from the user's other devices, `admission` at a time. The
+    /// host is always behind a [`RosterHost`], so there is no way to serve it ungated.
     pub struct InferService {
-        pub host: Arc<dyn InferHost>,
-        pub admission: Admission,
+        host: Arc<dyn InferHost>,
+        admission: Admission,
+        /// Serve infer/2 on this stream (register the service under [`INFER_V2`]), else infer/1.
+        v2: bool,
+    }
+
+    impl InferService {
+        pub fn new<H: InferHost + 'static>(host: H, gate: DeviceCaller, profile: Option<(std::path::PathBuf, String)>, admission: Admission) -> Self {
+            Self { host: Arc::new(RosterHost::new(host, gate, profile)), admission, v2: false }
+        }
+
+        /// The same service for [`INFER_V2`] streams.
+        pub fn v2(mut self) -> Self {
+            self.v2 = true;
+            self
+        }
     }
 
     #[async_trait]
     impl LinkHandler for InferService {
+        /// `from` is the stream's Noise-authenticated peer id (never one the caller sent). The
+        /// link carries no certificate, so the peer id is checked against the roster alone.
         async fn handle(&self, from: String, link: Link) {
-            if let Err(e) = remote::infer::serve(channel(link), self.host.as_ref(), &self.admission).await {
+            let caller = Caller::new(from.clone());
+            let served = if self.v2 {
+                remote::infer::v2::serve(channel(link), caller, self.host.as_ref(), &self.admission).await
+            } else {
+                remote::infer::serve(channel(link), &caller, self.host.as_ref(), &self.admission).await
+            };
+            if let Err(e) = served {
                 eprintln!("morph-agent: inference for {from}: {e}");
             }
         }
@@ -561,6 +654,7 @@ mod tests {
     mod agent_protocols {
         use super::*;
         use morph_ai::OffloadPlan;
+        use weirdnet_agent::Caller;
         use weirdnet_agent::remote::RemoteError;
         use weirdnet_agent::remote::infer::{Admission, InferHost, Route};
         use weirdnet_agent::remote::task::{TaskHost, TaskRequest};
@@ -570,7 +664,7 @@ mod tests {
             StopReason, ToolRegistry,
         };
 
-        use super::protocols::{InferService, RouterDialer, TaskService, remote_model};
+        use super::protocols::{InferService, RosterHost, RouterDialer, TaskService, remote_model};
 
         fn said(text: &str) -> Arc<dyn ModelBackend> {
             Arc::new(ScriptedModel::new(vec![ModelTurn { text: text.into(), tool_calls: vec![] }]))
@@ -578,7 +672,11 @@ mod tests {
 
         struct Models;
         impl InferHost for Models {
-            fn open(&self, _model: Option<&str>) -> Result<Arc<dyn ModelBackend>, RemoteError> {
+            /// The roster gate is `RosterHost`'s (what the service wraps this in); the model host itself admits.
+            fn authorize(&self, _caller: &Caller) -> Result<(), RemoteError> {
+                Ok(())
+            }
+            fn open(&self, _caller: &Caller, _model: Option<&str>) -> Result<Arc<dyn ModelBackend>, RemoteError> {
                 Ok(said("from the desktop"))
             }
         }
@@ -606,12 +704,20 @@ mod tests {
 
         /// A serving desk (A) and an asking phone (B), linked; C is the user's but never linked.
         fn devices(rt: &tokio::runtime::Runtime) -> (Arc<dyn NodeRouter>, String, String) {
+            devices_serving(rt, true)
+        }
+
+        /// `v2`: the desk also serves infer/2 (else it is a 0.3-era node: infer/1 only).
+        fn devices_serving(rt: &tokio::runtime::Runtime, v2: bool) -> (Arc<dyn NodeRouter>, String, String) {
             let user = Keypair::generate_ed25519();
             let (a, b, c) = (device(&user, "desk"), device(&user, "phone"), device(&user, "c"));
             let (server, _, listening) = up(&user, &a, &[&b.cert], None);
             let at: Multiaddr = format!("{}/p2p/{}", listening[0], server.peer_id()).parse().unwrap();
-            let desk = DeviceRouter::new(server);
-            rt.spawn(desk.serve(protocols::INFER, Arc::new(InferService { host: Arc::new(Models), admission: Admission::new(2) })).unwrap());
+            let desk = DeviceRouter::new(server.clone());
+            if v2 {
+                rt.spawn(desk.serve(protocols::INFER_V2, Arc::new(InferService::new(Models, server.clone(), None, Admission::new(2)).v2())).unwrap());
+            }
+            rt.spawn(desk.serve(protocols::INFER, Arc::new(InferService::new(Models, server, None, Admission::new(2)))).unwrap());
             rt.spawn(desk.serve(protocols::TASK, Arc::new(TaskService(Arc::new(Companions)))).unwrap());
             let (phone, _, _) = up(&user, &b, &[&a.cert, &c.cert], Some(at));
             (Arc::new(DeviceRouter::new(phone)), a.cert.peer_id, c.cert.peer_id)
@@ -638,6 +744,87 @@ mod tests {
             let plan = OffloadPlan { nodes: vec!["12D3KooWNotADevice".into()], fallback_local: false };
             let model = remote_model(router, &plan, Some(said("unused")));
             assert!(rt.block_on(model.complete(&[Message::user("hi")], &[], &DeltaSink::discard(), &CancelToken::new())).is_err());
+        }
+
+        /// The host's roster gate: A serves, B is linked, D was revoked, C is the user's but unknown, X is another user's.
+        fn gate_fixture() -> (RosterHost<Models>, Device, Device, Device, Device) {
+            let user = Keypair::generate_ed25519();
+            let (a, b, c, d) = (device(&user, "desk"), device(&user, "phone"), device(&user, "c"), device(&user, "d"));
+            let (server, st, _) = up(&user, &a, &[&b.cert, &d.cert], None);
+            st.lock().unwrap().roster.revoke(&WEIRDNET, &user, &d.cert.peer_id, 5).unwrap();
+            (RosterHost::new(Models, server, None), a, b, c, d)
+        }
+
+        #[test]
+        fn a_linked_device_may_use_the_inference_host() {
+            let (host, _a, b, _c, _d) = gate_fixture();
+            let caller = Caller::new(b.cert.peer_id.clone());
+            assert!(host.authorize(&caller).is_ok());
+            assert!(host.open(&caller, None).is_ok());
+            // With its own certificate presented, too.
+            let with_cert = Caller::new(b.cert.peer_id.clone()).with_cert(weirdnet_agent::serve::encode_cert(&b.cert));
+            assert!(host.authorize(&with_cert).is_ok());
+        }
+
+        #[test]
+        fn a_device_that_is_not_in_the_roster_is_refused() {
+            let (host, a, _b, c, _d) = gate_fixture();
+            let refused = |caller: Caller| match host.authorize(&caller) {
+                Err(RemoteError::Refused { message }) => message,
+                other => panic!("not refused: {other:?}"),
+            };
+            assert_eq!(refused(Caller::new(c.cert.peer_id.clone())), "unknown-device", "the user's own, never linked here");
+            assert_eq!(refused(Caller::new("12D3KooWNotADevice")), "unknown-device");
+            assert!(host.open(&Caller::new(c.cert.peer_id.clone()), None).is_err(), "open is gated too, not only authorize");
+            // A minted cert does not make a device a member; nor does a cert that is not the caller's.
+            let minted = Caller::new(c.cert.peer_id.clone()).with_cert(weirdnet_agent::serve::encode_cert(&c.cert));
+            assert_eq!(refused(minted), "unknown-device");
+            let borrowed = Caller::new(c.cert.peer_id.clone()).with_cert(weirdnet_agent::serve::encode_cert(&a.cert));
+            assert_eq!(refused(borrowed), "wrong-user");
+            let garbage = Caller::new(c.cert.peer_id.clone()).with_cert(vec![1, 2, 3]);
+            assert_eq!(refused(garbage), "wrong-user");
+            // Another user's device, with its own valid cert.
+            let stranger = device(&Keypair::generate_ed25519(), "x");
+            let theirs = Caller::new(stranger.cert.peer_id.clone()).with_cert(weirdnet_agent::serve::encode_cert(&stranger.cert));
+            assert_eq!(refused(theirs), "wrong-user");
+        }
+
+        #[test]
+        fn a_revoked_device_is_refused() {
+            let (host, _a, _b, _c, d) = gate_fixture();
+            let caller = Caller::new(d.cert.peer_id.clone());
+            assert!(matches!(host.authorize(&caller), Err(RemoteError::Refused { message }) if message == "revoked"));
+            assert!(host.open(&caller, None).is_err());
+            let with_cert = Caller::new(d.cert.peer_id.clone()).with_cert(weirdnet_agent::serve::encode_cert(&d.cert));
+            assert!(matches!(host.authorize(&with_cert), Err(RemoteError::Refused { message }) if message == "revoked"));
+        }
+
+        #[test]
+        fn a_locked_profile_refuses_even_a_linked_device() {
+            let tmp = tempfile::tempdir().unwrap();
+            let home = tmp.path().join("h");
+            morph_core::profiles::load_catalog(&home).unwrap();
+            crate::identity::create(&home, "default", &morph_identity::profile_identity::SecretString::from("a long password".to_string())).unwrap();
+            let user = Keypair::generate_ed25519();
+            let (a, b) = (device(&user, "desk"), device(&user, "phone"));
+            let (server, _, _) = up(&user, &a, &[&b.cert], None);
+            let host = RosterHost::new(Models, server, Some((home.clone(), "default".to_string())));
+            let caller = Caller::new(b.cert.peer_id.clone());
+            assert!(host.authorize(&caller).is_ok(), "unlocked: a member gets in");
+            crate::profile_lock::lock(&home, "default");
+            assert!(matches!(host.authorize(&caller), Err(RemoteError::Refused { message }) if message == "profile-locked"));
+            assert!(host.open(&caller, None).is_err());
+        }
+
+        #[test]
+        fn a_node_from_before_infer_2_is_asked_infer_1() {
+            let rt = tokio();
+            let (router, desk, _) = devices_serving(&rt, false);
+            let plan = OffloadPlan { nodes: vec![desk.clone()], fallback_local: false };
+            let model = remote_model(router, &plan, None);
+            let turn = rt.block_on(model.complete(&[Message::user("hi")], &[], &DeltaSink::discard(), &CancelToken::new())).unwrap();
+            assert_eq!(turn.text, "from the desktop");
+            assert!(matches!(model.last_route(), Some(Route::Node { node, .. }) if node == desk));
         }
 
         #[test]
