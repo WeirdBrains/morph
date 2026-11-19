@@ -242,6 +242,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: desktop-macos
+      - name: llama.cpp build tools (cmake, clang)
+        run: |
+          command -v cmake >/dev/null || brew install cmake
+          cmake --version | head -1
+          clang --version | head -1
       - run: cargo clippy --locked -p morph-desktop -p morph-webview -p morph-browser --all-targets -- -D warnings
       - run: cargo test --locked -p morph-desktop -p morph-webview -p morph-browser
       - name: Morph.app (zip, dmg)
@@ -295,6 +300,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: desktop-windows
+      - name: llama.cpp build tools (cmake, MSVC)
+        shell: pwsh
+        run: |
+          if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) { choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y }
+          cmake --version
       - run: cargo clippy --locked -p morph-desktop -p morph-webview -p morph-browser --all-targets -- -D warnings
       - run: cargo test --locked -p morph-desktop -p morph-webview -p morph-browser
       - name: WiX v5

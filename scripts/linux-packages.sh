@@ -58,7 +58,7 @@ tree() { # tree DIR FORM
   fi
 }
 
-deb_depends="libwebkit2gtk-4.1-0, libgtk-3-0, libglib2.0-0, libxkbcommon-x11-0, libxcb1, libvulkan1, libfontconfig1, libfreetype6, libssl3 | libssl3t64"
+deb_depends="libwebkit2gtk-4.1-0, libgtk-3-0, libglib2.0-0, libxkbcommon-x11-0, libxcb1, libvulkan1, libfontconfig1, libfreetype6, libstdc++6, libssl3 | libssl3t64"
 for form in desktop standalone; do
   [ "${MORPH_SKIP_DEB:-0}" = 1 ] && break
   pkg=morph; [ "$form" = standalone ] && pkg=morph-standalone
