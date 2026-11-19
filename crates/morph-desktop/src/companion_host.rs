@@ -45,6 +45,14 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(45);
 /// Logged-out fetches and searches.
 const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// The research budget: the design's searches, pages, concurrency and per-page limits, with a
+/// longer task limit. `weirdnet-agent` 0.1 counts model turns and time spent on approval cards
+/// against `per_task`, and a local model on a CPU takes most of 90 s for one turn, so the
+/// design's 90 s of research would end tasks before they research (docs/handoff.md).
+pub fn research_budget() -> weirdnet_agent::Budget {
+    weirdnet_agent::Budget { per_task: Duration::from_secs(600), ..Default::default() }
+}
+
 pub type Reply<T> = tokio::sync::oneshot::Sender<Result<T, HostError>>;
 
 /// A request from a companion tool that only the UI thread can answer.
@@ -193,26 +201,76 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, HostError> + 
 
 /// Bookmarks then history entries matching `query`, as search hits.
 pub fn library_hits(home: &std::path::Path, profile: &str, query: &str, max: usize) -> Vec<SearchHit> {
-    let mut hits: Vec<SearchHit> = Vec::new();
-    let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
-    let matches = |title: &str, url: &str| {
-        let hay = format!("{} {}", title.to_lowercase(), url.to_lowercase());
-        !words.is_empty() && words.iter().all(|w| hay.contains(w.as_str()))
-    };
-    if let Ok(marks) = morph_core::bookmarks::bookmarks(home, profile) {
-        for b in marks.iter().filter(|b| matches(&b.title, &b.url)) {
-            hits.push(SearchHit { title: b.title.clone(), url: b.url.clone(), snippet: "Bookmark".into() });
-        }
+    let words = library_words(query);
+    if words.is_empty() {
+        return Vec::new();
     }
-    if let Ok(visits) = morph_core::library::history(home, profile, "", 2000) {
-        for v in visits.iter().filter(|v| matches(&v.title, &v.url)) {
-            if !hits.iter().any(|h| h.url == v.url) {
-                hits.push(SearchHit { title: v.title.clone(), url: v.url.clone(), snippet: "Visited".into() });
+    // A model writes questions ("how to shut down a tokio app"), so a hit needs most of the
+    // query's words rather than all of them, and better hits come first.
+    let need = words.len().div_ceil(2).max(1);
+    let score = |title: &str, url: &str| {
+        let hay = format!("{} {}", title.to_lowercase(), url.to_lowercase());
+        let n = words.iter().filter(|w| hay.contains(w.as_str())).count();
+        (n >= need).then_some(n)
+    };
+    let mut hits: Vec<(usize, SearchHit)> = Vec::new();
+    if let Ok(marks) = morph_core::bookmarks::bookmarks(home, profile) {
+        for b in &marks {
+            if let Some(n) = score(&b.title, &b.url) {
+                hits.push((n, SearchHit { title: b.title.clone(), url: b.url.clone(), snippet: "Bookmark".into() }));
             }
         }
     }
-    hits.truncate(max);
-    hits
+    if let Ok(visits) = morph_core::library::history(home, profile, "", 2000) {
+        for v in &visits {
+            if let Some(n) = score(&v.title, &v.url)
+                && !hits.iter().any(|(_, h)| h.url == v.url)
+            {
+                hits.push((n, SearchHit { title: v.title.clone(), url: v.url.clone(), snippet: "Visited".into() }));
+            }
+        }
+    }
+    hits.sort_by_key(|h| std::cmp::Reverse(h.0)); // stable: bookmarks before visits on a tie
+    hits.into_iter().take(max).map(|(_, h)| h).collect()
+}
+
+/// The words of a query worth matching: lowercased, without short and common words.
+fn library_words(query: &str) -> Vec<String> {
+    const COMMON: &[&str] = &[
+        "the",
+        "and",
+        "for",
+        "how",
+        "what",
+        "why",
+        "when",
+        "where",
+        "which",
+        "who",
+        "with",
+        "from",
+        "into",
+        "about",
+        "does",
+        "can",
+        "you",
+        "your",
+        "are",
+        "this",
+        "that",
+        "way",
+        "best",
+        "recommended",
+        "use",
+        "using",
+    ];
+    let mut words: Vec<String> = query
+        .split(|c: char| !c.is_alphanumeric() && c != '-' && c != '_' && c != '.')
+        .map(|w| w.trim_matches('.').to_lowercase())
+        .filter(|w| w.chars().count() >= 3 && !COMMON.contains(&w.as_str()))
+        .collect();
+    words.dedup();
+    words
 }
 
 #[async_trait]
@@ -416,6 +474,7 @@ impl Worker {
                     return;
                 };
                 let mut sessions = Sessions::new(models, rt.block_on(with_hosts(&sources, tools.registry_for(""))), policy, approver);
+                sessions.set_budget(research_budget());
                 let _ = can_tx.send(sessions.canceller());
                 while let Ok(Cmd::Run { roster, companion, input, options }) = cmd_rx.recv() {
                     let tx = msg_tx.clone();
@@ -569,7 +628,7 @@ mod tests {
     }
 
     #[test]
-    fn the_library_is_searched_by_every_word() {
+    fn the_library_matches_most_of_a_question_s_words() {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path();
         let profile = morph_core::profiles::create(home, "Default").unwrap().id;
@@ -579,6 +638,11 @@ mod tests {
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].snippet, "Bookmark");
         assert!(library_hits(home, &profile, "", 8).is_empty());
+        assert!(library_hits(home, &profile, "how to", 8).is_empty(), "only common words");
+        morph_core::bookmarks::add_bookmark(home, &profile, "https://tokio.rs/", "Tokio", 3).unwrap();
+        let hits = library_hits(home, &profile, "How to gracefully shut down a Tokio application?", 8);
+        assert_eq!(hits.iter().map(|h| h.url.as_str()).collect::<Vec<_>>(), vec!["https://tokio.rs/tokio/topics/shutdown"]);
+        assert_eq!(library_words("What's the best way to use tokio::signal?"), vec!["tokio", "signal"]);
     }
 
     #[test]
@@ -610,5 +674,14 @@ mod tests {
         assert!(matches!(msg_rx.try_recv(), Ok(Msg::CardDetail(_, d)) if d == "page.click · “Sign in”"));
         let calls: Vec<HostCall> = call_rx.try_iter().collect();
         assert!(matches!(&calls[..], [HostCall::Highlight(Some(t)), HostCall::Highlight(None)] if t == "Sign in"), "{calls:?}");
+    }
+
+    #[test]
+    fn the_research_budget_keeps_the_design_limits_but_a_longer_task_time() {
+        let b = research_budget();
+        let d = weirdnet_agent::Budget::default();
+        assert_eq!((b.max_searches, b.max_pages, b.page_extension, b.max_concurrent), (3, 12, 5, 2));
+        assert_eq!((b.per_page, b.tokens_per_page), (d.per_page, d.tokens_per_page));
+        assert!(b.per_task > d.per_task);
     }
 }
