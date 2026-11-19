@@ -42,12 +42,21 @@ Update this table when you start or finish an area.
 
 ### Bridge requests from the companion hosts (for Lead Dev)
 
-Written down, not edited; the hosts work around each one today.
+Written down, not edited; the hosts work around each one today. **Status (Lead Dev,
+2026-11-19): all four landed on `main`, API in docs/bridge-api.md.** For Morph Dev to wire
+in the hosts: 1. `Browser::open_host_page_with(HostPageRequest::new(url))` (throwaway, the
+default; `HostPageRequest::signed_in(url)` for the opt-in), so logged-out research can use
+hidden pages with JavaScript instead of `companion_web.rs`'s plain HTTP; 2 and 3.
+`Browser::tab_action`/`active_tab_action`/`host_page_action` with `page_action::Action`
+(`Click`, `Fill`, `Focus`, `Read`, `Highlight`, `ScrollBy`, `ScrollTo`), pass
+`.on_origin(approved_origin)`; errors are typed (`NotFound`, `NotInteractable(why)`,
+`BlockedByIsolation`, `WrongOrigin`, ...); 4. `PageData.isolation` is `ScriptWorld` on
+macOS and Windows now, so the tools' page-world note can go (keep it for `PageWorld`).
 
-1. **Throwaway-session host pages.** `Browser::open_host_page` uses the window profile's data dir, so a hidden page is always signed in. Logged-out research (the default) needs an ephemeral (no cookies, no storage) host page; until then it runs over plain HTTP without JavaScript (`companion_web.rs`), and hidden host pages are used only for the per-task signed-in opt-in.
-2. **A tab host script for tier 2.** `page.click`, `page.fill` and an element highlight need a script-world call into a tab (find an element by text or selector, outline it, click it, set a field's value with input events). Today the card highlights with the find bar on the target text, and click and fill return "not supported" after approval.
-3. **Scroll for a webview tab.** `page.scroll` goes through `page_input`, which only works on shell-drawn pages.
-4. **PageWorld reads.** On macOS and Windows `PageData.isolation` is `PageWorld`; the tools add a note that the page's scripts could have changed the text. A script world there would remove the note.
+1. **(done)** **Throwaway-session host pages.** `Browser::open_host_page` uses the window profile's data dir, so a hidden page is always signed in. Logged-out research (the default) needs an ephemeral (no cookies, no storage) host page; until then it runs over plain HTTP without JavaScript (`companion_web.rs`), and hidden host pages are used only for the per-task signed-in opt-in.
+2. **(done)** **A tab host script for tier 2.** `page.click`, `page.fill` and an element highlight need a script-world call into a tab (find an element by text or selector, outline it, click it, set a field's value with input events). Today the card highlights with the find bar on the target text, and click and fill return "not supported" after approval.
+3. **(done)** **Scroll for a webview tab.** `page.scroll` goes through `page_input`, which only works on shell-drawn pages.
+4. **(done)** **PageWorld reads.** On macOS and Windows `PageData.isolation` is `PageWorld`; the tools add a note that the page's scripts could have changed the text. A script world there would remove the note.
 
 ## Where things stand
 
