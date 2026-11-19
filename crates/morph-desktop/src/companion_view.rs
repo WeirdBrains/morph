@@ -90,6 +90,29 @@ pub struct CompanionView {
     exported: Option<String>,
     /// The working line's last drawn frame (a quarter second), so it redraws as it ticks.
     activity_frame: Option<u128>,
+    /// The panel is folded to a slim strip (kept per profile in `companions/panel.json`, which
+    /// does not sync).
+    collapsed: bool,
+}
+
+/// Width of the folded panel's strip, in logical pixels.
+pub const COLLAPSED_WIDTH: f32 = 40.;
+/// The panel's own state on disk, per profile.
+const PANEL_FILE: &str = "panel.json";
+
+fn save_collapsed(store: &FileStore, collapsed: bool) -> Result<(), morph_ai::StoreError> {
+    store.write_file(PANEL_FILE, serde_json::json!({ "collapsed": collapsed }).to_string().as_bytes())
+}
+
+/// Whether the panel was left folded.
+fn load_collapsed(store: &FileStore) -> bool {
+    store
+        .read_file(PANEL_FILE)
+        .ok()
+        .flatten()
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .and_then(|v| v.get("collapsed").and_then(serde_json::Value::as_bool))
+        .unwrap_or(false)
 }
 
 /// What a companion says when asked while the profile is locked.
@@ -246,7 +269,9 @@ impl CompanionView {
             last: HashMap::new(),
             exported: None,
             activity_frame: None,
+            collapsed: false,
         };
+        view.collapsed = load_collapsed(&view.store);
         if std::env::var_os("MORPH_COMPANION_DEMO").is_some_and(|v| v == "1") {
             let id = view.selected.clone();
             view.conversations.insert(id, demo_conversation());
@@ -274,6 +299,68 @@ impl CompanionView {
     }
 
     /// The panel opened: the keyboard goes to the question field.
+    /// The panel is folded to its strip.
+    pub fn is_collapsed(&self) -> bool {
+        self.collapsed
+    }
+
+    /// Folds the panel to its strip or opens it out again, and remembers that for the profile.
+    pub fn set_collapsed(&mut self, collapsed: bool, cx: &mut Context<Self>) {
+        if self.collapsed == collapsed {
+            return;
+        }
+        self.collapsed = collapsed;
+        // A locked profile refuses the write; the panel still folds for this session.
+        let _ = save_collapsed(&self.store, collapsed);
+        // The shell gives the page the width back (or takes it again).
+        cx.emit(ShellRequest::CompanionsFolded);
+        cx.notify();
+    }
+
+    /// The folded strip: open it out, the selected companion's initial, and a pulse while a
+    /// task runs, in the card colour with "!" while a card waits, so nothing waits unseen.
+    fn strip(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let t = self.theme;
+        let waiting = self.conversations.values().any(|c| c.pending_card().is_some());
+        let running = self.conversations.values().any(|c| c.is_running());
+        let pulse = self.activity_frame.map_or(0., |f| (f % 4) as f32);
+        let initial = self.roster.get(&self.selected).and_then(|c| c.name().chars().next()).unwrap_or('C').to_string();
+        div()
+            .id("companions-strip")
+            .size_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap(px(10.))
+            .py(px(10.))
+            .bg(rgb(t.surface))
+            .cursor_pointer()
+            .on_click(cx.listener(|this, _, _, cx| this.set_collapsed(false, cx)))
+            .child(icon(t, "companions-expand", "«").on_click(cx.listener(|this, _, _, cx| this.set_collapsed(false, cx))))
+            .child(
+                div()
+                    .size(px(24.))
+                    .rounded(px(12.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(12.))
+                    .bg(rgb(t.surface_variant))
+                    .text_color(rgb(t.text_primary))
+                    .child(initial),
+            )
+            .children((running || waiting).then(|| {
+                div()
+                    .id("companions-strip-status")
+                    .size(px(10.))
+                    .rounded(px(5.))
+                    .bg(rgb(if waiting { t.accent_alt } else { t.accent }))
+                    .opacity(0.35 + 0.65 * (1. - (pulse - 1.5).abs() / 1.5))
+            }))
+            .children(waiting.then(|| div().text_size(px(13.)).text_color(rgb(t.accent_alt)).child("!")))
+            .into_any_element()
+    }
+
     pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.input.focus_handle(cx), cx);
         cx.emit(ShellRequest::FocusShell);
@@ -693,7 +780,11 @@ impl CompanionView {
             cx.notify(); // progress
         }
         // The working line's pulse and seconds move while a task runs.
-        let frame = self.conversations.get(&self.selected).and_then(|c| c.activity()).map(|(_, since)| since.elapsed().as_millis() / 250);
+        let frame = match self.collapsed {
+            // The strip pulses for any companion's task.
+            true => self.conversations.values().filter_map(|c| c.activity()).map(|(_, since)| since.elapsed().as_millis() / 250).max(),
+            false => self.conversations.get(&self.selected).and_then(|c| c.activity()).map(|(_, since)| since.elapsed().as_millis() / 250),
+        };
         if frame != self.activity_frame {
             self.activity_frame = frame;
             cx.notify();
@@ -912,6 +1003,9 @@ fn notice_row(t: Theme, i: usize, n: &NoticeView, running: bool, cx: &mut Contex
 
 impl Render for CompanionView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.collapsed {
+            return div().track_focus(&self.focus).size_full().child(self.strip(cx));
+        }
         let t = self.theme;
         let conv = self.conversations.get(&self.selected).cloned().unwrap_or_default();
         let picker: Vec<_> = self
@@ -993,10 +1087,14 @@ impl Render for CompanionView {
             .p(px(10.))
             .bg(rgb(t.surface))
             .child(
-                div().flex().flex_row().items_center().child(div().flex_1().text_size(px(13.)).child("Companions")).child(
-                    icon(t, "companions-close", "×")
-                        .on_click(cx.listener(|_, _, _, cx| cx.emit(ShellRequest::Run(morph_ui::actions::Action::ToggleCompanions)))),
-                ),
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(2.))
+                    .child(div().flex_1().text_size(px(13.)).child("Companions"))
+                    .child(icon(t, "companions-collapse", "»").on_click(cx.listener(|this, _, _, cx| this.set_collapsed(true, cx))))
+                    .child(icon(t, "companions-close", "×").on_click(cx.listener(|_, _, _, cx| cx.emit(ShellRequest::CloseCompanions)))),
             )
             .child(div().flex().flex_row().flex_wrap().gap(px(4.)).children(picker))
             .child(dim(t, format!("{who} · {model} · runs on this device")))
@@ -1184,6 +1282,20 @@ fn demo_conversation() -> Conversation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_folded_panel_is_remembered_per_profile_and_starts_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, b) = (FileStore::new(dir.path().join("a/companions")), FileStore::new(dir.path().join("b/companions")));
+        assert!(!load_collapsed(&a), "open by default");
+        save_collapsed(&a, true).unwrap();
+        assert!(load_collapsed(&a));
+        assert!(!load_collapsed(&b), "another profile keeps its own");
+        save_collapsed(&a, false).unwrap();
+        assert!(!load_collapsed(&a));
+        a.write_file(PANEL_FILE, b"not json").unwrap();
+        assert!(!load_collapsed(&a), "a damaged file opens the panel");
+    }
 
     #[test]
     fn only_a_page_world_read_is_marked_as_one_page_scripts_could_change() {

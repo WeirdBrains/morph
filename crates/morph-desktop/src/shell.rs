@@ -122,6 +122,10 @@ pub enum ShellRequest {
     Open { url: String, new_tab: bool },
     /// Hide the panel that asked.
     ClosePanel,
+    /// Hide the Companion panel (its ×; Ctrl+Shift+K folds and unfolds it).
+    CloseCompanions,
+    /// The Companion panel folded to its strip or opened out: lay the window out again.
+    CompanionsFolded,
     /// Take the keyboard back from the pages for the shell's own UI.
     FocusShell,
     /// The profile's library was unlocked.
@@ -841,6 +845,17 @@ impl Shell {
                 }
             }
             ShellRequest::FocusShell => self.focus_shell(cx),
+            ShellRequest::CompanionsFolded => cx.notify(),
+            ShellRequest::CloseCompanions => {
+                if self.layout.shown(Slot::Companion).is_some() {
+                    self.layout.toggle_kind(Slot::Companion, KindId::new(component::COMPANIONS));
+                    self.save_layout();
+                }
+                if let Some(main) = self.main() {
+                    main.focus_content(window, cx);
+                }
+                cx.notify();
+            }
             ShellRequest::AgentsChanged => {
                 if let Some(companions) = self.companions.clone() {
                     companions.update(cx, |view, cx| view.reload_agents(cx));
@@ -1090,6 +1105,7 @@ impl Shell {
             self.save_layout();
         }
         companions.update(cx, |view, cx| {
+            view.set_collapsed(false, cx);
             view.ask(name.as_deref(), &question, cx);
             view.focus(window, cx);
         });
@@ -1101,8 +1117,17 @@ impl Shell {
         let Some(companions) = self.companions.clone() else {
             return;
         };
-        let open = self.layout.toggle_kind(Slot::Companion, KindId::new(component::COMPANIONS));
-        self.save_layout();
+        // Shown: fold it to its strip or open it out. Hidden: show it opened out.
+        let open = if self.layout.shown(Slot::Companion).is_some() {
+            let fold = !companions.read(cx).is_collapsed();
+            companions.update(cx, |view, cx| view.set_collapsed(fold, cx));
+            !fold
+        } else {
+            self.layout.toggle_kind(Slot::Companion, KindId::new(component::COMPANIONS));
+            self.save_layout();
+            companions.update(cx, |view, cx| view.set_collapsed(false, cx));
+            true
+        };
         if open {
             companions.update(cx, |view, cx| view.focus(window, cx));
             self.focus_shell(cx);
@@ -1330,6 +1355,15 @@ impl Shell {
             Slot::Main => div().flex_1().flex().flex_col().min_w(px(0.)).child(content).into_any_element(),
             Slot::Sidebar => div().w(size).h_full().border_r_1().border_color(rgb(t.surface_variant)).child(content).into_any_element(),
             Slot::Bottom => div().h(size).w_full().border_t_1().border_color(rgb(t.surface_variant)).child(content).into_any_element(),
+            // Folded: a slim strip, and the page gets the width back. The slot keeps its size
+            // for when it opens out again.
+            Slot::Companion if self.companions.as_ref().is_some_and(|c| c.read(cx).is_collapsed()) => div()
+                .w(px(crate::companion_view::COLLAPSED_WIDTH))
+                .h_full()
+                .border_l_1()
+                .border_color(rgb(t.surface_variant))
+                .child(content)
+                .into_any_element(),
             Slot::Companion => div()
                 .w(size)
                 .h_full()
