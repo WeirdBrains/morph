@@ -15,7 +15,7 @@ use std::sync::{Arc, mpsc};
 mod download_auth;
 pub mod downloads;
 pub mod host_pages;
-pub use host_pages::{HostPageId, HostPageState};
+pub use host_pages::{HostPageId, HostPageRequest, HostPageState, HostSession};
 
 use morph_core::app_call::{self, AppCallError, AppCaller, AppPage};
 use morph_core::tabs::{TabId, TabSet};
@@ -431,6 +431,8 @@ pub struct Browser {
     host_pages: host_pages::HostPages,
     /// Page reads under way, of host pages and tabs.
     reads: morph_webview::PageReads,
+    /// Page actions under way (tier 2 click, fill, scroll), of host pages and tabs.
+    actions: morph_webview::PageActions,
 }
 
 /// Whether `url` is an address Morph opens itself (`morph:`,
@@ -471,6 +473,7 @@ impl Browser {
             closed: false,
             host_pages: host_pages::HostPages::default(),
             reads: morph_webview::PageReads::new(),
+            actions: morph_webview::PageActions::new(),
         };
         let first = browser.tabs.active_id();
         let url = config.start_url.trim().to_string();
@@ -503,6 +506,7 @@ impl Browser {
             visible: active && self.shown,
             session: session.filter(|_| !target.is_empty()),
             background: false,
+            storage: morph_webview::Storage::Profile,
         })?;
         self.by_view.insert(view.id(), id);
         let blank = target.is_empty();

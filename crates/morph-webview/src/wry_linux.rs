@@ -944,6 +944,15 @@ pub(crate) fn attach_bridge(engine: &webkit2gtk::WebView, bridge: &Option<PageBr
     manager.register_script_message_handler_in_world(bridge::HOST_HANDLER, bridge::HOST_WORLD);
 }
 
+/// A throwaway-storage view ([`crate::Storage::Ephemeral`]) saves nothing:
+/// its context (its own) cancels every download it starts.
+pub(crate) fn refuse_downloads(engine: &webkit2gtk::WebView) {
+    use webkit2gtk::{DownloadExt, WebContextExt};
+    if let Some(context) = engine.context() {
+        context.connect_download_started(|_, download| download.cancel());
+    }
+}
+
 /// [`WebView::evaluate_isolated`] on WebKitGTK: `script` runs in the main
 /// frame in [`bridge::HOST_WORLD`]; its string result is handed over as it is.
 pub(crate) fn evaluate_in_host_world(engine: &webkit2gtk::WebView, script: &str, done: crate::ScriptDone) -> bool {
@@ -1043,13 +1052,23 @@ pub(crate) fn popup_handler(
 }
 
 impl Backend for WryBackend {
+    fn ephemeral_storage(&self) -> bool {
+        true
+    }
     fn create(&mut self, spec: Spec) -> Result<Box<dyn WebView>> {
         self.next += 1;
         let id = ViewId(self.next);
+        crate::check_storage(&spec, true)?;
         let view_bridge = ViewBridge::new(id, spec.visible, spec.background);
-        let context = self.contexts.entry(spec.data_dir.clone()).or_insert_with(|| WebContext::new(spec.data_dir.clone()));
         let url = if spec.url.is_empty() { "about:blank".to_string() } else { spec.url.clone() };
-        let builder = WebViewBuilder::new_with_web_context(context);
+        let ephemeral = spec.storage == crate::Storage::Ephemeral;
+        let builder = if ephemeral {
+            // wry makes the view a WebKitWebContext of its own with an
+            // ephemeral WebsiteDataManager: nothing on disk, nothing shared.
+            WebViewBuilder::new().with_incognito(true)
+        } else {
+            WebViewBuilder::new_with_web_context(self.contexts.entry(spec.data_dir.clone()).or_insert_with(|| WebContext::new(spec.data_dir.clone())))
+        };
         // A page moved from another window starts from its history instead.
         let builder = if spec.session.is_some() { builder } else { builder.with_url(url.clone()) };
         let builder = builder
@@ -1061,7 +1080,11 @@ impl Backend for WryBackend {
             .with_new_window_req_handler(popup_handler(id, self.queue.clone(), self.popups.clone(), self.bridge.clone(), view_bridge.clone()));
         let view = with_bridge(builder, &self.bridge).build_as_child(&self.parent).map_err(backend_err)?;
         let engine = view.webview();
-        hook_downloads(&engine, id, &mut self.hooked, &spec.data_dir, &self.downloads, &self.queue);
+        if ephemeral {
+            refuse_downloads(&engine);
+        } else {
+            hook_downloads(&engine, id, &mut self.hooked, &spec.data_dir, &self.downloads, &self.queue);
+        }
         attach_bridge(&engine, &self.bridge, &view_bridge, true);
         watch(&engine, id, &self.queue, &self.shortcuts);
         watch_links(&engine, id, &self.queue);
