@@ -5,12 +5,13 @@
 //! applied to `library.db`.
 use morph_store::{Bookmark, BookmarkSet, Folder, Library, SyncConflict, SyncLogEntry, Tombstone};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use weirdnet_sync::hlc::Hlc;
 use weirdnet_sync::log::{LogEntry, OpLog};
 use weirdnet_sync::merge::{self, CONFLICT_KEEP_MS, EditOrDelete, Lww, OrSet, folder_cycle, lww};
-use weirdnet_sync::{EpochKeys, NodeId, Roster, SyncState, SyncType as typ};
+use weirdnet_sync::{EpochKeys, Limits, NodeId, RecordOptions, Roster, SyncState, SyncType as typ};
 
 /// Default opt-ins after link or first enable.
 pub const BOOKMARKS: &str = typ::BOOKMARKS;
@@ -188,7 +189,15 @@ pub fn load_log(lib: &Library) -> morph_store::Result<OpLog> {
             .into_iter()
             .filter_map(|r| {
                 let hlc = decode_hlc(&r.hlc)?;
-                Some(LogEntry { node_id: NodeId::new(r.node_id), seq: r.seq as u64, hlc, typ: r.typ, record_id: r.record_id, op: r.op, value: None })
+                Some(LogEntry {
+                    node_id: NodeId::new(r.node_id),
+                    seq: r.seq as u64,
+                    hlc,
+                    typ: r.typ,
+                    record_id: r.record_id,
+                    op: r.op,
+                    value: decode_value(r.value),
+                })
             })
             .collect();
         // Group by node and integrate (gaps are allowed).
@@ -215,6 +224,14 @@ pub fn load_log(lib: &Library) -> morph_store::Result<OpLog> {
     Ok(log)
 }
 
+/// A stored log value (`sync_log.value`, JSON of `weirdnet_sync::Value`). A row from
+/// before the column, or one this build cannot read, loads without a value, so the
+/// entry keeps its fallback `op` and `SyncState::read` reports what it would for an
+/// older peer's copy rather than a corrupted value.
+fn decode_value(b: Option<Vec<u8>>) -> Option<weirdnet_sync::Value> {
+    b.and_then(|b| serde_json::from_slice(&b).ok())
+}
+
 pub fn persist_log(lib: &mut Library, log: &OpLog, clock: Option<&Hlc>) -> morph_store::Result<()> {
     let cursors = log.cursors();
     let mut nodes: std::collections::BTreeSet<String> = cursors.keys().map(|n| n.0.clone()).collect();
@@ -238,6 +255,7 @@ pub fn persist_log(lib: &mut Library, log: &OpLog, clock: Option<&Hlc>) -> morph
                 typ: e.typ.clone(),
                 record_id: e.record_id.clone(),
                 op: e.op.clone(),
+                value: e.value.as_ref().map(|v| serde_json::to_vec(v).expect("log value json")),
             });
         }
     }
@@ -672,6 +690,50 @@ pub const META_ROSTER: &str = "roster";
 pub const META_EPOCH_KEYS: &str = "epoch_keys";
 /// Per-type pull positions (`weirdnet-sync` 0.2), as JSON `[node, type, seq]` rows.
 pub const META_TYPE_CURSORS: &str = "type_cursors";
+/// How each record type is written (`SyncState::records`: sealed, limits), as JSON.
+pub const META_RECORDS: &str = "records";
+
+/// `weirdnet_sync::RecordOptions` as stored (the crate's type is not serde).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct StoredRecordOptions {
+    sealed: bool,
+    inline_max: usize,
+    chunk_size: usize,
+    record_max: usize,
+    eager_chunks: bool,
+}
+
+/// The record types configured on this device (`SyncState::records`). Nothing stored, or
+/// an unreadable row, is no configuration: every type is plain with default limits.
+pub fn load_records(lib: &Library) -> morph_store::Result<BTreeMap<String, RecordOptions>> {
+    let stored: BTreeMap<String, StoredRecordOptions> =
+        lib.sync_meta(META_RECORDS)?.and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    Ok(stored
+        .into_iter()
+        .map(|(typ, o)| {
+            let limits = Limits { inline_max: o.inline_max, chunk_size: o.chunk_size, record_max: o.record_max, eager_chunks: o.eager_chunks };
+            (typ, RecordOptions { sealed: o.sealed, limits })
+        })
+        .collect())
+}
+
+pub fn save_records(lib: &mut Library, records: &BTreeMap<String, RecordOptions>) -> morph_store::Result<()> {
+    let stored: BTreeMap<&str, StoredRecordOptions> = records
+        .iter()
+        .map(|(typ, o)| {
+            let l = &o.limits;
+            let s = StoredRecordOptions {
+                sealed: o.sealed,
+                inline_max: l.inline_max,
+                chunk_size: l.chunk_size,
+                record_max: l.record_max,
+                eager_chunks: l.eager_chunks,
+            };
+            (typ.as_str(), s)
+        })
+        .collect();
+    lib.set_sync_meta(META_RECORDS, &serde_json::to_vec(&stored).expect("records json"))
+}
 
 /// JSON carried in `Transfer.settings` at link time (certs only, no secrets).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -825,6 +887,60 @@ mod tests {
     fn append(log: &mut OpLog, n: &str, ms: u64, ctr: u32, id: &str, op: BookmarksOp) {
         let hlc = Hlc::new(ms, ctr, node(n));
         log.append(node(n), hlc, BOOKMARKS, id, encode_op(&op));
+    }
+
+    /// Large (chunked) and sealed records written through `SyncState` read back whole
+    /// after the log, the record options and the epoch keys go through `library.db`.
+    #[test]
+    fn large_and_sealed_records_survive_a_reload() {
+        use weirdnet_net::Keypair;
+        use weirdnet_sync::RecordValue;
+        const BIG: &str = "morph-test-big";
+        const SEALED: &str = "morph-test-sealed";
+        let (_t, mut lib) = open();
+        let user = Keypair::generate_ed25519();
+        let node_key = Keypair::generate_ed25519();
+        let peer = node_key.public().to_peer_id().to_string();
+        let cert = Roster::self_certify(&weirdnet_net::WEIRDNET, &user, &peer, "this", 1).unwrap();
+        let types = vec![BIG.to_string(), SEALED.to_string()];
+        let fresh = || SyncState::new(vec![3; 32], user.public(), cert.clone(), Some(&node_key), types.clone()).unwrap();
+        let mut st = fresh();
+        st.auto_first_rotation = false;
+        st.publish_device_key(1).unwrap();
+        st.rotate(2).unwrap();
+        st.configure(BIG, RecordOptions::default()).unwrap();
+        st.configure(SEALED, RecordOptions { sealed: true, ..Default::default() }).unwrap();
+        let big: Vec<u8> = (0..1024 * 1024).map(|i| (i * 131 % 251) as u8).collect();
+        let secret = b"an MCP token".to_vec();
+        let sealed_big: Vec<u8> = big.iter().rev().copied().collect();
+        st.write(10, BIG, "answer", &big).unwrap();
+        st.write(11, SEALED, "token", &secret).unwrap();
+        st.write(12, SEALED, "transcript", &sealed_big).unwrap();
+        assert!(st.log.iter().any(|e| e.typ == weirdnet_sync::chunk_type(BIG)), "the 1 MiB value is chunked");
+
+        set_node_id(&mut lib, &peer).unwrap();
+        persist_log(&mut lib, &st.log, st.clock.as_ref()).unwrap();
+        save_records(&mut lib, &st.records).unwrap();
+        save_roster(&mut lib, &st.roster).unwrap();
+        save_epoch_keys(&mut lib, &st.keys).unwrap();
+        drop(st);
+
+        let mut back = fresh();
+        back.log = load_log(&lib).unwrap();
+        back.records = load_records(&lib).unwrap();
+        back.roster = load_roster(&lib).unwrap();
+        back.keys = load_epoch_keys(&lib).unwrap();
+        assert!(back.options(SEALED).sealed && !back.options(BIG).sealed, "record options reload");
+        let read = |typ: &str, rid: &str| {
+            let e = back.latest_entries(typ).into_iter().find(|e| e.record_id == rid).unwrap_or_else(|| panic!("no {rid}"));
+            match back.read(e).unwrap() {
+                RecordValue::Ready(v) => v.to_vec(),
+                other => panic!("{rid}: {other:?}"),
+            }
+        };
+        assert_eq!(read(BIG, "answer"), big);
+        assert_eq!(read(SEALED, "token"), secret);
+        assert_eq!(read(SEALED, "transcript"), sealed_big);
     }
 
     #[test]

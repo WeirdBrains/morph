@@ -286,7 +286,7 @@ fn build_state(lib: &Library) -> Option<(Arc<Mutex<SyncState>>, Keypair)> {
             // Start the key chain right after the first link, or once after an
             // upgrade from seed-only keys (once every device has a device key).
             auto_first_rotation: true,
-            records: Default::default(),
+            records: core::load_records(lib).ok()?,
         })),
         node_key,
     ))
@@ -320,7 +320,7 @@ fn offline_state(lib: &Library) -> Option<(SyncState, Keypair)> {
         device: Device::from_node_key(&node_key).ok(),
         keys: core::load_epoch_keys(lib).ok()?,
         auto_first_rotation: true,
-        records: Default::default(),
+        records: core::load_records(lib).ok()?,
     };
     st.publish_device_key(now_ms()).ok()?;
     st.refresh_keys();
@@ -402,6 +402,7 @@ pub fn tick(home: &Path, profile_id: &str) -> Result<usize> {
         let _ = library_db::with(home, profile_id, |lib| {
             let st = state.lock().expect("sync state");
             core::persist_log(lib, &st.log, st.clock.as_ref())?;
+            core::save_records(lib, &st.records)?;
             core::save_roster(lib, &st.roster)?;
             core::save_epoch_keys(lib, &st.keys)?;
             drop(st);
