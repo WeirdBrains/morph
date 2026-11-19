@@ -326,8 +326,9 @@ fn hits_text(provider: &str, hits: &[SearchHit]) -> String {
         return format!("{provider}: no results.");
     }
     let mut s = format!("{provider}:\n");
-    for (i, h) in hits.iter().take(MAX_HITS).enumerate() {
-        s.push_str(&format!("{}. {} <{}>\n   {}\n", i + 1, untrusted(&h.title, 200), h.url, untrusted(&h.snippet, 400)));
+    // Bullets, not numbers, so the model does not mistake result numbers for citations.
+    for h in hits.iter().take(MAX_HITS) {
+        s.push_str(&format!("- {} <{}>\n  {}\n", untrusted(&h.title, 200), h.url, untrusted(&h.snippet, 400)));
     }
     s
 }
@@ -395,6 +396,7 @@ impl Tool for WebTool {
                         out.is_error = library.is_empty();
                     }
                 }
+                text.push_str("\nThese are leads, not sources: read the most relevant pages with web.read before you answer, and cite the reads.");
                 out.content = text;
                 Ok(out)
             }

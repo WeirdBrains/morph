@@ -84,8 +84,9 @@ pub fn scope_label(scope: &Scope, site: Option<&str>) -> String {
         Scope::AlwaysSite { all_companions } => format!("Always allow on {} for {}", site.unwrap_or("this site"), who(all_companions)),
         Scope::AlwaysEverywhere { all_companions } => format!("Always allow everywhere for {}", who(all_companions)),
         Scope::AlwaysResearch { all_companions, provider_only } => {
-            let p = if *provider_only { " with this search provider" } else { "" };
-            format!("Always allow research{p} for {}", who(all_companions))
+            // Short enough for one line of the panel's card.
+            let what = if *provider_only { "this search engine" } else { "research" };
+            format!("Always allow {what} for {}", who(all_companions))
         }
     }
 }
