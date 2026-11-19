@@ -204,6 +204,7 @@ impl Backend for OffscreenBackend {
     fn create(&mut self, spec: Spec) -> Result<Box<dyn WebView>> {
         self.next += 1;
         let id = ViewId(self.next);
+        let view_bridge = crate::bridge::ViewBridge::new(id, spec.visible, spec.background);
         let context = self.contexts.entry(spec.data_dir.clone()).or_insert_with(|| WebContext::new(spec.data_dir.clone()));
         let url = if spec.url.is_empty() { "about:blank".to_string() } else { spec.url.clone() };
         let window = gtk::OffscreenWindow::new();
@@ -227,7 +228,7 @@ impl Backend for OffscreenBackend {
             .with_initialization_script(UNDO_REDO_SCRIPT)
             .with_initialization_script(CONTROL_SCHEME_SCRIPT)
             .with_initialization_script(crate::icons::ICON_SCRIPT)
-            .with_new_window_req_handler(popup_handler(id, self.queue.clone(), self.popups.clone(), self.bridge.clone()));
+            .with_new_window_req_handler(popup_handler(id, self.queue.clone(), self.popups.clone(), self.bridge.clone(), view_bridge.clone()));
         let view = match with_bridge(builder, &self.bridge).build_gtk(&vbox) {
             Ok(view) => view,
             Err(e) => {
@@ -248,7 +249,7 @@ impl Backend for OffscreenBackend {
         window.add(&vbox);
         engine.disconnect(quiet);
         crate::wry_linux::hook_downloads(&engine, id, &mut self.hooked, &spec.data_dir, &self.downloads, &self.queue);
-        attach_bridge(&engine, &self.bridge);
+        attach_bridge(&engine, &self.bridge, &view_bridge, true);
         watch(&engine, id, &self.queue, &self.shortcuts);
         crate::wry_linux::watch_links(&engine, id, &self.queue);
         if let Some(session) = &spec.session
@@ -350,6 +351,7 @@ impl Backend for OffscreenBackend {
             copied: Rc::default(),
             editable,
             held_middle: Cell::new(None),
+            bridge: view_bridge,
         };
         page.apply_size();
         page.set_visible(spec.visible)?;
@@ -434,6 +436,7 @@ struct OffscreenView {
     /// A middle button is down: `true` when it went to the page as a
     /// Ctrl+click (on a link), else it was kept from the page.
     held_middle: Cell<Option<bool>>,
+    bridge: crate::bridge::ViewBridge,
 }
 
 /// The rows of a `<select>` list, and the one selected.
@@ -707,6 +710,15 @@ impl WebView for OffscreenView {
     fn evaluate(&self, script: &str, done: crate::ScriptDone) -> bool {
         crate::wry_evaluate(&self.view, script, done)
     }
+    fn isolation(&self) -> crate::Isolation {
+        crate::Isolation::ScriptWorld
+    }
+    fn evaluate_isolated(&self, script: &str, done: crate::ScriptDone) -> bool {
+        crate::wry_linux::evaluate_in_host_world(&self.view.webview(), script, done)
+    }
+    fn engine_url(&self) -> Option<String> {
+        self.view.webview().uri().map(|u| u.to_string())
+    }
 
     fn id(&self) -> ViewId {
         self.id
@@ -745,6 +757,9 @@ impl WebView for OffscreenView {
         Ok(())
     }
     fn set_visible(&self, visible: bool) -> Result<()> {
+        // A background view is never shown.
+        let visible = visible && !self.bridge.background;
+        self.bridge.set_visible(visible);
         if self.visible.replace(visible) == visible {
             return Ok(());
         }

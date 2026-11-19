@@ -493,10 +493,10 @@ impl BrowserView {
         use raw_window_handle::HasWindowHandle;
         let raw = HasWindowHandle::window_handle(window).map_err(|e| format!("no window handle: {e}"))?.as_raw();
         let mut backend = Self::backend(raw, window)?;
-        backend.set_page_bridge(morph_webview::PageBridge {
-            script: morph_core::page_bridge::BRIDGE_SCRIPT.into(),
-            handler: std::rc::Rc::new(morph_core::page_bridge::answer),
-        });
+        backend.set_page_bridge(morph_webview::PageBridge::new(
+            morph_core::page_bridge::BRIDGE_SCRIPT,
+            std::rc::Rc::new(morph_core::page_bridge::answer),
+        ));
         let home_for_history = home.to_path_buf();
         let profile_id = profile.to_string();
         let sink: morph_browser::HistorySink = Box::new(move |url: &str, title: &str| {

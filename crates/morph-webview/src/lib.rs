@@ -13,8 +13,12 @@
 use std::path::PathBuf;
 use std::rc::Rc;
 
+pub use bridge::{BridgeContext, ContextHandler, FrameKind, Trust};
+pub use page_read::{Isolation, PageData, PageReads, ReadError, ReadRequest, Want};
+
 #[cfg(target_os = "linux")]
 pub mod appearance;
+pub mod bridge;
 pub mod clipboard;
 pub mod fake;
 pub mod icons;
@@ -22,6 +26,7 @@ pub mod keys;
 pub mod native_page;
 #[cfg(target_os = "linux")]
 pub mod offscreen;
+pub mod page_read;
 #[cfg(target_os = "linux")]
 pub mod render_probe;
 #[cfg(target_os = "linux")]
@@ -96,6 +101,10 @@ pub struct Spec {
     /// of a page being moved to another window); it goes to its current
     /// entry instead of `url`. Backends that can't restore one load `url`.
     pub session: Option<Vec<u8>>,
+    /// A view no user sees, made for a host to load and read (companion
+    /// research, a download's token search): it stays hidden, and its
+    /// bridge messages say [`BridgeContext::background`].
+    pub background: bool,
 }
 
 /// Where a link the user asked to open elsewhere goes.
@@ -529,6 +538,21 @@ pub trait WebView {
     fn evaluate(&self, _script: &str, _done: ScriptDone) -> bool {
         false
     }
+    /// Where [`Self::evaluate_isolated`] runs.
+    fn isolation(&self) -> Isolation {
+        Isolation::None
+    }
+    /// Run `script` (which returns a string) in the main frame, in Morph's
+    /// own script world where the engine has one ([`Self::isolation`]);
+    /// `done` gets the string as it is (not JSON-quoted), or `None` if it
+    /// failed. `false`: this backend can't (`done` is dropped).
+    fn evaluate_isolated(&self, _script: &str, _done: ScriptDone) -> bool {
+        false
+    }
+    /// The page's top-level address as the engine reports it now.
+    fn engine_url(&self) -> Option<String> {
+        None
+    }
     fn clear_data(&self) -> Result<()> {
         Ok(())
     }
@@ -633,18 +657,71 @@ pub enum Input {
     },
 }
 
-/// The page bridge a backend injects into every page: `script` runs at
-/// document start and exposes `window.MorphBridge`; a message the page posts
-/// goes to `handler`, and the reply it returns (JSON) is handed back to the
-/// page with `MorphBridge.deliver`. Rust never touches the DOM.
+/// The page bridge a backend injects into every page (docs/bridge-api.md):
+/// `script` runs at document start and exposes `window.MorphBridge`; a
+/// message the page posts goes to `on_message` with its [`BridgeContext`]
+/// (or, without one, to `handler`), and the reply it returns (JSON) is
+/// handed back to the page with `MorphBridge.deliver`. `host_scripts` are
+/// Morph's own, run in the main frame where page scripts can't reach them
+/// ([`bridge`]); their `MorphHost.post` messages reach `on_message` with
+/// [`Trust::Host`]. Rust never touches the DOM.
 #[derive(Clone)]
 pub struct PageBridge {
     pub script: Rc<str>,
+    /// Page messages without a context (the bridge before contexts). Not
+    /// called when `on_message` is set, and never for host messages.
     pub handler: BridgeHandler,
+    pub on_message: Option<ContextHandler>,
+    pub host_scripts: Vec<Rc<str>>,
 }
 
 /// Answers one page message (JSON) with a reply (JSON), or nothing.
 pub type BridgeHandler = Rc<dyn Fn(&str) -> Option<String>>;
+
+impl PageBridge {
+    /// A bridge whose page messages go to `handler`, without a context.
+    pub fn new(script: impl Into<Rc<str>>, handler: BridgeHandler) -> Self {
+        Self { script: script.into(), handler, on_message: None, host_scripts: Vec::new() }
+    }
+
+    /// A bridge whose messages (page and host) go to `on_message` with their context.
+    pub fn with_context(script: impl Into<Rc<str>>, on_message: ContextHandler) -> Self {
+        Self { script: script.into(), handler: Rc::new(|_| None), on_message: Some(on_message), host_scripts: Vec::new() }
+    }
+
+    /// Add a host script: the body of `function (MorphHost) { … }`, run in
+    /// every main frame before the page's scripts.
+    pub fn host_script(mut self, script: impl Into<Rc<str>>) -> Self {
+        self.host_scripts.push(script.into());
+        self
+    }
+
+    /// Answer a page-channel message from `view`, whose top-level address
+    /// the engine reports as `engine_url`. Host types are refused here.
+    pub fn answer_page(&self, view: &bridge::ViewBridge, engine_url: &str, body: &str) -> Option<String> {
+        if bridge::is_host_type(body) {
+            return bridge::error_reply(body, "refused: host messages cannot come from the page");
+        }
+        match &self.on_message {
+            Some(on_message) => on_message(&view.context(engine_url, FrameKind::Unknown, Trust::Page), body),
+            None => (self.handler)(body),
+        }
+    }
+
+    /// Answer a host-channel envelope from `view` (see [`bridge::check_host`]).
+    /// Refused envelopes get no answer, unless they carried the right token
+    /// (the host script's own message, sent from a page that moved on).
+    pub fn answer_host(&self, view: &bridge::ViewBridge, engine_url: &str, frame_url: Option<&str>, body: &str) -> Option<String> {
+        match bridge::check_host(view, engine_url, frame_url, body) {
+            Ok((context, message)) => self.on_message.as_ref().and_then(|on_message| on_message(&context, &message)),
+            Err(bridge::Refused::Token | bridge::Refused::Malformed) => None,
+            Err(refused) => {
+                let message = serde_json::from_str::<serde_json::Value>(body).ok()?.get("m")?.as_str()?.to_string();
+                bridge::error_reply(&message, &format!("refused: {refused}"))
+            }
+        }
+    }
+}
 
 /// The script that hands `reply` (a JSON object) to the page's bridge.
 /// JSON is a JavaScript expression, so it goes in as it is.
@@ -699,6 +776,13 @@ pub trait Backend {
 
 /// What [`WebView::evaluate`] calls with the script's result.
 pub type ScriptDone = Box<dyn FnOnce(Option<String>) + Send>;
+
+/// [`WebView::evaluate_isolated`] in the page's world on a wry view: the
+/// script's string comes back JSON-quoted, and is unquoted here.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub(crate) fn wry_evaluate_string(view: &wry::WebView, script: &str, done: ScriptDone) -> bool {
+    wry_evaluate(view, script, Box::new(move |r| done(r.and_then(|json| serde_json::from_str::<String>(&json).ok()))))
+}
 
 /// [`WebView::evaluate`] on a wry view (every real backend).
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
@@ -786,10 +870,67 @@ mod bridge_tests {
         assert_eq!(deliver_script(r#"{"id":"1","type":"pong"}"#), r#"window.MorphBridge && window.MorphBridge.deliver({"id":"1","type":"pong"});"#);
     }
 
+    type Seen = Rc<std::cell::RefCell<Vec<(BridgeContext, String)>>>;
+
+    fn recording() -> (PageBridge, Seen) {
+        let seen: Seen = Rc::default();
+        let log = seen.clone();
+        let bridge = PageBridge::with_context(
+            "",
+            Rc::new(move |ctx: &BridgeContext, body: &str| {
+                log.borrow_mut().push((ctx.clone(), body.to_string()));
+                Some(r#"{"id":"1","type":"ok"}"#.into())
+            }),
+        );
+        (bridge, seen)
+    }
+
+    #[test]
+    fn a_page_cannot_make_a_host_call() {
+        let (bridge, seen) = recording();
+        let view = bridge::ViewBridge::new(ViewId(5), true, false);
+        // A page script posts a host type on the page channel.
+        let reply = bridge.answer_page(&view, "https://evil.test/", r#"{"id":"9","type":"host.read"}"#).unwrap();
+        assert!(reply.contains("refused"), "{reply}");
+        // It forges a host envelope without the token.
+        let forged = serde_json::json!({"t": "guess", "f": "main", "o": "https://evil.test", "m": r#"{"id":"9","type":"host.read"}"#}).to_string();
+        assert_eq!(bridge.answer_host(&view, "https://evil.test/", None, &forged), None);
+        assert!(seen.borrow().is_empty(), "no handler saw either");
+    }
+
+    #[test]
+    fn handlers_get_the_engines_context() {
+        let (bridge, seen) = recording();
+        let view = bridge::ViewBridge::new(ViewId(5), false, false);
+        bridge.answer_page(&view, "https://example.com/a", r#"{"id":"1","type":"ping"}"#).unwrap();
+        let host =
+            serde_json::json!({"t": &*view.token, "f": "main", "o": "https://example.com", "m": r#"{"id":"h1","type":"host.hello"}"#}).to_string();
+        bridge.answer_host(&view, "https://example.com/a", None, &host).unwrap();
+        // The token holder whose page moved to another origin is told why.
+        let moved = bridge.answer_host(&view, "https://other.test/", None, &host).unwrap();
+        assert!(moved.contains(r#""id":"h1""#) && moved.contains("refused"), "{moved}");
+        let seen = seen.borrow();
+        assert_eq!(seen.len(), 2);
+        let (page, host) = (&seen[0].0, &seen[1].0);
+        assert_eq!((page.view, page.trust, page.frame, page.hidden), (ViewId(5), Trust::Page, FrameKind::Unknown, true));
+        assert_eq!(page.origin, "https://example.com");
+        assert_eq!((host.trust, host.frame), (Trust::Host, FrameKind::Main));
+        assert_eq!(seen[1].1, r#"{"id":"h1","type":"host.hello"}"#);
+    }
+
+    #[test]
+    fn bridges_without_a_context_keep_their_handler() {
+        let bridge = PageBridge::new("", Rc::new(|body: &str| Some(format!("echo {body}"))));
+        let view = bridge::ViewBridge::new(ViewId(1), true, false);
+        assert_eq!(bridge.answer_page(&view, "about:blank", r#"{"id":"1","type":"ping"}"#).unwrap(), r#"echo {"id":"1","type":"ping"}"#);
+        let host = serde_json::json!({"t": &*view.token, "f": "main", "o": "null", "m": "{}"}).to_string();
+        assert_eq!(bridge.answer_host(&view, "about:blank", None, &host), None, "host messages need a context handler");
+    }
+
     #[test]
     fn backends_without_a_bridge_ignore_it() {
         let mut backend = fake::FakeBackend::default();
-        backend.set_page_bridge(PageBridge { script: "".into(), handler: Rc::new(|_| None) });
+        backend.set_page_bridge(PageBridge::new("", Rc::new(|_| None)));
     }
 }
 
