@@ -8,7 +8,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use weirdnet_agent::{ModelBackend, ModelError};
-use weirdnet_model::agent::LocalModel;
 use weirdnet_model::catalog::{self, ModelSpec};
 use weirdnet_model::{Consent, Engine, ModelStore, Worker, human};
 
@@ -238,7 +237,7 @@ impl ModelProvider for LocalModels {
                 .clone()
         };
         // Gemma 4 often calls tools in its own syntax rather than the one weirdnet-model asks for.
-        Ok(Arc::new(crate::NativeCalls::new(Arc::new(LocalModel::new(spec.id, worker)))))
+        Ok(Arc::new(crate::NativeCalls::new(Arc::new(crate::local_chat::LocalChat::new(spec.id, worker)))))
     }
 }
 

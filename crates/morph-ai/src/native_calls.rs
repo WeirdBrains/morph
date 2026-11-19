@@ -64,7 +64,36 @@ impl ModelBackend for NativeCalls {
                 turn.tool_calls.push(ToolCall { id, name, arguments });
             }
         }
+        for call in &mut turn.tool_calls {
+            match resolve_tool_name(&call.name, tools) {
+                Some(name) => call.name = name,
+                None => eprintln!("morph: the model called a tool that is not offered: {:?}", call.name.chars().take(80).collect::<String>()),
+            }
+        }
         Ok(turn)
+    }
+}
+
+/// The offered tool a small model meant: the exact name, or one written with a namespace
+/// prefix (`default_api:page.fill`), underscores for dots (`page_fill`), or without its
+/// group when only one tool has that last part (`fill`). None when nothing offered fits.
+pub fn resolve_tool_name(name: &str, tools: &[ToolSpec]) -> Option<String> {
+    let exact = |n: &str| tools.iter().find(|t| t.name == n).map(|t| t.name.clone());
+    if let Some(n) = exact(name) {
+        return Some(n);
+    }
+    let bare = name.trim().rsplit(':').next().unwrap_or(name).trim();
+    if let Some(n) = exact(bare) {
+        return Some(n);
+    }
+    let flat = |n: &str| n.replace(['_', '-'], ".").to_ascii_lowercase();
+    if let Some(t) = tools.iter().find(|t| flat(&t.name) == flat(bare)) {
+        return Some(t.name.clone());
+    }
+    let mut last = tools.iter().filter(|t| t.name.rsplit('.').next() == Some(bare) && t.name.contains('.'));
+    match (last.next(), last.next()) {
+        (Some(t), None) => Some(t.name.clone()),
+        _ => None,
     }
 }
 
@@ -263,6 +292,20 @@ impl<'a> Parser<'a> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_tool_name_written_loosely_resolves_to_the_offered_tool() {
+        let tools: Vec<ToolSpec> = ["page.fill", "page.click", "tabs.list", "web.search"].iter().map(|n| ToolSpec::new(*n, "")).collect();
+        let r = |n: &str| resolve_tool_name(n, &tools);
+        assert_eq!(r("page.fill").as_deref(), Some("page.fill"));
+        assert_eq!(r("default_api:page.fill").as_deref(), Some("page.fill"));
+        assert_eq!(r("page_fill").as_deref(), Some("page.fill"));
+        assert_eq!(r("Page_Click").as_deref(), Some("page.click"));
+        assert_eq!(r("fill").as_deref(), Some("page.fill"));
+        assert_eq!(r("search").as_deref(), Some("web.search"));
+        assert_eq!(r("page.type"), None);
+        assert_eq!(r("list.tabs"), None);
+    }
 
     #[test]
     fn a_gemma_call_becomes_a_tool_call() {

@@ -19,6 +19,8 @@ mod ids;
 pub mod journal;
 #[cfg(feature = "local")]
 pub mod local;
+#[cfg(feature = "local")]
+pub mod local_chat;
 pub mod mcp;
 pub mod mcp_local;
 #[cfg(feature = "mcp")]
