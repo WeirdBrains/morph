@@ -12,6 +12,9 @@ pub struct SyncLogEntry {
     pub typ: String,
     pub record_id: String,
     pub op: Vec<u8>,
+    /// The entry's full value when `op` is only a fallback (encoded by
+    /// morph-core; opaque here). `None` for plain entries.
+    pub value: Option<Vec<u8>>,
 }
 
 /// A losing version kept for the UI (30 days).
@@ -45,10 +48,18 @@ pub struct SyncOrSetRow {
 
 impl Library {
     pub fn sync_log(&self) -> Result<Vec<SyncLogEntry>> {
-        let mut q = self.conn.prepare("SELECT node_id, seq, hlc, typ, record_id, op FROM sync_log ORDER BY node_id, seq")?;
+        let mut q = self.conn.prepare("SELECT node_id, seq, hlc, typ, record_id, op, value FROM sync_log ORDER BY node_id, seq")?;
         let rows = q
             .query_map([], |r| {
-                Ok(SyncLogEntry { node_id: r.get(0)?, seq: r.get(1)?, hlc: r.get(2)?, typ: r.get(3)?, record_id: r.get(4)?, op: r.get(5)? })
+                Ok(SyncLogEntry {
+                    node_id: r.get(0)?,
+                    seq: r.get(1)?,
+                    hlc: r.get(2)?,
+                    typ: r.get(3)?,
+                    record_id: r.get(4)?,
+                    op: r.get(5)?,
+                    value: r.get(6)?,
+                })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
@@ -57,9 +68,9 @@ impl Library {
     pub fn save_sync_log(&mut self, entries: &[SyncLogEntry]) -> Result<()> {
         let tx = self.conn.transaction()?;
         tx.execute("DELETE FROM sync_log", [])?;
-        let mut ins = tx.prepare("INSERT INTO sync_log (node_id, seq, hlc, typ, record_id, op) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")?;
+        let mut ins = tx.prepare("INSERT INTO sync_log (node_id, seq, hlc, typ, record_id, op, value) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)")?;
         for e in entries {
-            ins.execute(params![e.node_id, e.seq, e.hlc, e.typ, e.record_id, e.op])?;
+            ins.execute(params![e.node_id, e.seq, e.hlc, e.typ, e.record_id, e.op, e.value])?;
         }
         drop(ins);
         tx.commit()?;
@@ -68,8 +79,8 @@ impl Library {
 
     pub fn insert_sync_log(&mut self, e: &SyncLogEntry) -> Result<()> {
         self.conn.execute(
-            "INSERT OR REPLACE INTO sync_log (node_id, seq, hlc, typ, record_id, op) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![e.node_id, e.seq, e.hlc, e.typ, e.record_id, e.op],
+            "INSERT OR REPLACE INTO sync_log (node_id, seq, hlc, typ, record_id, op, value) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![e.node_id, e.seq, e.hlc, e.typ, e.record_id, e.op, e.value],
         )?;
         Ok(())
     }

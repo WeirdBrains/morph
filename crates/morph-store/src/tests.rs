@@ -172,11 +172,47 @@ fn sync_log_and_meta_round_trip() {
     assert_eq!(lib.schema_version().unwrap(), MIGRATIONS.len() as i64);
     lib.set_sync_meta("node_id", b"peer-a").unwrap();
     assert_eq!(lib.sync_meta("node_id").unwrap(), Some(b"peer-a".to_vec()));
-    let e = SyncLogEntry { node_id: "peer-a".into(), seq: 1, hlc: "h".into(), typ: "bookmarks".into(), record_id: "b1".into(), op: b"{}".to_vec() };
+    let e = SyncLogEntry {
+        node_id: "peer-a".into(),
+        seq: 1,
+        hlc: "h".into(),
+        typ: "bookmarks".into(),
+        record_id: "b1".into(),
+        op: b"{}".to_vec(),
+        value: None,
+    };
     lib.insert_sync_log(&e).unwrap();
     lib.set_sync_cursor("peer-a", 1).unwrap();
     assert_eq!(lib.sync_log().unwrap(), vec![e]);
     assert_eq!(lib.sync_cursors().unwrap(), vec![("peer-a".into(), 1)]);
+}
+
+#[test]
+fn sync_log_values_round_trip_and_older_rows_load_without_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    // A library from before the value column, with one log row.
+    {
+        let mut conn = weirdnet_storage::open(&path(tmp.path()), Some(key(1).expose()), WHAT).unwrap();
+        let before = MIGRATIONS.len() - 1;
+        weirdnet_storage::migrate::<StoreError>(&mut conn, &MIGRATIONS[..before], before, |_, _| Ok(())).unwrap();
+        conn.execute("INSERT INTO sync_log (node_id, seq, hlc, typ, record_id, op) VALUES ('peer-a', 1, 'h', 'bookmarks', 'b1', X'7B7D')", [])
+            .unwrap();
+    }
+    let mut lib = Library::open(tmp.path(), &key(1)).unwrap();
+    assert_eq!(lib.schema_version().unwrap(), MIGRATIONS.len() as i64);
+    let old = SyncLogEntry {
+        node_id: "peer-a".into(),
+        seq: 1,
+        hlc: "h".into(),
+        typ: "bookmarks".into(),
+        record_id: "b1".into(),
+        op: b"{}".to_vec(),
+        value: None,
+    };
+    assert_eq!(lib.sync_log().unwrap(), vec![old.clone()]);
+    let new = SyncLogEntry { seq: 2, record_id: "b2".into(), op: Vec::new(), value: Some(vec![1, 2, 3]), ..old.clone() };
+    lib.save_sync_log(&[old.clone(), new.clone()]).unwrap();
+    assert_eq!(lib.sync_log().unwrap(), vec![old, new]);
 }
 
 #[test]

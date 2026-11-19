@@ -145,6 +145,13 @@ CREATE TABLE download_sessions (
     saved_ms INTEGER NOT NULL
 );
 ",
+    "
+-- The full value of a sync log entry whose op is only a fallback (weirdnet-sync
+-- 0.4 large and sealed records: a chunk manifest or a sealed body), encoded by
+-- morph-core. NULL for plain entries and for every row written before this
+-- migration. Never edit a shipped migration; this one is appended.
+ALTER TABLE sync_log ADD COLUMN value BLOB;
+",
 ];
 
 #[derive(Debug, thiserror::Error)]
