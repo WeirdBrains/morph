@@ -124,13 +124,9 @@ pub fn backfill(lib: &mut Library, home: &Path, profile_id: &str) -> morph_store
         return Ok(());
     }
     let path = crate::profiles::settings_path(home, profile_id);
-    let Some(file) = read(&path) else { return Ok(()) };
-    let mtime = std::fs::metadata(&path)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
+    let Some(file) = read(home, profile_id) else { return Ok(()) };
+    let mtime =
+        crate::profile_files::modified(&path).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_millis() as u64).unwrap_or(0);
     let defaults = Settings::default();
     let have = merged(lib)?;
     let mut ops = Vec::new();
@@ -148,10 +144,10 @@ pub fn backfill(lib: &mut Library, home: &Path, profile_id: &str) -> morph_store
     append(lib, &ops, 0)
 }
 
-fn read(path: &Path) -> Option<Settings> {
-    match std::fs::read_to_string(path) {
-        Ok(raw) => serde_json::from_str(&raw).ok(),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(Settings::default()),
+fn read(home: &Path, profile_id: &str) -> Option<Settings> {
+    match crate::settings::read_profile(home, profile_id) {
+        Ok(Some(settings)) => Some(settings),
+        Ok(None) => Some(Settings::default()),
         Err(_) => None,
     }
 }
@@ -166,8 +162,7 @@ pub fn materialize(lib: &Library, home: &Path, profile_id: &str) -> Result<bool,
     if have.is_empty() {
         return Ok(false);
     }
-    let path = crate::profiles::settings_path(home, profile_id);
-    let Some(mut file) = read(&path) else { return Ok(false) };
+    let Some(mut file) = read(home, profile_id) else { return Ok(false) };
     let before = file.clone();
     for (field, (_, value)) in &have {
         put(&mut file, field, value);
@@ -201,7 +196,7 @@ mod tests {
     }
 
     fn file(home: &Path) -> Settings {
-        read(&crate::profiles::settings_path(home, "p1")).unwrap()
+        read(home, "p1").unwrap()
     }
 
     #[test]

@@ -295,7 +295,7 @@ fn policy_file_disables(path: &Path) -> bool {
     p.disable_discovery == Some(true) || p.discovery == Some(false)
 }
 
-fn policy_files(home: &Path) -> Vec<PathBuf> {
+pub(crate) fn policy_files(home: &Path) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     if let Ok(p) = std::env::var(POLICY_ENV) {
         let p = PathBuf::from(p);

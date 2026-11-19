@@ -6,7 +6,6 @@
 //! tabs, `data:` and `about:` pages are left out. A window with nothing
 //! left to reopen is dropped.
 use std::fs;
-use std::io::Write;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -70,9 +69,13 @@ pub fn is_restorable(url: &str) -> bool {
 
 /// The profile's saved windows (none when there is no file or it cannot
 /// be read: a bad file never keeps Morph from starting).
+///
+/// Once the profile has an identity the file is sealed
+/// ([`crate::profile_files`]), and a locked profile reads as no windows.
 pub fn load(home: impl AsRef<Path>, profile: &str) -> Session {
+    let home = home.as_ref();
     let path = crate::profiles::tabs_path(home, profile);
-    let Ok(body) = fs::read(&path) else {
+    let Ok(Some(body)) = crate::profile_files::read(home, profile, &path) else {
         return Session::default();
     };
     match serde_json::from_slice::<Session>(&body) {
@@ -85,25 +88,27 @@ pub fn load(home: impl AsRef<Path>, profile: &str) -> Session {
 }
 
 /// Replace the profile's saved windows (atomic). No windows removes the file.
+/// Sealed once the profile has an identity; refused while it is locked.
 pub fn save(home: impl AsRef<Path>, profile: &str, session: &Session) -> std::io::Result<()> {
+    let home = home.as_ref();
     let path = crate::profiles::tabs_path(home, profile);
+    // A locked profile's saved windows are never replaced or removed.
+    crate::profile_files::require_key(home, profile).map_err(|e| std::io::Error::other(e.to_string()))?;
     if session.windows.is_empty() {
-        return match fs::remove_file(&path) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
-            _ => Ok(()),
-        };
+        for p in [path.clone(), crate::profile_files::sealed_path(&path)] {
+            match fs::remove_file(&p) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+                _ => {}
+            }
+        }
+        return Ok(());
     }
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let tmp = path.with_extension("json.tmp");
-    let body = serde_json::to_vec_pretty(&Session::new(session.windows.clone()))?;
-    {
-        let mut file = fs::File::create(&tmp)?;
-        file.write_all(&body)?;
-        file.write_all(b"\n")?;
-    }
-    fs::rename(tmp, path)
+    let mut body = serde_json::to_vec_pretty(&Session::new(session.windows.clone()))?;
+    body.push(b'\n');
+    crate::profile_files::write(home, profile, &path, &body).map_err(|e| match e {
+        crate::profiles::ProfileError::Io(e) => e,
+        other => std::io::Error::other(other.to_string()),
+    })
 }
 
 /// The windows open app-wide, each keyed by `K` and showing one profile,

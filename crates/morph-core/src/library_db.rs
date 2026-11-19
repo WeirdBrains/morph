@@ -10,7 +10,8 @@
 //! removes the JSON files. After that the profile is encrypted for good: while
 //! it is locked, library calls fail with [`ProfileError::Locked`] rather than
 //! falling back to plaintext. Keys live only inside the open connections held
-//! here, and [`lock`] drops them.
+//! here (and the derived file key in [`crate::profile_files`]), and [`lock`]
+//! drops them.
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -61,7 +62,11 @@ pub fn unlock(home: impl AsRef<Path>, id: &str, key: &LibraryKey) -> Result<(), 
     let mut map = open_map();
     let mut lib = Library::open(&dir, key)?;
     import_json(home, id, &mut lib)?;
+    crate::profile_files::remember_key(&dir, key)?;
     map.insert(dir, lib);
+    drop(map);
+    // Settings and tabs left plaintext (before the identity, or by an older build) are sealed now.
+    crate::profile_files::seal_existing(home, id)?;
     Ok(())
 }
 
@@ -90,7 +95,9 @@ pub fn unlock_new_identity(home: impl AsRef<Path>, id: &str, key: &LibraryKey, n
 
 /// Close `id`'s library and forget its key. Does nothing if it is not open.
 pub fn lock(home: impl AsRef<Path>, id: &str) {
-    open_map().remove(&profiles::profile_dir(home, id));
+    let dir = profiles::profile_dir(home, id);
+    open_map().remove(&dir);
+    crate::profile_files::forget_key(&dir);
 }
 
 /// Run `f` on `id`'s open database: `Ok(None)` if the library is still

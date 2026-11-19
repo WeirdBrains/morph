@@ -75,6 +75,8 @@ pub enum ProfileError {
     LastProfile,
     #[error("this profile's library is locked; unlock it with the profile password")]
     Locked,
+    #[error("an administrator policy requires a password for this profile")]
+    PolicyLocked,
     #[error("library database: {0}")]
     Store(#[from] morph_store::StoreError),
 }

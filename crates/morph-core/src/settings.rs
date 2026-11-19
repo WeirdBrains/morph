@@ -1,7 +1,6 @@
 //! Persisted Morph shell preferences, stored as `settings.json` in the current profile.
 
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Deserializer, Serialize};
@@ -185,17 +184,40 @@ pub fn current_settings_path(home: impl AsRef<Path>) -> PathBuf {
 ///
 /// This never creates the home directory or the profile catalog.
 pub fn load(home: impl AsRef<Path>) -> Result<Settings, SettingsError> {
+    let home = home.as_ref();
     let path = current_settings_path(home);
-    if !path.exists() {
-        return Ok(Settings::default());
-    }
-    let raw = fs::read_to_string(path)?;
-    let mut settings: Settings = serde_json::from_str(&raw)?;
+    let raw = match profile_of(home, &path) {
+        // A profile's file, sealed once it has an identity (Locked while it is locked).
+        Some(id) => match crate::profile_files::read(home, &id, &path)? {
+            Some(raw) => raw,
+            None => return Ok(Settings::default()),
+        },
+        None if !path.exists() => return Ok(Settings::default()),
+        None => weirdnet_keys::Zeroizing::new(fs::read(&path)?),
+    };
+    let mut settings: Settings = serde_json::from_slice(&raw)?;
     settings.sidebar_width = clamp_sidebar_width(settings.sidebar_width);
     if !crate::search::is_known(&settings.search_engine) {
         settings.search_engine = default_search_engine();
     }
     Ok(settings)
+}
+
+/// The profile `path` is the settings file of, if it is one.
+fn profile_of(home: &Path, path: &Path) -> Option<String> {
+    let id = path.parent()?.file_name()?.to_str()?;
+    (crate::profiles::is_valid_id(id) && crate::profiles::settings_path(home, id) == path).then(|| id.to_string())
+}
+
+/// One profile's settings: `None` when it has no file yet. Sealed once the
+/// profile has an identity, so this fails with `Locked` while it is locked.
+pub fn read_profile(home: impl AsRef<Path>, profile_id: &str) -> Result<Option<Settings>, SettingsError> {
+    let home = home.as_ref();
+    let path = crate::profiles::settings_path(home, profile_id);
+    match crate::profile_files::read(home, profile_id, &path)? {
+        Some(raw) => Ok(Some(serde_json::from_slice(&raw)?)),
+        None => Ok(None),
+    }
 }
 
 /// Write [settings] to the current profile, migrating leftover files first.
@@ -220,22 +242,14 @@ pub fn save(home: impl AsRef<Path>, settings: &Settings) -> Result<(), SettingsE
     }
 }
 
-/// Write `settings` to one profile's `settings.json` (atomic replace), with no
-/// sync bookkeeping.
+/// Write `settings` to one profile's `settings.json` (atomic replace; sealed
+/// once the profile has an identity), with no sync bookkeeping.
 pub fn write_profile(home: impl AsRef<Path>, profile_id: &str, settings: &Settings) -> Result<(), SettingsError> {
+    let home = home.as_ref();
     let path = crate::profiles::settings_path(home, profile_id);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let tmp = path.with_extension("json.tmp");
-    let body = serde_json::to_vec_pretty(settings)?;
-    {
-        let mut file = fs::File::create(&tmp)?;
-        file.write_all(&body)?;
-        file.write_all(b"\n")?;
-        file.sync_all()?;
-    }
-    fs::rename(tmp, path)?;
+    let mut body = serde_json::to_vec_pretty(settings)?;
+    body.push(b'\n');
+    crate::profile_files::write(home, profile_id, &path, &body)?;
     Ok(())
 }
 

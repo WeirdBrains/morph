@@ -19,6 +19,8 @@ thiserror.workspace = true
 uuid = { version = "1", features = ["v7"] }
 weirdnet-schemes = "=0.1.0"
 weirdnet-sync.workspace = true
+# Sealing the profile files (XChaCha20-Poly1305) and the file key (HKDF).
+weirdnet-keys.workspace = true
 # App pages go to the web view as `data:` addresses.
 base64 = "0.22"
 
