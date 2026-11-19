@@ -16,6 +16,7 @@ pub mod home;
 pub mod identity;
 pub mod library;
 pub mod network;
+pub mod node_router;
 pub mod profiles;
 pub mod relays;
 pub mod sync;

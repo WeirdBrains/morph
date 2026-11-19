@@ -36,7 +36,7 @@ pub use mcp::{McpConfigs, McpSecrets, McpServer, McpTransport, McpValue};
 pub use mcp_local::{FileSecrets, McpApprovals, MemorySecrets, write_private};
 pub use model::{ModelChoice, ModelProvider, Platform, UnavailableModels};
 pub use remote::{
-    CompanionRoute, Link, LinkedNode, NodeRouter, OffloadMode, OffloadPlan, OffloadSettings, RouteError, offload_plan, route_companion,
+    CompanionRoute, Link, LinkHandler, LinkedNode, NodeRouter, OffloadMode, OffloadPlan, OffloadSettings, RouteError, offload_plan, route_companion,
 };
 pub use roster::{CompanionProfile, Roster, RosterError};
 pub use settings::{AgentSettings, SearchProvider};
