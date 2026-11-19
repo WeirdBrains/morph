@@ -33,7 +33,7 @@ pub use host::{BrowserHost, FetchedPage, HostError, PageSnapshot, ResearchHost, 
 pub use ids::new_id;
 pub use journal::{Journal, JournalEntry, JournalKind, Journals, NOTES_ID};
 pub use mcp::{McpConfigs, McpSecrets, McpServer, McpTransport, McpValue};
-pub use mcp_local::{FileSecrets, McpApprovals, MemorySecrets};
+pub use mcp_local::{FileSecrets, McpApprovals, MemorySecrets, write_private};
 pub use model::{ModelChoice, ModelProvider, Platform, UnavailableModels};
 pub use remote::{
     CompanionRoute, Link, LinkedNode, NodeRouter, OffloadMode, OffloadPlan, OffloadSettings, RouteError, offload_plan, route_companion,
