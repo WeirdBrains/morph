@@ -25,6 +25,8 @@ pub enum SessionError {
 pub struct Sessions {
     models: Arc<dyn ModelProvider>,
     tools: Arc<ToolRegistry>,
+    /// Registries of companions whose tools differ from `tools`.
+    own_tools: HashMap<AgentId, Arc<ToolRegistry>>,
     policy: SharedPolicy,
     approver: Arc<dyn Approver>,
     open: HashMap<AgentId, AgentSession>,
@@ -52,7 +54,7 @@ impl Canceller {
 
 impl Sessions {
     pub fn new(models: Arc<dyn ModelProvider>, tools: Arc<ToolRegistry>, policy: SharedPolicy, approver: Arc<dyn Approver>) -> Self {
-        Self { models, tools, policy, approver, open: HashMap::new(), running: Running::default() }
+        Self { models, tools, own_tools: HashMap::new(), policy, approver, open: HashMap::new(), running: Running::default() }
     }
 
     /// Runs one task for a companion, handing each view update to `on_update` as it happens.
@@ -68,8 +70,13 @@ impl Sessions {
         if !self.open.contains_key(companion) {
             let choice: &ModelChoice = profile.model.as_ref().ok_or_else(|| SessionError::NoModel(name.clone()))?;
             let model = self.models.open(choice).map_err(|e| SessionError::Model(e.to_string()))?;
-            let session =
-                AgentSession::new(AgentConfig::new(profile.identity.clone()), model, self.tools.clone(), self.policy.clone(), self.approver.clone());
+            let session = AgentSession::new(
+                AgentConfig::new(profile.identity.clone()),
+                model,
+                self.tools_of(companion),
+                self.policy.clone(),
+                self.approver.clone(),
+            );
             self.open.insert(companion.clone(), session);
         }
         let cancel = {
@@ -105,8 +112,26 @@ impl Sessions {
             return;
         }
         self.tools = tools;
+        self.own_tools.clear();
         let running = self.running.lock().unwrap();
         self.open.retain(|id, _| running.contains_key(id));
+    }
+
+    fn tools_of(&self, companion: &AgentId) -> Arc<ToolRegistry> {
+        self.own_tools.get(companion).unwrap_or(&self.tools).clone()
+    }
+
+    /// Uses `tools` for `companion`'s sessions opened from now on (the servers it may use
+    /// changed). Like [`set_tools`](Self::set_tools) but only for this companion, and nothing
+    /// happens when it already has this registry.
+    pub fn set_tools_for(&mut self, companion: &AgentId, tools: Arc<ToolRegistry>) {
+        if Arc::ptr_eq(&self.tools_of(companion), &tools) {
+            return;
+        }
+        self.own_tools.insert(companion.clone(), tools);
+        if !self.running.lock().unwrap().contains_key(companion) {
+            self.open.remove(companion);
+        }
     }
 
     /// A handle that stops tasks from another thread.
@@ -221,6 +246,28 @@ mod tests {
         let out = sessions.run(&roster, &id, "open", |u| updates.push(u)).await.unwrap();
         assert_eq!((out.stop, out.text.as_str()), (StopReason::Completed, "b"), "{updates:?}");
         assert!(updates.iter().any(|u| matches!(u, ViewUpdate::ToolDone { is_error: false, .. })));
+    }
+
+    #[tokio::test]
+    async fn tools_for_one_companion_leave_the_others_sessions_alone() {
+        let roster = Roster::first_run(ModelChoice::Gemma4E4B);
+        let provider = Provider(Mutex::new(vec![turn("one", vec![]), turn("two", vec![])]));
+        let approver = Arc::new(ScriptedApprover::new(vec![]));
+        let default = Arc::new(ToolRegistry::new());
+        let mut sessions = Sessions::new(Arc::new(provider), default.clone(), Policy::new().shared(), approver);
+        let (a, b) = (AgentId::new("local"), AgentId::new("scout"));
+        sessions.set_tools_for(&a, default.clone());
+        assert!(sessions.own_tools.is_empty(), "the registry it already uses changes nothing");
+        sessions.open.clear();
+        assert_eq!(sessions.run(&roster, &a, "x", |_| {}).await.unwrap().text, "one");
+        let own = registry().await;
+        sessions.set_tools_for(&b, own.clone());
+        assert!(sessions.open.contains_key(&a), "another companion's conversation stays");
+        assert!(Arc::ptr_eq(&sessions.tools_of(&b), &own) && Arc::ptr_eq(&sessions.tools_of(&a), &default));
+        sessions.set_tools_for(&a, own.clone());
+        assert!(!sessions.open.contains_key(&a), "the one whose tools changed starts fresh");
+        sessions.set_tools(registry().await);
+        assert!(sessions.own_tools.is_empty());
     }
 
     #[tokio::test]
