@@ -8,10 +8,11 @@
 //! them in `<untrusted_tool_result>`, and [`untrusted`] keeps a page from closing that wrapper
 //! early or forging one of its own.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use morph_ai::{BrowserHost, HostError, LIBRARY, PageSnapshot, ResearchHost, ScrollTo, SearchHit};
+use morph_ai::{ActedOn, BrowserHost, HostError, LIBRARY, PageSnapshot, PageTarget, ResearchHost, ScrollTo, SearchHit};
 use serde_json::{Value, json};
 use weirdnet_agent::{BudgetCharge, CallTarget, LocalTools, SessionMark, StepKind, Tier, Tool, ToolContext, ToolError, ToolOutput, ToolSpec};
 
@@ -27,8 +28,12 @@ const MAX_LINKS: usize = 25;
 /// Most results each search provider contributes.
 const MAX_HITS: usize = 8;
 
-/// What a tier 2 card is about, so the panel can mark it on the page while the card waits.
-pub type PendingTarget = Arc<Mutex<Option<String>>>;
+/// What a tier 2 card is about and the address it would act on, so the panel can mark it on
+/// the page while the card waits.
+pub type PendingTarget = Arc<Mutex<Option<(PageTarget, String)>>>;
+
+/// Most matches a page action can pick from (`nth`).
+const MAX_NTH: u64 = 100;
 
 /// Makes outside text safe to put inside the session's `<untrusted_tool_result>` wrapper: no
 /// wrapper tags of its own and no control characters, at most `max` characters.
@@ -90,6 +95,81 @@ fn host_err(e: HostError) -> ToolError {
     ToolError::Failed(e.to_string())
 }
 
+/// A page action's failure as the model should read it: what happened and that nothing was
+/// done when that is so.
+fn action_err(target: &PageTarget, e: HostError) -> ToolError {
+    let what = untrusted(&target.describe(), 300);
+    ToolError::Failed(match e {
+        HostError::NotFound => {
+            format!("No element on the page matches {what}. Nothing was done. Use the label exactly as the page shows it, or a CSS selector.")
+        }
+        HostError::NotInteractable(why) => format!("Found {what}, but it can't be used: {}. Nothing was done.", untrusted(&why, 300)),
+        HostError::Blocked(why) => format!(
+            "Refused: this browser can only act where the page's own scripts could interfere ({why}), so Morph doesn't act on pages here. Nothing was done."
+        ),
+        HostError::WrongOrigin { expected, actual } => {
+            format!("Refused: this was approved for {expected}, but the tab is now on {actual}. Nothing was done.")
+        }
+        HostError::Navigated { from, to } => format!("Refused: the page moved from {from} to {to} as the action started. Nothing was done."),
+        HostError::Timeout => "The page did not answer in time. The action may still have run; check the page before trying again.".into(),
+        other => other.to_string(),
+    })
+}
+
+/// The element a page action names: `target` (its label), optionally `selector`, `role` and
+/// `nth`. Needs a label or a selector.
+fn page_target(args: &Value, required: bool) -> Result<Option<PageTarget>, ToolError> {
+    let opt = |k: &str| args.get(k).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    let t = PageTarget {
+        label: opt("target"),
+        selector: opt("selector"),
+        role: opt("role"),
+        nth: args.get("nth").and_then(Value::as_u64).unwrap_or(0).min(MAX_NTH) as usize,
+    };
+    match (&t.label, &t.selector) {
+        (None, None) if required => Err(ToolError::InvalidArgs("`target` (the label shown on the page) or `selector` is required".into())),
+        (None, None) => Ok(None),
+        _ => Ok(Some(t)),
+    }
+}
+
+fn target_schema(extra: Value, required: &[&str]) -> Value {
+    let mut props = json!({
+        "target": { "type": "string", "description": "The label as the page shows it (button or link text, field label or placeholder)" },
+        "selector": { "type": "string", "description": "Optional CSS selector, when the label is ambiguous" },
+        "role": { "type": "string", "description": "Optional role: button, link, textbox, checkbox…" },
+        "nth": { "type": "integer", "description": "Which match, 0 for the first" },
+    });
+    if let (Some(p), Some(e)) = (props.as_object_mut(), extra.as_object()) {
+        p.extend(e.clone());
+    }
+    schema(props, required)
+}
+
+/// What the page reported about the element after an action (untrusted).
+fn acted_text(done: &str, target: &PageTarget, a: &ActedOn) -> String {
+    let mut s = format!("{done} {}", untrusted(&target.describe(), 300));
+    if let Some(el) = &a.element {
+        let name = if el.name.is_empty() { &el.text } else { &el.name };
+        if !name.is_empty() {
+            s.push_str(&format!(" ({} “{}”)", el.tag, untrusted(name, 200)));
+        }
+    }
+    if a.matches > 1 {
+        s.push_str(&format!(", the first of {} matches", a.matches));
+    }
+    s.push('.');
+    if let Some(el) = &a.element {
+        if el.secret {
+            s.push_str(" It is a password field; its value is never read back.");
+        } else if let Some(v) = &el.value {
+            s.push_str(&format!(" The field now reads “{}”.", untrusted(v, 500)));
+        }
+    }
+    s.push_str(&format!("\nThe page is at {}.", a.url));
+    s
+}
+
 fn signed_in(ctx: &ToolContext) -> Option<&str> {
     match &ctx.session {
         SessionMark::SignedIn { profile } => Some(profile.as_str()),
@@ -139,6 +219,9 @@ struct BrowserTool {
     name: &'static str,
     host: Arc<dyn BrowserHost>,
     pending: PendingTarget,
+    /// The address each page action was checked and approved for, by its arguments: the call
+    /// is refused if the tab is on another site by the time it runs.
+    approved: Mutex<HashMap<String, String>>,
 }
 
 impl BrowserTool {
@@ -158,9 +241,12 @@ impl BrowserTool {
             "browser.navigate" => {
                 ToolSpec::new(name, "Load a web address in the current tab.").tier(Tier::Navigate).schema(url_schema("Address to load"))
             }
-            "page.scroll" => ToolSpec::new(name, "Scroll the current page.")
-                .tier(Tier::Navigate)
-                .schema(schema(json!({ "to": { "type": "string", "enum": ["up", "down", "top", "bottom"] } }), &["to"])),
+            "page.scroll" => ToolSpec::new(
+                name,
+                "Scroll the current page up, down, to the top or bottom, or to an element (give its `target` label or `selector`).",
+            )
+            .tier(Tier::Navigate)
+            .schema(target_schema(json!({ "to": { "type": "string", "enum": ["up", "down", "top", "bottom", "element"] } }), &["to"])),
             "browser.find" => ToolSpec::new(name, "Find and highlight a phrase on the current page; returns the number of matches.")
                 .tier(Tier::Navigate)
                 .schema(schema(json!({ "query": { "type": "string" } }), &["query"])),
@@ -169,10 +255,10 @@ impl BrowserTool {
                 .schema(schema(json!({ "url": { "type": "string" }, "title": { "type": "string" } }), &["url"])),
             "page.click" => ToolSpec::new(name, "Click the link or button with this label on the current page.")
                 .tier(Tier::Interact)
-                .schema(schema(json!({ "target": { "type": "string", "description": "Visible label" } }), &["target"])),
+                .schema(target_schema(json!({}), &["target"])),
             "page.fill" => ToolSpec::new(name, "Type text into the field with this label on the current page (never submits).")
                 .tier(Tier::Interact)
-                .schema(schema(json!({ "target": { "type": "string" }, "value": { "type": "string" } }), &["target", "value"])),
+                .schema(target_schema(json!({ "value": { "type": "string" } }), &["target", "value"])),
             other => unreachable!("no browser tool {other}"),
         }
     }
@@ -207,18 +293,40 @@ impl Tool for BrowserTool {
                 let tab = args.get("tab").and_then(Value::as_u64);
                 self.host.cached_tabs().into_iter().find(|t| Some(t.id) == tab).map(|t| CallTarget::url(t.url)).unwrap_or_default()
             }
-            "page.click" | "page.fill" => {
-                // The card about this call can mark its target on the page while it waits.
-                *self.pending.lock().unwrap() = args.get("target").and_then(Value::as_str).map(str::to_string);
-                active()
+            "page.click" | "page.fill" | "page.scroll" => {
+                let url = self.host.active_url();
+                if let Some(url) = &url {
+                    let mut approved = self.approved.lock().unwrap();
+                    // Denied calls never take theirs back out.
+                    if approved.len() > 64 {
+                        approved.clear();
+                    }
+                    approved.insert(args.to_string(), url.clone());
+                }
+                if self.name != "page.scroll" {
+                    // The card about this call can mark its target on the page while it waits.
+                    *self.pending.lock().unwrap() = match (page_target(args, true), &url) {
+                        (Ok(Some(t)), Some(url)) => Some((t, url.clone())),
+                        _ => None,
+                    };
+                }
+                url.map(CallTarget::url).unwrap_or_default()
             }
-            "page.scroll" | "browser.find" => active(),
+            "browser.find" => active(),
             _ => CallTarget::default(),
         }
     }
 
     async fn call(&self, _ctx: &ToolContext, args: Value) -> Result<ToolOutput, ToolError> {
         let h = &self.host;
+        // The site the policy checked and the user approved, for page actions.
+        let approved = || {
+            self.approved
+                .lock()
+                .unwrap()
+                .remove(&args.to_string())
+                .ok_or_else(|| ToolError::Failed("Refused: there is no approved page for this action. Nothing was done.".into()))
+        };
         let text = match self.name {
             "page.text" => {
                 let p = h.attached_page().await.map_err(host_err)?;
@@ -264,15 +372,26 @@ impl Tool for BrowserTool {
                 format!("Loading {url}.")
             }
             "page.scroll" => {
-                let to = match str_arg(&args, "to")? {
-                    "up" => ScrollTo::Up,
-                    "down" => ScrollTo::Down,
-                    "top" => ScrollTo::Top,
-                    "bottom" => ScrollTo::Bottom,
-                    other => return Err(ToolError::InvalidArgs(format!("unknown direction {other}"))),
+                let element = page_target(&args, false)?;
+                let to = match (str_arg(&args, "to")?, element) {
+                    ("up", _) => ScrollTo::Up,
+                    ("down", _) => ScrollTo::Down,
+                    ("top", _) => ScrollTo::Top,
+                    ("bottom", _) => ScrollTo::Bottom,
+                    ("element", Some(t)) => ScrollTo::Element(t),
+                    ("element", None) => return Err(ToolError::InvalidArgs("scrolling to an element needs its `target` or `selector`".into())),
+                    (other, _) => return Err(ToolError::InvalidArgs(format!("unknown direction {other}"))),
                 };
-                h.scroll(to).await.map_err(host_err)?;
-                "Scrolled.".into()
+                let url = approved()?;
+                let done = h.scroll(&to, &url).await.map_err(|e| match &to {
+                    ScrollTo::Element(t) => action_err(t, e),
+                    _ => action_err(&PageTarget::default(), e),
+                })?;
+                match (&to, done.moved) {
+                    (ScrollTo::Element(t), _) => acted_text("Scrolled to", t, &done),
+                    (_, true) => "Scrolled.".into(),
+                    (_, false) => "The page did not move: it is already as far as it goes that way.".into(),
+                }
             }
             "browser.find" => {
                 let q = str_arg(&args, "query")?;
@@ -286,19 +405,17 @@ impl Tool for BrowserTool {
                 format!("Bookmarked {url}.")
             }
             "page.click" => {
-                let target = str_arg(&args, "target")?;
-                let r = h.click(target).await;
-                let _ = h.highlight(None).await;
-                r.map_err(host_err)?;
-                format!("Clicked \"{target}\".")
+                let target = page_target(&args, true)?.expect("required");
+                let url = approved()?;
+                let done = h.click(&target, &url).await.map_err(|e| action_err(&target, e))?;
+                acted_text("Clicked", &target, &done)
             }
             "page.fill" => {
-                let target = str_arg(&args, "target")?;
+                let target = page_target(&args, true)?.expect("required");
                 let value = args.get("value").and_then(Value::as_str).unwrap_or_default();
-                let r = h.fill(target, value).await;
-                let _ = h.highlight(None).await;
-                r.map_err(host_err)?;
-                format!("Typed into \"{target}\".")
+                let url = approved()?;
+                let done = h.fill(&target, value, &url).await.map_err(|e| action_err(&target, e))?;
+                acted_text("Typed into", &target, &done)
             }
             other => return Err(ToolError::NotFound(other.into())),
         };
@@ -310,7 +427,7 @@ impl Tool for BrowserTool {
 pub fn browser_tools(host: Arc<dyn BrowserHost>, pending: PendingTarget) -> LocalTools {
     let mut tools = LocalTools::new(BROWSER);
     for name in BROWSER_TOOLS {
-        tools.add(Arc::new(BrowserTool { name, host: host.clone(), pending: pending.clone() }));
+        tools.add(Arc::new(BrowserTool { name, host: host.clone(), pending: pending.clone(), approved: Mutex::default() }));
     }
     tools
 }
@@ -496,6 +613,42 @@ mod tests {
             self.calls.lock().unwrap().push(format!("bookmark {url}"));
             Ok(())
         }
+        async fn click(&self, target: &PageTarget, approved: &str) -> Result<ActedOn, HostError> {
+            self.calls.lock().unwrap().push(format!("click {} on {approved}", target.describe()));
+            match target.label.as_deref() {
+                Some("Missing") => Err(HostError::NotFound),
+                Some("Covered") => Err(HostError::NotInteractable("covered by div#banner".into())),
+                Some("Elsewhere") => Err(HostError::WrongOrigin { expected: "https://tokio.rs".into(), actual: "https://evil.example".into() }),
+                Some("Isolated") => Err(HostError::Blocked("page world".into())),
+                _ => Ok(ActedOn {
+                    url: "https://tokio.rs/tokio/tutorial".into(),
+                    matches: 2,
+                    element: Some(morph_ai::PageElement { tag: "button".into(), name: "Sign in".into(), ..Default::default() }),
+                    moved: false,
+                }),
+            }
+        }
+        async fn fill(&self, target: &PageTarget, value: &str, approved: &str) -> Result<ActedOn, HostError> {
+            self.calls.lock().unwrap().push(format!("fill {} with {value} on {approved}", target.describe()));
+            let secret = target.label.as_deref() == Some("Password");
+            Ok(ActedOn {
+                url: approved.into(),
+                matches: 1,
+                element: Some(morph_ai::PageElement {
+                    tag: "input".into(),
+                    name: target.label.clone().unwrap_or_default(),
+                    value: (!secret).then(|| value.to_string()),
+                    secret,
+                    editable: true,
+                    ..Default::default()
+                }),
+                moved: false,
+            })
+        }
+        async fn scroll(&self, to: &ScrollTo, approved: &str) -> Result<ActedOn, HostError> {
+            self.calls.lock().unwrap().push(format!("scroll {to:?} on {approved}"));
+            Ok(ActedOn { url: approved.into(), moved: !matches!(to, ScrollTo::Top), ..Default::default() })
+        }
     }
 
     #[derive(Default)]
@@ -597,11 +750,79 @@ mod tests {
     #[test]
     fn switching_to_a_tab_on_an_off_site_is_checked_against_that_site() {
         let pending = PendingTarget::default();
-        let tool = BrowserTool { name: "tabs.switch", host: Arc::new(FakeBrowser::default()), pending: pending.clone() };
+        let tool = BrowserTool { name: "tabs.switch", host: Arc::new(FakeBrowser::default()), pending: pending.clone(), approved: Mutex::default() };
         assert_eq!(tool.target(&json!({ "tab": 7 })).resolved_site().as_deref(), Some("bank.example"));
-        let click = BrowserTool { name: "page.click", host: Arc::new(FakeBrowser::default()), pending: pending.clone() };
+        let click = BrowserTool { name: "page.click", host: Arc::new(FakeBrowser::default()), pending: pending.clone(), approved: Mutex::default() };
         assert_eq!(click.target(&json!({ "target": "Sign in" })).resolved_site().as_deref(), Some("tokio.rs"));
-        assert_eq!(pending.lock().unwrap().as_deref(), Some("Sign in"));
+        assert_eq!(pending.lock().unwrap().clone(), Some((PageTarget::label("Sign in"), "https://tokio.rs/tokio/tutorial".into())));
+    }
+
+    fn tool(name: &'static str, host: Arc<FakeBrowser>) -> BrowserTool {
+        BrowserTool { name, host, pending: PendingTarget::default(), approved: Mutex::default() }
+    }
+
+    async fn run_tool(t: &BrowserTool, args: Value) -> Result<String, ToolError> {
+        let _ = t.target(&args);
+        t.call(&ctx(), args).await.map(|o| o.content)
+    }
+
+    fn ctx() -> ToolContext {
+        ToolContext {
+            agent: weirdnet_agent::AgentIdentity::new("local", "Local", weirdnet_agent::AgentKind::Local),
+            task_id: "t".into(),
+            session: SessionMark::LoggedOut,
+            cancel: weirdnet_agent::CancelToken::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn page_actions_run_on_the_approved_site_and_say_what_they_did() {
+        let host = Arc::new(FakeBrowser::default());
+        let click = tool("page.click", host.clone());
+        let fill = tool("page.fill", host.clone());
+        let scroll = tool("page.scroll", host.clone());
+
+        let out = run_tool(&click, json!({ "target": "Sign in", "role": "button" })).await.unwrap();
+        assert!(out.starts_with("Clicked the button “Sign in” (button “Sign in”), the first of 2 matches."), "{out}");
+        let out = run_tool(&fill, json!({ "target": "Email", "value": "me@example.com" })).await.unwrap();
+        assert!(out.contains("The field now reads “me@example.com”."), "{out}");
+        let out = run_tool(&fill, json!({ "target": "Password", "value": "hunter2" })).await.unwrap();
+        assert!(out.contains("password field") && !out.contains("hunter2"), "{out}");
+        assert_eq!(run_tool(&scroll, json!({ "to": "down" })).await.unwrap(), "Scrolled.");
+        assert!(run_tool(&scroll, json!({ "to": "top" })).await.unwrap().contains("did not move"));
+        assert!(run_tool(&scroll, json!({ "to": "element", "selector": "#faq" })).await.unwrap().starts_with("Scrolled to `#faq`"));
+        assert!(matches!(run_tool(&scroll, json!({ "to": "element" })).await, Err(ToolError::InvalidArgs(_))));
+        assert!(matches!(run_tool(&click, json!({})).await, Err(ToolError::InvalidArgs(_))));
+
+        let calls = host.calls.lock().unwrap().clone();
+        assert_eq!(calls[0], "click the button “Sign in” on https://tokio.rs/tokio/tutorial");
+        assert_eq!(calls[1], "fill “Email” with me@example.com on https://tokio.rs/tokio/tutorial");
+        assert!(calls[5].starts_with("scroll Element(PageTarget { label: None, selector: Some(\"#faq\")"), "{calls:?}");
+
+        // Without the check before it (no approved address), nothing runs.
+        let r = click.call(&ctx(), json!({ "target": "Again" })).await;
+        assert!(matches!(&r, Err(ToolError::Failed(m)) if m.contains("no approved page")), "{:?}", r.map(|o| o.content));
+    }
+
+    #[tokio::test]
+    async fn page_action_refusals_read_as_clear_results() {
+        let click = tool("page.click", Arc::new(FakeBrowser::default()));
+        let err = |label: &'static str| {
+            let click = &click;
+            async move {
+                match run_tool(click, json!({ "target": label })).await {
+                    Err(ToolError::Failed(m)) => m,
+                    other => panic!("{other:?}"),
+                }
+            }
+        };
+        assert!(err("Missing").await.starts_with("No element on the page matches “Missing”. Nothing was done."));
+        assert_eq!(err("Covered").await, "Found “Covered”, but it can't be used: covered by div#banner. Nothing was done.");
+        assert_eq!(
+            err("Elsewhere").await,
+            "Refused: this was approved for https://tokio.rs, but the tab is now on https://evil.example. Nothing was done."
+        );
+        assert!(err("Isolated").await.starts_with("Refused: this browser can only act where the page's own scripts could interfere"));
     }
 
     #[tokio::test]

@@ -15,10 +15,11 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use morph_ai::{
-    AiStore, BrowserHost, FetchedPage, FileStore, HostError, LIBRARY, ModelProvider, PageSnapshot, ResearchHost, Roster, ScrollTo, SearchHit,
-    SearchProvider, TabInfo,
+    ActedOn, AiStore, BrowserHost, FetchedPage, FileStore, HostError, LIBRARY, ModelProvider, PageElement, PageSnapshot, PageTarget, ResearchHost,
+    Roster, ScrollTo, SearchHit, SearchProvider, TabInfo,
 };
 use morph_companion::{Canceller, PendingTarget, SessionError, Sessions, TaskOptions, ViewUpdate, browser_tools, web_tools};
+use morph_webview::{Action, ActionError, ActionRequest, ActionResult, Locator};
 use weirdnet_agent::{
     AgentId, ApprovalAnswer, ApprovalPrompt, Approver, CallTarget, Outcome, SharedPolicy, SourceKind, Tier, ToolContext, ToolError, ToolOutput,
     ToolRegistry, ToolSource, ToolSpec,
@@ -61,10 +62,13 @@ pub enum HostCall {
     Open(String, Reply<u64>),
     Switch(u64, Reply<()>),
     Navigate(String, Reply<()>),
-    Scroll(ScrollTo, Reply<()>),
     Find(String, Reply<u32>),
-    /// Mark text on the active page while a card about it waits (`None` clears it).
-    Highlight(Option<String>),
+    /// A page action on the active tab (tier 2, scrolling, a card's highlight), always with the
+    /// approved origin set. No reply for a highlight.
+    Act {
+        request: ActionRequest,
+        reply: Option<Reply<ActedOn>>,
+    },
     Bookmark {
         url: String,
         title: String,
@@ -86,9 +90,9 @@ impl std::fmt::Debug for HostCall {
             HostCall::Open(..) => "Open",
             HostCall::Switch(..) => "Switch",
             HostCall::Navigate(..) => "Navigate",
-            HostCall::Scroll(..) => "Scroll",
             HostCall::Find(..) => "Find",
-            HostCall::Highlight(_) => "Highlight",
+            HostCall::Act { reply: None, .. } => "Act (highlight)",
+            HostCall::Act { .. } => "Act",
             HostCall::Bookmark { .. } => "Bookmark",
             HostCall::ReadHidden { .. } => "ReadHidden",
         };
@@ -113,6 +117,60 @@ async fn ask<T>(calls: &Mutex<Sender<HostCall>>, make: impl FnOnce(Reply<T>) -> 
         Ok(Err(_)) => Err(HostError::Gone),
         Err(_) => Err(HostError::Read("the browser did not answer in time".into())),
     }
+}
+
+/// How long a card's outline stays on the page (the bridge's most; it has no way to clear one).
+const HIGHLIGHT: Duration = Duration::from_secs(30);
+/// One `page.scroll` up or down, CSS pixels.
+const SCROLL_STEP: f64 = 600.0;
+/// Far enough for the top or the bottom of any page (the page clamps it).
+const SCROLL_END: f64 = 1.0e7;
+
+/// The bridge's locator for a target: by accessible name (labels, button and link text,
+/// placeholders), narrowed by selector and role when given.
+pub fn locator(t: &PageTarget) -> Locator {
+    Locator { selector: t.selector.clone(), role: t.role.clone(), name: t.label.clone(), nth: t.nth, ..Locator::default() }
+}
+
+/// `action`, refused by the bridge unless the tab is still on `approved_url`'s origin.
+pub fn on_approved(action: Action, approved_url: &str) -> ActionRequest {
+    ActionRequest::new(action).on_origin(morph_webview::bridge::origin_of(approved_url))
+}
+
+/// A page action's answer for the tools: what it touched, or why nothing was done.
+pub fn acted(r: ActionResult) -> Result<ActedOn, HostError> {
+    match r {
+        Ok(o) => Ok(ActedOn {
+            url: o.url,
+            matches: o.matches,
+            element: o.element.map(|e| PageElement {
+                tag: e.tag,
+                role: e.role,
+                name: e.name,
+                text: e.text,
+                value: if e.secret { None } else { e.value },
+                secret: e.secret,
+                editable: e.editable,
+                disabled: e.disabled,
+                href: e.href,
+            }),
+            moved: o.scroll.moved,
+        }),
+        Err(ActionError::Unsupported) => Err(HostError::Unsupported("acting on pages in this browser".into())),
+        Err(ActionError::Gone) => Err(HostError::NoTab),
+        Err(ActionError::Timeout) => Err(HostError::Timeout),
+        Err(ActionError::NotFound) => Err(HostError::NotFound),
+        Err(ActionError::NotInteractable(why)) => Err(HostError::NotInteractable(why)),
+        Err(ActionError::BlockedByIsolation(i)) => Err(HostError::Blocked(format!("{i:?}"))),
+        Err(ActionError::WrongOrigin { expected, actual }) => Err(HostError::WrongOrigin { expected, actual }),
+        Err(ActionError::Navigated { from, to }) => Err(HostError::Navigated { from, to }),
+        Err(e @ (ActionError::BadRequest(_) | ActionError::Script(_))) => Err(HostError::Read(e.to_string())),
+    }
+}
+
+/// The outline a tier 2 card puts on its target while it waits.
+pub fn highlight_request(target: &PageTarget, approved_url: &str) -> ActionRequest {
+    on_approved(Action::Highlight { target: locator(target), duration: HIGHLIGHT }, approved_url)
 }
 
 /// The browser host: tab actions go to the panel; the attached page was read when the user sent.
@@ -150,8 +208,16 @@ impl BrowserHost for DesktopBrowser {
     async fn navigate(&self, url: &str) -> Result<(), HostError> {
         ask(&self.calls, |r| HostCall::Navigate(url.to_string(), r)).await
     }
-    async fn scroll(&self, to: ScrollTo) -> Result<(), HostError> {
-        ask(&self.calls, |r| HostCall::Scroll(to, r)).await
+    async fn scroll(&self, to: &ScrollTo, approved_url: &str) -> Result<ActedOn, HostError> {
+        let by = |dy: f64| Action::ScrollBy { dx: 0.0, dy };
+        let action = match to {
+            ScrollTo::Up => by(-SCROLL_STEP),
+            ScrollTo::Down => by(SCROLL_STEP),
+            ScrollTo::Top => by(-SCROLL_END),
+            ScrollTo::Bottom => by(SCROLL_END),
+            ScrollTo::Element(t) => Action::ScrollTo(locator(t)),
+        };
+        ask(&self.calls, |r| HostCall::Act { request: on_approved(action, approved_url), reply: Some(r) }).await
     }
     async fn find_in_page(&self, query: &str) -> Result<u32, HostError> {
         ask(&self.calls, |r| HostCall::Find(query.to_string(), r)).await
@@ -159,11 +225,18 @@ impl BrowserHost for DesktopBrowser {
     async fn bookmark(&self, url: &str, title: &str) -> Result<(), HostError> {
         ask(&self.calls, |r| HostCall::Bookmark { url: url.to_string(), title: title.to_string(), reply: r }).await
     }
-    async fn highlight(&self, text: Option<&str>) -> Result<(), HostError> {
-        self.calls.lock().unwrap().send(HostCall::Highlight(text.map(str::to_string))).map_err(|_| HostError::Gone)
+    async fn highlight(&self, target: &PageTarget, approved_url: &str) -> Result<(), HostError> {
+        let request = highlight_request(target, approved_url);
+        self.calls.lock().unwrap().send(HostCall::Act { request, reply: None }).map_err(|_| HostError::Gone)
     }
-    // click and fill: the page bridge has no way yet to run a host script in a tab
-    // (docs/handoff.md, bridge requests), so tier 2 answers Unsupported after its card.
+    async fn click(&self, target: &PageTarget, approved_url: &str) -> Result<ActedOn, HostError> {
+        let request = on_approved(Action::Click(locator(target)), approved_url);
+        ask(&self.calls, |r| HostCall::Act { request, reply: Some(r) }).await
+    }
+    async fn fill(&self, target: &PageTarget, value: &str, approved_url: &str) -> Result<ActedOn, HostError> {
+        let request = on_approved(Action::Fill { target: locator(target), value: value.to_string() }, approved_url);
+        ask(&self.calls, |r| HostCall::Act { request, reply: Some(r) }).await
+    }
 }
 
 /// The research host: the Library from the profile's files, the web provider and logged-out
@@ -300,6 +373,9 @@ impl ResearchHost for DesktopResearch {
     }
 }
 
+/// A page read as text, with its HTTP status when it came over HTTP.
+type ReadPage = (PageSnapshot, Option<u16>);
+
 impl DesktopResearch {
     /// A hidden host page: throwaway when logged out, this profile's session with the opt-in.
     /// Logged out on an engine without throwaway storage, plain HTTP with no cookies instead.
@@ -307,8 +383,8 @@ impl DesktopResearch {
         &self,
         url: &str,
         signed_in: Option<&str>,
-        http: fn(&str, Duration) -> Result<(PageSnapshot, Option<u16>), HostError>,
-    ) -> Result<(PageSnapshot, Option<u16>), HostError> {
+        http: fn(&str, Duration) -> Result<ReadPage, HostError>,
+    ) -> Result<ReadPage, HostError> {
         if let Some(p) = signed_in {
             self.check_profile(p)?;
         }
@@ -340,27 +416,20 @@ impl Approver for PanelApprover {
         let target = if tool.tier == Tier::Interact { self.pending.lock().unwrap().take() } else { None };
         // The tool and what it touches: the element's text, else the search engine or site.
         let detail = match (&target, &prompt.request.provider, &prompt.request.site) {
-            (Some(t), ..) => format!("{} · “{t}”", tool.name),
+            (Some((t, _)), ..) => format!("{} · {}", tool.name, t.describe()),
             (None, Some(p), _) => format!("{} · {p}", tool.name),
             (None, None, Some(site)) => format!("{} · {site}", tool.name),
             _ => tool.name.clone(),
         };
         let _ = self.msgs.send(Msg::CardDetail(prompt.agent.clone(), detail));
-        let highlight = |text: Option<String>| {
-            if let Some(calls) = &self.calls {
-                let _ = calls.lock().unwrap().send(HostCall::Highlight(text));
-            }
-        };
-        if target.is_some() {
-            highlight(target.clone());
+        // Outlined on the page it would act on (refused if the tab has moved to another site);
+        // the outline fades on its own, as the bridge has no way to clear it on Deny.
+        if let (Some((t, url)), Some(calls)) = (&target, &self.calls) {
+            let _ = calls.lock().unwrap().send(HostCall::Act { request: highlight_request(t, url), reply: None });
         }
         let (tx, rx) = tokio::sync::oneshot::channel();
         *self.slot.lock().unwrap() = Some(tx);
-        let answer = rx.await.unwrap_or(ApprovalAnswer::Deny);
-        if target.is_some() && answer == ApprovalAnswer::Deny {
-            highlight(None);
-        }
-        answer
+        rx.await.unwrap_or(ApprovalAnswer::Deny)
     }
 }
 
@@ -657,11 +726,11 @@ mod tests {
     }
 
     #[test]
-    fn a_tier_two_card_names_its_target_and_marks_it_until_declined() {
+    fn a_tier_two_card_names_its_target_and_outlines_it_on_the_approved_origin() {
         let (msg_tx, msg_rx) = mpsc::channel();
         let (call_tx, call_rx) = mpsc::channel();
         let pending = PendingTarget::default();
-        *pending.lock().unwrap() = Some("Sign in".into());
+        *pending.lock().unwrap() = Some((PageTarget::label("Sign in"), "https://a.example/login?next=1".into()));
         let slot: Slot = Arc::default();
         let approver = PanelApprover { slot: slot.clone(), pending, msgs: msg_tx, calls: Some(Mutex::new(call_tx)) };
         let prompt = ApprovalPrompt {
@@ -684,7 +753,78 @@ mod tests {
         assert_eq!(answer, ApprovalAnswer::Deny);
         assert!(matches!(msg_rx.try_recv(), Ok(Msg::CardDetail(_, d)) if d == "page.click · “Sign in”"));
         let calls: Vec<HostCall> = call_rx.try_iter().collect();
-        assert!(matches!(&calls[..], [HostCall::Highlight(Some(t)), HostCall::Highlight(None)] if t == "Sign in"), "{calls:?}");
+        let [HostCall::Act { request, reply: None }] = &calls[..] else { panic!("{calls:?}") };
+        assert_eq!(request.expect_origin.as_deref(), Some("https://a.example"));
+        assert!(!request.allow_page_world);
+        assert!(
+            matches!(&request.action, Action::Highlight { target, duration } if target.name.as_deref() == Some("Sign in") && *duration == HIGHLIGHT),
+            "{:?}",
+            request.action
+        );
+    }
+
+    #[test]
+    fn page_actions_go_to_the_approved_origin_and_their_refusals_keep_their_reason() {
+        let (call_tx, call_rx) = mpsc::channel();
+        let browser = DesktopBrowser::new(call_tx, Seen::default());
+        let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+        let target = PageTarget { label: Some("Email".into()), role: Some("textbox".into()), ..Default::default() };
+        let answers = std::thread::spawn(move || {
+            let mut seen = Vec::new();
+            for answer in [
+                Err(ActionError::WrongOrigin { expected: "https://shop.test".into(), actual: "https://evil.test".into() }),
+                Err(ActionError::NotInteractable("covered by div#banner".into())),
+                Err(ActionError::BlockedByIsolation(morph_webview::Isolation::PageWorld)),
+                Err(ActionError::NotFound),
+            ] {
+                let Ok(HostCall::Act { request, reply: Some(reply) }) = call_rx.recv() else { panic!() };
+                seen.push(request);
+                let _ = reply.send(acted(answer));
+            }
+            seen
+        });
+        let r = rt.block_on(async {
+            vec![
+                browser.fill(&target, "me@shop.test", "https://shop.test/checkout").await,
+                browser.click(&target, "https://shop.test/checkout").await,
+                browser.scroll(&ScrollTo::Down, "https://shop.test/").await,
+                browser.scroll(&ScrollTo::Element(PageTarget { selector: Some("#faq".into()), ..Default::default() }), "https://shop.test/").await,
+            ]
+        });
+        let seen = answers.join().unwrap();
+        assert!(seen.iter().all(|r| r.expect_origin.as_deref() == Some("https://shop.test") && !r.allow_page_world));
+        assert!(
+            matches!(&seen[0].action, Action::Fill { target, value } if target.name.as_deref() == Some("Email") && target.role.as_deref() == Some("textbox") && value == "me@shop.test")
+        );
+        assert!(matches!(&seen[1].action, Action::Click(_)));
+        assert!(matches!(seen[2].action, Action::ScrollBy { dx, dy } if dx == 0.0 && dy == SCROLL_STEP));
+        assert!(matches!(&seen[3].action, Action::ScrollTo(l) if l.selector.as_deref() == Some("#faq")));
+        assert_eq!(r[0], Err(HostError::WrongOrigin { expected: "https://shop.test".into(), actual: "https://evil.test".into() }));
+        assert_eq!(r[1], Err(HostError::NotInteractable("covered by div#banner".into())));
+        assert_eq!(r[2], Err(HostError::Blocked("PageWorld".into())));
+        assert_eq!(r[3], Err(HostError::NotFound));
+    }
+
+    #[test]
+    fn an_action_outcome_never_carries_a_password_value() {
+        let outcome = morph_webview::ActionOutcome {
+            view: morph_webview::ViewId(1),
+            url: "https://shop.test/login".into(),
+            origin: "https://shop.test".into(),
+            isolation: morph_webview::Isolation::ScriptWorld,
+            matches: 1,
+            element: Some(morph_webview::page_action::Element {
+                tag: "input".into(),
+                secret: true,
+                value: Some("hunter2".into()),
+                editable: true,
+                ..Default::default()
+            }),
+            scroll: Default::default(),
+        };
+        let a = acted(Ok(outcome)).unwrap();
+        let el = a.element.unwrap();
+        assert!(el.secret && el.value.is_none());
     }
 
     #[test]

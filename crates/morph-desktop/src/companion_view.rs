@@ -14,7 +14,7 @@ use gpui::{
     relative, rgb,
 };
 use morph_ai::{
-    AiStore, EngineFactory, FileStore, Grants, HostError, LocalModels, ModelChoice, ModelStatus, PageLink, PageSnapshot, Platform, Roster, ScrollTo,
+    ActedOn, AiStore, EngineFactory, FileStore, Grants, HostError, LocalModels, ModelChoice, ModelStatus, PageLink, PageSnapshot, Platform, Roster,
     TabInfo,
 };
 use morph_browser::{HostPageId, HostPageRequest, HostPageState};
@@ -29,7 +29,7 @@ use morph_webview::{Isolation, PageData, ReadRequest, Want};
 use weirdnet_agent::{AgentId, ApprovalAnswer, Citation, Outcome};
 
 use crate::browser_view::BrowserView;
-use crate::companion_host::{DesktopBrowser, DesktopResearch, HostCall, Hosts, Msg, Reply, Seen, Worker};
+use crate::companion_host::{DesktopBrowser, DesktopResearch, HostCall, Hosts, Msg, Reply, Seen, Worker, acted};
 use crate::shell::{Page, ShellRequest};
 use crate::text_input::{TextInput, TextInputEvent};
 use crate::widgets::{button, chip, heading, icon};
@@ -103,6 +103,11 @@ enum Op {
         id: HostPageId,
         pending: Pending<morph_webview::page_read::ReadResult>,
         reply: Reply<(PageSnapshot, Option<u16>)>,
+    },
+    /// A page action on the active tab (`reply` is `None` for a card's highlight).
+    Act {
+        pending: Pending<morph_webview::ActionResult>,
+        reply: Option<Reply<ActedOn>>,
     },
     /// Waiting for the page to count find matches.
     Find {
@@ -467,6 +472,14 @@ impl CompanionView {
                         let _ = reply.send(result.map(|d| (snapshot(d), None)).map_err(read_error));
                     }
                 },
+                Op::Act { pending, reply } => match pending.try_take() {
+                    None => self.ops.push(Op::Act { pending, reply }),
+                    Some(result) => {
+                        if let Some(reply) = reply {
+                            let _ = reply.send(acted(result));
+                        }
+                    }
+                },
                 Op::Find { until, reply } => match self.with_browser(cx, |b| b.find().and_then(|f| f.matches)).flatten() {
                     Some(n) => {
                         let _ = reply.send(Ok(n));
@@ -507,26 +520,14 @@ impl CompanionView {
                 let r = self.with_browser(cx, |b| b.load(&url));
                 let _ = reply.send(r.ok_or(HostError::Gone));
             }
-            HostCall::Scroll(to, reply) => {
-                let r = self.with_browser(cx, |b| {
-                    let area = b.page_area();
-                    let dy = match to {
-                        ScrollTo::Up => -8.0,
-                        ScrollTo::Down => 8.0,
-                        ScrollTo::Top => -10_000.0,
-                        ScrollTo::Bottom => 10_000.0,
-                    };
-                    b.page_input(morph_webview::Input::Scroll {
-                        x: area.width / 2.0,
-                        y: area.height / 2.0,
-                        dx: 0.0,
-                        dy,
-                        precise: false,
-                        modifiers: Default::default(),
-                    });
-                });
-                let _ = reply.send(r.ok_or(HostError::Gone));
-            }
+            HostCall::Act { request, reply } => match self.with_browser(cx, |b| b.active_tab_action(request)) {
+                Some(pending) => self.ops.push(Op::Act { pending, reply }),
+                None => {
+                    if let Some(reply) = reply {
+                        let _ = reply.send(gone());
+                    }
+                }
+            },
             HostCall::Find(query, reply) => {
                 if self
                     .with_browser(cx, |b| {
@@ -540,15 +541,6 @@ impl CompanionView {
                 } else {
                     let _ = reply.send(gone());
                 }
-            }
-            HostCall::Highlight(text) => {
-                self.with_browser(cx, |b| match text {
-                    Some(t) => {
-                        b.open_find();
-                        b.set_find_query(&t);
-                    }
-                    None => b.close_find(),
-                });
             }
             HostCall::Bookmark { url, title, reply } => {
                 let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or_default();

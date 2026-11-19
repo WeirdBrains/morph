@@ -24,6 +24,24 @@ pub enum HostError {
     Unsupported(String),
     #[error("the browser window is gone")]
     Gone,
+    /// Tier 2 and scrolling: nothing on the page matched the target.
+    #[error("no element on the page matches")]
+    NotFound,
+    /// Found, but hidden, disabled, covered, read-only or not a field.
+    #[error("the element can't be used: {0}")]
+    NotInteractable(String),
+    /// The engine could only act where the page's own scripts could interfere.
+    #[error("refused: {0}")]
+    Blocked(String),
+    /// The tab is no longer on the site the user approved.
+    #[error("refused: approved for {expected}, but the tab is now on {actual}")]
+    WrongOrigin { expected: String, actual: String },
+    /// The page moved to another site while the action was starting.
+    #[error("refused: the page moved from {from} to {to}")]
+    Navigated { from: String, to: String },
+    /// The page did not answer in time; the action may still have run.
+    #[error("the page did not answer in time (the action may still have run)")]
+    Timeout,
 }
 
 /// A link on a page.
@@ -62,13 +80,83 @@ pub struct TabInfo {
     pub active: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// An element on a page a tier 2 tool or a scroll names: its label (accessible name: label,
+/// aria-label, button or link text, placeholder), and optionally a CSS selector, a role and
+/// which match (0 is the first).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct PageTarget {
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub selector: Option<String>,
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub nth: usize,
+}
+
+impl PageTarget {
+    pub fn label(label: impl Into<String>) -> Self {
+        Self { label: Some(label.into()), ..Self::default() }
+    }
+
+    /// How a card or a tool result names it: “Sign in”, the button “Send”, `#q`.
+    pub fn describe(&self) -> String {
+        let mut s = match (&self.role, &self.label) {
+            (Some(role), Some(label)) => format!("the {role} “{label}”"),
+            (None, Some(label)) => format!("“{label}”"),
+            (Some(role), None) => format!("the {role}"),
+            (None, None) => String::new(),
+        };
+        if let Some(sel) = &self.selector {
+            if !s.is_empty() {
+                s.push(' ');
+            }
+            s.push_str(&format!("`{sel}`"));
+        }
+        if self.nth > 0 {
+            s.push_str(&format!(" (match {})", self.nth + 1));
+        }
+        if s.is_empty() { "the element".into() } else { s }
+    }
+}
+
+/// An element as the page reported it after an action (untrusted page content).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct PageElement {
+    pub tag: String,
+    pub role: String,
+    pub name: String,
+    pub text: String,
+    /// A field's value; never a password field's (`secret`).
+    pub value: Option<String>,
+    pub secret: bool,
+    pub editable: bool,
+    pub disabled: bool,
+    pub href: Option<String>,
+}
+
+/// What a page action did.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ActedOn {
+    /// The page's address when the action ran.
+    pub url: String,
+    /// How many elements matched the target.
+    pub matches: usize,
+    pub element: Option<PageElement>,
+    /// A scroll moved the page (or a box in it).
+    pub moved: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScrollTo {
     Up,
     Down,
     Top,
     Bottom,
+    /// Bring an element to the middle of the view.
+    Element(PageTarget),
 }
 
 /// The browser, from a companion's point of view. Tier 0 reads only what the user attached;
@@ -92,22 +180,27 @@ pub trait BrowserHost: Send + Sync {
     async fn switch_tab(&self, tab: u64) -> Result<(), HostError>;
     /// Loads a URL in the active tab.
     async fn navigate(&self, url: &str) -> Result<(), HostError>;
-    async fn scroll(&self, _to: ScrollTo) -> Result<(), HostError> {
+    /// Scrolls the active tab. `approved_url` is the address the call was approved for; the
+    /// host refuses when the tab has moved to another site since.
+    async fn scroll(&self, _to: &ScrollTo, _approved_url: &str) -> Result<ActedOn, HostError> {
         Err(HostError::Unsupported("scrolling".into()))
     }
     /// Finds and highlights `query` in the active page; the number of matches.
     async fn find_in_page(&self, query: &str) -> Result<u32, HostError>;
     async fn bookmark(&self, url: &str, title: &str) -> Result<(), HostError>;
-    /// Marks `text` on the active page while an approval card about it waits (`None` clears it).
-    async fn highlight(&self, _text: Option<&str>) -> Result<(), HostError> {
+    /// Outlines `target` on the active page while an approval card about it waits (it fades on
+    /// its own; there is no clear).
+    async fn highlight(&self, _target: &PageTarget, _approved_url: &str) -> Result<(), HostError> {
         Ok(())
     }
-    /// Tier 2: clicks the link or button labelled `target` on the active page.
-    async fn click(&self, _target: &str) -> Result<(), HostError> {
+    /// Tier 2, after approval: clicks `target` on the active tab, refused unless the tab is still
+    /// on `approved_url`'s site.
+    async fn click(&self, _target: &PageTarget, _approved_url: &str) -> Result<ActedOn, HostError> {
         Err(HostError::Unsupported("acting on pages".into()))
     }
-    /// Tier 2: types `value` into the field labelled `target` (never submits).
-    async fn fill(&self, _target: &str, _value: &str) -> Result<(), HostError> {
+    /// Tier 2, after approval: types `value` into the field `target` (never submits), refused
+    /// unless the tab is still on `approved_url`'s site.
+    async fn fill(&self, _target: &PageTarget, _value: &str, _approved_url: &str) -> Result<ActedOn, HostError> {
         Err(HostError::Unsupported("acting on pages".into()))
     }
 }
