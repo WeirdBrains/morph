@@ -5,6 +5,7 @@ on:
   push:
     branches: [main, "release/**"]
   pull_request:
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -238,37 +239,106 @@ jobs:
           if-no-files-found: warn
 
   # The GPUI desktop shell on macOS (WKWebView child views): clippy and the
-  # shell's tests, a universal Morph.app (arm64 + x86_64) in a zip and a dmg
-  # (scripts/macos-dist.sh), and the smoke test: a window, a page from a
-  # local server, the page bridge (scripts/desktop-smoke.py).
+  # shell's tests, then a universal Morph.app (arm64 + x86_64) in a zip and a
+  # dmg (scripts/macos-dist.sh). Pull requests build on GitHub's macOS
+  # runners. Pushes to main, tags and manual runs build on m3talsmith's
+  # Apple silicon Mac (self-hosted, label weirdbrains-mac): never pull requests, so
+  # a fork's code never runs on a personal machine. On the Mac nothing is
+  # installed (Rust, both darwin targets, clippy, Xcode CLT and cmake are
+  # already there), HOME and MORPH_HOME point at a throwaway dir, and the
+  # target dir and dist/ are deleted at the end so builds don't pile up.
+  # The smoke test (windows, screenshots) is desktop-macos-smoke, always on
+  # GitHub's runners.
   desktop-macos:
-    runs-on: macos-latest
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) && fromJSON('["self-hosted","macOS","ARM64","weirdbrains-mac"]') || 'macos-latest' }}
+    timeout-minutes: 150
+    env:
+      CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
+        if: runner.environment == 'github-hosted'
         with:
           components: clippy
           targets: aarch64-apple-darwin, x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
+        if: runner.environment == 'github-hosted'
         with:
           key: desktop-macos
       - name: llama.cpp build tools (cmake, clang)
+        if: runner.environment == 'github-hosted'
         run: |
           command -v cmake >/dev/null || brew install cmake
           cmake --version | head -1
           clang --version | head -1
+      - name: Self-hosted Mac (check tools, install nothing; private HOME and target dir)
+        if: runner.environment == 'self-hosted'
+        run: |
+          set -euo pipefail
+          for t in cargo rustup clippy-driver cmake clang lipo codesign hdiutil python3; do
+            command -v "$t" >/dev/null || { echo "::error::$t is missing on the self-hosted Mac (not installing it)"; exit 1; }
+          done
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            rustup target list --installed | grep -qx "$target" || { echo "::error::Rust target $target is missing on the self-hosted Mac (not installing it)"; exit 1; }
+          done
+          rustc --version; cmake --version | head -1; clang --version | head -1
+          df -h "$RUNNER_TEMP" | tail -1
+          work="$RUNNER_TEMP/morph-ci"
+          rm -rf "$work" && mkdir -p "$work/home" "$work/morph-home"
+          {
+            echo "CARGO_HOME=${CARGO_HOME:-$HOME/.cargo}"
+            echo "RUSTUP_HOME=${RUSTUP_HOME:-$HOME/.rustup}"
+            echo "CARGO_TARGET_DIR=$work/target"
+            echo "HOME=$work/home"
+            echo "MORPH_HOME=$work/morph-home"
+          } >> "$GITHUB_ENV"
       - run: cargo clippy --locked -p morph-desktop -p morph-webview -p morph-browser --all-targets -- -D warnings
       - run: cargo test --locked -p morph-desktop -p morph-webview -p morph-browser
+      - name: Free the debug build before the release build (self-hosted)
+        if: runner.environment == 'self-hosted'
+        run: rm -rf "$CARGO_TARGET_DIR/debug"
       - name: Morph.app (zip, dmg)
         run: scripts/macos-dist.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: morph-macos-universal
+          path: |
+            dist/morph-*-universal-apple-darwin.zip
+            dist/morph-*-universal-apple-darwin.dmg
+            dist/SHA256SUMS-macos
+          if-no-files-found: error
+      - name: Clean up the build (self-hosted)
+        if: always() && runner.environment == 'self-hosted'
+        run: |
+          rm -rf "$RUNNER_TEMP/morph-ci" dist
+          df -h "$RUNNER_TEMP" | tail -1
+
+  # The smoke test of desktop-macos's build, always on GitHub's runners (it
+  # opens windows and takes a full-screen screenshot, which is uploaded):
+  # the zip and dmg checks, Info.plist, and scripts/desktop-smoke.py (a
+  # window, a page from a local server, the page bridge).
+  desktop-macos-smoke:
+    needs: desktop-macos
+    runs-on: macos-latest
+    steps:
+      - name: Never on a self-hosted runner
+        if: runner.environment != 'github-hosted'
+        run: exit 1
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with:
+          name: morph-macos-universal
+          path: dist
       - name: Smoke test
         env:
           MORPH_REQUIRE_QR: "1"
         run: |
           python3 -m pip install --user --break-system-packages zxing-cpp pillow
-          version="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "morph-desktop"))')"
+          zip="$(ls dist/morph-*-universal-apple-darwin.zip)"
+          version="$(basename "$zip")"; version="${version#morph-}"; version="${version%-universal-apple-darwin.zip}"
+          (cd dist && shasum -a 256 -c SHA256SUMS-macos)
           rm -rf /tmp/smoke && mkdir -p /tmp/smoke
-          ditto -x -k dist/morph-*-universal-apple-darwin.zip /tmp/smoke
+          ditto -x -k "$zip" /tmp/smoke
           hdiutil verify dist/morph-*-universal-apple-darwin.dmg
           # Registered as a browser and for weirdnet-morph:// (macOS lists it under Default web browser).
           plist=/tmp/smoke/Morph.app/Contents/Info.plist
@@ -286,12 +356,8 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: morph-macos-universal
-          path: |
-            dist/morph-*-universal-apple-darwin.zip
-            dist/morph-*-universal-apple-darwin.dmg
-            dist/SHA256SUMS-macos
-            dist/smoke-macos*.png
+          name: morph-macos-smoke
+          path: dist/smoke-macos*.png
           if-no-files-found: warn
 
   # The GPUI desktop shell on Windows (WebView2 child views): clippy and the
