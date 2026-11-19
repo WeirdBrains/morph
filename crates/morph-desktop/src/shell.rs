@@ -791,7 +791,13 @@ impl Shell {
         let start = self.pending_start.take().unwrap_or(WindowStart::Url(String::new()));
         let mut more = std::mem::take(&mut self.pending_windows);
         let start = match start {
-            WindowStart::Url(url) if !morph_core::scheme::is_link(&url) && !Windows::shown_elsewhere(cx, window.window_handle(), &self.profile) => {
+            // As at launch: the windows of the last run come back unless
+            // MORPH_NO_RESTORE=1 asks for just the page it was started with.
+            WindowStart::Url(url)
+                if restores_session()
+                    && !morph_core::scheme::is_link(&url)
+                    && !Windows::shown_elsewhere(cx, window.window_handle(), &self.profile) =>
+            {
                 let mut saved = morph_core::session::load(&self.home, &self.profile).windows.into_iter();
                 match saved.next() {
                     Some(first) => {
