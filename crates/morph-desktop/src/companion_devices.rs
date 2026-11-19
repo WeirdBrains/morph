@@ -11,6 +11,8 @@ use morph_ai::{CompanionProfile, CompanionRoute, NodeRouter, Platform, route_com
 use morph_services::node_router::{self, Capabilities, DeviceRouter, NodeDirectory};
 use weirdnet_agent::AgentKind;
 
+use crate::companion_host::{LockCheck, profile_lock};
+
 /// How often the panel checks the sync node and asks the devices again.
 const EVERY: Duration = Duration::from_secs(10);
 const ASK_TIMEOUT: Duration = Duration::from_secs(3);
@@ -28,6 +30,7 @@ pub struct CompanionDevices {
     links: Option<Links>,
     checked: Option<Instant>,
     asking: Arc<AtomicBool>,
+    locked: LockCheck,
 }
 
 /// What this desktop tells its linked devices. It does not serve models to them yet (that
@@ -39,7 +42,13 @@ fn this_device() -> Capabilities {
 
 impl CompanionDevices {
     pub fn new(home: PathBuf, profile: String) -> Self {
-        Self { home, profile, links: None, checked: None, asking: Arc::new(AtomicBool::new(false)) }
+        let locked = profile_lock(home.clone(), profile.clone());
+        Self { home, profile, links: None, checked: None, asking: Arc::new(AtomicBool::new(false)), locked }
+    }
+
+    /// The profile lock this panel follows (tests set their own).
+    pub fn with_lock(self, locked: LockCheck) -> Self {
+        Self { locked, ..self }
     }
 
     /// From the panel's poll: at most every [`EVERY`], follow the sync node (a router while it
@@ -56,7 +65,11 @@ impl CompanionDevices {
         if self.links.as_ref().is_none_or(|l| l.started_at != started_at) {
             self.links = node_router::for_profile(&self.home, &self.profile, this_device)
                 .map(|(router, directory)| Links { router, directory, started_at })
-                .map_err(|e| eprintln!("morph-companions: linked devices: {e}"))
+                .map_err(|e| {
+                    if !matches!(e, morph_services::device_calls::DeviceCallError::Locked) {
+                        eprintln!("morph-companions: linked devices: {e}");
+                    }
+                })
                 .ok();
         }
         if let Some(l) = &self.links
@@ -73,6 +86,12 @@ impl CompanionDevices {
     /// Where `companion`'s task runs.
     pub fn route(&self, companion: &CompanionProfile) -> CompanionRoute {
         let nodes = self.links.as_ref().map(|l| l.router.nodes()).unwrap_or_default();
+        // A locked profile reaches no device (`DeviceCaller::for_profile` refuses it).
+        if nodes.is_empty() && companion.identity.kind == AgentKind::Node && (self.locked)() {
+            return CompanionRoute::Unavailable {
+                reason: format!("{} runs on another device; this profile is locked, so unlock it with its password first", companion.name()),
+            };
+        }
         if nodes.is_empty() && companion.identity.kind == AgentKind::Node {
             return CompanionRoute::Unavailable {
                 reason: format!("{} runs on another device; turn on sync in Settings to reach it", companion.name()),
@@ -105,10 +124,12 @@ mod tests {
     #[test]
     fn without_sync_a_node_companion_says_why_and_local_ones_run() {
         let tmp = std::env::temp_dir().join(format!("morph-companion-devices-{}", std::process::id()));
-        let mut d = CompanionDevices::new(tmp, "p1".into());
+        let mut d = CompanionDevices::new(tmp.clone(), "p1".into()).with_lock(Arc::new(|| false));
         d.tick();
         let atlas = CompanionProfile::on_node("atlas", "Atlas", "12D3KooWDesk", ModelChoice::Gemma4E4B);
         assert!(d.not_here(&atlas).is_some_and(|r| r.contains("turn on sync")));
+        let locked = CompanionDevices::new(tmp, "p1".into()).with_lock(Arc::new(|| true));
+        assert!(locked.not_here(&atlas).is_some_and(|r| r.contains("this profile is locked")), "{:?}", locked.not_here(&atlas));
         let local = CompanionProfile::local("local", "Local", ModelChoice::Gemma4E2B);
         assert_eq!(d.not_here(&local), None);
         assert_eq!(d.route(&local), CompanionRoute::Here);

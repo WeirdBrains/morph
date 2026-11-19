@@ -29,7 +29,7 @@ use morph_webview::{Isolation, PageData, ReadRequest, Want};
 use weirdnet_agent::{AgentId, ApprovalAnswer, Citation, Outcome};
 
 use crate::browser_view::BrowserView;
-use crate::companion_host::{DesktopBrowser, DesktopResearch, HostCall, Hosts, Msg, Reply, Seen, Worker, acted};
+use crate::companion_host::{DesktopBrowser, DesktopResearch, HostCall, Hosts, LockCheck, Msg, Reply, Seen, Worker, acted, profile_lock};
 use crate::shell::{Page, ShellRequest};
 use crate::text_input::{TextInput, TextInputEvent};
 use crate::widgets::{button, chip, heading, icon};
@@ -60,6 +60,10 @@ pub struct CompanionView {
     devices: crate::companion_devices::CompanionDevices,
     /// `MORPH_COMPANION_AUTOASK=<question>`: a dev flag that sends one question when the panel first polls.
     autoask: Option<String>,
+    /// The profile lock: while it is locked no task starts, and locking stops the running ones.
+    lock: LockCheck,
+    /// When the lock was last looked at, and what it said.
+    lock_seen: Option<(Instant, bool)>,
     store: FileStore,
     focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
@@ -83,6 +87,11 @@ pub struct CompanionView {
     /// Where the last export went.
     exported: Option<String>,
 }
+
+/// What a companion says when asked while the profile is locked.
+const LOCKED: &str = "This profile is locked. Unlock it with its password, then ask again.";
+/// How often the panel looks at the profile lock.
+const LOCK_EVERY: Duration = Duration::from_secs(1);
 
 /// One host call the panel is still answering.
 enum Op {
@@ -175,14 +184,18 @@ impl CompanionView {
         let policy_base = policy.read().unwrap_or_else(|e| e.into_inner()).clone();
         let (calls, host_calls) = std::sync::mpsc::channel();
         let seen = Seen::default();
+        let lock = profile_lock(home.to_path_buf(), profile.to_string());
         let hosts = Hosts {
-            browser: Arc::new(DesktopBrowser::new(calls.clone(), seen.clone())),
-            research: Arc::new(DesktopResearch::new(
-                calls.clone(),
-                home.to_path_buf(),
-                profile.to_string(),
-                FileStore::new(morph_core::profiles::profile_dir(home, profile).join("companions")),
-            )),
+            browser: Arc::new(DesktopBrowser::new(calls.clone(), seen.clone()).locked_when(lock.clone())),
+            research: Arc::new(
+                DesktopResearch::new(
+                    calls.clone(),
+                    home.to_path_buf(),
+                    profile.to_string(),
+                    FileStore::new(morph_core::profiles::profile_dir(home, profile).join("companions")),
+                )
+                .locked_when(lock.clone()),
+            ),
             calls: Some(calls),
         };
         let worker = Worker::start_with(models.clone(), policy.clone(), tools, Some(hosts));
@@ -210,6 +223,8 @@ impl CompanionView {
             roster_unsaved,
             devices: crate::companion_devices::CompanionDevices::new(home.to_path_buf(), profile.to_string()),
             autoask: std::env::var("MORPH_COMPANION_AUTOASK").ok().filter(|q| !q.trim().is_empty()),
+            lock,
+            lock_seen: None,
             store,
             focus: cx.focus_handle(),
             _subscriptions: vec![sub],
@@ -367,11 +382,34 @@ impl CompanionView {
         self.send(question.trim().to_string(), cx);
     }
 
+    /// At most every second: when the profile has just locked, stop every running task (its
+    /// host calls already refuse with `HostError::Locked`).
+    fn follow_lock(&mut self) {
+        if self.lock_seen.is_some_and(|(t, _)| t.elapsed() < LOCK_EVERY) {
+            return;
+        }
+        let locked = (self.lock)();
+        let was = self.lock_seen.is_some_and(|(_, l)| l);
+        self.lock_seen = Some((Instant::now(), locked));
+        if locked && !was {
+            let running: Vec<AgentId> = self.conversations.iter().filter(|(_, c)| c.is_running()).map(|(id, _)| id.clone()).collect();
+            for id in running {
+                self.worker.cancel(&id);
+            }
+        }
+    }
+
     fn send(&mut self, text: String, cx: &mut Context<Self>) {
         let id = self.selected.clone();
         let not_here = self.roster.get(&id).and_then(|c| self.devices.not_here(c));
+        let locked = (self.lock)();
         let conv = self.conversation();
         if text.is_empty() || conv.is_running() {
+            cx.notify();
+            return;
+        }
+        if locked {
+            conv.fail(LOCKED);
             cx.notify();
             return;
         }
@@ -620,6 +658,7 @@ impl CompanionView {
             self.reload_agents(cx);
         }
         self.devices.tick();
+        self.follow_lock();
         if let Some(q) = self.autoask.take() {
             self.send(q, cx);
         }

@@ -173,24 +173,49 @@ pub fn highlight_request(target: &PageTarget, approved_url: &str) -> ActionReque
     on_approved(Action::Highlight { target: locator(target), duration: HIGHLIGHT }, approved_url)
 }
 
+/// Whether the profile is locked now (Lead Dev's profile lock): the hosts then refuse every
+/// call with [`HostError::Locked`], as `DeviceCaller` and the MCP host fail closed.
+pub type LockCheck = Arc<dyn Fn() -> bool + Send + Sync>;
+
+fn never_locked() -> LockCheck {
+    Arc::new(|| false)
+}
+
+/// The lock check for a window's profile.
+pub fn profile_lock(home: PathBuf, profile: String) -> LockCheck {
+    Arc::new(move || morph_services::profile_lock::is_locked(&home, &profile))
+}
+
+fn gate(locked: &LockCheck) -> Result<(), HostError> {
+    if locked() { Err(HostError::Locked) } else { Ok(()) }
+}
+
 /// The browser host: tab actions go to the panel; the attached page was read when the user sent.
 pub struct DesktopBrowser {
     calls: Mutex<Sender<HostCall>>,
     seen: Seen,
+    locked: LockCheck,
 }
 
 impl DesktopBrowser {
     pub fn new(calls: Sender<HostCall>, seen: Seen) -> Self {
-        Self { calls: Mutex::new(calls), seen }
+        Self { calls: Mutex::new(calls), seen, locked: never_locked() }
+    }
+
+    /// Refuse everything while `locked` says the profile is locked.
+    pub fn locked_when(self, locked: LockCheck) -> Self {
+        Self { locked, ..self }
     }
 }
 
 #[async_trait]
 impl BrowserHost for DesktopBrowser {
     async fn attached_page(&self) -> Result<PageSnapshot, HostError> {
+        gate(&self.locked)?;
         self.seen.attached.lock().unwrap().clone().ok_or(HostError::NothingAttached)
     }
     async fn tabs(&self) -> Result<Vec<TabInfo>, HostError> {
+        gate(&self.locked)?;
         ask(&self.calls, HostCall::Tabs).await
     }
     fn active_url(&self) -> Option<String> {
@@ -200,15 +225,19 @@ impl BrowserHost for DesktopBrowser {
         self.seen.tabs.lock().unwrap().clone()
     }
     async fn open_url(&self, url: &str) -> Result<u64, HostError> {
+        gate(&self.locked)?;
         ask(&self.calls, |r| HostCall::Open(url.to_string(), r)).await
     }
     async fn switch_tab(&self, tab: u64) -> Result<(), HostError> {
+        gate(&self.locked)?;
         ask(&self.calls, |r| HostCall::Switch(tab, r)).await
     }
     async fn navigate(&self, url: &str) -> Result<(), HostError> {
+        gate(&self.locked)?;
         ask(&self.calls, |r| HostCall::Navigate(url.to_string(), r)).await
     }
     async fn scroll(&self, to: &ScrollTo, approved_url: &str) -> Result<ActedOn, HostError> {
+        gate(&self.locked)?;
         let by = |dy: f64| Action::ScrollBy { dx: 0.0, dy };
         let action = match to {
             ScrollTo::Up => by(-SCROLL_STEP),
@@ -220,20 +249,25 @@ impl BrowserHost for DesktopBrowser {
         ask(&self.calls, |r| HostCall::Act { request: on_approved(action, approved_url), reply: Some(r) }).await
     }
     async fn find_in_page(&self, query: &str) -> Result<u32, HostError> {
+        gate(&self.locked)?;
         ask(&self.calls, |r| HostCall::Find(query.to_string(), r)).await
     }
     async fn bookmark(&self, url: &str, title: &str) -> Result<(), HostError> {
+        gate(&self.locked)?;
         ask(&self.calls, |r| HostCall::Bookmark { url: url.to_string(), title: title.to_string(), reply: r }).await
     }
     async fn highlight(&self, target: &PageTarget, approved_url: &str) -> Result<(), HostError> {
+        gate(&self.locked)?;
         let request = highlight_request(target, approved_url);
         self.calls.lock().unwrap().send(HostCall::Act { request, reply: None }).map_err(|_| HostError::Gone)
     }
     async fn click(&self, target: &PageTarget, approved_url: &str) -> Result<ActedOn, HostError> {
+        gate(&self.locked)?;
         let request = on_approved(Action::Click(locator(target)), approved_url);
         ask(&self.calls, |r| HostCall::Act { request, reply: Some(r) }).await
     }
     async fn fill(&self, target: &PageTarget, value: &str, approved_url: &str) -> Result<ActedOn, HostError> {
+        gate(&self.locked)?;
         let request = on_approved(Action::Fill { target: locator(target), value: value.to_string() }, approved_url);
         ask(&self.calls, |r| HostCall::Act { request, reply: Some(r) }).await
     }
@@ -246,11 +280,17 @@ pub struct DesktopResearch {
     home: PathBuf,
     profile: String,
     store: FileStore,
+    locked: LockCheck,
 }
 
 impl DesktopResearch {
     pub fn new(calls: Sender<HostCall>, home: PathBuf, profile: String, store: FileStore) -> Self {
-        Self { calls: Mutex::new(calls), home, profile, store }
+        Self { calls: Mutex::new(calls), home, profile, store, locked: never_locked() }
+    }
+
+    /// Refuse everything (the Library, the web, hidden pages) while the profile is locked.
+    pub fn locked_when(self, locked: LockCheck) -> Self {
+        Self { locked, ..self }
     }
 
     fn check_profile(&self, signed_in: &str) -> Result<(), HostError> {
@@ -357,6 +397,7 @@ impl ResearchHost for DesktopResearch {
         self.store.load_settings().ok().flatten().unwrap_or_default().search_provider.id().to_string()
     }
     async fn search(&self, provider: &str, query: &str) -> Result<Vec<SearchHit>, HostError> {
+        gate(&self.locked)?;
         let (provider, query) = (provider.to_string(), query.to_string());
         if provider == LIBRARY {
             let (home, profile) = (self.home.clone(), self.profile.clone());
@@ -365,10 +406,12 @@ impl ResearchHost for DesktopResearch {
         blocking(move || companion_web::search(&provider, &query, HTTP_TIMEOUT)).await
     }
     async fn fetch(&self, url: &str, signed_in: Option<&str>) -> Result<FetchedPage, HostError> {
+        gate(&self.locked)?;
         let (page, status) = self.hidden_or_http(url, signed_in, companion_web::fetch_page).await?;
         Ok(FetchedPage { bytes: page.text.len() as u64, url: page.url, status, text: page.text })
     }
     async fn read(&self, url: &str, signed_in: Option<&str>) -> Result<(PageSnapshot, Option<u16>), HostError> {
+        gate(&self.locked)?;
         self.hidden_or_http(url, signed_in, companion_web::read).await
     }
 }
@@ -803,6 +846,30 @@ mod tests {
         assert_eq!(r[1], Err(HostError::NotInteractable("covered by div#banner".into())));
         assert_eq!(r[2], Err(HostError::Blocked("PageWorld".into())));
         assert_eq!(r[3], Err(HostError::NotFound));
+    }
+
+    #[test]
+    fn a_locked_profile_refuses_every_host_call_without_asking_the_panel() {
+        let (call_tx, call_rx) = mpsc::channel();
+        let locked: LockCheck = Arc::new(|| true);
+        let seen = Seen::default();
+        *seen.attached.lock().unwrap() = Some(PageSnapshot { url: "https://a.example/".into(), ..Default::default() });
+        let browser = DesktopBrowser::new(call_tx.clone(), seen).locked_when(locked.clone());
+        let tmp = std::env::temp_dir().join(format!("morph-companion-locked-{}", std::process::id()));
+        let research = DesktopResearch::new(call_tx, tmp.clone(), "p1".into(), FileStore::new(tmp.join("companions"))).locked_when(locked);
+        let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+        let t = PageTarget::label("Send");
+        rt.block_on(async {
+            assert_eq!(browser.attached_page().await, Err(HostError::Locked));
+            assert_eq!(browser.tabs().await, Err(HostError::Locked));
+            assert_eq!(browser.click(&t, "https://a.example/").await, Err(HostError::Locked));
+            assert_eq!(browser.fill(&t, "x", "https://a.example/").await, Err(HostError::Locked));
+            assert_eq!(browser.scroll(&ScrollTo::Down, "https://a.example/").await, Err(HostError::Locked));
+            assert_eq!(research.search(LIBRARY, "tokio").await, Err(HostError::Locked));
+            assert_eq!(research.read("https://a.example/", None).await, Err(HostError::Locked));
+            assert!(matches!(research.fetch("https://a.example/", None).await, Err(HostError::Locked)));
+        });
+        assert!(call_rx.try_recv().is_err(), "nothing reached the panel");
     }
 
     #[test]

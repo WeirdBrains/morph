@@ -42,6 +42,9 @@ pub enum HostError {
     /// The page did not answer in time; the action may still have run.
     #[error("the page did not answer in time (the action may still have run)")]
     Timeout,
+    /// The profile was locked (its password not entered): nothing of it is read or acted on.
+    #[error("this profile is locked: unlock it with its password, then ask again")]
+    Locked,
 }
 
 /// A link on a page.
