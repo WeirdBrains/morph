@@ -391,21 +391,19 @@ pub mod protocols {
     pub struct RosterHost<H> {
         inner: H,
         gate: DeviceCaller,
-        /// The profile (home, id) whose lock refuses everything.
-        profile: Option<(std::path::PathBuf, String)>,
     }
 
     impl<H: InferHost> RosterHost<H> {
-        pub fn new(inner: H, gate: DeviceCaller, profile: Option<(std::path::PathBuf, String)>) -> Self {
-            Self { inner, gate, profile }
+        /// The profile's lock is the `gate`'s own ([`DeviceCaller::check_unlocked`]), so there is
+        /// no profile to forget to pass.
+        pub fn new(inner: H, gate: DeviceCaller) -> Self {
+            Self { inner, gate }
         }
 
         /// The gate: the profile is unlocked, and `caller` (the Noise-authenticated peer, plus
         /// the certificate it presented, if any) is a current linked device.
         pub fn check(&self, caller: &Caller) -> Result<(), RemoteError> {
-            if let Some((home, id)) = &self.profile
-                && crate::profile_lock::is_locked(home, id)
-            {
+            if self.gate.check_unlocked().is_err() {
                 return Err(RemoteError::refused("profile-locked"));
             }
             let presented = match caller.cert_bytes.as_deref().map(weirdnet_agent::serve::decode_cert) {
@@ -456,8 +454,8 @@ pub mod protocols {
     }
 
     impl InferService {
-        pub fn new<H: InferHost + 'static>(host: H, gate: DeviceCaller, profile: Option<(std::path::PathBuf, String)>, admission: Admission) -> Self {
-            Self { host: Arc::new(RosterHost::new(host, gate, profile)), admission, v2: false }
+        pub fn new<H: InferHost + 'static>(host: H, gate: DeviceCaller, admission: Admission) -> Self {
+            Self { host: Arc::new(RosterHost::new(host, gate)), admission, v2: false }
         }
 
         /// The same service for [`INFER_V2`] streams.
@@ -716,9 +714,9 @@ mod tests {
             let at: Multiaddr = format!("{}/p2p/{}", listening[0], server.peer_id()).parse().unwrap();
             let desk = DeviceRouter::new(server.clone());
             if v2 {
-                rt.spawn(desk.serve(protocols::INFER_V2, Arc::new(InferService::new(Models, server.clone(), None, Admission::new(2)).v2())).unwrap());
+                rt.spawn(desk.serve(protocols::INFER_V2, Arc::new(InferService::new(Models, server.clone(), Admission::new(2)).v2())).unwrap());
             }
-            rt.spawn(desk.serve(protocols::INFER, Arc::new(InferService::new(Models, server, None, Admission::new(2)))).unwrap());
+            rt.spawn(desk.serve(protocols::INFER, Arc::new(InferService::new(Models, server, Admission::new(2)))).unwrap());
             rt.spawn(desk.serve(protocols::TASK, Arc::new(TaskService(Arc::new(Companions)))).unwrap());
             let (phone, _, _) = up(&user, &b, &[&a.cert, &c.cert], Some(at));
             (Arc::new(DeviceRouter::new(phone)), a.cert.peer_id, c.cert.peer_id)
@@ -753,7 +751,7 @@ mod tests {
             let (a, b, c, d) = (device(&user, "desk"), device(&user, "phone"), device(&user, "c"), device(&user, "d"));
             let (server, st, _) = up(&user, &a, &[&b.cert, &d.cert], None);
             st.lock().unwrap().roster.revoke(&WEIRDNET, &user, &d.cert.peer_id, 5).unwrap();
-            (RosterHost::new(Models, server, None), a, b, c, d)
+            (RosterHost::new(Models, server), a, b, c, d)
         }
 
         #[test]
@@ -809,7 +807,7 @@ mod tests {
             let user = Keypair::generate_ed25519();
             let (a, b) = (device(&user, "desk"), device(&user, "phone"));
             let (server, _, _) = up(&user, &a, &[&b.cert], None);
-            let host = RosterHost::new(Models, server, Some((home.clone(), "default".to_string())));
+            let host = RosterHost::new(Models, server.for_locked_profile(&home, "default"));
             let caller = Caller::new(b.cert.peer_id.clone());
             assert!(host.authorize(&caller).is_ok(), "unlocked: a member gets in");
             crate::profile_lock::lock(&home, "default");

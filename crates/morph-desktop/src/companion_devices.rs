@@ -222,7 +222,7 @@ impl CompanionDevices {
                 LocalInferHost::new(s.models.clone() as Arc<dyn ModelProvider>, move || choice.choice(), move || on.enabled())
                     .with_local_priority(move || busy.load(Ordering::SeqCst) || project.load(Ordering::SeqCst))
             };
-            match serve_inference(&l.router, make, Some((self.home.clone(), self.profile.clone())), Admission::with_queue(1, 2)) {
+            match serve_inference(&l.router, make, Admission::with_queue(1, 2)) {
                 Ok(serving) => l.serving = Some((serving, claim)),
                 Err(e) => eprintln!("morph-companions: serving models to linked devices: {e}"),
             }

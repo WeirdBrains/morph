@@ -109,6 +109,20 @@ impl DeviceCaller {
         Self { node, state, addrs: Arc::new(addrs), profile: None }
     }
 
+    /// This caller, acting for the profile `(home, id)`: refused while it is locked (tests;
+    /// [`DeviceCaller::for_profile`] sets it).
+    #[cfg(test)]
+    pub(crate) fn for_locked_profile(mut self, home: &Path, profile_id: &str) -> Self {
+        self.profile = Some(Arc::new((home.to_path_buf(), profile_id.to_string())));
+        self
+    }
+
+    /// Whether the profile this caller acts for is unlocked: the lock check served requests
+    /// make, so a host takes it from the caller rather than being handed a profile.
+    pub fn check_unlocked(&self) -> Result<(), DeviceCallError> {
+        self.unlocked()
+    }
+
     /// Refuse while the profile is locked.
     fn unlocked(&self) -> Result<(), DeviceCallError> {
         match &self.profile {

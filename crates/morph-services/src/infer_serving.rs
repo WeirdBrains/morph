@@ -8,8 +8,6 @@
 //! accepting and cancels the turns in flight; the app drops it when the setting goes off, the
 //! profile locks or the sync node restarts.
 
-use std::path::PathBuf;
-
 use futures::future::{AbortHandle, Abortable, join};
 use morph_ai::RouteError;
 use weirdnet_agent::remote::infer::{Admission, InferHost};
@@ -39,18 +37,17 @@ impl Drop for InferServing {
 }
 
 /// Serve `make()`'s host on `router` for infer/1 and infer/2, `admission` at a time (it is
-/// shared by both protocols). `profile` is the profile whose lock refuses everything.
+/// shared by both protocols). The router's caller holds the profile, and its lock refuses everything.
 /// Fails when the router cannot accept (for example, a locked profile, or the protocol is
 /// already served on this node).
 pub fn serve_inference<H: InferHost + 'static>(
     router: &DeviceRouter,
     make: impl Fn() -> H,
-    profile: Option<(PathBuf, String)>,
     admission: Admission,
 ) -> Result<InferServing, RouteError> {
     let gate = router.caller().clone();
-    let v1 = protocols::InferService::new(make(), gate.clone(), profile.clone(), admission.clone());
-    let v2 = protocols::InferService::new(make(), gate, profile, admission).v2();
+    let v1 = protocols::InferService::new(make(), gate.clone(), admission.clone());
+    let v2 = protocols::InferService::new(make(), gate, admission).v2();
     let first = router.serve(protocols::INFER, std::sync::Arc::new(v1))?;
     let second = router.serve(protocols::INFER_V2, std::sync::Arc::new(v2))?;
     let (abort, registration) = AbortHandle::new_pair();
@@ -201,7 +198,6 @@ pub(crate) mod tests {
                     LocalInferHost::new(provider.clone(), || ModelChoice::Gemma4E4B, move || on.load(Ordering::SeqCst))
                         .with_local_priority(move || busy.load(Ordering::SeqCst))
                 },
-                None,
                 Admission::with_queue(1, 2),
             )
         }
