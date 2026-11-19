@@ -40,7 +40,7 @@ pub use host::{
 pub use ids::new_id;
 pub use journal::{Journal, JournalEntry, JournalKind, Journals, NOTES_ID};
 pub use mcp::{McpConfigs, McpSecrets, McpServer, McpTransport, McpValue};
-pub use mcp_local::{FileSecrets, McpApprovals, MemorySecrets, write_private};
+pub use mcp_local::{APPROVAL_KEY_CONTEXT, FileSecrets, McpApprovals, MemorySecrets, write_private};
 pub use model::{ModelChoice, ModelProvider, Platform, UnavailableModels};
 #[cfg(feature = "local")]
 pub use native_calls::{NativeCalls, split_native_calls};

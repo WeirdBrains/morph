@@ -26,6 +26,8 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 sha2.workspace = true
+# Keyed approval fingerprints (McpApprovals::with_key).
+blake3.workspace = true
 async-trait.workspace = true
 
 [dev-dependencies]

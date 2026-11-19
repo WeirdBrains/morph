@@ -157,12 +157,28 @@ impl McpSecrets for FileSecrets {
 
 /// What the user agreed to start on this machine: a local-command server runs only after the user
 /// has seen its warning, and again if anything about it changes. Saved per machine.
-#[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Default, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct McpApprovals {
     /// Server id to the fingerprint that was approved.
     #[serde(default)]
     approved: BTreeMap<String, String>,
+    /// The profile's approval key ([`with_key`](Self::with_key)): never saved, never printed.
+    #[serde(skip)]
+    key: Option<[u8; 32]>,
 }
+
+impl std::fmt::Debug for McpApprovals {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("McpApprovals").field("approved", &self.approved).field("keyed", &self.key.is_some()).finish()
+    }
+}
+
+/// The context the host derives the approval key under (from the profile's key; one per purpose).
+pub const APPROVAL_KEY_CONTEXT: &[u8] = b"morph/mcp-approval/v1";
+
+/// Marks a keyed fingerprint. An approval stored before keying (a plain SHA-256) never matches a
+/// keyed one, so such a server asks once more and is then stored keyed.
+const KEYED: &str = "k1:";
 
 impl McpApprovals {
     /// Reads the file; a missing or unreadable file approves nothing.
@@ -185,60 +201,90 @@ impl McpApprovals {
         io.write(path, &serde_json::to_vec_pretty(self).map_err(|e| StoreError::Io(e.to_string()))?)
     }
 
+    /// Fingerprints with `key` (derived by the host under [`APPROVAL_KEY_CONTEXT`]): keyed BLAKE3,
+    /// so a stored approval says nothing about a secret value without the profile's key.
+    pub fn with_key(mut self, key: [u8; 32]) -> Self {
+        self.key = Some(key);
+        self
+    }
+
     /// What a server is approved as: a SHA-256 over everything that decides what runs or where
     /// requests go (the program, arguments and every environment value for a local command; the
     /// URL and every header value for an HTTP server). Secret values are read from `secrets` and
     /// hashed in, so a changed token asks again too; only the digest is ever stored. A secret this
-    /// device does not hold counts as missing, which is a state of its own.
+    /// device does not hold counts as missing, which is a state of its own. Unkeyed: only for a
+    /// profile without an identity (it has no key); the host uses [`keyed_fingerprint`](Self::keyed_fingerprint).
     pub fn fingerprint(server: &McpServer, secrets: &dyn McpSecrets) -> String {
         use sha2::{Digest, Sha256};
-        fn field(h: &mut Sha256, tag: &str, bytes: &[u8]) {
-            h.update(tag.as_bytes());
-            h.update((bytes.len() as u64).to_le_bytes());
-            h.update(bytes);
+        let mut h = Sha256::new();
+        Self::feed(server, secrets, &mut |b| h.update(b));
+        h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    /// [`fingerprint`](Self::fingerprint) as a keyed BLAKE3 under `key`: rotating the key (a new
+    /// profile key) changes every fingerprint, so each server asks once more.
+    pub fn keyed_fingerprint(server: &McpServer, secrets: &dyn McpSecrets, key: &[u8; 32]) -> String {
+        let mut h = blake3::Hasher::new_keyed(key);
+        Self::feed(server, secrets, &mut |b| {
+            h.update(b);
+        });
+        format!("{KEYED}{}", h.finalize().to_hex())
+    }
+
+    fn fingerprint_for(&self, server: &McpServer, secrets: &dyn McpSecrets) -> String {
+        match &self.key {
+            Some(key) => Self::keyed_fingerprint(server, secrets, key),
+            None => Self::fingerprint(server, secrets),
         }
-        fn values(h: &mut Sha256, server: &McpServer, map: &BTreeMap<String, McpValue>, secrets: &dyn McpSecrets) {
+    }
+
+    /// The fingerprint's input, streamed to `update` (each field tagged and length-prefixed).
+    fn feed(server: &McpServer, secrets: &dyn McpSecrets, update: &mut dyn FnMut(&[u8])) {
+        fn field(u: &mut dyn FnMut(&[u8]), tag: &str, bytes: &[u8]) {
+            u(tag.as_bytes());
+            u(&(bytes.len() as u64).to_le_bytes());
+            u(bytes);
+        }
+        fn values(u: &mut dyn FnMut(&[u8]), server: &McpServer, map: &BTreeMap<String, McpValue>, secrets: &dyn McpSecrets) {
             for (name, v) in map {
-                field(h, "n", name.as_bytes());
+                field(u, "n", name.as_bytes());
                 match v {
-                    McpValue::Plain { value } => field(h, "p", value.as_bytes()),
+                    McpValue::Plain { value } => field(u, "p", value.as_bytes()),
                     McpValue::Secret { name: secret } => {
-                        field(h, "r", secret.as_bytes());
+                        field(u, "r", secret.as_bytes());
                         match secrets.get(&server.id, secret) {
-                            Some(value) => field(h, "s", value.as_bytes()),
-                            None => field(h, "m", b""),
+                            Some(value) => field(u, "s", value.as_bytes()),
+                            None => field(u, "m", b""),
                         }
                     }
                 }
             }
         }
-        let mut h = Sha256::new();
         match &server.transport {
             McpTransport::Stdio { command, args, env } => {
-                field(&mut h, "kind", b"stdio");
-                field(&mut h, "command", command.as_bytes());
+                field(update, "kind", b"stdio");
+                field(update, "command", command.as_bytes());
                 for a in args {
-                    field(&mut h, "arg", a.as_bytes());
+                    field(update, "arg", a.as_bytes());
                 }
-                values(&mut h, server, env, secrets);
+                values(update, server, env, secrets);
             }
             McpTransport::Http { url, headers } => {
-                field(&mut h, "kind", b"http");
-                field(&mut h, "url", url.as_bytes());
-                values(&mut h, server, headers, secrets);
+                field(update, "kind", b"http");
+                field(update, "url", url.as_bytes());
+                values(update, server, headers, secrets);
             }
         }
-        h.finalize().iter().map(|b| format!("{b:02x}")).collect()
     }
 
     /// Whether `server` may start on this machine: the user approved exactly this server.
     pub fn is_approved(&self, server: &McpServer, secrets: &dyn McpSecrets) -> bool {
-        self.approved.get(&server.id) == Some(&Self::fingerprint(server, secrets))
+        self.approved.get(&server.id) == Some(&self.fingerprint_for(server, secrets))
     }
 
     /// Records the user's OK for this server as it is now.
     pub fn approve(&mut self, server: &McpServer, secrets: &dyn McpSecrets) {
-        self.approved.insert(server.id.clone(), Self::fingerprint(server, secrets));
+        self.approved.insert(server.id.clone(), self.fingerprint_for(server, secrets));
     }
 
     /// Forgets the OK (the server was removed, or the user withdrew it).
@@ -369,6 +415,39 @@ mod tests {
         assert!(a.is_approved(&s, &secrets));
         secrets.remove_server(&s.id);
         assert!(!a.is_approved(&s, &secrets), "a secret this device lacks is a change");
+    }
+
+    #[test]
+    fn keyed_approvals_store_no_plain_digest_follow_the_key_and_old_ones_ask_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp-approved.json");
+        let secrets = MemorySecrets::default();
+        let s = with_env(stdio(&["--x"], &[]), &[("API_TOKEN", secret_env("API_TOKEN"))]);
+        secrets.set(&s.id, "API_TOKEN", "sk-live-very-secret");
+        let plain = McpApprovals::fingerprint(&s, &secrets);
+
+        // Approved before keying: stored as a plain SHA-256.
+        let mut old = McpApprovals::default();
+        old.approve(&s, &secrets);
+        old.save(&path).unwrap();
+        assert!(std::fs::read_to_string(&path).unwrap().contains(&plain));
+
+        // Loaded with the profile's key: asks once, then is stored keyed only.
+        let mut a = McpApprovals::load(&path).with_key([7; 32]);
+        assert!(!a.is_approved(&s, &secrets), "an old plain approval asks again once");
+        a.approve(&s, &secrets);
+        a.save(&path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains(&plain) && !text.contains("sk-live-very-secret") && text.contains(KEYED), "{text}");
+        assert!(!format!("{a:?}").contains("[7, 7"), "the key never prints");
+        assert!(McpApprovals::load(&path).with_key([7; 32]).is_approved(&s, &secrets), "and matches from then on");
+
+        // Another key (a rotated profile key) changes the fingerprint, so it asks again.
+        assert_ne!(McpApprovals::keyed_fingerprint(&s, &secrets, &[7; 32]), McpApprovals::keyed_fingerprint(&s, &secrets, &[8; 32]));
+        assert!(!McpApprovals::load(&path).with_key([8; 32]).is_approved(&s, &secrets));
+        // A changed secret still asks again under the key.
+        secrets.set(&s.id, "API_TOKEN", "sk-live-another");
+        assert!(!McpApprovals::load(&path).with_key([7; 32]).is_approved(&s, &secrets));
     }
 
     #[test]

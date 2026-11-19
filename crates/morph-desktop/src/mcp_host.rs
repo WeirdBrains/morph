@@ -36,8 +36,16 @@ fn approvals_io(companions: &Path) -> std::sync::Arc<dyn morph_ai::FileIo> {
     morph_services::profile_io::io_beside(&profile_dir(companions))
 }
 
+/// The approvals, fingerprinted with the profile's approval key (so the file holds no plain digest
+/// of a secret). Approvals stored before keying ask once more. A profile without an identity has no
+/// key and keeps plain fingerprints; a locked profile approves nothing.
 fn load_approvals(companions: &Path) -> McpApprovals {
-    McpApprovals::load_with(&approvals_path(companions), approvals_io(companions).as_ref())
+    let approvals = McpApprovals::load_with(&approvals_path(companions), approvals_io(companions).as_ref());
+    match morph_services::profile_io::derive_key(&profile_dir(companions), morph_ai::APPROVAL_KEY_CONTEXT) {
+        Ok(Some(key)) => approvals.with_key(key.0),
+        Ok(None) => approvals,
+        Err(_) => McpApprovals::default(),
+    }
 }
 
 fn save_approvals(approvals: &McpApprovals, companions: &Path) -> Result<(), String> {

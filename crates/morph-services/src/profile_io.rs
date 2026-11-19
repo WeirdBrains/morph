@@ -69,6 +69,15 @@ pub fn io_beside(profile_dir: &Path) -> Arc<dyn FileIo> {
     io_for(profile_dir)
 }
 
+/// A per-purpose key for the profile holding `dir` ([`profile_files::derive_key`] under `context`):
+/// `Ok(None)` outside the profile layout or for a profile without an identity, `Locked` while locked.
+pub fn derive_key(dir: &Path, context: &[u8]) -> Result<Option<weirdnet_keys::Key32>, StoreError> {
+    match locate(dir) {
+        Some((home, id)) => profile_files::derive_key(&home, &id, context).map_err(failed),
+        None => Ok(None),
+    }
+}
+
 /// The store over a profile's `companions/` directory.
 pub fn file_store(companions: &Path) -> FileStore {
     FileStore::with_io(companions, io_for(companions))
@@ -169,6 +178,40 @@ mod tests {
         put(profile.join("mcp-approved.local.json"), format!(r#"{{"approved":{{"srv":"{APPROVAL}"}}}}"#));
         put(profile.join("mcp-extra.local.json"), format!("{{\"x\":\"{SECRET}\"}}"));
         put(profile.join("mcp-secrets.local.tmp"), format!("{{\"x\":\"{SECRET}\"}}"));
+    }
+
+    #[test]
+    fn approvals_are_keyed_by_the_profile_and_hold_no_plain_digest() {
+        use morph_ai::{APPROVAL_KEY_CONTEXT, McpServer, McpTransport, McpValue};
+        let (_tmp, home) = home();
+        let (profile, companions) = dirs(&home);
+        assert!(derive_key(&companions, APPROVAL_KEY_CONTEXT).unwrap().is_none(), "no identity, no key");
+        assert!(derive_key(Path::new("/tmp/elsewhere"), APPROVAL_KEY_CONTEXT).unwrap().is_none());
+        crate::identity::create(&home, "default", &pw()).unwrap();
+        let key = derive_key(&companions, APPROVAL_KEY_CONTEXT).unwrap().unwrap();
+        assert_eq!(key.0, derive_key(&profile, APPROVAL_KEY_CONTEXT).unwrap().unwrap().0, "the same key from either directory");
+        assert_ne!(key.0, derive_key(&profile, b"morph/other/v1").unwrap().unwrap().0, "one key per purpose");
+
+        let secrets = FileSecrets::open_with(profile.join("mcp-secrets.local.json"), io_beside(&profile));
+        secrets.set("srv", "TOKEN", SECRET);
+        let env = std::collections::BTreeMap::from([("TOKEN".to_string(), McpValue::Secret { name: "TOKEN".into() })]);
+        let mut server = McpServer::new("S", McpTransport::Stdio { command: "x".into(), args: vec![], env });
+        server.id = "srv".into();
+        let plain = McpApprovals::fingerprint(&server, &secrets);
+        let path = profile.join("mcp-approved.local.json");
+        let mut a = McpApprovals::load_with(&path, io_beside(&profile).as_ref()).with_key(key.0);
+        a.approve(&server, &secrets);
+        a.save_with(&path, io_beside(&profile).as_ref()).unwrap();
+        let inside = String::from_utf8(io_beside(&profile).read(&path).unwrap().unwrap()).unwrap();
+        assert!(inside.contains("k1:") && !inside.contains(&plain) && !inside.contains(SECRET), "{inside}");
+        assert!(leaks(&home, &plain).is_empty() && leaks(&home, "k1:").is_empty(), "sealed on disk too");
+
+        profile_lock::lock(&home, "default");
+        assert!(matches!(derive_key(&companions, APPROVAL_KEY_CONTEXT), Err(StoreError::Locked)), "no key while locked");
+        library::unlock(&home, "default", &pw()).unwrap();
+        let again = derive_key(&companions, APPROVAL_KEY_CONTEXT).unwrap().unwrap();
+        assert_eq!(again.0, key.0, "stable across a lock");
+        assert!(McpApprovals::load_with(&path, io_beside(&profile).as_ref()).with_key(again.0).is_approved(&server, &secrets));
     }
 
     #[test]
