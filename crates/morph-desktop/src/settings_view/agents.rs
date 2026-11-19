@@ -252,7 +252,7 @@ pub fn subscribe(state: &State, window: &mut Window, cx: &mut Context<SettingsVi
 }
 
 impl SettingsView {
-    fn agents_dir(&self) -> Option<PathBuf> {
+    pub(super) fn agents_dir(&self) -> Option<PathBuf> {
         self.profile_id().map(|id| dir(&self.home, &id))
     }
 
@@ -328,6 +328,7 @@ impl SettingsView {
     pub(super) fn agents_reload(&mut self, cx: &mut Context<Self>) {
         self.agents.selected = None;
         self.agents.note = None;
+        self.servers_reload();
         cx.notify();
     }
 
@@ -357,7 +358,7 @@ impl SettingsView {
             .into_any_element()
     }
 
-    pub(super) fn agents_rows(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+    pub(super) fn agents_rows(&mut self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
         let t = self.theme;
         let Some(dir) = self.agents_dir() else {
             return vec![
@@ -579,6 +580,9 @@ impl SettingsView {
                 chips.into_any_element(),
             ),
         );
+
+        // Connected servers: MCP servers the companions use (not Morph's own server, below).
+        rows.extend(self.servers_rows(&dir, cx));
 
         // MCP placeholder: there is no server to turn on yet.
         rows.push(self.plain_row(

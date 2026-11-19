@@ -59,7 +59,8 @@ impl CompanionView {
                 .map(|e| Box::new(e) as Box<dyn weirdnet_model::Engine>)
         });
         let models = Arc::new(LocalModels::new(weirdnet_model::ModelStore::from_env(), factory));
-        let worker = Worker::start(models.clone(), policy.clone());
+        let tools = crate::mcp_host::get(&morph_core::profiles::profile_dir(home, profile).join("companions"));
+        let worker = Worker::start_with(models.clone(), policy.clone(), tools);
         let selected = roster.default_companion().map(|c| c.id().clone()).unwrap_or_else(|| AgentId::new("local"));
         let input = cx.new(|cx| TextInput::new("Ask a companion", theme, cx));
         let sub = cx.subscribe_in(&input, window, |this, _, event, _, cx| match event {
