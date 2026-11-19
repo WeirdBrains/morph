@@ -3,7 +3,7 @@
 //! skipped-approval notices, footnotes and the trace) and hands the user's questions and card
 //! answers to the worker in `companion_host`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
@@ -97,6 +97,10 @@ pub struct CompanionView {
     collapsed: bool,
     /// The outline the waiting card put on the page.
     outline: crate::companion_host::CardOutline,
+    /// Each running task's wall clock (card waits not counted), stopped at `WALL_LIMIT`.
+    guards: HashMap<AgentId, crate::companion_host::WallGuard>,
+    /// Tasks the guard stopped, told so when they end.
+    timed_out: HashSet<AgentId>,
 }
 
 /// Width of the folded panel's strip, in logical pixels.
@@ -278,6 +282,8 @@ impl CompanionView {
             activity_frame: None,
             collapsed: false,
             outline: Default::default(),
+            guards: HashMap::new(),
+            timed_out: HashSet::new(),
         };
         view.collapsed = load_collapsed(&view.store);
         if std::env::var_os("MORPH_COMPANION_DEMO").is_some_and(|v| v == "1") {
@@ -509,6 +515,43 @@ impl CompanionView {
         }
     }
 
+    /// Stops a task that ran past `WALL_LIMIT`, not counting time the user took on its cards.
+    fn guard_tasks(&mut self) {
+        let now = Instant::now();
+        let mut over = Vec::new();
+        for (id, guard) in &mut self.guards {
+            let waiting = self.conversations.get(id).is_some_and(|c| c.pending_card().is_some() || c.asking_more_pages());
+            if guard.over(now, waiting, crate::companion_host::WALL_LIMIT) {
+                over.push(id.clone());
+            }
+        }
+        for id in over {
+            self.guards.remove(&id);
+            self.timed_out.insert(id.clone());
+            self.worker.cancel(&id);
+        }
+    }
+
+    /// A task finished or failed: an unanswered "+5 pages" card is a no, and a task the guard
+    /// stopped says why.
+    fn task_ended(&mut self, id: &AgentId) {
+        self.guards.remove(id);
+        let conv = self.conversations.entry(id.clone()).or_default();
+        conv.answer_more_pages(false);
+        if self.timed_out.remove(id) {
+            let mins = crate::companion_host::WALL_LIMIT.as_secs() / 60;
+            conv.fail(&format!("Stopped after {mins} minutes of work. Ask again with a narrower question, or try a faster model."));
+        }
+    }
+
+    /// The running task's "+5 pages" card: read more pages now, or not.
+    fn more_pages_now(&mut self, yes: bool, cx: &mut Context<Self>) {
+        if self.conversation().answer_more_pages(yes) {
+            self.worker.answer_pages(yes);
+        }
+        cx.notify();
+    }
+
     /// The "+5 pages" card: go on with the extension's pages, in the same conversation.
     fn more_pages(&mut self, cx: &mut Context<Self>) {
         if let Some(n) = self.conversation().take_more_pages() {
@@ -549,6 +592,7 @@ impl CompanionView {
             (None, _) => text.clone(),
         };
         conv.start_task(&text);
+        self.guards.insert(id.clone(), crate::companion_host::WallGuard::new(Instant::now()));
         // Signed-in research is chosen per task and never kept.
         let options = TaskOptions {
             signed_in: std::mem::take(&mut self.signed_in_next).then(|| self.profile.clone()),
@@ -835,6 +879,7 @@ impl CompanionView {
             self.activity_frame = frame;
             cx.notify();
         }
+        self.guard_tasks();
         if msgs.is_empty() {
             return;
         }
@@ -849,6 +894,7 @@ impl CompanionView {
                     }
                 }
                 Msg::Doing(id, text) => self.conversations.entry(id).or_default().set_doing(&text),
+                Msg::MorePages(id, extension) => self.conversations.entry(id).or_default().ask_more_pages(extension),
                 Msg::CardDetail(id, detail) => {
                     let conv = self.conversations.entry(id.clone()).or_default();
                     if conv.pending_card().is_some_and(|c| c.detail.is_none()) {
@@ -858,13 +904,15 @@ impl CompanionView {
                 }
                 Msg::Done(id, Ok(outcome)) => {
                     self.clear_outline(cx);
+                    self.task_ended(&id);
                     // Footnotes the trace backs stay; unbacked ones go with their markers.
                     let f = parse_citations(&outcome.text, &outcome.trace);
                     let notes = footnotes(&outcome.trace, f.citations.clone());
                     let conv = self.conversations.entry(id.clone()).or_default();
                     conv.finish_answer(&f.text, notes);
-                    // The task wanted more pages than its budget: the "+5 pages" card.
-                    if ran_out_of_pages(&outcome) {
+                    // The task wanted more pages than its budget and did not ask while it ran
+                    // (tasks on another node): the "+5 pages" card for a follow-on task.
+                    if ran_out_of_pages(&outcome) && !conv.asked_more_pages() {
                         conv.offer_more_pages(crate::companion_host::research_budget().page_extension);
                     }
                     let question = conv
@@ -882,6 +930,7 @@ impl CompanionView {
                 }
                 Msg::Done(id, Err(e)) => {
                     self.clear_outline(cx);
+                    self.task_ended(&id);
                     self.conversations.entry(id).or_default().fail(&e.to_string());
                 }
             }
@@ -1111,7 +1160,9 @@ impl Render for CompanionView {
                     div().text_size(px(11.)).text_color(rgb(color)).child(format!("{mark} {tool}")).into_any_element()
                 }
                 Entry::Error(m) => div().text_size(px(12.)).text_color(rgb(t.error)).child(m.clone()).into_any_element(),
-                Entry::MorePages { extension, taken } => more_pages_card(t, i, *extension, *taken, running, cx).into_any_element(),
+                Entry::MorePages { extension, taken, asking, declined } => {
+                    more_pages_card(t, i, *extension, *taken, *asking, *declined, running, cx).into_any_element()
+                }
             })
             .collect();
 
@@ -1268,13 +1319,37 @@ fn approval_card(t: Theme, i: usize, card: &ApprovalCard, answer: Option<&str>, 
 }
 
 /// "+5 pages": the research wanted more pages than its budget.
-fn more_pages_card(t: Theme, i: usize, extension: u32, taken: bool, running: bool, cx: &mut Context<CompanionView>) -> gpui::Div {
+#[allow(clippy::too_many_arguments)]
+fn more_pages_card(
+    t: Theme,
+    i: usize,
+    extension: u32,
+    taken: bool,
+    asking: bool,
+    declined: bool,
+    running: bool,
+    cx: &mut Context<CompanionView>,
+) -> gpui::Div {
     let base =
         div().flex().flex_col().gap(px(6.)).p(px(8.)).rounded(px(8.)).border_1().border_color(rgb(t.accent)).child(
             div().text_size(px(12.)).text_color(rgb(t.text_primary)).child("Research used its page budget before reading everything it wanted."),
         );
     if taken {
         base.child(dim(t, format!("Reading up to {extension} more pages")))
+    } else if declined {
+        base.child(dim(t, "No more pages"))
+    } else if asking {
+        // The task waits on this answer.
+        base.child(
+            div()
+                .flex()
+                .gap(px(6.))
+                .child(
+                    button(t, ("companion-more-pages-now", i), format!("+{extension} pages"), true)
+                        .on_click(cx.listener(|this, _, _, cx| this.more_pages_now(true, cx))),
+                )
+                .child(button(t, ("companion-no-more-pages", i), "No", false).on_click(cx.listener(|this, _, _, cx| this.more_pages_now(false, cx)))),
+        )
     } else if running {
         base
     } else {

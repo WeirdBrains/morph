@@ -47,9 +47,14 @@ pub enum Entry {
     },
     Error(String),
     /// The task's page budget ran out: the "+5 pages" card (`taken` once the user took it).
+    /// `asking`: the running task waits on it (weirdnet-agent's `extend_pages`) until the user
+    /// answers; `declined` once they said no or the task ended first. Otherwise it is offered
+    /// after the task, as a follow-on task.
     MorePages {
         extension: u32,
         taken: bool,
+        asking: bool,
+        declined: bool,
     },
 }
 
@@ -118,7 +123,7 @@ impl Conversation {
         if !self.running {
             return None;
         }
-        Some(if self.pending_card().is_some() {
+        Some(if self.pending_card().is_some() || self.asking_more_pages() {
             Activity::WaitingForApproval
         } else if let Some(d) = &self.doing {
             Activity::Doing(d.clone())
@@ -232,7 +237,37 @@ impl Conversation {
 
     /// The task that just finished wanted more pages than its budget: offer `extension` more.
     pub fn offer_more_pages(&mut self, extension: u32) {
-        self.entries.push(Entry::MorePages { extension, taken: false });
+        self.entries.push(Entry::MorePages { extension, taken: false, asking: false, declined: false });
+    }
+
+    /// The running task used its page budget and waits for the user: "+`extension` pages" or no.
+    pub fn ask_more_pages(&mut self, extension: u32) {
+        self.track(|c| c.entries.push(Entry::MorePages { extension, taken: false, asking: true, declined: false }));
+    }
+
+    /// Whether the running task waits on a "+5 pages" answer.
+    pub fn asking_more_pages(&self) -> bool {
+        self.entries.iter().any(|e| matches!(e, Entry::MorePages { asking: true, taken: false, declined: false, .. }))
+    }
+
+    /// The answer to the card the running task waits on (`false` too when the task ended first).
+    /// Returns whether one was waiting.
+    pub fn answer_more_pages(&mut self, yes: bool) -> bool {
+        let mut found = false;
+        self.track(|c| {
+            if let Some(Entry::MorePages { taken, declined, .. }) =
+                c.entries.iter_mut().find(|e| matches!(e, Entry::MorePages { asking: true, taken: false, declined: false, .. }))
+            {
+                (*taken, *declined, found) = (yes, !yes, true);
+            }
+        });
+        found
+    }
+
+    /// Whether the task since the last question already asked for more pages while it ran, so no
+    /// follow-on offer is made after it.
+    pub fn asked_more_pages(&self) -> bool {
+        self.entries.iter().rev().take_while(|e| !matches!(e, Entry::User { .. })).any(|e| matches!(e, Entry::MorePages { asking: true, .. }))
     }
 
     /// The user took the waiting "+5 pages" offer: its extension, once (`None` when there is no
@@ -242,7 +277,7 @@ impl Conversation {
             return None;
         }
         match self.entries.iter_mut().rev().take_while(|e| !matches!(e, Entry::User { .. })).find(|e| matches!(e, Entry::MorePages { .. })) {
-            Some(Entry::MorePages { extension, taken }) if !*taken => {
+            Some(Entry::MorePages { extension, taken, asking: false, .. }) if !*taken => {
                 *taken = true;
                 Some(*extension)
             }
@@ -451,13 +486,34 @@ mod tests {
     }
 
     #[test]
+    fn a_more_pages_ask_while_the_task_runs_is_answered_once_and_is_never_a_follow_on_offer() {
+        let mut c = Conversation::default();
+        c.start_task("q");
+        c.ask_more_pages(5);
+        assert!(c.asking_more_pages());
+        assert!(matches!(c.activity(), Some((Activity::WaitingForApproval, _))));
+        assert!(c.answer_more_pages(true));
+        assert!(!c.asking_more_pages());
+        assert!(!c.answer_more_pages(false), "answered once");
+        assert!(matches!(c.entries().last(), Some(Entry::MorePages { taken: true, declined: false, .. })));
+        assert!(c.asked_more_pages());
+        c.ask_more_pages(5);
+        assert!(c.answer_more_pages(false));
+        assert!(matches!(c.entries().last(), Some(Entry::MorePages { taken: false, declined: true, .. })));
+        c.finish_answer("a", vec![]);
+        assert_eq!(c.take_more_pages(), None, "a mid-task card is not a follow-on");
+        c.start_task("next");
+        assert!(!c.asked_more_pages());
+    }
+
+    #[test]
     fn a_more_pages_offer_is_taken_once_and_only_after_the_task_and_before_the_next_question() {
         let mut c = Conversation::default();
         c.start_task("q");
         c.offer_more_pages(5);
         assert_eq!(c.take_more_pages(), None, "not while the task runs");
         c.apply(ViewUpdate::Finished { task_id: "t".into(), status: "done".into() });
-        assert!(matches!(c.entries().last(), Some(Entry::MorePages { extension: 5, taken: false })));
+        assert!(matches!(c.entries().last(), Some(Entry::MorePages { extension: 5, taken: false, .. })));
         assert_eq!(c.take_more_pages(), Some(5));
         assert!(matches!(c.entries().last(), Some(Entry::MorePages { taken: true, .. })));
         assert_eq!(c.take_more_pages(), None);

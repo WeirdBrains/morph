@@ -11,7 +11,7 @@
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use morph_ai::{
@@ -37,6 +37,8 @@ pub enum Msg {
     CardDetail(AgentId, String),
     /// The step line of a tool call that is starting ("Reading tokio.rs…").
     Doing(AgentId, String),
+    /// The running task used its page budget and waits for "+N pages" or no ([`Worker::answer_pages`]).
+    MorePages(AgentId, u32),
 }
 
 enum Cmd {
@@ -48,12 +50,44 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(45);
 /// Logged-out fetches and searches.
 const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// The research budget: the design's searches, pages, concurrency and per-page limits, with a
-/// longer task limit. `weirdnet-agent` 0.1 counts model turns and time spent on approval cards
-/// against `per_task`, and a local model on a CPU takes most of 90 s for one turn, so the
-/// design's 90 s of research would end tasks before they research (docs/handoff.md).
+/// The research budget: the design's limits, including 90 s of research per task. Since
+/// weirdnet-agent 0.3 `per_task` counts only tool time (not model turns or card waits), so a
+/// local model on a CPU no longer ends tasks before they research; [`WallGuard`] bounds the
+/// task's own wall time instead.
 pub fn research_budget() -> weirdnet_agent::Budget {
-    weirdnet_agent::Budget { per_task: Duration::from_secs(600), ..Default::default() }
+    weirdnet_agent::Budget::default()
+}
+
+/// How long a task may run, not counting time a card waits for the user. weirdnet-agent's
+/// `per_task` no longer bounds wall time, and a local model on a busy CPU can take minutes a turn.
+pub const WALL_LIMIT: Duration = Duration::from_secs(15 * 60);
+
+/// A running task's wall clock without the time it waited on the user (cards, "+5 pages").
+#[derive(Debug, Clone, Copy)]
+pub struct WallGuard {
+    started: Instant,
+    waited: Duration,
+    waiting_since: Option<Instant>,
+}
+
+impl WallGuard {
+    pub fn new(now: Instant) -> Self {
+        Self { started: now, waited: Duration::ZERO, waiting_since: None }
+    }
+
+    /// Called as the panel polls: whether the task has now run longer than `limit`.
+    pub fn over(&mut self, now: Instant, waiting: bool, limit: Duration) -> bool {
+        match (waiting, self.waiting_since) {
+            (true, None) => self.waiting_since = Some(now),
+            (false, Some(since)) => {
+                self.waited += now.saturating_duration_since(since);
+                self.waiting_since = None;
+            }
+            _ => {}
+        }
+        let waiting_now = self.waiting_since.map_or(Duration::ZERO, |since| now.saturating_duration_since(since));
+        now.saturating_duration_since(self.started).saturating_sub(self.waited + waiting_now) > limit
+    }
 }
 
 pub type Reply<T> = tokio::sync::oneshot::Sender<Result<T, HostError>>;
@@ -510,11 +544,14 @@ impl DesktopResearch {
 }
 
 type Slot = Arc<Mutex<Option<tokio::sync::oneshot::Sender<ApprovalAnswer>>>>;
+/// The answer to a running task's "+5 pages" card.
+type PagesSlot = Arc<Mutex<Option<tokio::sync::oneshot::Sender<bool>>>>;
 
 /// Asks the user through the panel: `decide` waits until [`Worker::answer`] is called. A tier 2
 /// card's target is marked on the page while it waits.
 struct PanelApprover {
     slot: Slot,
+    pages: PagesSlot,
     pending: PendingTarget,
     msgs: Sender<Msg>,
     calls: Option<Mutex<Sender<HostCall>>>,
@@ -541,6 +578,14 @@ impl Approver for PanelApprover {
         *self.slot.lock().unwrap() = Some(tx);
         rx.await.unwrap_or(ApprovalAnswer::Deny)
     }
+
+    /// The "+5 pages" card while the task runs; no when the panel goes away or the task stops.
+    async fn extend_pages(&self, prompt: &weirdnet_agent::PagesPrompt) -> bool {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        *self.pages.lock().unwrap() = Some(tx);
+        let _ = self.msgs.send(Msg::MorePages(prompt.agent.clone(), prompt.extension));
+        rx.await.unwrap_or(false)
+    }
 }
 
 /// The app's tool hosts for a worker.
@@ -556,6 +601,7 @@ pub struct Worker {
     msgs: Receiver<Msg>,
     canceller: Canceller,
     approval: Slot,
+    pages: PagesSlot,
 }
 
 /// No tools: the registry is the same empty one for every task.
@@ -681,9 +727,11 @@ impl Worker {
         let (msg_tx, msgs) = mpsc::channel::<Msg>();
         let (can_tx, can_rx) = mpsc::channel();
         let approval: Slot = Arc::default();
+        let pages: PagesSlot = Arc::default();
         let pending = PendingTarget::default();
         let approver = Arc::new(PanelApprover {
             slot: approval.clone(),
+            pages: pages.clone(),
             pending: pending.clone(),
             msgs: msg_tx.clone(),
             calls: hosts.as_ref().and_then(|h| h.calls.clone()).map(Mutex::new),
@@ -722,7 +770,7 @@ impl Worker {
             })
             .expect("spawn the companion worker");
         let canceller = can_rx.recv().expect("the worker reports its canceller");
-        Self { cmd, msgs, canceller, approval }
+        Self { cmd, msgs, canceller, approval, pages }
     }
 
     #[cfg(test)]
@@ -737,6 +785,7 @@ impl Worker {
     pub fn cancel(&self, companion: &AgentId) -> bool {
         // A card waiting for an answer is declined so the task can end.
         self.answer(ApprovalAnswer::Deny);
+        self.answer_pages(false);
         self.canceller.cancel(companion)
     }
 
@@ -744,6 +793,14 @@ impl Worker {
     pub fn answer(&self, answer: ApprovalAnswer) -> bool {
         match self.approval.lock().unwrap().take() {
             Some(tx) => tx.send(answer).is_ok(),
+            None => false,
+        }
+    }
+
+    /// The user's answer to the running task's "+5 pages" card. Returns whether one was waiting.
+    pub fn answer_pages(&self, yes: bool) -> bool {
+        match self.pages.lock().unwrap().take() {
+            Some(tx) => tx.send(yes).is_ok(),
             None => false,
         }
     }
@@ -910,7 +967,7 @@ mod tests {
         let pending = PendingTarget::default();
         *pending.lock().unwrap() = Some((PageTarget::label("Sign in"), "https://a.example/login?next=1".into()));
         let slot: Slot = Arc::default();
-        let approver = PanelApprover { slot: slot.clone(), pending, msgs: msg_tx, calls: Some(Mutex::new(call_tx)) };
+        let approver = PanelApprover { slot: slot.clone(), pages: PagesSlot::default(), pending, msgs: msg_tx, calls: Some(Mutex::new(call_tx)) };
         let prompt = ApprovalPrompt {
             agent: AgentId::new("local"),
             request: weirdnet_agent::ActionRequest::new(Tier::Interact).site("a.example"),
@@ -1068,12 +1125,53 @@ mod tests {
     }
 
     #[test]
-    fn the_research_budget_keeps_the_design_limits_but_a_longer_task_time() {
+    fn the_research_budget_is_the_design_budget_with_90_s_of_tool_time() {
         let b = research_budget();
-        let d = weirdnet_agent::Budget::default();
         assert_eq!((b.max_searches, b.max_pages, b.page_extension, b.max_concurrent), (3, 12, 5, 2));
-        assert_eq!((b.per_page, b.tokens_per_page), (d.per_page, d.tokens_per_page));
-        assert!(b.per_task > d.per_task);
+        assert_eq!(b.per_task, Duration::from_secs(90));
+        assert_eq!(b, weirdnet_agent::Budget::default());
+    }
+
+    #[test]
+    fn the_wall_guard_counts_the_task_but_not_the_user_deciding() {
+        let t0 = Instant::now();
+        let s = Duration::from_secs;
+        let limit = s(100);
+        let mut g = WallGuard::new(t0);
+        assert!(!g.over(t0 + s(60), false, limit));
+        assert!(!g.over(t0 + s(70), true, limit), "a card comes up at 70 s");
+        assert!(!g.over(t0 + s(500), true, limit), "the user takes their time");
+        assert!(!g.over(t0 + s(510), false, limit), "answered at 510 s: 70 s of task so far");
+        assert!(!g.over(t0 + s(539), false, limit), "99 s");
+        assert!(g.over(t0 + s(541), false, limit), "101 s of task");
+    }
+
+    #[test]
+    fn a_more_pages_card_waits_for_the_panel_and_a_stop_says_no() {
+        let (msg_tx, msg_rx) = mpsc::channel();
+        let pages = PagesSlot::default();
+        let approver = PanelApprover { slot: Slot::default(), pages: pages.clone(), pending: PendingTarget::default(), msgs: msg_tx, calls: None };
+        let prompt = weirdnet_agent::PagesPrompt { agent: AgentId::new("local"), task_id: "t".into(), used: 12, extension: 5 };
+        let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+        let ask = |yes: Option<bool>| {
+            rt.block_on(async {
+                let extend = approver.extend_pages(&prompt);
+                let answer_it = async {
+                    while pages.lock().unwrap().is_none() {
+                        tokio::task::yield_now().await;
+                    }
+                    let tx = pages.lock().unwrap().take().unwrap();
+                    if let Some(yes) = yes {
+                        tx.send(yes).unwrap();
+                    }
+                };
+                tokio::join!(extend, answer_it).0
+            })
+        };
+        assert!(ask(Some(true)));
+        assert!(matches!(msg_rx.try_recv(), Ok(Msg::MorePages(id, 5)) if id == AgentId::new("local")));
+        assert!(!ask(Some(false)));
+        assert!(!ask(None), "the panel dropped the card (the task stopped)");
     }
 
     struct Ping(&'static str);
