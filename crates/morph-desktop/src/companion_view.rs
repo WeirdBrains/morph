@@ -268,6 +268,11 @@ impl CompanionView {
             TextInputEvent::Cancel => cx.emit(ShellRequest::Run(morph_ui::actions::Action::ToggleCompanions)),
             TextInputEvent::Tab { .. } | TextInputEvent::Changed => {}
         });
+        let serving = crate::companion_devices::ModelServing {
+            models: models.clone(),
+            companions: morph_core::profiles::profile_dir(home, profile).join("companions"),
+            busy: worker.busy(),
+        };
         let mut view = Self {
             theme,
             roster,
@@ -283,7 +288,9 @@ impl CompanionView {
             policy_base,
             synced,
             roster_unsaved,
-            devices: crate::companion_devices::CompanionDevices::new(home.to_path_buf(), profile.to_string()).with_lock(lock.clone()),
+            devices: crate::companion_devices::CompanionDevices::new(home.to_path_buf(), profile.to_string())
+                .with_lock(lock.clone())
+                .with_model_serving(serving),
             autoask: std::env::var("MORPH_COMPANION_AUTOASK").ok().filter(|q| !q.trim().is_empty()),
             made: Instant::now(),
             lock,

@@ -7,9 +7,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use morph_ai::{CompanionProfile, CompanionRoute, NodeRouter, Platform, route_companion};
+use morph_ai::{
+    AiStore, CompanionProfile, CompanionRoute, LocalInferHost, LocalModels, ModelChoice, ModelProvider, ModelStatus, NodeRouter, Platform,
+    route_companion, serving_choice,
+};
+use morph_services::infer_serving::{InferServing, serve_inference};
 use morph_services::node_router::{self, Capabilities, DeviceRouter, NodeDirectory};
 use weirdnet_agent::AgentKind;
+use weirdnet_agent::remote::infer::Admission;
 
 use crate::companion_host::{LockCheck, profile_lock};
 
@@ -18,6 +23,8 @@ const EVERY: Duration = Duration::from_secs(10);
 const ASK_TIMEOUT: Duration = Duration::from_secs(3);
 
 struct Links {
+    /// This device's model served to the linked ones, while the setting is on.
+    serving: Option<InferServing>,
     router: DeviceRouter,
     directory: NodeDirectory,
     /// The node's start time: a restarted node needs a new router.
@@ -31,25 +38,67 @@ pub struct CompanionDevices {
     checked: Option<Instant>,
     asking: Arc<AtomicBool>,
     locked: LockCheck,
+    serving: Option<ModelServing>,
 }
 
-/// What this desktop tells its linked devices. It does not serve models to them yet (that
-/// needs the `remote::infer` service, which comes with the `weirdnet-agent` 0.2.0 pin), so
-/// phones do not offload here.
-fn this_device() -> Capabilities {
-    Capabilities { platform: Platform::Desktop, serves_models: false }
+/// What serving this device's model needs from the panel: the models, the companions folder
+/// (the setting and the roster live there) and the worker's busy flag.
+#[derive(Clone)]
+pub struct ModelServing {
+    pub models: Arc<LocalModels>,
+    pub companions: PathBuf,
+    pub busy: Arc<AtomicBool>,
+}
+
+impl ModelServing {
+    /// "Serve my models to my other devices" (Settings > Agents), read live: it syncs and is
+    /// toggled from the settings page.
+    fn enabled(&self) -> bool {
+        morph_services::profile_io::file_store(&self.companions).load_settings().ok().flatten().is_some_and(|s| s.offload.serve)
+    }
+
+    /// The model served: the default local companion's.
+    fn choice(&self) -> ModelChoice {
+        let roster = morph_services::profile_io::file_store(&self.companions).load_roster().ok().flatten();
+        roster.map(|r| serving_choice(&r)).unwrap_or_else(|| ModelChoice::default_for(Platform::Desktop))
+    }
+
+    /// What this desktop tells its linked devices: it serves models when the setting is on and
+    /// the model is downloaded and runs on this CPU, so a device never offloads to one that
+    /// would refuse.
+    fn capabilities(&self) -> Capabilities {
+        let ready = matches!(self.models.status(&self.choice()), ModelStatus::Ready { .. });
+        Capabilities { platform: Platform::Desktop, serves_models: self.enabled() && ready }
+    }
+}
+
+/// Without model serving (tests) a device serves none.
+fn capabilities_of(serving: &Option<ModelServing>) -> Capabilities {
+    serving.as_ref().map(ModelServing::capabilities).unwrap_or(Capabilities { platform: Platform::Desktop, serves_models: false })
+}
+
+/// Whether inference is registered now: the setting is on and the profile is unlocked.
+fn wants_serving(enabled: bool, locked: bool) -> bool {
+    enabled && !locked
 }
 
 impl CompanionDevices {
     pub fn new(home: PathBuf, profile: String) -> Self {
         let locked = profile_lock(home.clone(), profile.clone());
-        Self { home, profile, links: None, checked: None, asking: Arc::new(AtomicBool::new(false)), locked }
+        Self { home, profile, links: None, checked: None, asking: Arc::new(AtomicBool::new(false)), locked, serving: None }
     }
 
     /// Follow the panel's profile lock check (the one its hosts refuse on), so the two never
     /// disagree; tests set their own.
     pub fn with_lock(self, locked: LockCheck) -> Self {
         Self { locked, ..self }
+    }
+
+    /// Serve this device's model to the linked devices while the setting is on (and the profile
+    /// is unlocked); the setting itself is read live by the host, so turning it off refuses at
+    /// once and the registration follows at the next tick.
+    pub fn with_model_serving(self, serving: ModelServing) -> Self {
+        Self { serving: Some(serving), ..self }
     }
 
     /// From the panel's poll: at most every [`EVERY`], follow the sync node (a router while it
@@ -59,13 +108,19 @@ impl CompanionDevices {
             return;
         }
         self.checked = Some(Instant::now());
+        // A locked profile reaches no device and serves nothing: the registration goes with it.
+        if (self.locked)() {
+            self.links = None;
+            return;
+        }
         let Some(started_at) = morph_services::sync::net_status(&self.home, &self.profile).map(|s| s.started_at) else {
             self.links = None;
             return;
         };
         if self.links.as_ref().is_none_or(|l| l.started_at != started_at) {
-            self.links = node_router::for_profile(&self.home, &self.profile, this_device)
-                .map(|(router, directory)| Links { router, directory, started_at })
+            let mine = self.serving.clone();
+            self.links = node_router::for_profile(&self.home, &self.profile, move || capabilities_of(&mine))
+                .map(|(router, directory)| Links { serving: None, router, directory, started_at })
                 .map_err(|e| {
                     if !matches!(e, morph_services::device_calls::DeviceCallError::Locked) {
                         eprintln!("morph-companions: linked devices: {e}");
@@ -73,6 +128,7 @@ impl CompanionDevices {
                 })
                 .ok();
         }
+        self.follow_serving();
         if let Some(l) = &self.links
             && !self.asking.swap(true, Ordering::SeqCst)
         {
@@ -81,6 +137,31 @@ impl CompanionDevices {
                 directory.refresh_blocking(&caller, ASK_TIMEOUT);
                 asking.store(false, Ordering::SeqCst);
             });
+        }
+    }
+
+    /// Register inference on the router while it should be served, drop it when it should not
+    /// (setting off) or when it ended (the node stopped accepting).
+    fn follow_serving(&mut self) {
+        let (Some(l), Some(s)) = (self.links.as_mut(), self.serving.as_ref()) else { return };
+        if l.serving.as_ref().is_some_and(|x| !x.running()) {
+            l.serving = None;
+        }
+        if !wants_serving(s.enabled(), (self.locked)()) {
+            l.serving = None;
+            return;
+        }
+        if l.serving.is_none() {
+            let s = s.clone();
+            let make = move || {
+                let (on, choice, busy) = (s.clone(), s.clone(), s.busy.clone());
+                LocalInferHost::new(s.models.clone() as Arc<dyn ModelProvider>, move || choice.choice(), move || on.enabled())
+                    .with_local_priority(move || busy.load(Ordering::SeqCst))
+            };
+            match serve_inference(&l.router, make, Some((self.home.clone(), self.profile.clone())), Admission::with_queue(1, 2)) {
+                Ok(serving) => l.serving = Some(serving),
+                Err(e) => eprintln!("morph-companions: serving models to linked devices: {e}"),
+            }
         }
     }
 
@@ -121,6 +202,14 @@ impl CompanionDevices {
 mod tests {
     use super::*;
     use morph_ai::ModelChoice;
+
+    #[test]
+    fn inference_is_registered_only_while_the_setting_is_on_and_the_profile_unlocked() {
+        assert!(wants_serving(true, false));
+        assert!(!wants_serving(false, false), "off");
+        assert!(!wants_serving(true, true), "locked");
+        assert!(!capabilities_of(&None).serves_models, "no model serving: nothing is offered to offload to");
+    }
 
     #[test]
     fn without_sync_a_node_companion_says_why_and_local_ones_run() {

@@ -633,6 +633,8 @@ pub struct Worker {
     canceller: Canceller,
     approval: Slot,
     pages: PagesSlot,
+    /// A task is running on the worker (so a remote turn waits its turn: this device's own first).
+    busy: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// No tools: the registry is the same empty one for every task.
@@ -770,6 +772,8 @@ impl Worker {
             calls: hosts.as_ref().and_then(|h| h.calls.clone()).map(Mutex::new),
         });
         let exclusions = Exclusions::default();
+        let busy = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let running = busy.clone();
         let sources: Vec<Arc<dyn ToolSource>> = match hosts {
             Some(h) => {
                 let report = |inner: Arc<dyn ToolSource>| -> Arc<dyn ToolSource> {
@@ -799,6 +803,7 @@ impl Worker {
                         autos.lock().unwrap().insert(companion.clone());
                     }
                     exclusions.set(options.excluded.clone());
+                    running.store(true, std::sync::atomic::Ordering::SeqCst);
                     let task = sessions.run_with(&roster, &companion, &input, options, |u| {
                         let _ = tx.send(Msg::Update(id.clone(), u));
                     });
@@ -806,6 +811,7 @@ impl Worker {
                         Some(handle) => handle.block_on(task),
                         None => rt.block_on(task),
                     };
+                    running.store(false, std::sync::atomic::Ordering::SeqCst);
                     autos.lock().unwrap().remove(&companion);
                     exclusions.set(Vec::new());
                     let _ = msg_tx.send(Msg::Done(companion, result.map(Box::new)));
@@ -813,7 +819,12 @@ impl Worker {
             })
             .expect("spawn the companion worker");
         let canceller = can_rx.recv().expect("the worker reports its canceller");
-        Self { cmd, msgs, canceller, approval, pages }
+        Self { cmd, msgs, canceller, approval, pages, busy }
+    }
+
+    /// Whether a task is running now.
+    pub fn busy(&self) -> Arc<std::sync::atomic::AtomicBool> {
+        self.busy.clone()
     }
 
     #[cfg(test)]

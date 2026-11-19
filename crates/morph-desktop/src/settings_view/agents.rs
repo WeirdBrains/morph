@@ -36,6 +36,11 @@ pub fn load_roster(dir: &Path) -> Roster {
     }
 }
 
+/// The model this device serves to its other devices: the default local companion's.
+pub fn roster_model(dir: &Path) -> ModelChoice {
+    morph_ai::serving_choice(&load_roster(dir))
+}
+
 fn edit_roster(dir: &Path, f: impl FnOnce(&mut Roster) -> Result<(), morph_ai::RosterError>) -> Result<(), String> {
     let mut roster = load_roster(dir);
     f(&mut roster).map_err(|e| e.to_string())?;
@@ -143,6 +148,33 @@ pub fn set_offload_mode(dir: &Path, mode: OffloadMode) -> Result<(), String> {
     let mut s = load_settings(dir);
     s.offload.mode = mode;
     store(dir).save_settings(&s).map_err(|e| e.to_string())
+}
+
+/// "Serve my models to my other devices": this device answers model turns from the user's
+/// linked devices with its local model. Synced with the other agent settings.
+pub fn set_serve_models(dir: &Path, on: bool) -> Result<(), String> {
+    let mut s = load_settings(dir);
+    s.offload.serve = on;
+    store(dir).save_settings(&s).map_err(|e| e.to_string())
+}
+
+/// What the serving row says besides the switch: what is served, or why nothing is.
+pub fn serving_note(on: bool, cpu: Option<&CpuLimit>, model: &ModelChoice, state: &ModelState) -> String {
+    if !on {
+        return "Off: your other devices run their own model turns.".into();
+    }
+    if let Some(c) = cpu {
+        return format!("On, but nothing is served: {}.", c.reason());
+    }
+    match state {
+        ModelState::Installed => {
+            format!("On: {} is served to your linked devices, one turn at a time, and your own questions here go first.", model.label())
+        }
+        ModelState::NotDownloaded { .. } => {
+            format!("On, but {} is not downloaded yet, so other devices run their own turns until it is.", model.label())
+        }
+        ModelState::NotInCatalog => format!("On, but {} is not a model Morph can run locally, so nothing is served.", model.label()),
+    }
 }
 
 /// Whether the model picker and companion setup offer local models: not on a CPU that lacks what
@@ -691,6 +723,24 @@ impl SettingsView {
             rate_chips.into_any_element(),
         ));
 
+        // Serve this device's model to the user's other devices (off until turned on).
+        let serve = load_settings(&dir).offload.serve;
+        let served = roster_model(&dir);
+        let note = serving_note(serve, self.agents.cpu.as_ref(), &served, &model_state(&served, &ModelStore::from_env()));
+        let serve_chips =
+            div().flex().flex_row().gap(px(6.)).children([(true, "On"), (false, "Off")].into_iter().enumerate().map(|(i, (on, label))| {
+                chip(t, ("agents-serve", i), label, serve == on).on_click(cx.listener(move |this, _, _, cx| {
+                    this.agents_apply(|d| set_serve_models(d, on), cx);
+                }))
+            }));
+        rows.push(self.plain_row(
+            "Serve my models to my other devices",
+            format!(
+                "Lets your linked, unrevoked devices (a phone, say) use this device's local model for their turns. Only your own devices can ask, never while this profile is locked, and one turn at a time. {note} Syncs with your other agent settings, so a device that cannot run local models serves nothing."
+            ),
+            serve_chips.into_any_element(),
+        ));
+
         // Connected servers: MCP servers the companions use (not Morph's own server, below).
         rows.extend(self.servers_rows(&dir, cx));
 
@@ -826,6 +876,22 @@ mod tests {
         set_offload_mode(&p, OffloadMode::Always).unwrap();
         assert_eq!(load_settings(&p).offload.mode, OffloadMode::Always);
         assert_eq!(load_settings(&p).search_provider, SearchProvider::DuckDuckGo, "other settings stay");
+    }
+
+    #[test]
+    fn serving_is_off_by_default_saved_with_the_settings_and_explained() {
+        let (_d, p) = tmp();
+        assert!(!load_settings(&p).offload.serve, "off until turned on");
+        set_serve_models(&p, true).unwrap();
+        assert!(load_settings(&p).offload.serve);
+        assert_eq!(load_settings(&p).offload.mode, OffloadMode::Auto, "the offload choice stays");
+        assert_eq!(roster_model(&p), ModelChoice::Gemma4E4B);
+        let m = ModelChoice::Gemma4E4B;
+        assert!(serving_note(false, None, &m, &ModelState::Installed).starts_with("Off"));
+        assert!(serving_note(true, None, &m, &ModelState::Installed).contains("Gemma 4 E4B is served"));
+        assert!(serving_note(true, None, &m, &ModelState::NotDownloaded { size: 1, partial: 0 }).contains("not downloaded"));
+        let cpu = CpuLimit { missing: vec!["avx2".into()] };
+        assert!(serving_note(true, Some(&cpu), &m, &ModelState::Installed).contains("AVX2"));
     }
 
     #[test]
