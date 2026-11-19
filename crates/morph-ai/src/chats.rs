@@ -5,9 +5,6 @@
 use serde::{Deserialize, Serialize};
 use weirdnet_agent::AgentId;
 
-/// Answers longer than this are clipped in the synced copy (a sync op must fit one page).
-pub const MAX_SYNCED_ANSWER: usize = 48 * 1024;
-
 /// One question and its answer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChatTurn {
@@ -29,18 +26,10 @@ impl ChatTurn {
     pub fn new(companion: AgentId, question: impl Into<String>, answer: impl Into<String>, at_ms: u64) -> Self {
         Self { id: crate::ids::new_id("chat"), companion, question: question.into(), answer: answer.into(), sources: Vec::new(), at_ms, device: None }
     }
-
-    /// The copy that syncs: the answer clipped to [`MAX_SYNCED_ANSWER`] bytes (see [`clip_markdown`]).
-    pub fn for_sync(&self) -> ChatTurn {
-        let mut t = self.clone();
-        if t.answer.len() > MAX_SYNCED_ANSWER {
-            t.answer = clip_markdown(&t.answer, MAX_SYNCED_ANSWER);
-        }
-        t
-    }
 }
 
-/// The note a clipped answer ends with.
+/// The note a clipped answer ends with. Turns sync whole; only the copy peers on an older Morph
+/// get for a long turn is clipped (`morph-services` `companion_sync`).
 pub const CLIP_NOTE: &str = "*(clipped on this device; the full answer is on the device that ran it)*";
 
 /// `text` cut to at most `keep` bytes on a char boundary, then the clip note. A code fence the
@@ -145,16 +134,6 @@ mod tests {
     }
 
     #[test]
-    fn long_answers_are_clipped_for_sync_on_a_char_boundary() {
-        let t = ChatTurn::new(AgentId::new("a"), "q", "é".repeat(MAX_SYNCED_ANSWER), 1);
-        let s = t.for_sync();
-        assert!(s.answer.len() < t.answer.len());
-        assert!(s.answer.ends_with(CLIP_NOTE));
-        let short = ChatTurn::new(AgentId::new("a"), "q", "short", 1);
-        assert_eq!(short.for_sync(), short);
-    }
-
-    #[test]
     fn a_clip_inside_a_code_fence_closes_it_before_the_note() {
         let text = format!("Intro\n\n```rust\n{}\n```\n\nAfter", "let x = 1;\n".repeat(50));
         let c = clip_markdown(&text, 40);
@@ -195,9 +174,9 @@ mod tests {
             let body = body.strip_suffix("\n```").unwrap_or(body);
             assert!(body.len() <= keep && text.starts_with(body), "keep {keep}: {body:?}");
         }
-        let long = ChatTurn::new(AgentId::new("a"), "q", format!("```\n{}", "🦀".repeat(MAX_SYNCED_ANSWER)), 1);
-        let s = long.for_sync();
-        assert!(s.answer.ends_with(&format!("🦀\n```\n\n{CLIP_NOTE}")));
-        assert_eq!(s, long.for_sync());
+        let long = format!("```\n{}", "🦀".repeat(1000));
+        let s = clip_markdown(&long, 2001);
+        assert!(s.ends_with(&format!("🦀\n```\n\n{CLIP_NOTE}")), "a cut inside a char backs off to its start");
+        assert_eq!(s, clip_markdown(&long, 2001));
     }
 }
