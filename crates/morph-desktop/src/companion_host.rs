@@ -498,6 +498,7 @@ impl Worker {
         Self { cmd, msgs, canceller, approval }
     }
 
+    #[cfg(test)]
     pub fn run(&self, roster: Roster, companion: AgentId, input: String) {
         self.run_with(roster, companion, input, TaskOptions::default());
     }
