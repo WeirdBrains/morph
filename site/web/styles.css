@@ -143,9 +143,17 @@ pre code {
   color: var(--morph-on-primary);
 }
 
+/* Side margins: 20px on phones (a little more beside a notch), 32px from 640px up. */
 .wrap {
-  width: min(72rem, calc(100% - 2rem));
+  --gutter: max(1.25rem, env(safe-area-inset-left), env(safe-area-inset-right));
+  width: min(72rem, calc(100% - 2 * var(--gutter)));
   margin-inline: auto;
+}
+
+@media (min-width: 640px) {
+  .wrap {
+    --gutter: 2rem;
+  }
 }
 
 .site-header {
@@ -726,5 +734,23 @@ td:first-child {
 
   .page-hero {
     padding: 4rem 0 1.5rem;
+  }
+}
+
+/* Phones: tables and commands fit the screen instead of scrolling sideways. */
+@media (max-width: 480px) {
+  th,
+  td {
+    padding: 0.5rem 0.45rem;
+  }
+
+  td:first-child {
+    white-space: normal;
+  }
+
+  pre,
+  pre code {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
   }
 }
