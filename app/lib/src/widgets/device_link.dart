@@ -116,6 +116,9 @@ class _Sas extends StatelessWidget {
 
 String _friendlyLinkError(Object e) {
   final text = '$e'.replaceFirst(RegExp(r'^(Bad state|Exception): '), '');
+  if (text.contains('profile locked')) {
+    return 'This profile is locked. Unlock it, then open the code again.';
+  }
   if (text.contains('password_open') ||
       text.contains('decrypt') ||
       text.contains('wrong password')) {
@@ -273,7 +276,7 @@ class _MorphLinkFromDeviceState extends State<MorphLinkFromDevice> {
     }
     if (!morphIsLinkInvite(invite)) {
       setState(
-        () => _error = invite.startsWith(morphLinkOfferPrefix)
+        () => _error = morphIsLinkOffer(invite)
             ? 'That is a new device\'s code. Scan it under Add a device on '
                   'the device that has the identity.'
             : 'That is not a Morph device code.',
@@ -606,12 +609,17 @@ class MorphAddDevice extends StatefulWidget {
     this.scan,
     this.onClose,
     this.onInvite,
+    this.link,
   });
 
   final MorphApi api;
   final String profileId;
   final String profileName;
   final String? home;
+
+  /// A new device's code opened from outside (Morph's or a Ymir node's),
+  /// put in the link field; pairing still waits for the password.
+  final String? link;
 
   /// Opens the camera and returns the scanned text; null hides the button.
   final Future<String?> Function()? scan;
@@ -627,7 +635,7 @@ class MorphAddDevice extends StatefulWidget {
 
 class _MorphAddDeviceState extends State<MorphAddDevice> {
   final _password = TextEditingController();
-  final _link = TextEditingController();
+  late final _link = TextEditingController(text: widget.link?.trim() ?? '');
   MorphLinkPairing? _pairing;
   bool _busy = false;
   bool _sent = false;
@@ -672,7 +680,7 @@ class _MorphAddDeviceState extends State<MorphAddDevice> {
       setState(() => _error = 'Enter this profile\'s password.');
       return;
     }
-    if (!link.startsWith(morphLinkOfferPrefix)) {
+    if (!morphIsLinkOffer(link)) {
       setState(
         () => _error = 'Scan the code on the new device, or paste its link.',
       );
@@ -834,7 +842,7 @@ class _MorphAddDeviceState extends State<MorphAddDevice> {
           enableSuggestions: false,
           decoration: const InputDecoration(
             labelText: 'Or paste the link',
-            hintText: 'weirdnet-morph://link/…',
+            hintText: 'weirdnet-morph://link/… or weirdnet-ymir://link/…',
           ),
         ),
         const SizedBox(height: 16),

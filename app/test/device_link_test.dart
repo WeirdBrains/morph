@@ -198,6 +198,52 @@ void main() {
     expect(api.linkCalls, isNot(contains('pair-cancel 9')));
   });
 
+  testWidgets('existing device: an opened Ymir code waits for the password', (
+    tester,
+  ) async {
+    final api = FakeMorphApi();
+    await api.createProfileIdentity('work', 'right password');
+    await _host(
+      tester,
+      MorphAddDevice(
+        api: api,
+        profileId: 'work',
+        profileName: 'Work',
+        link: ' weirdnet-ymir://link/opened ',
+      ),
+    );
+    final field = tester.widget<TextField>(
+      find.byKey(const Key('add-device-link')),
+    );
+    expect(field.controller!.text, 'weirdnet-ymir://link/opened');
+    expect(api.linkCalls, isEmpty);
+    await tester.tap(find.byKey(const Key('add-device-pair')));
+    await tester.pump();
+    expect(find.text('Enter this profile\'s password.'), findsOneWidget);
+    expect(api.linkCalls, isEmpty);
+
+    api.lockedProfiles.add('work');
+    await tester.enterText(
+      find.byKey(const Key('add-device-password')),
+      'right password',
+    );
+    await tester.tap(find.byKey(const Key('add-device-pair')));
+    await tester.pump();
+    expect(find.textContaining('This profile is locked'), findsOneWidget);
+    expect(api.linkCalls, isEmpty);
+
+    api.lockedProfiles.clear();
+    await tester.enterText(
+      find.byKey(const Key('add-device-password')),
+      'right password',
+    );
+    await tester.tap(find.byKey(const Key('add-device-pair')));
+    await tester.pump();
+    expect(api.linkCalls, ['pair work weirdnet-ymir://link/opened']);
+    expect(find.textContaining('Link Ymir on gpu-box?'), findsOneWidget);
+    expect(find.text('042 917'), findsOneWidget);
+  });
+
   testWidgets('existing device: a scan fills the link and pairs', (
     tester,
   ) async {

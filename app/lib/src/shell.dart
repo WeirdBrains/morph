@@ -462,6 +462,10 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
       await _openLinkInvite(url);
       return;
     }
+    if (morphIsLinkOffer(url)) {
+      await _openLinkOffer(url.trim());
+      return;
+    }
     if (_tabHasPage(tabs.activeId) || _showSwitcher) {
       _openTab();
     }
@@ -480,6 +484,10 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
     _appCalls.remove(tabs.activeId);
     if (morphIsLinkInvite(raw.trim())) {
       await _openLinkInvite(raw.trim());
+      return;
+    }
+    if (morphIsLinkOffer(raw)) {
+      await _openLinkOffer(raw.trim());
       return;
     }
     final url = widget.api.omniboxTargetFor(raw, _tabEngine);
@@ -1251,6 +1259,49 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
     _onOverlayClosed();
   }
 
+  /// A new device's link code (Morph's, or a Ymir node's from `ymirctl pool
+  /// link`), opened or typed: Add a device with it filled in. The password
+  /// and the six-digit check still come first; a locked profile refuses it
+  /// in Rust. A profile without an identity has nothing to add it to.
+  Future<void> _openLinkOffer(String link) async {
+    if (!mounted) {
+      return;
+    }
+    final profileId = _profileId;
+    MorphIdentity? identity = _identity;
+    try {
+      identity = await widget.api.profileIdentity(profileId, home: _home);
+    } catch (_) {
+      // Keep what the shell knows.
+    }
+    if (!mounted || profileId != _profileId) {
+      return;
+    }
+    if (identity != null) {
+      await _openAddDevice(link: link);
+      return;
+    }
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        key: const Key('link-offer-no-identity'),
+        title: const Text('This profile has no identity yet'),
+        content: Text(
+          'That code is from a device that wants to join your devices. '
+          '$_profileName has no identity to add it to: create or restore '
+          'one first, or open the code in a profile that has one.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+    _onOverlayClosed();
+  }
+
   Future<void> _openOnboarding() async {
     if (_onboardingOpen || !mounted) {
       return;
@@ -1449,7 +1500,7 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
 
   /// QR login, existing-device side: send this profile's identity to a new
   /// device that shows a link code.
-  Future<void> _openAddDevice() async {
+  Future<void> _openAddDevice({String? link}) async {
     if (!mounted) {
       return;
     }
@@ -1466,6 +1517,7 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
               profileName: _profileName,
               home: _home,
               scan: _scanQr,
+              link: link,
               onClose: () => Navigator.of(panel).pop(),
               onInvite: (invite) {
                 Navigator.of(panel).pop();

@@ -36,6 +36,16 @@
 				<string>weirdnet-morph</string>
 			</array>
 		</dict>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>CFBundleURLName</key>
+			<string>org.weirdbrains.morph.weirdnet-ymir</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>weirdnet-ymir</string>
+			</array>
+		</dict>
 	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>Morph uses the camera to scan the code another of your devices shows when you link them.</string>

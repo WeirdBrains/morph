@@ -2,14 +2,15 @@ import 'dart:async';
 
 import 'package:flutter/services.dart';
 
-import 'api.dart' show morphIsLinkInvite;
+import 'api.dart' show morphIsLinkInvite, morphIsLinkOffer;
 
 /// Web links handed to Morph by the system: command-line arguments on Linux
 /// and Windows (the desktop entry's `%u`, the registry's `"%1"`), and the
 /// platform channel on Android (ACTION_VIEW intents), iOS (scene URL
 /// contexts) and macOS (Apple Events). The shell opens each web link in a new
 /// tab of the active profile; a `weirdnet-morph://invite/…` link opens device
-/// linking instead.
+/// linking instead, and a new device's `weirdnet-morph://link/…` or a Ymir
+/// node's `weirdnet-ymir://link/…` code opens Add a device.
 ///
 /// On Android, text shared to Morph (ACTION_SEND / SEND_MULTIPLE) or picked
 /// from "Search in Morph" (ACTION_PROCESS_TEXT) arrives too: its first web
@@ -35,10 +36,11 @@ class MorphIncomingLinks {
         uri.host.isNotEmpty;
   }
 
-  /// A link the shell opens: a web link, or another device's
-  /// `weirdnet-morph://invite/…` code (device linking).
+  /// A link the shell opens: a web link, another device's
+  /// `weirdnet-morph://invite/…` code, or a new device's (or Ymir node's)
+  /// link code (device linking).
   static bool isOpenable(String value) =>
-      isWebLink(value) || morphIsLinkInvite(value);
+      isWebLink(value) || morphIsLinkInvite(value) || morphIsLinkOffer(value);
 
   /// Where shared text should go: the first web link in it (a lone
   /// `host.tld/path` counts), else a search for the text.

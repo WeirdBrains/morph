@@ -19,7 +19,7 @@ import UIKit
 }
 
 /// `weirdnet-morph://` links opened from other apps (a scanned device-link
-/// invite, for one), on the channel Android uses too
+/// invite, for one) and Ymir's `weirdnet-ymir://link/…` codes, on the channel Android uses too
 /// (`MorphIncomingLinks` in Dart): the launch link waits until Dart asks for
 /// it with `initialLink`; later ones are pushed with `open`.
 final class MorphIncomingLinks: NSObject, FlutterPlugin, FlutterSceneLifeCycleDelegate {
@@ -81,10 +81,10 @@ final class MorphIncomingLinks: NSObject, FlutterPlugin, FlutterSceneLifeCycleDe
     }
   }
 
-  /// Morph's own scheme and web links; nothing else.
+  /// Morph's own scheme, Ymir's device-link codes and web links; nothing else.
   static func accepts(_ url: URL) -> Bool {
     switch url.scheme?.lowercased() {
-    case "weirdnet-morph", "http", "https": return true
+    case "weirdnet-morph", "weirdnet-ymir", "http", "https": return true
     default: return false
     }
   }

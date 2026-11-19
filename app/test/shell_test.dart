@@ -1244,6 +1244,71 @@ void main() {
     }
   });
 
+  testWidgets(
+    'a Ymir link code opens Add a device, or explains without an identity',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      final view = tester.view;
+      view.physicalSize = const Size(412, 915);
+      view.devicePixelRatio = 1.0;
+      final api = FakeMorphApi();
+      const code = 'weirdnet-ymir://link/gqF2AQ';
+      try {
+        await tester.pumpWidget(
+          MorphApp(
+            api: api,
+            home: '/tmp/morph-does-not-exist',
+            subscribeToTicks: false,
+            loadPageBridgeAsset: false,
+          ),
+        );
+        await _pumpUntilIdentity(tester);
+        await tester.pumpAndSettle();
+        final state = tester.state<MorphShellState>(find.byType(MorphShell));
+        unawaited(state.openIncomingLink(' $code '));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('add-device-panel')), findsOneWidget);
+        final field = tester.widget<TextField>(
+          find.byKey(const Key('add-device-link')),
+        );
+        expect(field.controller!.text, code);
+        expect(
+          api.linkCalls,
+          isEmpty,
+          reason: 'nothing dialled before the password',
+        );
+        await tester.enterText(
+          find.byKey(const Key('add-device-password')),
+          'any password',
+        );
+        await tester.tap(find.byKey(const Key('add-device-pair')));
+        await tester.pumpAndSettle();
+        expect(api.linkCalls, ['pair default $code']);
+        expect(find.textContaining('Link Ymir on gpu-box?'), findsOneWidget);
+        expect(find.text('042 917'), findsOneWidget);
+        expect(state.tabs.tabs, hasLength(1), reason: 'no tab for the code');
+
+        // No identity: nothing to add the device to.
+        api.onboarded = false;
+        api.identitiesByProfile.remove('default');
+        await tester.tap(find.byKey(const Key('add-device-cancel')));
+        await tester.pumpAndSettle();
+        expect(api.linkCalls.last, 'pair-cancel 9');
+        expect(find.byKey(const Key('add-device-panel')), findsNothing);
+        unawaited(state.openIncomingLink(code));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('link-offer-no-identity')), findsOneWidget);
+        expect(find.byKey(const Key('add-device-panel')), findsNothing);
+        await tester.tap(find.text('OK'));
+        await tester.pumpAndSettle();
+        expect(api.linkCalls.last, 'pair-cancel 9', reason: 'nothing dialled');
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+        view.reset();
+      }
+    },
+  );
+
   testWidgets('an invite link opens linking, or explains with an identity', (
     tester,
   ) async {

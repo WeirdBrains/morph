@@ -529,6 +529,18 @@ const morphLinkInvitePrefix = 'weirdnet-morph://invite/';
 /// The prefix of a new device's link (Link from another device).
 const morphLinkOfferPrefix = 'weirdnet-morph://link/';
 
+/// The prefix of a Ymir node's link (`ymirctl pool link`): added here like
+/// a new Morph device, after the password and the six-digit check.
+const morphYmirLinkOfferPrefix = 'weirdnet-ymir://link/';
+
+/// Whether [text] is a new device's link Morph can add (Morph's or a Ymir
+/// node's), by its prefix; Rust checks the rest when it pairs.
+bool morphIsLinkOffer(String text) {
+  final t = text.trim().toLowerCase();
+  return t.startsWith(morphLinkOfferPrefix) ||
+      t.startsWith(morphYmirLinkOfferPrefix);
+}
+
 /// Whether [text] is an existing device's invite rather than a new device's
 /// link.
 bool morphIsLinkInvite(String text) =>

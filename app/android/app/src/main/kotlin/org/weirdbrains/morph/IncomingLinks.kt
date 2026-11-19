@@ -5,7 +5,7 @@ import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodChannel
 
 /**
- * What other apps hand Morph: http(s) and weirdnet-morph:// links
+ * What other apps hand Morph: http(s), weirdnet-morph:// and weirdnet-ymir:// links
  * (ACTION_VIEW) and shared or
  * selected text (ACTION_SEND, ACTION_SEND_MULTIPLE, ACTION_PROCESS_TEXT).
  * Dart decides whether shared text is a link or a search. The launch
@@ -49,7 +49,7 @@ object IncomingLinks {
         }
         val data = intent.data ?: return null
         val scheme = data.scheme?.lowercase()
-        return if (scheme == "http" || scheme == "https" || scheme == "weirdnet-morph") data.toString() else null
+        return if (scheme == "http" || scheme == "https" || scheme == "weirdnet-morph" || scheme == "weirdnet-ymir") data.toString() else null
     }
 
     /** The text another app shared or selected, or null. */

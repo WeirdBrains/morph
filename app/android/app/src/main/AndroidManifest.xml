@@ -49,12 +49,14 @@
                 <data android:scheme="https"/>
             </intent-filter>
             <!-- Morph's own links (weirdnet-morph://invite/… from a device
-                 link code scanned with the system camera). -->
+                 link code scanned with the system camera), and a Ymir
+                 node's device-link code (weirdnet-ymir://link/…). -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW"/>
                 <category android:name="android.intent.category.DEFAULT"/>
                 <category android:name="android.intent.category.BROWSABLE"/>
                 <data android:scheme="weirdnet-morph"/>
+                <data android:scheme="weirdnet-ymir"/>
             </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>

@@ -131,13 +131,25 @@ void main() {
     await links.dispose();
   });
 
+  test('new devices\' and Ymir nodes\' link codes come through', () {
+    expect(MorphIncomingLinks.isOpenable('weirdnet-morph://link/abc'), isTrue);
+    expect(MorphIncomingLinks.isOpenable('weirdnet-ymir://link/abc'), isTrue);
+    expect(MorphIncomingLinks.isOpenable(' WEIRDNET-YMIR://link/abc '), isTrue);
+    expect(
+      MorphIncomingLinks.isOpenable('weirdnet-ymir://invite/abc'),
+      isFalse,
+    );
+    expect(MorphIncomingLinks.isOpenable('weirdnet-bragi://link/abc'), isFalse);
+  });
+
   test('device-link invites come through; other Morph links do not', () async {
     expect(
       MorphIncomingLinks.isOpenable('weirdnet-morph://invite/abc'),
       isTrue,
     );
-    expect(MorphIncomingLinks.isOpenable('weirdnet-morph://link/abc'), isFalse);
     expect(MorphIncomingLinks.isOpenable('weirdnet-morph://peer/x'), isFalse);
+    expect(MorphIncomingLinks.isOpenable('weirdnet-ymir://peer/x'), isFalse);
+    expect(MorphIncomingLinks.isOpenable('weirdnet://link/abc'), isFalse);
     messenger.setMockMethodCallHandler(channel, (call) async {
       return switch (call.method) {
         'initialLink' => 'weirdnet-morph://invite/launch',

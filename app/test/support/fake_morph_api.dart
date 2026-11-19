@@ -688,6 +688,9 @@ class FakeMorphApi implements MorphApi {
   MorphLinkStatus linkStatus = const MorphLinkStatus(MorphLinkState.waiting);
   String linkSas = '042917';
 
+  /// Profiles whose Add a device refuses as Rust does while locked.
+  final lockedProfiles = <String>{};
+
   /// The identity a finished link stores (the other device's).
   MorphIdentity linkedIdentity = const MorphIdentity(
     userId: 'linkeduser0000000000000000000000',
@@ -758,14 +761,18 @@ class FakeMorphApi implements MorphApi {
     if (sealed != null && sealed.password != password) {
       throw StateError('wrong password');
     }
-    if (!link.startsWith('weirdnet-morph://link/')) {
+    if (lockedProfiles.contains(profileId)) {
+      throw StateError('profile locked');
+    }
+    final ymir = link.startsWith('weirdnet-ymir://link/');
+    if (!link.startsWith('weirdnet-morph://link/') && !ymir) {
       throw StateError('not a Morph link');
     }
     linkCalls.add('pair $profileId $link');
     return MorphLinkPairing(
       session: 9,
       sas: linkSas,
-      device: 'Morph on laptop',
+      device: ymir ? 'Ymir on gpu-box' : 'Morph on laptop',
     );
   }
 
