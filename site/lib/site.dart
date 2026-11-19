@@ -9,6 +9,17 @@ const siteDescription =
     'The browser is one part of the app, next to chat, notes, projects, '
     'and a peer-to-peer web on Weirdnet.';
 const githubUrl = 'https://github.com/WeirdBrains/morph';
+const weirdnetUrl = 'https://net.weirdbrains.com';
 const taurUrl = 'https://pkg.taur.weirdbrains.com';
 const ogImageUrl = '$siteUrl/images/morph-icon-512.png';
 const ogImageAlt = 'The Morph app icon: a white M with cyan and magenta glitch slices.';
+
+/// The latest published release (GitHub release, not a pre-release).
+const latestVersion = '0.2.0';
+const latestDate = 'November 18, 2026';
+const releasesUrl = '$githubUrl/releases';
+const latestReleaseUrl = '$githubUrl/releases/tag/v$latestVersion';
+const changelogUrl = '$githubUrl/blob/main/CHANGELOG.md';
+const unsignedDocsUrl = '$githubUrl/blob/main/docs/install-macos-windows.md';
+
+String assetUrl(String name) => '$githubUrl/releases/download/v$latestVersion/$name';

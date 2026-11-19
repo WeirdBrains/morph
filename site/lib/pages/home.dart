@@ -1,330 +1,213 @@
 import 'package:jaspr/dom.dart';
 import 'package:jaspr/jaspr.dart';
 
+import '../components/layout.dart';
 import '../site.dart';
 
+/// The front page. Old one-page anchors (#about, #features, #built,
+/// #platforms, #install) still land on a matching section.
 class Home extends StatelessComponent {
   const Home({super.key});
 
   @override
   Component build(BuildContext context) {
-    return Component.element(
-      tag: 'main',
-      id: 'content',
-      children: [
-        section(
-          [
+    return Component.fragment([
+      section(
+        [
+          div([
+            p([Component.text('Version $latestVersion · Linux, macOS, Windows and Android')], classes: 'status'),
+            h1([Component.text(siteTagline)]),
+            p([
+              Component.text(
+                'The browser is one part of the app, next to local AI, projects, notes, and a peer-to-peer web.',
+              ),
+            ], classes: 'lede'),
+            p([Component.text('Morph is built so your data stays yours, and nothing leaks.')], classes: 'support'),
             div([
-              p([Component.text('Early development')], classes: 'status'),
-              h1([Component.text(siteTagline)]),
+              a([Component.text('Download Morph $latestVersion')], href: '/download', classes: 'button button-primary'),
+              a([Component.text('See the features')], href: '/features', classes: 'button button-ghost'),
+            ], classes: 'actions'),
+          ], classes: 'hero-inner'),
+          shot(
+            'screenshot-main-tabs.webp',
+            'Morph on Linux with four tabs open and a tide pool field guide page loaded.',
+            'Morph $latestVersion on Linux.',
+            lazy: false,
+          ),
+        ],
+        classes: 'hero hero-split wrap',
+        id: 'top',
+      ),
+      section(
+        [
+          div([
+            h2([Component.text('What Morph is')]),
+            div([
               p([
                 Component.text(
-                  'The browser is one part of the app, next to local AI, projects, notes, '
-                  'and a peer-to-peer web.',
+                  'Morph is a private, decentralized browser with local AI built in. It is meant to be a research '
+                  'assistant, a rubber duck, and a journaler: a place for both short-term and long-term work on the web.',
                 ),
-              ], classes: 'lede'),
+              ]),
               p([
                 Component.text(
-                  'Morph is built so your data stays yours, and nothing leaks.',
+                  'The desktop app is a host for swappable components. Browsing is one of them, next to your '
+                  'bookmarks, history, identity and settings today, and chat, notes and projects as they arrive.',
                 ),
-              ], classes: 'support'),
-              div([
-                a([Component.text('Install')], href: '#install', classes: 'button button-primary'),
-                a(
-                  [Component.text('View the source on GitHub')],
-                  href: githubUrl,
-                  target: Target.blank,
-                  attributes: {'rel': 'noopener noreferrer'},
-                  classes: 'button button-ghost',
-                ),
-              ], classes: 'actions'),
-            ], classes: 'hero-inner'),
-          ],
-          classes: 'hero wrap',
-          id: 'top',
-        ),
-        section(
-          [
+              ]),
+            ], classes: 'prose'),
+          ], classes: 'wrap'),
+        ],
+        classes: 'band',
+        id: 'about',
+      ),
+      section(
+        [
+          div([
+            h2([Component.text('A look at Morph')]),
+            p([
+              Component.text('Real screenshots of Morph $latestVersion, taken with a demo profile.'),
+            ], classes: 'intro'),
             div([
-              h2([Component.text('What Morph is')]),
-              div([
-                p([
-                  Component.text(
-                    'Morph is a private, decentralized browser with local AI built in. '
-                    'It is a research assistant, a rubber duck, and a journaler: a place '
-                    'for both short-term and long-term work on the web.',
-                  ),
-                ]),
-                p([
-                  Component.text(
-                    'The desktop shell is a host for swappable components. Browsing is '
-                    'one of those components, sitting next to chat, notes, projects, and '
-                    'the people you are connected to.',
-                  ),
-                ]),
-                p([
-                  Component.text(
-                    'It is standards-based, with pages rendered in the system web view on '
-                    'every platform. A Rust core owns your identity, data, networking, and '
-                    'AI. The UI only draws the screen and handles input.',
-                  ),
-                ]),
-              ], classes: 'prose'),
-            ], classes: 'wrap'),
-          ],
-          classes: 'band',
-          id: 'about',
-        ),
-        section(
-          [
-            div([
-              h2([Component.text('Features')]),
-              p([
-                Component.text(
-                  'These are the parts Morph is designed around. Some are already in '
-                  'progress; others are planned in the project priorities.',
-                ),
-              ], classes: 'intro'),
-              div([
-                _feature(
-                  'A standards-based browser',
-                  'Pages render in the system web view: WebKit on Linux, WKWebView on '
-                      'Apple platforms, WebView2 on Windows, and Android WebView. The '
-                      'browser is one component of the app, not the whole app.',
-                ),
-                _feature(
-                  'Local AI',
-                  'Local models are on by default, with one switch to turn them off. '
-                      'Morph starts as a chat partner and rubber duck. Later it becomes a '
-                      'Student that can learn from the browsing you opt into, and a '
-                      'Researcher that keeps research journals across the web, your peers, '
-                      'and your chats.',
-                ),
-                _feature(
-                  'Projects and code spaces',
-                  'Projects include templates, notes, a code editor, and code spaces — '
-                      'groups of repos and folders. They are Rust first. A project can be '
-                      'private (the default) or public, and gated or open. Public projects '
-                      'can be served over ordinary HTTPS at your own dynamic DNS name.',
-                ),
-                _feature(
-                  'A peer-to-peer web on Weirdnet',
-                  'You get one key identity, shared with Muninn. Peer sites live at ',
-                  after: [
-                    code([Component.text('weirdnet-morph://')]),
+              shot(
+                'screenshot-light-side.webp',
+                'Morph in the light theme with tabs in a list on the left side.',
+                'Light theme, tabs on the left.',
+              ),
+              shot(
+                'screenshot-bookmarks.webp',
+                'The bookmarks panel beside a page, with tag chips and folders.',
+                'Bookmarks with folders and tags.',
+              ),
+              shot(
+                'screenshot-link-device.webp',
+                'The identity panel showing a QR code for linking a new device.',
+                'Linking a device with a QR code.',
+              ),
+            ], classes: 'gallery'),
+            p([
+              a([Component.text('All features →')], href: '/features', classes: 'more'),
+            ]),
+          ], classes: 'wrap'),
+        ],
+        classes: 'band',
+        id: 'features',
+      ),
+      section(
+        [
+          div([
+            h2([Component.text('Get Morph $latestVersion')], id: 'install'),
+            p([
+              Component.text('Released $latestDate. Downloads are on '),
+              extLink('GitHub', latestReleaseUrl),
+              Component.text(', with SHA256SUMS to check them.'),
+            ], classes: 'intro'),
+            Component.element(
+              tag: 'dl',
+              classes: 'facts',
+              children: [
+                Component.element(tag: 'dt', children: [Component.text('Linux')]),
+                Component.element(
+                  tag: 'dd',
+                  children: [
                     Component.text(
-                      '. Relays help reach devices that DNS cannot, and Grindvakt '
-                      'dynamic DNS can tie a domain name to your browser.',
+                      'x86_64: tarball, zip, deb, rpm, Nix flake, and morph-bin for Arch on the WeirdBrains TAUR server.',
                     ),
                   ],
                 ),
-                _feature(
-                  'Notes, a journal, chat, and forums',
-                  'Write notes and a journal, and talk with the people you are connected '
-                      'to. Forums stay Morph-only.',
+                Component.element(tag: 'dt', children: [Component.text('macOS')]),
+                Component.element(
+                  tag: 'dd',
+                  children: [
+                    Component.text('Universal (Apple silicon and Intel), dmg or zip. Not notarized yet.'),
+                  ],
                 ),
-                _feature(
-                  'Your own look and layout',
-                  'Components can be themed and swapped to fit how you work. A later '
-                      'drag-and-drop layout mode will let you place components and choose '
-                      'what is shown by default.',
+                Component.element(tag: 'dt', children: [Component.text('Windows')]),
+                Component.element(tag: 'dd', children: [Component.text('x64, msi or zip. Not code-signed yet.')]),
+                Component.element(tag: 'dt', children: [Component.text('Android and iOS')]),
+                Component.element(
+                  tag: 'dd',
+                  children: [
+                    Component.text('An arm64 APK to sideload. iOS builds run in CI; there is no public iOS build yet.'),
+                  ],
                 ),
-                _feature(
-                  'Sandboxed extensions',
-                  'Extensions are downloaded and installed only with your permission, '
-                      'signed by the author\'s key. Each one runs in its own sandboxed '
-                      'process. The first SDK is Rust; other compiled languages can use '
-                      'the same gRPC contract.',
-                ),
-                _feature(
-                  'Signed updates, never forced',
-                  'Updates come through Salty Gull. They are signed, and they are never '
-                      'forced: you opt in to each update, or opt in to all of them.',
-                ),
-              ], classes: 'feature-grid'),
-            ], classes: 'wrap'),
-          ],
-          classes: 'band',
-          id: 'features',
-        ),
-        section(
-          [
+              ],
+            ),
             div([
-              h2([Component.text("How it's built")]),
-              div([
-                p([
-                  Component.text(
-                    'A Rust 2024 core owns identity, data, networking, and AI. The shells '
-                    'draw the screen and route input; they do not hold keys or business '
-                    'logic. Anything both shells need lives in a Morph crate that can be '
-                    'tested without a display.',
-                  ),
-                ]),
-                p([
-                  Component.text(
-                    'On the desktop, the shell is written in Rust with GPUI, Zed\'s UI '
-                    'framework. Linux comes first; macOS and Windows on GPUI are planned. '
-                    'On mobile, the shell stays Flutter, on Android, iOS, and F-Droid. Both '
-                    'shells sit on the same Rust crates. Pages use the system web view on '
-                    'every platform.',
-                  ),
-                ]),
-              ], classes: 'prose'),
-            ], classes: 'wrap'),
-          ],
-          classes: 'band',
-          id: 'built',
-        ),
-        section(
-          [
+              a([Component.text('Download')], href: '/download', classes: 'button button-primary'),
+            ], classes: 'actions'),
+          ], classes: 'wrap'),
+        ],
+        classes: 'band',
+        id: 'platforms',
+      ),
+      section(
+        [
+          div([
+            h2([Component.text("How it's built")]),
             div([
-              h2([Component.text('Platforms and status')]),
               p([
                 Component.text(
-                  'Morph is in early development. Phase 1 of the GPUI desktop shell is in '
-                  'progress, with Linux first.',
+                  'A Rust 2024 core owns identity, data, networking and AI. The shells draw the screen and route '
+                  'input; they never hold keys or business logic.',
                 ),
-              ], classes: 'intro'),
-              Component.element(
-                tag: 'dl',
-                classes: 'facts',
-                children: [
-                  Component.element(tag: 'dt', children: [Component.text('Linux desktop')]),
-                  Component.element(
-                    tag: 'dd',
-                    children: [
-                      Component.text(
-                        'The current focus. The GPUI shell is being built so you can browse, '
-                        'use tabs and the address bar, and type in pages and popups.',
-                      ),
-                    ],
-                  ),
-                  Component.element(tag: 'dt', children: [Component.text('macOS and Windows')]),
-                  Component.element(
-                    tag: 'dd',
-                    children: [
-                      Component.text(
-                        'Planned on the same GPUI shell, after Linux is solid. Not started yet.',
-                      ),
-                    ],
-                  ),
-                  Component.element(tag: 'dt', children: [Component.text('Android, iOS, and F-Droid')]),
-                  Component.element(
-                    tag: 'dd',
-                    children: [
-                      Component.text(
-                        'The Flutter mobile shell stays. It shares the same Rust core as desktop.',
-                      ),
-                    ],
-                  ),
-                  Component.element(tag: 'dt', children: [Component.text('License')]),
-                  Component.element(
-                    tag: 'dd',
-                    children: [
-                      Component.text('BSD 3-Clause. Source is on '),
-                      a(
-                        [Component.text('GitHub')],
-                        href: githubUrl,
-                        target: Target.blank,
-                        attributes: {'rel': 'noopener noreferrer'},
-                      ),
-                      Component.text('.'),
-                    ],
-                  ),
-                ],
-              ),
-            ], classes: 'wrap'),
-          ],
-          classes: 'band',
-          id: 'platforms',
-        ),
-        section(
-          [
+              ]),
+              p([
+                Component.text(
+                  'On Linux, macOS and Windows the shell is Rust on GPUI, Zed’s UI framework, and runs natively on '
+                  'Wayland or X11 on Linux. On Android and iOS it is a Flutter app over the same Rust crates. Pages use '
+                  'the system web view everywhere, and networking, keys and sync come from ',
+                ),
+                a([Component.text('Weirdnet')], href: weirdnetUrl),
+                Component.text('.'),
+              ]),
+            ], classes: 'prose'),
+          ], classes: 'wrap'),
+        ],
+        classes: 'band',
+        id: 'built',
+      ),
+      section(
+        [
+          div([
+            h2([Component.text('Coming soon')]),
+            p([
+              Component.text('What the next releases bring. Android and iOS move forward with each one.'),
+            ], classes: 'intro'),
             div([
-              h2([Component.text('Install')]),
-              div([
-                h3([Component.text('Arch Linux')]),
-                p([
-                  Component.text('The '),
-                  code([Component.text('morph')]),
-                  Component.text(' and '),
-                  code([Component.text('morph-bin')]),
-                  Component.text(
-                    ' packages are coming with the first build. They will be published on ',
-                  ),
-                  a(
-                    [Component.text('the WeirdBrains TAUR server')],
-                    href: taurUrl,
-                    target: Target.blank,
-                    attributes: {'rel': 'noopener noreferrer'},
-                  ),
-                  Component.text(
-                    '. Until that build is ready, install from source using the steps in the repository README.',
-                  ),
-                ]),
-              ], classes: 'install-block'),
-              div([
-                h3([Component.text('From source')]),
-                p([
-                  Component.text(
-                    'Clone the repository and follow the README for current build steps. '
-                    'The GPUI desktop work is happening on ',
-                  ),
-                  code([Component.text('main')]),
-                  Component.text(
-                    '. You will need Rust 1.99 or newer. Flutter 3.50 (Dart 3.14) is required for the mobile app, and for the current Flutter shell on ',
-                  ),
-                  code([Component.text('main')]),
-                  Component.text(' until the GPUI shell lands.'),
-                ]),
-                pre([
-                  code([
-                    Component.text(
-                      'git clone https://github.com/WeirdBrains/morph.git\n'
-                      'cd morph',
-                    ),
-                  ]),
-                ]),
-                p([
-                  Component.text(
-                    'On Arch, the GPUI desktop shell will need these system libraries:',
-                  ),
-                ]),
-                pre([
-                  code([
-                    Component.text(
-                      'sudo pacman -S --needed webkit2gtk-4.1 gtk3 libxkbcommon-x11 vulkan-icd-loader',
-                    ),
-                  ]),
-                ]),
-                p([
-                  Component.text('Once the desktop crate is in the tree, the intended command is:'),
-                ]),
-                pre([
-                  code([Component.text('cargo run -p morph-desktop --release')]),
-                ]),
-                p([
-                  Component.text('Until then, the README covers building the existing Flutter app in '),
-                  code([Component.text('app/')]),
-                  Component.text('.'),
-                ]),
-              ], classes: 'install-block'),
-            ], classes: 'wrap'),
-          ],
-          classes: 'band',
-          id: 'install',
-        ),
-      ],
-    );
+              _milestone(
+                'v0.3',
+                'Peer-to-peer, plus a password saver',
+                'Peers and relays, Grindvakt dynamic DNS, real peer content at weirdnet-morph://, and saved passwords.',
+              ),
+              _milestone(
+                'v0.4',
+                'Local AI and projects',
+                'Local models, projects with code spaces, and hosting them privately or publicly.',
+              ),
+              _milestone('v0.5', 'Extensions', 'Chrome and Firefox extensions unchanged, each in its own sandbox.'),
+            ], classes: 'feature-grid'),
+            p([
+              a([Component.text('The full roadmap →')], href: '/roadmap', classes: 'more'),
+            ]),
+          ], classes: 'wrap'),
+        ],
+        classes: 'band',
+        id: 'coming-soon',
+      ),
+    ]);
   }
 }
 
-Component _feature(String title, String body, {List<Component>? after}) {
-  return article([
-    h3([Component.text(title)]),
-    p([
-      Component.text(body),
-      ...?after,
-    ]),
-  ], classes: 'card');
+Component _milestone(String version, String title, String body) {
+  return a(
+    [
+      span([Component.text(version)], classes: 'milestone'),
+      h3([Component.text(title)]),
+      p([Component.text(body)]),
+      statusTag(Status.planned),
+    ],
+    href: '/roadmap#${version.replaceAll('.', '-')}',
+    classes: 'card card-link',
+  );
 }
