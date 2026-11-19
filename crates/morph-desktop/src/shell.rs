@@ -614,17 +614,30 @@ impl Shell {
     }
 
     /// Show profile `id` in this window: its tabs, cookies, library, layout.
+    /// The tabs it showed stay saved with the profile it leaves (taken now,
+    /// before its pages go), and the windows `id` had put aside by an
+    /// earlier switch come back: the first here, the others in new windows.
     fn switch_profile(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         let Some(profiles) = self.profiles.clone() else {
             return;
         };
+        let leaving = self.main().and_then(|m| m.session(cx));
         if !profiles.update(cx, |view, cx| view.switch(id, cx)) {
             return;
         }
+        self.save_layout();
         self.profile = id.to_string();
+        let mut restored = Windows::switch(cx, window.window_handle(), leaving, id).into_iter();
+        let first = restored.next();
+        // What the window shows now, as the session has it already.
+        self.last_session = Some((id.to_string(), first.clone()));
         crate::library::open_at_launch(&self.home, id);
         self.layout = layout::load(&self.home, id);
-        self.build(WindowStart::Url(String::new()), window, cx);
+        self.build(first.map_or(WindowStart::Url(String::new()), WindowStart::Saved), window, cx);
+        for saved in restored {
+            let profile = id.to_string();
+            cx.defer(move |cx| open_window(cx, profile, WindowStart::Saved(saved), None));
+        }
         cx.notify();
     }
 
@@ -719,8 +732,8 @@ impl Shell {
         if self.last_session.as_ref() == Some(&now) {
             return;
         }
-        let before = self.last_session.replace(now.clone()).map(|(p, _)| p);
-        Windows::update_session(cx, window.window_handle(), now.0, now.1, before);
+        self.last_session = Some(now.clone());
+        Windows::update_session(cx, window.window_handle(), now.1);
     }
 
     /// Close this window (its last tab closed, Ctrl+W); the last window
@@ -1271,6 +1284,9 @@ struct Windows {
     home: PathBuf,
     keymap: Keymap,
     list: Vec<WindowEntry>,
+    /// What each window shows for the session, and the windows a profile
+    /// switch put aside: each profile's `tabs.json`.
+    open: morph_core::session::OpenWindows<gpui::WindowId>,
     front: Option<gpui::WindowId>,
     listener: Option<crate::single::Listener>,
     /// Quitting: windows closing now stay in the session.
@@ -1281,8 +1297,6 @@ struct Windows {
 
 struct WindowEntry {
     handle: gpui::WindowHandle<Shell>,
-    profile: String,
-    session: Option<morph_core::session::WindowSession>,
 }
 
 impl gpui::Global for Windows {}
@@ -1314,15 +1328,9 @@ impl Windows {
         cx.try_global::<Windows>().and_then(|w| w.listener.as_ref()).map(|l| l.take()).unwrap_or_default()
     }
 
-    /// The window shows `session` in `profile` now; save the profiles it
-    /// touched (`before`: the profile it showed until now).
-    fn update_session(
-        cx: &mut App,
-        window: gpui::AnyWindowHandle,
-        profile: String,
-        session: Option<morph_core::session::WindowSession>,
-        before: Option<String>,
-    ) {
+    /// The window shows `session` now; save its profile. (A profile switch
+    /// goes through [`Windows::switch`], never here.)
+    fn update_session(cx: &mut App, window: gpui::AnyWindowHandle, session: Option<morph_core::session::WindowSession>) {
         if cx.try_global::<Windows>().is_none() {
             return;
         }
@@ -1330,21 +1338,35 @@ impl Windows {
         if windows.quitting {
             return;
         }
-        let Some(entry) = windows.list.iter_mut().find(|e| e.handle.window_id() == window.window_id()) else {
-            return;
-        };
-        entry.profile = profile.clone();
-        entry.session = session;
-        windows.save(&profile);
-        if let Some(before) = before.filter(|b| *b != profile) {
-            windows.save(&before);
+        if let Some(profile) = windows.open.update(&window.window_id(), session).map(str::to_string) {
+            windows.save(&profile);
         }
+    }
+
+    /// Window `window` switches to profile `to`, showing `leaving` until
+    /// now: both profiles are saved before its pages go. Returns `to`'s
+    /// windows to show (see [`morph_core::session::OpenWindows::switch`]).
+    fn switch(
+        cx: &mut App,
+        window: gpui::AnyWindowHandle,
+        leaving: Option<morph_core::session::WindowSession>,
+        to: &str,
+    ) -> Vec<morph_core::session::WindowSession> {
+        if cx.try_global::<Windows>().is_none() {
+            return Vec::new();
+        }
+        let windows = cx.global_mut::<Windows>();
+        let Some(switched) = windows.open.switch(&window.window_id(), leaving, to) else {
+            return Vec::new();
+        };
+        windows.save(&switched.from);
+        windows.save(to);
+        switched.windows
     }
 
     /// Write `profile`'s windows to its `tabs.json`.
     fn save(&self, profile: &str) {
-        let windows: Vec<_> = self.list.iter().filter(|e| e.profile == profile).filter_map(|e| e.session.clone()).collect();
-        if let Err(e) = morph_core::session::save(&self.home, profile, &morph_core::session::Session::new(windows)) {
+        if let Err(e) = self.open.save(&self.home, profile) {
             eprintln!("morph: could not save the open tabs: {e}");
         }
     }
@@ -1362,11 +1384,13 @@ impl Windows {
         let Some(at) = windows.list.iter().position(|e| e.handle.window_id() == id) else {
             return;
         };
-        let entry = windows.list.remove(at);
+        windows.list.remove(at);
         if windows.front == Some(id) {
             windows.front = windows.list.last().map(|e| e.handle.window_id());
         }
-        windows.save(&entry.profile);
+        if let Some(profile) = windows.open.remove(&id) {
+            windows.save(&profile);
+        }
     }
 
     /// Morph quits: every window stays in the session as it is.
@@ -1426,6 +1450,12 @@ pub fn open_window(cx: &mut App, profile: String, start: WindowStart, origin: Op
         }),
         ..Default::default()
     };
+    // A saved window is in the session from the start, before it reports
+    // its tabs.
+    let saved = match &start {
+        WindowStart::Saved(w) => Some(w.clone()),
+        _ => None,
+    };
     let opened = cx.open_window(options, |window, cx| {
         cx.new(|cx| Shell::new(home.clone(), profile.clone(), start, Theme::default(), keymap.clone(), saved_layout, window, cx))
     });
@@ -1441,7 +1471,8 @@ pub fn open_window(cx: &mut App, profile: String, start: WindowStart, origin: Op
     };
     {
         let windows = cx.global_mut::<Windows>();
-        windows.list.push(WindowEntry { handle, profile, session: None });
+        windows.list.push(WindowEntry { handle });
+        windows.open.add(handle.window_id(), &profile, saved);
         windows.opened += 1;
         windows.front = Some(handle.window_id());
     }
@@ -1515,7 +1546,16 @@ pub fn run(home: PathBuf, args: Args, listener: Option<crate::single::Listener>)
                 morph_core::profiles::DEFAULT_PROFILE_ID.to_string()
             }
         };
-        cx.set_global(Windows { home: home.clone(), keymap, list: Vec::new(), front: None, listener, quitting: false, opened: 0 });
+        cx.set_global(Windows {
+            home: home.clone(),
+            keymap,
+            list: Vec::new(),
+            open: Default::default(),
+            front: None,
+            listener,
+            quitting: false,
+            opened: 0,
+        });
         // The windows of the last run, the shown profile's first; then a
         // URL on the command line opens in a new tab of the first. With
         // none, one window: the URL, else Settings' Open at start (blank by
