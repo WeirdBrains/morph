@@ -33,3 +33,5 @@ async-trait.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 tokio = { version = "1", features = ["rt", "time", "macros"] }
+# ScriptedModel for the inference host tests.
+weirdnet-agent = { workspace = true, features = ["testing"] }

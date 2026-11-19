@@ -16,6 +16,7 @@ pub mod chats;
 mod file_io;
 pub mod host;
 mod ids;
+pub mod infer_host;
 pub mod journal;
 pub mod lease;
 #[cfg(feature = "local")]
@@ -44,6 +45,7 @@ pub use host::{
     TabInfo,
 };
 pub use ids::new_id;
+pub use infer_host::{LocalInferHost, serving_choice};
 pub use journal::{Journal, JournalEntry, JournalKind, Journals, NOTES_ID};
 pub use mcp::{McpConfigs, McpSecrets, McpServer, McpTransport, McpValue};
 pub use mcp_local::{APPROVAL_KEY_CONTEXT, FileSecrets, McpApprovals, MemorySecrets, write_private};

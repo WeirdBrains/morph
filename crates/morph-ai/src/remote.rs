@@ -133,6 +133,14 @@ pub struct OffloadSettings {
     /// Run here when no device can take the turn.
     #[serde(default = "yes")]
     pub fallback_local: bool,
+    /// "Serve my models to my other devices": this device answers model turns from the user's
+    /// linked devices with its local model. Off until the user turns it on; synced with the rest.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub serve: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 fn yes() -> bool {
@@ -141,7 +149,7 @@ fn yes() -> bool {
 
 impl Default for OffloadSettings {
     fn default() -> Self {
-        Self { mode: OffloadMode::Auto, prefer: None, fallback_local: true }
+        Self { mode: OffloadMode::Auto, prefer: None, fallback_local: true, serve: false }
     }
 }
 
@@ -213,7 +221,7 @@ mod tests {
         assert!(plan.fallback_local);
         assert!(offload_plan(&auto, Platform::Desktop, &nodes).runs_here());
 
-        let prefer = OffloadSettings { mode: OffloadMode::Always, prefer: Some("desk-b".into()), fallback_local: false };
+        let prefer = OffloadSettings { mode: OffloadMode::Always, prefer: Some("desk-b".into()), fallback_local: false, serve: false };
         let plan = offload_plan(&prefer, Platform::Desktop, &nodes);
         assert_eq!(plan.nodes[0], "desk-b");
         assert!(!plan.fallback_local);
@@ -228,7 +236,7 @@ mod tests {
         quiet.serves_models = false;
         let me = LinkedNode { this_device: true, ..node("me", Platform::Desktop, true) };
         let nodes = vec![quiet, me, node("off", Platform::Desktop, false)];
-        let s = OffloadSettings { mode: OffloadMode::Always, prefer: None, fallback_local: false };
+        let s = OffloadSettings { mode: OffloadMode::Always, prefer: None, fallback_local: false, serve: false };
         let plan = offload_plan(&s, Platform::Phone, &nodes);
         assert!(plan.runs_here());
         assert!(plan.fallback_local, "nothing to offload to: run here");
