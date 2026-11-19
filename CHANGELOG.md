@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- A revoked device can no longer change your companions, grants or MCP servers: everything it wrote to them is void, from before the revocation too, and the last version from your other devices comes back. Anything it wrote after the revocation is ignored everywhere, even when another device relays it late. A synced MCP server that runs a local command starts only if it came from this device or a linked device that is not revoked (docs/library-sync.md).
+
 - Calls between your own linked devices use this device's key and its linked-device certificate, and a device answers only your other active linked devices: revoked or unknown devices are refused (docs/net-app-caller-identity.md). Calls to public Weirdnet apps stay anonymous.
 
 - Synced companion chats: a long answer is clipped once, no longer re-clipped on a device that only has the clipped copy (which could replace the full answer on the device that ran it), and no chat record is too large to sync. Revoking a device on another device now voids its grants here on the next sync pass even when nothing else changed.
