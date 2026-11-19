@@ -1,6 +1,7 @@
 //! The transcript the Companion panel draws for one companion, built from [`ViewUpdate`]s.
 //! Pure state: the panel reads it and the host feeds it.
 
+use crate::markdown::Markdown;
 use crate::view::{ApprovalCard, FootnoteView, NoticeView, TraceRowView, ViewUpdate};
 
 /// A page the user attached to the conversation (the current tab).
@@ -26,6 +27,8 @@ pub enum Entry {
     },
     Assistant {
         text: String,
+        /// `text` as blocks; call [`Conversation::settle`] once per frame to bring it up to date.
+        doc: Markdown,
         footnotes: Vec<FootnoteView>,
     },
     /// An approval card; `answer` is set once the user picked an offer or declined.
@@ -98,6 +101,16 @@ impl Conversation {
         self.running = true;
     }
 
+    /// Parse text that arrived since the last call (the tail of the streaming answer only). The
+    /// panel calls this once per frame, however many deltas came in.
+    pub fn settle(&mut self) {
+        for e in &mut self.entries {
+            if let Entry::Assistant { doc, .. } = e {
+                doc.settle();
+            }
+        }
+    }
+
     /// Records the user's answer on the waiting card.
     pub fn answer_card(&mut self, label: &str) {
         if let Some(Entry::Card { answer, .. }) = self.entries.iter_mut().rev().find(|e| matches!(e, Entry::Card { answer: None, .. })) {
@@ -126,8 +139,15 @@ impl Conversation {
         match update {
             ViewUpdate::TaskStarted { .. } => self.running = true,
             ViewUpdate::Text(delta) => match self.entries.last_mut() {
-                Some(Entry::Assistant { text, .. }) => text.push_str(&delta),
-                _ => self.entries.push(Entry::Assistant { text: delta, footnotes: Vec::new() }),
+                Some(Entry::Assistant { text, doc, .. }) => {
+                    text.push_str(&delta);
+                    doc.push_str(&delta);
+                }
+                _ => {
+                    let mut doc = Markdown::new();
+                    doc.push_str(&delta);
+                    self.entries.push(Entry::Assistant { text: delta, doc, footnotes: Vec::new() });
+                }
             },
             ViewUpdate::Approval(card) => self.entries.push(Entry::Card { card, answer: None }),
             ViewUpdate::Notice(n) => self.entries.push(Entry::Notice(n)),
@@ -168,6 +188,20 @@ mod tests {
 
     fn page() -> AttachedPage {
         AttachedPage { url: "https://a.com/".into(), title: "A".into() }
+    }
+
+    #[test]
+    fn streamed_text_is_parsed_once_per_settle_and_matches_the_final_text() {
+        let mut c = Conversation::default();
+        c.apply(ViewUpdate::Text("Four is **".into()));
+        c.apply(ViewUpdate::Text("four**.\n\n- a\n- b".into()));
+        let Some(Entry::Assistant { doc, text, .. }) = c.entries().last() else { panic!() };
+        assert!(doc.is_dirty() && doc.blocks().count() == 0, "nothing is parsed before settle");
+        assert_eq!(text, doc.source());
+        c.settle();
+        let Some(Entry::Assistant { doc, .. }) = c.entries().last() else { panic!() };
+        assert!(!doc.is_dirty());
+        assert_eq!(doc.blocks().count(), 2);
     }
 
     #[test]
