@@ -134,8 +134,14 @@ impl Conversation {
 
     /// The task finished: the last answer becomes `text` (its sources list taken out and unbacked
     /// markers dropped, see [`crate::parse_citations`]) with the checked footnotes under it.
+    /// Only this task's answer changes, and an empty final text (a task stopped by its budget or
+    /// the Stop button) keeps what had streamed.
     pub fn finish_answer(&mut self, text: &str, notes: Vec<FootnoteView>) {
-        if let Some(Entry::Assistant { text: t, doc, footnotes }) = self.entries.iter_mut().rev().find(|e| matches!(e, Entry::Assistant { .. })) {
+        let answer = self.entries.iter_mut().rev().take_while(|e| !matches!(e, Entry::User { .. })).find(|e| matches!(e, Entry::Assistant { .. }));
+        if let Some(Entry::Assistant { text: t, doc, footnotes }) = answer {
+            if text.trim().is_empty() {
+                return;
+            }
             if t != text {
                 *t = text.to_string();
                 *doc = Markdown::new();
@@ -296,5 +302,22 @@ mod tests {
         c.clear();
         assert!(c.entries().is_empty());
         assert!(c.attached().is_some());
+    }
+
+    #[test]
+    fn finishing_keeps_a_stopped_answer_and_never_touches_an_earlier_task() {
+        let mut c = Conversation::default();
+        c.start_task("one");
+        c.apply(ViewUpdate::Text("first answer".into()));
+        c.finish_answer("first answer [1]", Vec::new());
+        c.start_task("two");
+        c.apply(ViewUpdate::Text("partial".into()));
+        c.finish_answer("", Vec::new());
+        assert!(matches!(c.entries().last(), Some(Entry::Assistant { text, .. }) if text == "partial"));
+        c.start_task("three");
+        c.finish_answer("nothing streamed", Vec::new());
+        let texts: Vec<&str> =
+            c.entries().iter().filter_map(|e| if let Entry::Assistant { text, .. } = e { Some(text.as_str()) } else { None }).collect();
+        assert_eq!(texts, vec!["first answer [1]", "partial"]);
     }
 }
