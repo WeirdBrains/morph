@@ -8,7 +8,7 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
-use crate::mcp::{McpSecrets, McpServer, McpTransport};
+use crate::mcp::{McpSecrets, McpServer, McpTransport, McpValue};
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -100,7 +100,7 @@ impl McpSecrets for FileSecrets {
 }
 
 /// What the user agreed to start on this machine: a local-command server runs only after the user
-/// has seen its warning, and again if its command or arguments change. Saved per machine.
+/// has seen its warning, and again if anything about it changes. Saved per machine.
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct McpApprovals {
     /// Server id to the fingerprint that was approved.
@@ -119,32 +119,60 @@ impl McpApprovals {
         write_private(path, &serde_json::to_vec_pretty(self).map_err(std::io::Error::other)?)
     }
 
-    /// What a local command is approved as: the program, its arguments and the *names* of its
-    /// environment variables (never values, so changing a token does not ask again). `None` for
-    /// HTTP servers, which need no confirmation.
-    pub fn fingerprint(server: &McpServer) -> Option<String> {
+    /// What a server is approved as: a SHA-256 over everything that decides what runs or where
+    /// requests go (the program, arguments and every environment value for a local command; the
+    /// URL and every header value for an HTTP server). Secret values are read from `secrets` and
+    /// hashed in, so a changed token asks again too; only the digest is ever stored. A secret this
+    /// device does not hold counts as missing, which is a state of its own.
+    pub fn fingerprint(server: &McpServer, secrets: &dyn McpSecrets) -> String {
+        use sha2::{Digest, Sha256};
+        fn field(h: &mut Sha256, tag: &str, bytes: &[u8]) {
+            h.update(tag.as_bytes());
+            h.update((bytes.len() as u64).to_le_bytes());
+            h.update(bytes);
+        }
+        fn values(h: &mut Sha256, server: &McpServer, map: &BTreeMap<String, McpValue>, secrets: &dyn McpSecrets) {
+            for (name, v) in map {
+                field(h, "n", name.as_bytes());
+                match v {
+                    McpValue::Plain { value } => field(h, "p", value.as_bytes()),
+                    McpValue::Secret { name: secret } => {
+                        field(h, "r", secret.as_bytes());
+                        match secrets.get(&server.id, secret) {
+                            Some(value) => field(h, "s", value.as_bytes()),
+                            None => field(h, "m", b""),
+                        }
+                    }
+                }
+            }
+        }
+        let mut h = Sha256::new();
         match &server.transport {
             McpTransport::Stdio { command, args, env } => {
-                let names: Vec<&str> = env.keys().map(String::as_str).collect();
-                Some(format!("{command}\u{1f}{}\u{1e}{}", args.join("\u{1f}"), names.join(",")))
+                field(&mut h, "kind", b"stdio");
+                field(&mut h, "command", command.as_bytes());
+                for a in args {
+                    field(&mut h, "arg", a.as_bytes());
+                }
+                values(&mut h, server, env, secrets);
             }
-            McpTransport::Http { .. } => None,
+            McpTransport::Http { url, headers } => {
+                field(&mut h, "kind", b"http");
+                field(&mut h, "url", url.as_bytes());
+                values(&mut h, server, headers, secrets);
+            }
         }
+        h.finalize().iter().map(|b| format!("{b:02x}")).collect()
     }
 
-    /// Whether `server` may start on this machine.
-    pub fn is_approved(&self, server: &McpServer) -> bool {
-        match Self::fingerprint(server) {
-            None => true,
-            Some(fp) => self.approved.get(&server.id) == Some(&fp),
-        }
+    /// Whether `server` may start on this machine: the user approved exactly this server.
+    pub fn is_approved(&self, server: &McpServer, secrets: &dyn McpSecrets) -> bool {
+        self.approved.get(&server.id) == Some(&Self::fingerprint(server, secrets))
     }
 
     /// Records the user's OK for this server as it is now.
-    pub fn approve(&mut self, server: &McpServer) {
-        if let Some(fp) = Self::fingerprint(server) {
-            self.approved.insert(server.id.clone(), fp);
-        }
+    pub fn approve(&mut self, server: &McpServer, secrets: &dyn McpSecrets) {
+        self.approved.insert(server.id.clone(), Self::fingerprint(server, secrets));
     }
 
     /// Forgets the OK (the server was removed, or the user withdrew it).
@@ -197,28 +225,101 @@ mod tests {
         assert_eq!(m.get("a", "K"), None);
     }
 
+    fn secret_env(name: &str) -> McpValue {
+        McpValue::Secret { name: name.into() }
+    }
+
+    fn with_env(mut s: McpServer, env: &[(&str, McpValue)]) -> McpServer {
+        s.transport = McpTransport::Stdio {
+            command: "srv".into(),
+            args: vec!["--x".into()],
+            env: env.iter().map(|(k, v)| (k.to_string(), v.clone())).collect(),
+        };
+        s
+    }
+
     #[test]
-    fn a_local_command_needs_approval_again_when_it_changes_but_not_for_a_new_token() {
+    fn any_change_to_what_a_server_runs_needs_approval_again() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("mcp-approved.json");
-        let mut s = stdio(&["--x"], &[("TOKEN", "1")]);
+        let none = MemorySecrets::default();
+        let base = stdio(&["--x"], &[("NODE_OPTIONS", "--max-old-space-size=64")]);
         let mut a = McpApprovals::load(&path);
-        assert!(!a.is_approved(&s));
-        a.approve(&s);
+        assert!(!a.is_approved(&base, &none));
+        a.approve(&base, &none);
         a.save(&path).unwrap();
         let a = McpApprovals::load(&path);
-        assert!(a.is_approved(&s));
-        // A new secret value does not ask again; a new argument or variable name does.
-        s.transport = stdio(&["--x"], &[("TOKEN", "2")]).transport;
-        assert!(a.is_approved(&s));
-        s.transport = stdio(&["--y"], &[("TOKEN", "2")]).transport;
-        assert!(!a.is_approved(&s));
-        s.transport = stdio(&["--x"], &[("OTHER", "2")]).transport;
-        assert!(!a.is_approved(&s));
+        assert!(a.is_approved(&base, &none));
+        let changed = |f: &dyn Fn(&mut McpServer)| {
+            let mut s = base.clone();
+            f(&mut s);
+            s
+        };
+        // A synced change of an environment value, name, argument or program all ask again.
+        let node_options = changed(&|s| s.transport = stdio(&["--x"], &[("NODE_OPTIONS", "--require /tmp/evil.js")]).transport);
+        assert!(!a.is_approved(&node_options, &none), "an env value changed");
+        assert!(!a.is_approved(&changed(&|s| s.transport = stdio(&["--x"], &[("OTHER", "--max-old-space-size=64")]).transport), &none));
+        assert!(!a.is_approved(&changed(&|s| s.transport = stdio(&["--y"], &[("NODE_OPTIONS", "--max-old-space-size=64")]).transport), &none));
+        let McpTransport::Stdio { args, env, .. } = &base.transport else { unreachable!() };
+        let other_program = changed(&|s| s.transport = McpTransport::Stdio { command: "evil".into(), args: args.clone(), env: env.clone() });
+        assert!(!a.is_approved(&other_program, &none));
+        // Arguments are not run together: ["a b"] and ["a", "b"] differ.
+        let mut x = a.clone();
+        x.approve(&stdio(&["a b"], &[]), &none);
+        assert!(!x.is_approved(
+            &{
+                let mut s = stdio(&["a", "b"], &[]);
+                s.id = base.id.clone();
+                s
+            },
+            &none
+        ));
+        // Name and value are not run together either.
+        let one = with_env(base.clone(), &[("AB", McpValue::Plain { value: "C".into() })]);
+        let two = with_env(base.clone(), &[("A", McpValue::Plain { value: "BC".into() })]);
+        assert_ne!(McpApprovals::fingerprint(&one, &none), McpApprovals::fingerprint(&two, &none));
         let mut a = a;
-        a.revoke(&s.id);
-        assert!(!a.is_approved(&stdio(&["--x"], &[("TOKEN", "1")])));
-        let http = McpServer::new("H", McpTransport::Http { url: "https://x".into(), headers: BTreeMap::new() });
-        assert!(McpApprovals::default().is_approved(&http), "HTTP servers need no confirmation");
+        a.revoke(&base.id);
+        assert!(!a.is_approved(&base, &none));
+    }
+
+    #[test]
+    fn a_changed_secret_asks_again_and_no_value_is_stored_in_the_approvals_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp-approved.json");
+        let secrets = MemorySecrets::default();
+        let s =
+            with_env(stdio(&[], &[]), &[("API_TOKEN", secret_env("API_TOKEN")), ("MODE", McpValue::Plain { value: "plain-visible-value".into() })]);
+        secrets.set(&s.id, "API_TOKEN", "sk-live-very-secret");
+        let mut a = McpApprovals::default();
+        a.approve(&s, &secrets);
+        a.save(&path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("sk-live-very-secret") && !text.contains("plain-visible-value") && !text.contains("API_TOKEN"), "{text}");
+        assert!(a.is_approved(&s, &secrets));
+        secrets.set(&s.id, "API_TOKEN", "sk-live-another");
+        assert!(!a.is_approved(&s, &secrets), "a different secret value is a change");
+        secrets.set(&s.id, "API_TOKEN", "sk-live-very-secret");
+        assert!(a.is_approved(&s, &secrets));
+        secrets.remove_server(&s.id);
+        assert!(!a.is_approved(&s, &secrets), "a secret this device lacks is a change");
+    }
+
+    #[test]
+    fn an_http_server_is_approved_for_its_url_and_headers_too() {
+        let secrets = MemorySecrets::default();
+        let mut http = McpServer::new("H", McpTransport::Http { url: "https://docs.example/mcp".into(), headers: BTreeMap::new() });
+        assert!(!McpApprovals::default().is_approved(&http, &secrets), "a new HTTP server asks first too");
+        let mut a = McpApprovals::default();
+        a.approve(&http, &secrets);
+        assert!(a.is_approved(&http, &secrets));
+        // A synced change of the URL would send the bearer token somewhere new: it asks again.
+        http.transport = McpTransport::Http { url: "https://evil.example/mcp".into(), headers: BTreeMap::new() };
+        assert!(!a.is_approved(&http, &secrets));
+        http.transport = McpTransport::Http {
+            url: "https://docs.example/mcp".into(),
+            headers: BTreeMap::from([("X-Team".to_string(), McpValue::Plain { value: "a".into() })]),
+        };
+        assert!(!a.is_approved(&http, &secrets), "a header changed");
     }
 }

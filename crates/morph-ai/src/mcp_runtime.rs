@@ -135,7 +135,9 @@ pub fn warning_for(server: &McpServer) -> Option<String> {
         McpTransport::Stdio { command, args, .. } => {
             Some(StdioCommand { program: command.clone(), args: args.clone(), env: Vec::new(), cwd: None }.warning())
         }
-        McpTransport::Http { .. } => None,
+        McpTransport::Http { url, .. } => {
+            Some(format!("Morph will send this server's requests, and any secret in its headers, to {url}. Only allow servers you trust."))
+        }
     }
 }
 
@@ -170,7 +172,7 @@ pub async fn connect(configs: &McpConfigs, ctx: &ConnectContext<'_>) -> McpHub {
             ServerStatus::Off
         } else if !server.runs_on(ctx.device) {
             ServerStatus::NotOnThisDevice
-        } else if !ctx.approvals.is_approved(server) {
+        } else if !ctx.approvals.is_approved(server, ctx.secrets) {
             ServerStatus::NeedsApproval { warning: warning_for(server).unwrap_or_default() }
         } else {
             let prefix = prefix_for(server, &prefixes);
@@ -297,7 +299,7 @@ done"#;
         secrets.set(&s.id, "MCP_NAME", "files");
         s.tools_off = BTreeSet::from(["files_write".to_string()]);
         let mut approvals = McpApprovals::default();
-        approvals.approve(&s);
+        approvals.approve(&s, &secrets);
         let mut configs = McpConfigs::default();
         configs.upsert(s.clone());
         let hub = run(&configs, &secrets, &approvals).await;
@@ -335,8 +337,8 @@ done"#;
             McpServer::new("Missing bin", McpTransport::Stdio { command: "/nonexistent/mcp-server".into(), args: vec![], env: BTreeMap::new() });
         let unreachable = McpServer::new("Unreachable", McpTransport::Http { url: "http://127.0.0.1:9/mcp".into(), headers: BTreeMap::new() });
         let mut approvals = McpApprovals::default();
-        for s in [&good, &off, &elsewhere, &needs_secret, &missing_bin] {
-            approvals.approve(s);
+        for s in [&good, &off, &elsewhere, &needs_secret, &missing_bin, &unreachable] {
+            approvals.approve(s, &secrets);
         }
         let mut configs = McpConfigs::default();
         for s in [&good, &off, &elsewhere, &unapproved, &needs_secret, &missing_bin, &unreachable] {
@@ -362,8 +364,8 @@ done"#;
         let mut mine = stdio("Mine", &[("MCP_NAME", plain("mine"))]);
         mine.companions = Some(BTreeSet::from(["scout".to_string()]));
         let mut approvals = McpApprovals::default();
-        approvals.approve(&shared);
-        approvals.approve(&mine);
+        approvals.approve(&shared, &secrets);
+        approvals.approve(&mine, &secrets);
         let mut configs = McpConfigs::default();
         configs.upsert(shared.clone());
         configs.upsert(mine.clone());
@@ -380,6 +382,26 @@ done"#;
         assert!(old.companions.is_none() && old.applies_to("anyone"));
     }
 
+    #[tokio::test]
+    async fn a_synced_change_of_an_environment_value_stops_the_server_until_the_user_agrees_again() {
+        let secrets = MemorySecrets::default();
+        let mut s = stdio("Docs", &[("MCP_NAME", plain("docs")), ("NODE_OPTIONS", plain("--max-old-space-size=64"))]);
+        let mut approvals = McpApprovals::default();
+        approvals.approve(&s, &secrets);
+        let mut configs = McpConfigs::default();
+        configs.upsert(s.clone());
+        let hub = run(&configs, &secrets, &approvals).await;
+        assert!(matches!(hub.statuses[&s.id], ServerStatus::Connected { .. }));
+        // The config arrives again from another device with a different NODE_OPTIONS.
+        if let McpTransport::Stdio { env, .. } = &mut s.transport {
+            env.insert("NODE_OPTIONS".into(), plain("--require /tmp/evil.js"));
+        }
+        configs.upsert(s.clone());
+        let hub = run(&configs, &secrets, &approvals).await;
+        assert!(matches!(hub.statuses[&s.id], ServerStatus::NeedsApproval { .. }), "{:?}", hub.statuses);
+        assert!(hub.registry.specs().is_empty(), "nothing of it runs");
+    }
+
     #[test]
     fn prefixes_are_safe_names_and_stay_unique() {
         let a = McpServer::new("GitHub Docs!", McpTransport::Http { url: "https://x".into(), headers: BTreeMap::new() });
@@ -389,6 +411,6 @@ done"#;
         assert_eq!(prefix_for(&b, &["github_docs_".to_string()]), "github_docs_1234_");
         let weird = McpServer::new("日本語", McpTransport::Http { url: "https://x".into(), headers: BTreeMap::new() });
         assert_eq!(prefix_for(&weird, &[]), "mcp_");
-        assert!(warning_for(&a).is_none());
+        assert!(warning_for(&a).unwrap().contains("https://x"));
     }
 }

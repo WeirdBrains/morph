@@ -318,11 +318,13 @@ impl SettingsView {
         server.name = text(&form.name);
         server.companions = form.scope.clone().filter(|c| !c.is_empty());
         let id = server.id.clone();
-        let needs_ok = !mcp_host::is_approved(&dir, &server);
-        let saved = server.clone();
         if self.servers_apply(move |d, secrets| mcp_host::save_server(d, secrets, server, &new_secrets), cx) {
+            // Asked after saving: the approval covers the values just stored, secrets included.
+            let manager = mcp_host::get(&dir);
+            let stored = mcp_host::configs(&dir).servers.into_iter().find(|s| s.id == id);
+            let needs_ok = stored.as_ref().is_some_and(|s| s.enabled && !mcp_host::is_approved(&dir, manager.secrets(), s));
             self.servers.form = None;
-            self.servers.confirm = (needs_ok && saved.enabled).then_some(id);
+            self.servers.confirm = needs_ok.then_some(id);
             cx.notify();
         }
     }
@@ -344,7 +346,7 @@ impl SettingsView {
             .child(div().text_size(px(13.)).child(format!("Allow {} to start?", s.name)))
             .child(div().text_size(px(12.)).text_color(rgb(t.text_secondary)).child(warning_for(s).unwrap_or_default()))
             .child(div().text_size(px(12.)).text_color(rgb(t.text_secondary)).child(
-                "Only allow commands you trust. Morph asks again if the command or its arguments change. Environment values are never shown here.",
+                "Only allow servers you trust. Morph asks again if anything about it changes: the command, arguments, URL, or any environment or header value. Values are never shown here.",
             ))
             .child(
                 div()
@@ -354,7 +356,7 @@ impl SettingsView {
                     .child(button(t, ("srv-allow", 0usize), "Allow and start", true).on_click(cx.listener(move |this, _, _, cx| {
                         let id = id.clone();
                         this.servers.confirm = None;
-                        this.servers_apply(move |d, _| mcp_host::approve(d, &id), cx);
+                        this.servers_apply(move |d, secrets| mcp_host::approve(d, secrets, &id), cx);
                     })))
                     .child(button(t, ("srv-allow", 1usize), "Not now", false).on_click(cx.listener(move |this, _, _, cx| {
                         if this.servers.confirm.as_deref() == Some(id2.as_str()) {
