@@ -203,6 +203,13 @@ pub fn start_with(home: &Path, profile_id: &str, cfg: NodeConfig) -> Result<()> 
         return Ok(());
     };
     let node = start_node(node_key, cfg, state.clone()).map_err(Error::failed)?;
+    // On load: rows merged before a revocation arrived (or by an older build) are rebuilt.
+    let _ = library_db::with(home, profile_id, |lib| {
+        if core::revocations_unapplied(lib).unwrap_or(true) || companion_sync::revocations_pending(lib) {
+            apply_revocations(lib, home, profile_id);
+        }
+        Ok(())
+    });
     core::attach_live(dir.clone(), state.clone());
     let stopped = Arc::new(AtomicBool::new(false));
     let running = Running { home: home.to_path_buf(), profile_id: profile_id.to_string(), node: Arc::new(node), state, stopped: stopped.clone() };
@@ -397,7 +404,11 @@ pub fn tick(home: &Path, profile_id: &str) -> Result<usize> {
     // whose void failed on an earlier pass.
     let revoked_now = state.lock().map(|st| revoked_ids(&st.roster)).unwrap_or_default();
     let _ = library_db::with(home, profile_id, |lib| {
-        if (applied > 0 || revoked_now != revoked_before || companion_sync::revocations_pending(lib))
+        if revoked_now != revoked_before || core::revocations_unapplied(lib).unwrap_or(true) {
+            // Rebuild every type without what revoked devices wrote late (all of it, for the
+            // security-sensitive companion types).
+            apply_revocations(lib, home, profile_id);
+        } else if (applied > 0 || companion_sync::revocations_pending(lib))
             && let Err(e) = companion_sync::materialize(lib, &companion_sync::store(&dir))
         {
             eprintln!("morph-sync: companions: {e}");
@@ -405,6 +416,51 @@ pub fn tick(home: &Path, profile_id: &str) -> Result<usize> {
         Ok(())
     });
     Ok(applied)
+}
+
+/// Rematerialize every type against the roster's current revocations, then record them as
+/// applied. Run when the revocations change, when sync starts, and after a revoke here.
+fn apply_revocations(lib: &mut Library, home: &Path, profile_id: &str) {
+    let dir = morph_core::profiles::profile_dir(home, profile_id);
+    if let Err(e) = core::materialize_all(lib, now_ms()) {
+        eprintln!("morph-sync: revocations: {e}");
+        return;
+    }
+    if let Err(e) = morph_core::settings_sync::materialize(lib, home, profile_id) {
+        eprintln!("morph-sync: settings: {e}");
+    }
+    if let Err(e) = companion_sync::materialize(lib, &companion_sync::store(&dir)) {
+        eprintln!("morph-sync: companions: {e}");
+        return;
+    }
+    if let Err(e) = core::mark_revocations_applied(lib) {
+        eprintln!("morph-sync: revocations: {e}");
+    }
+}
+
+/// Whether the stdio MCP server `server_id` of a profile may start a process on this device:
+/// its synced config was written here or by a linked device that is not revoked (in the
+/// library's roster and, while sync runs, the live one). Fails closed when the library is
+/// locked or unreadable. The MCP host checks this before it starts a local command, on top of
+/// the per-machine approval.
+pub fn mcp_may_start(home: &Path, profile_id: &str, server_id: &str) -> bool {
+    let live_revoked: Vec<String> =
+        live(home, profile_id).map(|(_, st)| st.lock().map(|st| revoked_ids(&st.roster)).unwrap_or_default()).unwrap_or_default();
+    let trusted = library_db::with(home, profile_id, |lib| {
+        let writer_ok = companion_sync::mcp_writer_trusted(lib, server_id).unwrap_or(false);
+        let writer = companion_sync::mcp_writer(lib, server_id).ok().flatten();
+        Ok(writer_ok && writer.is_none_or(|w| !live_revoked.contains(&w)))
+    });
+    // No library for the profile: nothing ever synced into it, so the config was written here.
+    matches!(trusted, Ok(Some(true)) | Ok(None))
+}
+
+/// [`mcp_may_start`] for the profile whose companions directory is `companions`
+/// (`<home>/profiles/<id>/companions`).
+pub fn mcp_may_start_in(companions: &Path, server_id: &str) -> bool {
+    let Some(profile) = companions.parent() else { return false };
+    let (Some(id), Some(home)) = (profile.file_name().and_then(|n| n.to_str()), profile.parent().and_then(Path::parent)) else { return false };
+    mcp_may_start(home, id, server_id)
 }
 
 fn revoked_ids(roster: &Roster) -> Vec<String> {
@@ -654,6 +710,7 @@ pub fn revoke_device(home: &Path, profile_id: &str, peer_id: &str, now_ms: i64) 
         if let Err(e) = companion_sync::after_revoke(lib, &companion_sync::store(&dir), now_ms) {
             eprintln!("morph-sync: companions after revoke: {e}");
         }
+        apply_revocations(lib, home, profile_id);
         core::refresh_live(&dir, lib);
         Ok(Ok(()))
     })
@@ -1083,7 +1140,10 @@ mod tests {
         let policy_a = store_a.load_policy().unwrap().unwrap();
         assert!(policy_a.allows().is_empty(), "the revoked device's standing allow is void at once");
         assert_eq!(policy_a.site_level(&AgentId::new("atlas"), "tokio.rs"), SiteLevel::Ask, "and its site grant");
-        assert!(store_a.load_roster().unwrap().unwrap().get(&AgentId::new("atlas")).is_some(), "a Local companion it added stays");
+        assert!(
+            store_a.load_roster().unwrap().unwrap().get(&AgentId::new("atlas")).is_none(),
+            "every companion op it wrote is void, a Local companion too"
+        );
         revoke_device(&a, "p1", &b_peer, 201).unwrap();
         assert_eq!(devices(&a, "p1").unwrap()[1].revoked_ms, Some(200), "revoking twice is a no-op");
         hist::record_visit(&b, "p1", "https://after-revoke-b.example/", "", 210).unwrap();
