@@ -137,6 +137,7 @@ pub fn target_summary(s: &McpServer) -> String {
 pub fn scope_summary(s: &McpServer, names: &BTreeMap<String, String>) -> String {
     match &s.companions {
         None => "For all companions".to_string(),
+        Some(ids) if ids.is_empty() => "For no companion (the one it was for was removed)".to_string(),
         Some(ids) => {
             let who: Vec<String> = ids.iter().map(|id| names.get(id).cloned().unwrap_or_else(|| format!("{id} (removed)"))).collect();
             format!("Only for {}", who.join(", "))
@@ -316,7 +317,7 @@ impl SettingsView {
             None => McpServer::new("", transport),
         };
         server.name = text(&form.name);
-        server.companions = form.scope.clone().filter(|c| !c.is_empty());
+        server.companions = form.scope.clone();
         let id = server.id.clone();
         if self.servers_apply(move |d, secrets| mcp_host::save_server(d, secrets, server, &new_secrets), cx) {
             // Asked after saving: the approval covers the values just stored, secrets included.
@@ -691,6 +692,8 @@ mod tests {
         assert_eq!(scope_summary(&s, &names), "For all companions");
         s.companions = Some(BTreeSet::from(["scout".to_string()]));
         assert_eq!(scope_summary(&s, &names), "Only for Scout");
+        s.companions = Some(BTreeSet::new());
+        assert_eq!(scope_summary(&s, &names), "For no companion (the one it was for was removed)");
         s.companions = Some(BTreeSet::from(["gone".to_string()]));
         assert_eq!(scope_summary(&s, &names), "Only for gone (removed)");
     }
