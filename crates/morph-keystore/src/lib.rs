@@ -70,30 +70,38 @@ fn platform_store() -> keyring_core::Result<Arc<CredentialStore>> {
     }
     #[cfg(not(any(test, feature = "mock")))]
     {
-        #[cfg(target_os = "android")]
-        {
-            Ok(android_native_keyring_store::Store::new()?)
-        }
-        #[cfg(target_os = "macos")]
-        {
-            Ok(apple_native_keyring_store::keychain::Store::new()?)
-        }
-        #[cfg(target_os = "ios")]
-        {
-            Ok(apple_native_keyring_store::protected::Store::new()?)
-        }
-        #[cfg(windows)]
-        {
-            Ok(windows_native_keyring_store::Store::new()?)
-        }
-        #[cfg(all(unix, not(any(target_os = "android", target_os = "macos", target_os = "ios"))))]
-        {
-            Ok(zbus_secret_service_keyring_store::Store::new()?)
-        }
-        #[cfg(not(any(unix, windows)))]
-        {
-            Err(Error::NotSupportedByStore("no keystore on this platform".into()))
-        }
+        native_store()
+    }
+}
+
+/// The operating system's own keystore. Built in every configuration, the
+/// tests' and `mock`'s too, so the platform store crate is always the one
+/// linked for the target (and never reported as an unused dependency).
+#[cfg_attr(any(test, feature = "mock"), allow(dead_code))]
+fn native_store() -> keyring_core::Result<Arc<CredentialStore>> {
+    #[cfg(target_os = "android")]
+    {
+        Ok(android_native_keyring_store::Store::new()?)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Ok(apple_native_keyring_store::keychain::Store::new()?)
+    }
+    #[cfg(target_os = "ios")]
+    {
+        Ok(apple_native_keyring_store::protected::Store::new()?)
+    }
+    #[cfg(windows)]
+    {
+        Ok(windows_native_keyring_store::Store::new()?)
+    }
+    #[cfg(all(unix, not(any(target_os = "android", target_os = "macos", target_os = "ios"))))]
+    {
+        Ok(zbus_secret_service_keyring_store::Store::new()?)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        Err(Error::NotSupportedByStore("no keystore on this platform".into()))
     }
 }
 
