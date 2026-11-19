@@ -389,6 +389,11 @@ impl DesktopResearch {
         Self { calls: Mutex::new(calls), home, profile, store, locked: never_locked() }
     }
 
+    /// The most requests a second to any one site (Agents > Site rate), read when a request is made.
+    fn site_rate(&self) -> f64 {
+        self.store.load_settings().ok().flatten().unwrap_or_default().site_rate()
+    }
+
     /// Refuse everything (the Library, the web, hidden pages) while the profile is locked.
     pub fn locked_when(self, locked: LockCheck) -> Self {
         Self { locked, ..self }
@@ -504,7 +509,12 @@ impl ResearchHost for DesktopResearch {
             let (home, profile) = (self.home.clone(), self.profile.clone());
             return blocking(move || Ok(library_hits(&home, &profile, &query, 8))).await;
         }
-        blocking(move || companion_web::search(&provider, &query, HTTP_TIMEOUT)).await
+        let rate = self.site_rate();
+        blocking(move || {
+            companion_web::polite_wait(&companion_web::provider_host(&provider), rate);
+            companion_web::search(&provider, &query, HTTP_TIMEOUT)
+        })
+        .await
     }
     async fn fetch(&self, url: &str, signed_in: Option<&str>) -> Result<FetchedPage, HostError> {
         gate(&self.locked)?;
@@ -532,6 +542,12 @@ impl DesktopResearch {
         if let Some(p) = signed_in {
             self.check_profile(p)?;
         }
+        let (rate, wait_url) = (self.site_rate(), url.to_string());
+        blocking(move || {
+            companion_web::polite_wait(&wait_url, rate);
+            Ok(())
+        })
+        .await?;
         let hidden = ask(&self.calls, |r| HostCall::ReadHidden { url: url.to_string(), signed_in: signed_in.is_some(), reply: r }).await;
         match hidden {
             Err(HostError::Unsupported(_)) if signed_in.is_none() => {

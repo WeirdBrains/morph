@@ -51,7 +51,7 @@ pub use remote::{
     CompanionRoute, Link, LinkHandler, LinkedNode, NodeRouter, OffloadMode, OffloadPlan, OffloadSettings, RouteError, offload_plan, route_companion,
 };
 pub use roster::{CompanionProfile, Roster, RosterError};
-pub use settings::{AgentSettings, SearchProvider};
+pub use settings::{AgentSettings, DEFAULT_SITE_RATE, SITE_RATE_RANGE, SITE_RATE_STEPS, SearchProvider};
 pub use store::{
     AiStore, FileStore, Grants, MemoryStore, StoreError, forget_vanished_companions, rebase_policy, rebase_shared, reload_shared, remove_companion,
     revoke_shared, save_shared,

@@ -123,7 +123,30 @@ pub struct ResearchProject {
     pub created_ms: u64,
 }
 
+/// The first plan of a project made from a question: the user can steer it later.
+pub fn starter_plan() -> Vec<PlanStep> {
+    ["Search the Library and the web for the question", "Read the best sources", "Write the findings and a draft report with footnotes"]
+        .iter()
+        .map(|t| PlanStep::new(t))
+        .collect()
+}
+
+/// A short title from a question: its first line, at most 60 characters.
+pub fn title_of(question: &str) -> String {
+    let line = question.lines().next().unwrap_or("").trim();
+    let mut t: String = line.chars().take(60).collect();
+    if line.chars().count() > 60 {
+        t.push('…');
+    }
+    if t.is_empty() { "Research project".into() } else { t }
+}
+
 impl ResearchProject {
+    /// A project from a question, with the starter plan, for `companion`.
+    pub fn from_question(question: &str, companion: &str, now: u64) -> Self {
+        Self::new(&title_of(question), question.trim(), companion, starter_plan(), now)
+    }
+
     pub fn new(title: &str, brief: &str, companion: &str, plan: Vec<PlanStep>, now: u64) -> Self {
         Self {
             id: new_id("research"),
@@ -193,6 +216,22 @@ impl Projects {
             p.recover(now);
         }
         Ok(me)
+    }
+
+    /// From the saved bytes (a missing file is `Projects::default()`), recovering steps that were in flight.
+    pub fn from_bytes(bytes: Option<&[u8]>, now: u64) -> Result<Self, StoreError> {
+        let mut me: Self = match bytes {
+            Some(b) => serde_json::from_slice(b).map_err(|e| StoreError::Io(e.to_string()))?,
+            None => Self::default(),
+        };
+        for p in &mut me.projects {
+            p.recover(now);
+        }
+        Ok(me)
+    }
+
+    pub fn to_bytes(&self) -> Result<Vec<u8>, StoreError> {
+        serde_json::to_vec_pretty(self).map_err(|e| StoreError::Io(e.to_string()))
     }
 
     pub fn save(&self, io: &dyn FileIo, path: &std::path::Path) -> Result<(), StoreError> {
@@ -290,23 +329,71 @@ pub fn check_caps(project: &ResearchProject, caps: &Caps, always_allow: bool, no
     Ok(())
 }
 
-/// A polite per-site rate limit, always on, even with Always allow: one request per
-/// `gap` per site, backing off (doubling, to five minutes) after a 429 or 503. It is not a
-/// budget; it keeps the project from getting blocked.
+/// The politeness limit on requests to any one site, for every companion and every research
+/// project (the Agents setting "site rate", requests per second; fractions allowed). It is
+/// always on, even with Always allow, and it is not a budget.
+///
+/// Each wait is the minimum interval (1 / rate, rounded up) plus a random 0 to 10% of it, so
+/// visits look less mechanical. A wait is never shorter than the minimum interval, so the rate
+/// is never exceeded. A 429 or 503 backs off on top: the interval doubles per strike, to five
+/// minutes, and the jitter applies to that too.
 #[derive(Debug, Clone)]
 pub struct SiteLimiter {
-    gap_ms: u64,
+    rate: f64,
     next_ok: HashMap<String, u64>,
     strikes: HashMap<String, u32>,
+    rng: u64,
+}
+
+/// The most extra wait, as a share of the minimum interval.
+pub const JITTER: f64 = 0.10;
+
+/// The minimum interval at `rate` requests per second, in ms (0 for an unlimited rate).
+pub fn min_interval_ms(rate: f64) -> u64 {
+    if rate.is_finite() && rate > 0.0 {
+        (1000.0 / rate).ceil() as u64
+    } else if rate.is_finite() {
+        u64::MAX / 4
+    } else {
+        0
+    }
+}
+
+/// A wait of `min_ms` plus `unit` (0.0 to 1.0) of the 10% jitter: always between `min_ms` and `min_ms` + 10%.
+pub fn jittered_ms(min_ms: u64, unit: f64) -> u64 {
+    let unit = if unit.is_finite() { unit.clamp(0.0, 1.0) } else { 0.0 };
+    min_ms + (min_ms as f64 * JITTER * unit).floor() as u64
 }
 
 impl SiteLimiter {
-    /// One request per five seconds per site.
-    pub const DEFAULT_GAP: Duration = Duration::from_secs(5);
     const MAX_BACKOFF_MS: u64 = 300_000;
 
-    pub fn new(gap: Duration) -> Self {
-        Self { gap_ms: gap.as_millis() as u64, next_ok: HashMap::new(), strikes: HashMap::new() }
+    /// A limiter for `rate` requests per second to one site (use `f64::INFINITY` for none, in tests).
+    pub fn new(rate: f64) -> Self {
+        let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1);
+        Self { rate, next_ok: HashMap::new(), strikes: HashMap::new(), rng: seed | 1 }
+    }
+
+    /// A limiter with a fixed jitter source (tests).
+    pub fn with_seed(rate: f64, seed: u64) -> Self {
+        Self { rng: seed | 1, ..Self::new(rate) }
+    }
+
+    /// The rate for requests from now on (a settings change).
+    pub fn set_rate(&mut self, rate: f64) {
+        self.rate = rate;
+    }
+
+    pub fn rate(&self) -> f64 {
+        self.rate
+    }
+
+    fn unit(&mut self) -> f64 {
+        // xorshift64*: enough for jitter; nothing here is secret.
+        self.rng ^= self.rng >> 12;
+        self.rng ^= self.rng << 25;
+        self.rng ^= self.rng >> 27;
+        (self.rng.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 11) as f64 / (1u64 << 53) as f64
     }
 
     /// Milliseconds to wait before `site` may be asked again (0: now).
@@ -314,17 +401,28 @@ impl SiteLimiter {
         self.next_ok.get(site).map_or(0, |at| at.saturating_sub(now))
     }
 
-    /// A request to `site` went out.
+    /// A request to `site` went out at `now`: the next may follow after the interval and jitter.
     pub fn record(&mut self, site: &str, now: u64) {
         self.strikes.remove(site);
-        self.next_ok.insert(site.into(), now + self.gap_ms);
+        let wait = jittered_ms(min_interval_ms(self.rate), self.unit());
+        self.next_ok.insert(site.into(), now + wait);
+    }
+
+    /// Takes the next slot for `site`: how long to wait before sending (0: now), and books the
+    /// request after it. For callers that sleep instead of coming back later.
+    pub fn reserve(&mut self, site: &str, now: u64) -> u64 {
+        let wait = self.wait_ms(site, now);
+        self.record(site, now + wait);
+        wait
     }
 
     /// The site answered 429 or 503: wait longer each time.
     pub fn back_off(&mut self, site: &str, now: u64) {
         let n = self.strikes.entry(site.into()).or_insert(0);
         *n += 1;
-        let wait = (self.gap_ms << (*n).min(10)).min(Self::MAX_BACKOFF_MS);
+        let n = *n;
+        let base = min_interval_ms(self.rate).saturating_mul(1u64 << n.min(10)).min(Self::MAX_BACKOFF_MS.max(min_interval_ms(self.rate)));
+        let wait = jittered_ms(base, self.unit());
         self.next_ok.insert(site.into(), now + wait);
     }
 }
@@ -548,7 +646,7 @@ mod tests {
             &id,
             &mut Fixed { pages: 2, tool_ms: 1000, fail_at: None, ran: vec![] },
             power(),
-            &mut SiteLimiter::new(Duration::ZERO),
+            &mut SiteLimiter::new(f64::INFINITY),
             &now,
         );
         assert_eq!(end, SessionEnd::Finished);
@@ -578,7 +676,7 @@ mod tests {
             now.set(now.get() + 1);
             now.get()
         };
-        let mut limiter = SiteLimiter::new(Duration::ZERO);
+        let mut limiter = SiteLimiter::new(f64::INFINITY);
         let mut env = SessionEnv { caps: Caps::default(), power: power(), run_now: false, limiter: &mut limiter, cancel: &cancel, clock: &clock };
         let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _ = run_session(&mut ps, &id, &mut Dies, &mut env, &mut |p| p.save(&PlainIo, &path));
@@ -593,7 +691,7 @@ mod tests {
         assert_eq!(p.plan[2].status, StepStatus::Queued);
         assert_eq!(p.next_step(), Some(2));
         let mut runner = Fixed { pages: 1, tool_ms: 10, fail_at: None, ran: vec![] };
-        let end = run(&mut again, &id, &mut runner, power(), &mut SiteLimiter::new(Duration::ZERO), &now);
+        let end = run(&mut again, &id, &mut runner, power(), &mut SiteLimiter::new(f64::INFINITY), &now);
         assert_eq!(end, SessionEnd::Finished);
         assert_eq!(runner.ran, vec![2, 3]);
     }
@@ -618,7 +716,7 @@ mod tests {
     fn a_failed_step_ends_the_session_and_the_next_one_retries_it() {
         let (mut ps, id) = setup(2);
         let now = Cell::new(3_000);
-        let mut lim = SiteLimiter::new(Duration::ZERO);
+        let mut lim = SiteLimiter::new(f64::INFINITY);
         let mut runner = Fixed { pages: 1, tool_ms: 1, fail_at: Some(0), ran: vec![] };
         assert_eq!(run(&mut ps, &id, &mut runner, power(), &mut lim, &now), SessionEnd::StepFailed);
         assert_eq!(ps.get(&id).unwrap().plan[0].status, StepStatus::Queued);
@@ -641,7 +739,7 @@ mod tests {
             now.set(now.get() + 1);
             now.get()
         };
-        let mut lim = SiteLimiter::new(Duration::ZERO);
+        let mut lim = SiteLimiter::new(f64::INFINITY);
         let mut env = SessionEnv { caps: Caps::default(), power: power(), run_now: false, limiter: &mut lim, cancel: &cancel, clock: &clock };
         let mut saves = 0;
         let end = run_session(&mut ps, &id, &mut Pauses, &mut env, &mut |p| {
@@ -668,7 +766,7 @@ mod tests {
             &id,
             &mut Fixed { pages: 40, tool_ms: 1000, fail_at: None, ran: vec![] },
             power(),
-            &mut SiteLimiter::new(Duration::ZERO),
+            &mut SiteLimiter::new(f64::INFINITY),
             &now,
         );
         assert_eq!(end, SessionEnd::Capped(CapHit::PagesPerHour));
@@ -680,7 +778,7 @@ mod tests {
             &id,
             &mut Fixed { pages: 40, tool_ms: 1000, fail_at: None, ran: vec![] },
             power(),
-            &mut SiteLimiter::new(Duration::ZERO),
+            &mut SiteLimiter::new(f64::INFINITY),
             &now,
         );
         assert_eq!(end, SessionEnd::Finished);
@@ -727,29 +825,80 @@ mod tests {
             s.site = Some("docs.rs".into());
         }
         let now = Cell::new(100);
-        let mut lim = SiteLimiter::new(SiteLimiter::DEFAULT_GAP);
+        let mut lim = SiteLimiter::with_seed(0.2, 7);
         let mut runner = Fixed { pages: 1, tool_ms: 1, fail_at: None, ran: vec![] };
         let end = run(&mut ps, &id, &mut runner, power(), &mut lim, &now);
-        assert!(matches!(end, SessionEnd::SiteWait(ms) if ms > 4_000 && ms <= 5_000), "{end:?}");
+        assert!(matches!(end, SessionEnd::SiteWait(ms) if ms > 4_000 && ms <= 5_600), "{end:?}");
         assert_eq!(runner.ran, vec![0]);
-        now.set(100 + 6_000);
+        now.set(100 + 7_000);
         assert_eq!(run(&mut ps, &id, &mut runner, power(), &mut lim, &now), SessionEnd::Finished);
     }
 
     #[test]
-    fn a_429_backs_off_and_the_step_stays_queued() {
-        let mut lim = SiteLimiter::new(Duration::from_secs(5));
+    fn a_429_backs_off_on_top_of_the_rate() {
+        // 0.2/s: a 5 s minimum interval.
+        let mut lim = SiteLimiter::with_seed(0.2, 3);
         lim.back_off("a.example", 0);
-        assert_eq!(lim.wait_ms("a.example", 0), 10_000);
+        assert!((10_000..=11_000).contains(&lim.wait_ms("a.example", 0)), "{}", lim.wait_ms("a.example", 0));
         lim.back_off("a.example", 0);
-        assert_eq!(lim.wait_ms("a.example", 0), 20_000);
+        assert!((20_000..=22_000).contains(&lim.wait_ms("a.example", 0)));
         for _ in 0..20 {
             lim.back_off("a.example", 0);
         }
-        assert_eq!(lim.wait_ms("a.example", 0), 300_000);
+        assert!((300_000..=330_000).contains(&lim.wait_ms("a.example", 0)));
         lim.record("a.example", 0);
-        assert_eq!(lim.wait_ms("a.example", 0), 5_000);
+        assert!((5_000..=5_500).contains(&lim.wait_ms("a.example", 0)));
         assert_eq!(lim.wait_ms("other.example", 0), 0);
+    }
+
+    #[test]
+    fn the_jitter_never_goes_below_the_minimum_and_stays_within_ten_percent() {
+        // The pure rule at the edges.
+        for min in [1, 7, 500, 2_000, 5_000, 10_000, 100_000] {
+            assert_eq!(jittered_ms(min, 0.0), min);
+            for unit in [0.0, 0.001, 0.5, 0.999, 1.0] {
+                let w = jittered_ms(min, unit);
+                assert!(w >= min, "{w} below {min}");
+                assert!(w as f64 <= min as f64 * 1.10 + 1e-9, "{w} over 10% of {min}");
+            }
+            // Out-of-range or broken input cannot shorten or lengthen it past the bounds.
+            assert_eq!(jittered_ms(min, -3.0), min);
+            assert_eq!(jittered_ms(min, f64::NAN), min);
+            assert!(jittered_ms(min, 9.0) as f64 <= min as f64 * 1.10 + 1e-9);
+        }
+        // Through the limiter, for several rates and many draws: never under 1/rate, never over +10%,
+        // so the rate is never exceeded.
+        for rate in [0.1, 0.2, 0.5, 1.0, 2.0, 3.0] {
+            let min = min_interval_ms(rate);
+            let mut lim = SiteLimiter::with_seed(rate, 99);
+            let (mut lo, mut hi) = (u64::MAX, 0);
+            for i in 0..2_000u64 {
+                lim.record("s", 1_000_000 * i);
+                let w = lim.wait_ms("s", 1_000_000 * i);
+                assert!(w >= min, "rate {rate}: {w} under the minimum {min}");
+                assert!(w as f64 <= min as f64 * 1.10 + 1e-9, "rate {rate}: {w} over 10% above {min}");
+                (lo, hi) = (lo.min(w), hi.max(w));
+            }
+            // It does vary, so visits are not on a metronome (not for intervals too short to spread).
+            if min >= 100 {
+                assert!(hi > lo, "rate {rate}: no jitter in 2000 draws");
+            }
+        }
+    }
+
+    #[test]
+    fn the_interval_is_one_over_the_rate_rounded_up() {
+        assert_eq!(min_interval_ms(0.2), 5_000);
+        assert_eq!(min_interval_ms(0.5), 2_000);
+        assert_eq!(min_interval_ms(3.0), 334);
+        assert_eq!(min_interval_ms(f64::INFINITY), 0);
+        // Requests booked back to back wait the minimum each, never less.
+        let mut lim = SiteLimiter::with_seed(1.0, 5);
+        let w: Vec<u64> = (0..4).map(|_| lim.reserve("s", 0)).collect();
+        assert_eq!(w[0], 0);
+        for pair in w.windows(2) {
+            assert!(pair[1] - pair[0] >= 1_000 && pair[1] - pair[0] <= 1_100, "{w:?}");
+        }
     }
 
     #[test]
@@ -767,8 +916,7 @@ mod tests {
         ps.get_mut(&id).unwrap().always_allow = true;
         let now = Cell::new(1);
         let off = Power { on_ac: false, battery_pct: Some(90), busy: false };
-        let end =
-            run(&mut ps, &id, &mut Fixed { pages: 1, tool_ms: 1, fail_at: None, ran: vec![] }, off, &mut SiteLimiter::new(Duration::ZERO), &now);
+        let end = run(&mut ps, &id, &mut Fixed { pages: 1, tool_ms: 1, fail_at: None, ran: vec![] }, off, &mut SiteLimiter::new(f64::INFINITY), &now);
         assert_eq!(end, SessionEnd::Held(Hold::NeedsPower));
     }
 
@@ -782,6 +930,19 @@ mod tests {
         assert!(b.max_pages > 100_000 && b.max_steps > 100_000);
         assert_eq!(session_budget(false).max_pages, 25);
         assert_eq!(session_budget(false).per_task, Duration::from_secs(600));
+    }
+
+    #[test]
+    fn a_project_from_a_question_has_a_title_a_plan_and_starts_paused() {
+        let p = ResearchProject::from_question("  How does Tokio cancel a task?\nMore detail.", "atlas", 7);
+        assert_eq!(p.title, "How does Tokio cancel a task?");
+        assert_eq!(p.brief, "How does Tokio cancel a task?\nMore detail.");
+        assert_eq!((p.state, p.plan.len(), p.always_allow, p.signed_in), (ProjectState::Paused, 3, false, false));
+        assert_eq!(title_of(&"x".repeat(80)).chars().count(), 61);
+        assert_eq!(title_of(""), "Research project");
+        let bytes = Projects { projects: vec![p], always_allow_all: false }.to_bytes().unwrap();
+        assert_eq!(Projects::from_bytes(Some(&bytes), 9).unwrap().projects.len(), 1);
+        assert!(Projects::from_bytes(None, 9).unwrap().projects.is_empty());
     }
 
     #[test]

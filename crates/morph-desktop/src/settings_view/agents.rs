@@ -125,6 +125,19 @@ pub fn set_provider(dir: &Path, provider: SearchProvider) -> Result<(), String> 
     store(dir).save_settings(&s).map_err(|e| e.to_string())
 }
 
+/// The most requests a second to any one site, for every companion and research project.
+pub fn set_site_rate(dir: &Path, rate: f64) -> Result<(), String> {
+    let mut s = load_settings(dir);
+    s.site_rate = rate;
+    store(dir).save_settings(&s).map_err(|e| e.to_string())
+}
+
+/// "0.5 requests a second (one every 2 s)".
+pub fn site_rate_label(rate: f64) -> String {
+    let every = 1.0 / rate;
+    if rate >= 1.0 { format!("{rate}/s") } else { format!("{rate}/s (one every {} s)", (every * 10.0).round() / 10.0) }
+}
+
 /// Where turns may run when this device cannot run local models.
 pub fn set_offload_mode(dir: &Path, mode: OffloadMode) -> Result<(), String> {
     let mut s = load_settings(dir);
@@ -658,6 +671,22 @@ impl SettingsView {
                 chips.into_any_element(),
             ),
         );
+
+        // Site rate: the most requests a second to any one site, for every companion and research.
+        let rate = load_settings(&dir).site_rate();
+        let rate_chips = div().flex().flex_row().flex_wrap().gap(px(6.)).children(morph_ai::SITE_RATE_STEPS.into_iter().enumerate().map(|(i, r)| {
+            chip(t, ("agents-site-rate", i), site_rate_label(r), (rate - r).abs() < 1e-9).on_click(cx.listener(move |this, _, _, cx| {
+                this.agents_apply(|d| set_site_rate(d, r), cx);
+            }))
+        }));
+        rows.push(self.plain_row(
+            "Site rate",
+            format!(
+                "The most requests a second Morph makes to any one site, for every companion and research project, with or without Always allow. Each wait is at least 1 / rate, plus a random 0 to 10% so visits look less mechanical. A 429 or 503 backs off on top. Now {}. Syncs with your other agent settings.",
+                site_rate_label(rate)
+            ),
+            rate_chips.into_any_element(),
+        ));
 
         // Connected servers: MCP servers the companions use (not Morph's own server, below).
         rows.extend(self.servers_rows(&dir, cx));

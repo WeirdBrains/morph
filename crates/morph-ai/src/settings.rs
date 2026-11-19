@@ -32,7 +32,7 @@ impl SearchProvider {
 }
 
 /// Settings shared by every companion of a profile.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentSettings {
     /// The web provider after the Library. Research always searches the Library first.
     #[serde(default)]
@@ -40,6 +40,40 @@ pub struct AgentSettings {
     /// When model turns go to another of the user's devices.
     #[serde(default)]
     pub offload: crate::remote::OffloadSettings,
+    /// The most requests per second Morph makes to any one site, for every companion and every
+    /// research project (fractions allowed: 0.2 is one request every 5 seconds). Each wait is
+    /// the minimum interval (1 / rate) plus a random 0 to 10% (see `research::SiteLimiter`).
+    #[serde(default = "default_site_rate")]
+    pub site_rate: f64,
+}
+
+/// Default: one request every 2 seconds to any one site.
+pub const DEFAULT_SITE_RATE: f64 = 0.5;
+/// What the settings offer: 0.1/s (one per 10 s) up to 2/s.
+pub const SITE_RATE_STEPS: [f64; 5] = [0.1, 0.2, 0.5, 1.0, 2.0];
+/// The lowest and highest rates a saved value is held to.
+pub const SITE_RATE_RANGE: (f64, f64) = (0.01, 10.0);
+
+fn default_site_rate() -> f64 {
+    DEFAULT_SITE_RATE
+}
+
+impl Default for AgentSettings {
+    fn default() -> Self {
+        Self { search_provider: SearchProvider::default(), offload: Default::default(), site_rate: DEFAULT_SITE_RATE }
+    }
+}
+
+impl AgentSettings {
+    /// The rate to use: the saved one held to [`SITE_RATE_RANGE`] (a damaged or synced value that
+    /// is not a number, zero or negative gives the default).
+    pub fn site_rate(&self) -> f64 {
+        if self.site_rate.is_finite() && self.site_rate > 0.0 {
+            self.site_rate.clamp(SITE_RATE_RANGE.0, SITE_RATE_RANGE.1)
+        } else {
+            DEFAULT_SITE_RATE
+        }
+    }
 }
 
 #[cfg(test)]
@@ -54,7 +88,7 @@ mod tests {
         assert_eq!(s, AgentSettings::default());
         assert_eq!(
             serde_json::to_string(&AgentSettings { search_provider: SearchProvider::Google, ..Default::default() }).unwrap(),
-            r#"{"search_provider":"google","offload":{"mode":"auto","fallback_local":true}}"#
+            r#"{"search_provider":"google","offload":{"mode":"auto","fallback_local":true},"site_rate":0.5}"#
         );
     }
 
@@ -69,6 +103,21 @@ mod tests {
         let mem = MemoryStore::default();
         mem.save_settings(&s).unwrap();
         assert_eq!(mem.load_settings().unwrap(), Some(s));
+    }
+
+    #[test]
+    fn the_site_rate_has_a_default_survives_old_files_and_is_held_in_range() {
+        assert_eq!(AgentSettings::default().site_rate(), 0.5);
+        let old: AgentSettings = serde_json::from_str(r#"{"search_provider":"google"}"#).unwrap();
+        assert_eq!(old.site_rate(), 0.5);
+        let fraction: AgentSettings = serde_json::from_str(r#"{"site_rate":0.2}"#).unwrap();
+        assert_eq!(fraction.site_rate(), 0.2);
+        for (saved, used) in [(0.0, 0.5), (-1.0, 0.5), (f64::NAN, 0.5), (1000.0, 10.0), (0.0001, 0.01)] {
+            assert_eq!(AgentSettings { site_rate: saved, ..Default::default() }.site_rate(), used);
+        }
+        for r in SITE_RATE_STEPS {
+            assert!((SITE_RATE_RANGE.0..=SITE_RATE_RANGE.1).contains(&r));
+        }
     }
 
     #[test]

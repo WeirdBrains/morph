@@ -101,6 +101,10 @@ pub struct CompanionView {
     guards: HashMap<AgentId, crate::companion_host::WallGuard>,
     /// Tasks the guard stopped, told so when they end.
     timed_out: HashSet<AgentId>,
+    /// The Research tab is showing (not the chat).
+    research_tab: bool,
+    /// Long-term research projects (`companions/research.json`).
+    research: crate::companion_research::ResearchState,
 }
 
 /// Width of the folded panel's strip, in logical pixels.
@@ -284,8 +288,15 @@ impl CompanionView {
             outline: Default::default(),
             guards: HashMap::new(),
             timed_out: HashSet::new(),
+            research_tab: false,
+            research: crate::companion_research::ResearchState { projects: Default::default(), open: None },
         };
         view.collapsed = load_collapsed(&view.store);
+        view.research = crate::companion_research::ResearchState::load(&view.store);
+        if std::env::var_os("MORPH_COMPANION_DEMO_RESEARCH").is_some_and(|v| v == "1") {
+            view.research_tab = true;
+            view.research.demo();
+        }
         if std::env::var_os("MORPH_COMPANION_DEMO").is_some_and(|v| v == "1") {
             let id = view.selected.clone();
             view.conversations.insert(id, demo_conversation());
@@ -476,7 +487,111 @@ impl CompanionView {
     fn submit(&mut self, cx: &mut Context<Self>) {
         let text = self.input.read(cx).text().trim().to_string();
         self.input.update(cx, |i, cx| i.set_text("", cx));
-        self.send(text, cx);
+        if self.research_tab {
+            self.start_project(&text, cx);
+        } else {
+            self.send(text, cx);
+        }
+    }
+
+    fn selected_name(&self) -> String {
+        self.roster.get(&self.selected).map(|c| c.name().to_string()).unwrap_or_default()
+    }
+
+    fn save_research(&self) {
+        self.research.save(&self.store);
+    }
+
+    /// A new research project from `question`, for the selected companion; the tab shows it open.
+    fn start_project(&mut self, question: &str, cx: &mut Context<Self>) {
+        if question.trim().is_empty() {
+            return;
+        }
+        let name = self.selected_name();
+        self.research.add(question, &name);
+        self.research_tab = true;
+        self.save_research();
+        cx.notify();
+    }
+
+    /// "Make this a research project" on a chat: its last question becomes the brief.
+    fn make_research_project(&mut self, cx: &mut Context<Self>) {
+        let last = self.conversations.get(&self.selected).and_then(|c| {
+            c.entries().iter().rev().find_map(|e| match e {
+                Entry::User { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+        });
+        if let Some(q) = last {
+            self.start_project(&q, cx);
+        }
+    }
+
+    fn set_research_tab(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.research_tab = on;
+        cx.notify();
+    }
+
+    pub(crate) fn research_open(&mut self, id: String, cx: &mut Context<Self>) {
+        self.research.open = if self.research.open.as_deref() == Some(id.as_str()) { None } else { Some(id) };
+        cx.notify();
+    }
+
+    pub(crate) fn research_set(&mut self, id: String, state: morph_ai::research::ProjectState, cx: &mut Context<Self>) {
+        self.research.set_state(&id, state);
+        self.save_research();
+        cx.notify();
+    }
+
+    pub(crate) fn research_toggle_allow(&mut self, id: String, cx: &mut Context<Self>) {
+        self.research.toggle_allow(&id);
+        self.save_research();
+        cx.notify();
+    }
+
+    pub(crate) fn research_toggle_allow_all(&mut self, cx: &mut Context<Self>) {
+        self.research.toggle_allow_all();
+        self.save_research();
+        cx.notify();
+    }
+
+    /// Header: title, fold and close, and the Chat / Research tabs.
+    fn header(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let t = self.theme;
+        let active = self.research.active();
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(6.))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(2.))
+                    .child(div().flex_1().text_size(px(13.)).child("Companions"))
+                    .child(icon(t, "companions-collapse", "»").on_click(cx.listener(|this, _, _, cx| this.set_collapsed(true, cx))))
+                    .child(icon(t, "companions-close", "×").on_click(cx.listener(|_, _, _, cx| cx.emit(ShellRequest::CloseCompanions)))),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap(px(4.))
+                    .child(
+                        chip(t, "companions-tab-chat", "Chat", !self.research_tab)
+                            .on_click(cx.listener(|this, _, _, cx| this.set_research_tab(false, cx))),
+                    )
+                    .child(
+                        chip(
+                            t,
+                            "companions-tab-research",
+                            if active > 0 { format!("Research  {active}") } else { "Research".to_string() },
+                            self.research_tab,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.set_research_tab(true, cx))),
+                    ),
+            )
     }
 
     /// A question from the address bar (`> q` or `>name q`): select that companion and send it.
@@ -1106,6 +1221,28 @@ impl Render for CompanionView {
             return div().track_focus(&self.focus).size_full().child(self.strip(cx));
         }
         let t = self.theme;
+        if self.research_tab {
+            let who = self.selected_name();
+            return div()
+                .track_focus(&self.focus)
+                .size_full()
+                .flex()
+                .flex_col()
+                .gap(px(8.))
+                .p(px(10.))
+                .bg(rgb(t.surface))
+                .child(self.header(cx))
+                .child(crate::companion_research::body(t, &self.research, &who, cx))
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(6.))
+                        .child(div().flex_1().h(px(28.)).px(px(8.)).rounded(px(6.)).bg(rgb(t.background)).child(self.input.clone()))
+                        .child(button(t, "research-start", "Start project", true).on_click(cx.listener(|this, _, _, cx| this.submit(cx)))),
+                );
+        }
         let conv = self.conversations.get(&self.selected).cloned().unwrap_or_default();
         let picker: Vec<_> = self
             .roster
@@ -1178,6 +1315,7 @@ impl Render for CompanionView {
         let can_export = !running && self.last.contains_key(&self.selected);
         let exported = self.exported.clone();
         let signed_in = self.signed_in_next;
+        let can_make_project = !running && conv.entries().iter().any(|e| matches!(e, Entry::User { .. }));
 
         div()
             .track_focus(&self.focus)
@@ -1187,16 +1325,7 @@ impl Render for CompanionView {
             .gap(px(8.))
             .p(px(10.))
             .bg(rgb(t.surface))
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(2.))
-                    .child(div().flex_1().text_size(px(13.)).child("Companions"))
-                    .child(icon(t, "companions-collapse", "»").on_click(cx.listener(|this, _, _, cx| this.set_collapsed(true, cx))))
-                    .child(icon(t, "companions-close", "×").on_click(cx.listener(|_, _, _, cx| cx.emit(ShellRequest::CloseCompanions)))),
-            )
+            .child(self.header(cx))
             .child(div().flex().flex_row().flex_wrap().gap(px(4.)).children(picker))
             .child(dim(t, format!("{who} · {model} · runs on this device")))
             .children(model_card(t, self.models.status(&self.model_choice()), cx))
@@ -1272,6 +1401,10 @@ impl Render for CompanionView {
                         .when(!can_attach && attached.is_none(), |d| d.opacity(0.5))
                         .on_click(cx.listener(|this, _, _, cx| this.toggle_attach(cx))),
                     )
+                    .children(can_make_project.then(|| {
+                        chip(t, "companion-make-project", "Make this a research project", false)
+                            .on_click(cx.listener(|this, _, _, cx| this.make_research_project(cx)))
+                    }))
                     .child(
                         chip(t, "companion-signed-in", if signed_in { "Research: signed in, this task" } else { "Research: logged out" }, signed_in)
                             .when(signed_in, |d| d.text_color(rgb(t.accent_alt)))

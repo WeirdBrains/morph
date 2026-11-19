@@ -11,6 +11,44 @@ use morph_ai::{FetchedPage, HostError, PageLink, PageSnapshot, SearchHit};
 const MAX_BODY: u64 = 4 * 1024 * 1024;
 const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Morph/0.3 Safari/605.1.15";
 
+/// The politeness limit shared by every companion and research project (Agents > Site rate):
+/// one limiter for the whole process, keyed by host.
+static SITES: std::sync::Mutex<Option<morph_ai::research::SiteLimiter>> = std::sync::Mutex::new(None);
+
+/// The host of an address (or the text itself when it is not one).
+fn site_of(url: &str) -> String {
+    let rest = url.split("://").nth(1).unwrap_or(url);
+    rest.split(['/', '?', '#']).next().unwrap_or(rest).trim_start_matches("www.").to_ascii_lowercase()
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or_default()
+}
+
+/// Sleeps until `url`'s site may be asked again at `rate` requests per second (minimum interval
+/// plus up to 10%), then books this request. Blocking: call it from `blocking`.
+pub fn polite_wait(url: &str, rate: f64) {
+    let wait = {
+        let mut g = SITES.lock().unwrap_or_else(|e| e.into_inner());
+        let l = g.get_or_insert_with(|| morph_ai::research::SiteLimiter::new(rate));
+        l.set_rate(rate);
+        l.reserve(&site_of(url), now_ms())
+    };
+    if wait > 0 {
+        std::thread::sleep(Duration::from_millis(wait));
+    }
+}
+
+/// A 429 or 503 came back from `url`: wait longer before the next visit to that site.
+fn note_status(url: &str, status: u16) {
+    if status == 429 || status == 503 {
+        let mut g = SITES.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(l) = g.as_mut() {
+            l.back_off(&site_of(url), now_ms());
+        }
+    }
+}
+
 fn agent(timeout: Duration) -> ureq::Agent {
     ureq::Agent::config_builder().timeout_global(Some(timeout)).user_agent(USER_AGENT).http_status_as_error(false).max_redirects(8).build().into()
 }
@@ -20,6 +58,7 @@ pub fn get(url: &str, timeout: Duration) -> Result<(String, u16, String, String)
     use ureq::ResponseExt;
     let mut resp = agent(timeout).get(url).header("Accept-Language", "en").call().map_err(|e| HostError::Fetch(e.to_string()))?;
     let status = resp.status().as_u16();
+    note_status(url, status);
     let final_url = resp.get_uri().to_string();
     let kind = resp.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("").to_ascii_lowercase();
     if !(kind.is_empty() || kind.contains("html") || kind.starts_with("text/") || kind.contains("json") || kind.contains("xml")) {
@@ -432,6 +471,14 @@ pub fn parse_google(html: &str) -> Vec<SearchHit> {
 }
 
 /// Searches the web provider `provider` (`duckduckgo` or `google`) logged out.
+/// The site a search provider's requests go to (for the site rate).
+pub fn provider_host(provider: &str) -> String {
+    match provider {
+        "google" => "www.google.com".to_string(),
+        _ => "html.duckduckgo.com".to_string(),
+    }
+}
+
 pub fn search(provider: &str, query: &str, timeout: Duration) -> Result<Vec<SearchHit>, HostError> {
     let q = percent_encode(query);
     let (url, parse): (String, fn(&str) -> Vec<SearchHit>) = match provider {
@@ -448,6 +495,14 @@ pub fn search(provider: &str, query: &str, timeout: Duration) -> Result<Vec<Sear
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sites_are_told_apart_by_host_and_a_provider_has_one() {
+        assert_eq!(super::site_of("https://www.Docs.rs/tokio/latest?x=1"), "docs.rs");
+        assert_eq!(super::site_of("http://a.example:8080/p#f"), "a.example:8080");
+        assert_eq!(super::provider_host("google"), "www.google.com");
+        assert_eq!(super::provider_host("duckduckgo"), "html.duckduckgo.com");
+    }
+
     use super::*;
 
     #[test]
