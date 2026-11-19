@@ -37,7 +37,7 @@ fn approvals_path(companions: &Path) -> PathBuf {
 }
 
 fn secrets_path(companions: &Path) -> PathBuf {
-    profile_dir(companions).join("mcp-secrets.local.json")
+    profile_dir(companions).join(morph_services::companion_sync::SECRETS_FILE)
 }
 
 type Index = BTreeMap<String, BTreeMap<String, String>>;
@@ -250,6 +250,9 @@ impl McpManager {
         let (tx, rx) = mpsc::channel::<()>();
         let state = Arc::new(Mutex::new(State { registry: Arc::new(ToolRegistry::new()), scoped: BTreeMap::new(), snapshot: Snapshot::default() }));
         let secrets = Arc::new(LocalSecrets::open(companions));
+        // Sync reads and writes these same secrets (a sealed record type), not a second copy.
+        let shared: Arc<dyn McpSecrets> = secrets.clone();
+        morph_services::companion_sync::share_secrets(&profile_dir(companions), &shared);
         // One worker thread drives the servers' pipes and connections for as long as they live.
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)

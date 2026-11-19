@@ -24,6 +24,8 @@ futures = "0.3"
 morph-ai.workspace = true
 weirdnet-agent.workspace = true
 serde.workspace = true
+# Digests of MCP secret values in the companion-sync snapshot (never the values).
+sha2.workspace = true
 async-trait.workspace = true
 # A relay's display name from its well-known info (HTTPS, in the background).
 ureq = { version = "3", default-features = false, features = ["rustls"] }

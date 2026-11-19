@@ -10,12 +10,21 @@
 //! | `morph-grants`     | `site/<agent>\u{1f}<site>` level (LWW), `allow/<key>` standing allow and `ext/<agent>` external approval (OR-set) |
 //! | `morph-chats`      | `t/<id>` chat turn (OR-set; long turns chunked, whole)          |
 //! | `morph-mcp`        | `s/<id>` server config without secret values (OR-set)           |
+//! | `morph-mcp-secrets`| `k/<id>` a server's secret values, name to value (OR-set; sealed) |
 //! | `morph-journal`    | `j/<id>` journal and `e/<id>` entry (OR-set)                    |
 //!
 //! Every record is written with `SyncState::write` and read with `SyncState::read`, so a value
 //! over the type's `inline_max` is chunked and travels whole (a chat turn with a long answer).
 //! [`configure`] sets the record options, the same on every device. Peers on an older Morph
 //! see an entry's fallback `op` only: for a chunked chat turn that is a clipped copy.
+//!
+//! MCP secrets are a sealed type: every write (removals too) goes through `SyncState::write`
+//! with no fallback, so only devices holding the epoch key read them, and older peers see an
+//! empty op. Before the first rotation a write is refused (`no-epoch-key`): the secret stays
+//! on this device only and the next pass tries again. They live in this device's
+//! [`McpSecrets`] store, never in the files under `companions/`; the snapshot keeps their
+//! names and a digest only. Values are written back exactly as they came, so a server's
+//! approval fingerprint (which hashes them) is the same on every device that holds them.
 //!
 //! The files the app reads stay where they were (the companions directory, through
 //! [`AiStore`]). Like settings, sync works by difference: [`backfill`] logs what changed in
@@ -33,13 +42,17 @@
 //! after a revoke on this device. A synced stdio MCP server may also only start where
 //! [`mcp_writer_trusted`] says its config came from this device or a linked, unrevoked one.
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, Weak};
 
-use morph_ai::{AgentSettings, AiStore, ChatLog, ChatTurn, FileStore, Journals, McpConfigs, Roster as Companions, StoreError};
+use morph_ai::{
+    AgentSettings, AiStore, ChatLog, ChatTurn, FileSecrets, FileStore, Journals, McpConfigs, McpSecrets, Roster as Companions, StoreError,
+};
 use morph_store::Library;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use weirdnet_agent::{AgentKind, CompanionScope, Policy};
+use weirdnet_net::Keypair;
 use weirdnet_sync::hlc::Hlc;
 use weirdnet_sync::log::LogEntry;
 use weirdnet_sync::merge::OrSet;
@@ -90,6 +103,110 @@ pub type Result<T> = std::result::Result<T, CompanionSyncError>;
 /// The companions directory of a profile, where the panel and Settings read these files.
 pub fn store(profile_dir: &Path) -> FileStore {
     FileStore::new(profile_dir.join("companions"))
+}
+
+/// This device's MCP secrets file, beside the profile (outside `companions/`, never synced as a
+/// file).
+pub const SECRETS_FILE: &str = "mcp-secrets.local.json";
+
+static SECRETS: Mutex<Vec<(PathBuf, Weak<dyn McpSecrets>)>> = Mutex::new(Vec::new());
+
+/// Use `secrets` as the profile's MCP secrets store while it lives (the MCP host's own, so
+/// what sync writes is what it reads, with no second copy of the file in memory).
+pub fn share_secrets(profile_dir: &Path, secrets: &Arc<dyn McpSecrets>) {
+    let mut all = SECRETS.lock().unwrap_or_else(|p| p.into_inner());
+    all.retain(|(p, w)| p != profile_dir && w.strong_count() > 0);
+    all.push((profile_dir.to_path_buf(), Arc::downgrade(secrets)));
+}
+
+/// The profile's MCP secrets store: the shared one, else [`SECRETS_FILE`] read now.
+pub fn secrets_for(profile_dir: &Path) -> Arc<dyn McpSecrets> {
+    let shared = SECRETS.lock().unwrap_or_else(|p| p.into_inner()).iter().find(|(p, _)| p == profile_dir).and_then(|(_, w)| w.upgrade());
+    shared.unwrap_or_else(|| Arc::new(FileSecrets::open(profile_dir.join(SECRETS_FILE))))
+}
+
+/// Secret values by record (`k/<server id>`), name to value. Only ever in memory: the
+/// snapshot holds [`secret_summary`] instead.
+type SecretValues = BTreeMap<String, BTreeMap<String, String>>;
+
+/// What the snapshot keeps of a server's secrets: their names and a digest of the values.
+fn secret_summary(map: &BTreeMap<String, String>) -> Value {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(serde_json::to_vec(map).expect("secrets json"));
+    json!({ "names": map.keys().collect::<Vec<_>>(), "digest": digest.iter().map(|b| format!("{b:02x}")).collect::<String>() })
+}
+
+fn summary_names(v: &Value) -> impl Iterator<Item = String> + '_ {
+    v.get("names").and_then(Value::as_array).into_iter().flatten().filter_map(|n| n.as_str().map(str::to_string))
+}
+
+/// This device's secrets for every server its configs or the last merge know of.
+fn read_secrets(store: &dyn AiStore, secrets: &dyn McpSecrets, base: &State) -> Result<(BTreeMap<String, Value>, SecretValues)> {
+    let mut names: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for s in store.load_mcp()?.unwrap_or_default().servers {
+        names.entry(s.id.clone()).or_default().extend(s.secret_names());
+    }
+    for (rid, v) in base.recs.get(MCP_SECRETS).into_iter().flatten() {
+        if let Some(id) = rid.strip_prefix("k/") {
+            names.entry(id.to_string()).or_default().extend(summary_names(v));
+        }
+    }
+    let (mut recs, mut values) = (BTreeMap::new(), SecretValues::new());
+    for (id, names) in names {
+        let map: BTreeMap<String, String> = names.into_iter().filter_map(|n| secrets.get(&id, &n).map(|v| (n, v))).collect();
+        if !map.is_empty() {
+            let rid = format!("k/{id}");
+            recs.insert(rid.clone(), secret_summary(&map));
+            values.insert(rid, map);
+        }
+    }
+    Ok((recs, values))
+}
+
+/// Write the merged secrets into `secrets`, exactly as they came, touching only what differs.
+/// A record this device cannot read keeps what this device has. Returns the snapshot's
+/// summaries and whether anything changed.
+fn write_secrets(
+    secrets: &dyn McpSecrets,
+    merged: &BTreeMap<String, Value>,
+    base: &State,
+    unreadable: &BTreeSet<String>,
+) -> (BTreeMap<String, Value>, bool) {
+    let empty = BTreeMap::new();
+    let before = base.recs.get(MCP_SECRETS).unwrap_or(&empty);
+    let mut out = BTreeMap::new();
+    let mut changed = false;
+    for rid in unreadable.iter().filter(|r| !merged.contains_key(*r)) {
+        if let Some(v) = before.get(rid) {
+            out.insert(rid.clone(), v.clone());
+        }
+    }
+    for (rid, v) in merged {
+        let Some(id) = rid.strip_prefix("k/") else { continue };
+        let Ok(map) = serde_json::from_value::<BTreeMap<String, String>>(v.clone()) else { continue };
+        let known: BTreeSet<String> = before.get(rid).into_iter().flat_map(summary_names).chain(map.keys().cloned()).collect();
+        let current: BTreeMap<String, String> = known.iter().filter_map(|n| secrets.get(id, n).map(|v| (n.clone(), v))).collect();
+        if current != map {
+            if current.keys().any(|n| !map.contains_key(n)) {
+                // A name went away: the trait forgets whole servers only.
+                secrets.remove_server(id);
+            }
+            for (n, v) in &map {
+                if secrets.get(id, n).as_ref() != Some(v) {
+                    secrets.set(id, n, v);
+                }
+            }
+            changed = true;
+        }
+        out.insert(rid.clone(), secret_summary(&map));
+    }
+    for rid in before.keys().filter(|r| !merged.contains_key(*r) && !unreadable.contains(*r)) {
+        if let Some(id) = rid.strip_prefix("k/") {
+            secrets.remove_server(id);
+            changed = true;
+        }
+    }
+    (out, changed)
 }
 
 fn on(lib: &Library) -> Vec<&'static str> {
@@ -192,13 +309,64 @@ fn read_op(sync: &SyncState, e: &LogEntry) -> std::result::Result<Option<RecOp>,
     })
 }
 
+/// The library's records as a [`SyncState`] without a running node: log, clock, record
+/// options and epoch keys, configured like the live state. `companion_sync` writes and reads
+/// its records through it (chunked and sealed values need it). A library that is not linked
+/// yet gets a placeholder identity that never leaves this value: it writes plain and chunked
+/// records, and a sealed write is refused (`no-epoch-key`) until a rotation gave it a key.
+fn sync_state(lib: &Library) -> Option<SyncState> {
+    let our = morph_core::sync::node_id(lib).ok().flatten()?;
+    let linked = || {
+        let seed = morph_core::sync::load_seed(lib).ok().flatten()?;
+        let node_key = Keypair::from_protobuf_encoding(&morph_core::sync::load_node_key(lib).ok().flatten()?).ok()?;
+        let mut bytes: [u8; 32] = seed.as_slice().try_into().ok()?;
+        let user = Keypair::ed25519_from_bytes(&mut bytes).ok()?;
+        let user_id = weirdnet_net::user::user_id(&user.public());
+        let roster = morph_core::sync::load_roster(lib).ok()?;
+        let our_cert = roster.get(&our).cloned()?;
+        Some((seed, user.public(), user_id, roster, our_cert, weirdnet_sync::Device::from_node_key(&node_key).ok()))
+    };
+    let (seed, user_key, user_id, roster, our_cert, device) = linked().unwrap_or_else(|| {
+        let user = Keypair::generate_ed25519();
+        let user_id = weirdnet_net::user::user_id(&user.public());
+        let cert = weirdnet_net::user::NodeCert {
+            user_id: user_id.clone(),
+            peer_id: our.clone(),
+            label: String::new(),
+            cert: Vec::new(),
+            issued_at: 0,
+            revoked_at: None,
+            revocation: None,
+        };
+        (Vec::new(), user.public(), user_id, weirdnet_sync::Roster::new(), cert, None)
+    });
+    let mut st = SyncState {
+        seed,
+        user_id,
+        user_key,
+        our_cert,
+        our_node: weirdnet_sync::NodeId::new(our),
+        types: morph_core::sync::types_on(lib).ok()?,
+        roster,
+        log: morph_core::sync::load_log(lib).ok()?,
+        clock: morph_core::sync::load_clock(lib).ok()?,
+        device,
+        keys: morph_core::sync::load_epoch_keys(lib).ok()?,
+        auto_first_rotation: false,
+        records: morph_core::sync::load_records(lib).ok()?,
+    };
+    st.refresh_keys();
+    configure(&mut st);
+    Some(st)
+}
+
 fn records_state(lib: &Library) -> Result<SyncState> {
-    crate::sync::records_state(lib).ok_or(CompanionSyncError::NoState)
+    sync_state(lib).ok_or(CompanionSyncError::NoState)
 }
 
 /// Records from the files. Allows get a sync key: the one they were synced under, else
 /// `<our node>/<local id>`.
-fn read_files(store: &dyn AiStore, our: &str, base: &State) -> Result<State> {
+fn read_files(store: &dyn AiStore, secrets: Option<&dyn McpSecrets>, our: &str, base: &State) -> Result<(State, SecretValues)> {
     let mut st = State {
         allow_ids: BTreeMap::new(),
         next_allow_id: base.next_allow_id,
@@ -259,6 +427,18 @@ fn read_files(store: &dyn AiStore, our: &str, base: &State) -> Result<State> {
     }
     st.recs.insert(MCP.into(), m);
 
+    // Without a secrets store this pass leaves the secrets as they were merged last.
+    let mut values = SecretValues::new();
+    let k = match secrets {
+        Some(secrets) => {
+            let (k, v) = read_secrets(store, secrets, base)?;
+            values = v;
+            k
+        }
+        None => base.recs.get(MCP_SECRETS).cloned().unwrap_or_default(),
+    };
+    st.recs.insert(MCP_SECRETS.into(), k);
+
     let mut j = BTreeMap::new();
     let journals = store.load_journals()?.unwrap_or_default();
     for x in &journals.journals {
@@ -268,7 +448,7 @@ fn read_files(store: &dyn AiStore, our: &str, base: &State) -> Result<State> {
         j.insert(format!("e/{}", e.id), to_value(e));
     }
     st.recs.insert(JOURNAL.into(), j);
-    Ok(st)
+    Ok((st, values))
 }
 
 /// What a fresh install has before the user touched anything: stamped at time zero so it
@@ -298,6 +478,11 @@ fn save_snapshot(lib: &mut Library, st: &State) -> Result<()> {
 /// Log what changed in the files since the last pass (all of it on the first pass). Run before
 /// a pull so other devices can fetch it.
 pub fn backfill(lib: &mut Library, store: &dyn AiStore, now_ms: i64) -> Result<()> {
+    backfill_with(lib, store, None, now_ms)
+}
+
+/// [`backfill`], with this device's MCP secrets (none: they are left as merged last).
+pub fn backfill_with(lib: &mut Library, store: &dyn AiStore, secrets: Option<&dyn McpSecrets>, now_ms: i64) -> Result<()> {
     let types = on(lib);
     let Some(our) = node_id(lib)? else { return Ok(()) };
     if types.is_empty() {
@@ -306,7 +491,7 @@ pub fn backfill(lib: &mut Library, store: &dyn AiStore, now_ms: i64) -> Result<(
     let base = load_snapshot(lib)?;
     let first = base.is_none();
     let base = base.unwrap_or_default();
-    let mut file = read_files(store, &our, &base)?;
+    let (mut file, secret_values) = read_files(store, secrets, &our, &base)?;
     let mut sync = records_state(lib)?;
     let node = sync.our_node.clone();
     let mut wrote = false;
@@ -317,7 +502,12 @@ pub fn backfill(lib: &mut Library, store: &dyn AiStore, now_ms: i64) -> Result<(
         let mut ops: Vec<(String, RecOp, bool)> = Vec::new();
         for (id, v) in &now {
             if before.get(id) != Some(v) {
-                ops.push((id.clone(), RecOp::Put { value: v.clone() }, first && first_run_value(typ, id, v)));
+                // A secret record's value is the secrets themselves, not their summary.
+                let value = match secret_values.get(id) {
+                    Some(map) if *typ == MCP_SECRETS => to_value(map),
+                    _ => v.clone(),
+                };
+                ops.push((id.clone(), RecOp::Put { value }, first && first_run_value(typ, id, v)));
             }
         }
         for id in before.keys().filter(|k| !now.contains_key(*k)) {
@@ -387,7 +577,13 @@ fn voided(typ: &str, revoked: &BTreeMap<String, i64>, e: &weirdnet_sync::log::Lo
 
 /// Merge one type's ops from every node: OR-sets for collections, LWW for single values. Each
 /// winning value comes with the node that wrote it.
-fn merge_type(lib: &Library, sync: &SyncState, typ: &str, revoked: &BTreeMap<String, i64>) -> Result<BTreeMap<String, (Value, String)>> {
+fn merge_type(
+    lib: &Library,
+    sync: &SyncState,
+    typ: &str,
+    revoked: &BTreeMap<String, i64>,
+    unreadable: &mut BTreeSet<String>,
+) -> Result<BTreeMap<String, (Value, String)>> {
     let log = &sync.log;
     let mut nodes: BTreeSet<String> = log.cursors().keys().map(|n| n.0.clone()).collect();
     for e in lib.sync_log()? {
@@ -402,7 +598,14 @@ fn merge_type(lib: &Library, sync: &SyncState, typ: &str, revoked: &BTreeMap<Str
             }
             // An entry this device cannot read (sealed under a key it lacks) is skipped, so
             // the record keeps the latest entry it can.
-            let Ok(Some(op)) = read_op(sync, e) else { continue };
+            let op = match read_op(sync, e) {
+                Ok(Some(op)) => op,
+                Ok(None) => continue,
+                Err(_) => {
+                    unreadable.insert(e.record_id.clone());
+                    continue;
+                }
+            };
             let value = match &op {
                 RecOp::Put { value } => Some(value.clone()),
                 RecOp::Remove => None,
@@ -590,6 +793,11 @@ fn write_files(store: &dyn AiStore, st: &mut State, types: &[&str], chat_inline_
 /// Settings then reload). Does nothing until [`backfill`] has run once, so a pass can never
 /// replace local files with an empty log.
 pub fn materialize(lib: &mut Library, store: &dyn AiStore) -> Result<bool> {
+    materialize_with(lib, store, None)
+}
+
+/// [`materialize`], writing merged MCP secrets into `secrets` (none: left as they are).
+pub fn materialize_with(lib: &mut Library, store: &dyn AiStore, secrets: Option<&dyn McpSecrets>) -> Result<bool> {
     let types = on(lib);
     if types.is_empty() {
         return Ok(false);
@@ -605,15 +813,30 @@ pub fn materialize(lib: &mut Library, store: &dyn AiStore) -> Result<bool> {
         revoked: revoked.clone(),
         mcp_writers: base.mcp_writers.clone(),
     };
+    let mut secrets_changed = false;
     for typ in &types {
-        let merged = merge_type(lib, &sync, typ, &revoked_at)?;
+        let mut unreadable = BTreeSet::new();
+        let merged = merge_type(lib, &sync, typ, &revoked_at, &mut unreadable)?;
+        if *typ == MCP_SECRETS {
+            let summaries = match secrets {
+                Some(secrets) => {
+                    let values = merged.into_iter().map(|(id, (v, _))| (id, v)).collect();
+                    let (summaries, changed) = write_secrets(secrets, &values, &base, &unreadable);
+                    secrets_changed = changed;
+                    summaries
+                }
+                None => base.recs.get(MCP_SECRETS).cloned().unwrap_or_default(),
+            };
+            st.recs.insert(MCP_SECRETS.to_string(), summaries);
+            continue;
+        }
         if *typ == MCP {
             st.mcp_writers = merged.iter().map(|(id, (_, w))| (id.clone(), w.clone())).collect();
         }
         st.recs.insert(typ.to_string(), merged.into_iter().map(|(id, (v, _))| (id, v)).collect());
     }
     drop_revoked_hosts(&mut st, &base, &revoked);
-    let changed = write_files(store, &mut st, &types, sync.options(CHATS).limits.inline_max)?;
+    let changed = write_files(store, &mut st, &types, sync.options(CHATS).limits.inline_max)? | secrets_changed;
     save_snapshot(lib, &st)?;
     if changed {
         APPLIED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -664,9 +887,9 @@ pub fn mcp_writer(lib: &Library, server_id: &str) -> Result<Option<String>> {
 }
 
 /// A device was revoked on this device: void its grants now, not on the next pass.
-pub fn after_revoke(lib: &mut Library, store: &dyn AiStore, now_ms: i64) -> Result<bool> {
-    backfill(lib, store, now_ms)?;
-    materialize(lib, store)
+pub fn after_revoke(lib: &mut Library, store: &dyn AiStore, secrets: Option<&dyn McpSecrets>, now_ms: i64) -> Result<bool> {
+    backfill_with(lib, store, secrets, now_ms)?;
+    materialize_with(lib, store, secrets)
 }
 
 #[cfg(test)]
@@ -911,7 +1134,7 @@ mod tests {
         assert!(s.load_roster().unwrap().unwrap().get(&AgentId::new("atlas")).is_some());
 
         revoke(&mut l, "b");
-        assert!(after_revoke(&mut l, &s, 300).unwrap());
+        assert!(after_revoke(&mut l, &s, None, 300).unwrap());
         let p = s.load_policy().unwrap().unwrap();
         assert_eq!(p.site_level(&AgentId::new("local"), "bank.com"), SiteLevel::Off, "its widening is void; ours stands");
         assert_eq!(p.site_level(&AgentId::new("local"), "news.com"), SiteLevel::Act, "every grant op it wrote is void: ours is back");
@@ -1063,6 +1286,142 @@ mod tests {
         assert_eq!(s.load_chats().unwrap().unwrap().turns[0], turn, "the full turn stays here");
         backfill(&mut l, &s, 101).unwrap();
         assert_eq!(ours(&l, CHATS).len(), 1, "and is not logged again");
+    }
+
+    /// Bind `lib` to the user of `seed` as device `node` (its seed, node key and cert), as
+    /// linking does. Returns its peer id.
+    fn bind_device(lib: &mut Library, seed: [u8; 32], node: &weirdnet_net::Keypair, label: &str) -> String {
+        let mut bytes = seed;
+        let user = weirdnet_net::Keypair::ed25519_from_bytes(&mut bytes).unwrap();
+        let peer = node.public().to_peer_id().to_string();
+        morph_core::sync::store_seed(lib, &seed).unwrap();
+        morph_core::sync::store_node_key(lib, &node.to_protobuf_encoding().unwrap()).unwrap();
+        enable(lib, &peer, 10).unwrap();
+        let mut r = load_roster(lib).unwrap();
+        r.upsert(weirdnet_sync::Roster::self_certify(&weirdnet_net::WEIRDNET, &user, &peer, label, 1).unwrap());
+        save_roster(lib, &r).unwrap();
+        peer
+    }
+
+    /// Start the key chain on `lib`'s device, as the first rotation after linking does.
+    fn rotate(lib: &mut Library) {
+        let mut st = records_state(lib).unwrap();
+        st.publish_device_key(1).unwrap();
+        st.rotate(2).unwrap();
+        save_roster(lib, &st.roster).unwrap();
+        morph_core::sync::save_epoch_keys(lib, &st.keys).unwrap();
+    }
+
+    fn secret_server() -> McpServer {
+        let mut headers = BTreeMap::new();
+        headers.insert("Authorization".to_string(), McpValue::Secret { name: "TOKEN".into() });
+        let mut s = McpServer::new("Docs", McpTransport::Http { url: "https://mcp.example/".into(), headers });
+        s.id = "srv".into();
+        s
+    }
+
+    #[test]
+    fn mcp_secrets_sync_sealed_only_after_a_rotation_and_keep_approvals_matching() {
+        use morph_ai::{McpApprovals, MemorySecrets};
+        const SEED: [u8; 32] = [9; 32];
+        let (ta, mut a) = lib();
+        let node_a = weirdnet_net::Keypair::generate_ed25519();
+        bind_device(&mut a, SEED, &node_a, "a");
+        let store_a = MemoryStore::default();
+        let mut cfg = McpConfigs::default();
+        cfg.upsert(secret_server());
+        store_a.save_mcp(&cfg).unwrap();
+        let sec_a = MemorySecrets::default();
+        sec_a.set("srv", "TOKEN", "Bearer t-1");
+        let mut approvals = McpApprovals::default();
+        approvals.approve(&secret_server(), &sec_a);
+        let approved = McpApprovals::fingerprint(&secret_server(), &sec_a);
+        let secret_entries = |l: &Library| load_log(l).unwrap().iter().filter(|e| e.typ == MCP_SECRETS).cloned().collect::<Vec<_>>();
+
+        // No epoch key yet: refused, the secret stays here, and nothing goes out.
+        backfill_with(&mut a, &store_a, Some(&sec_a), 100).unwrap();
+        assert!(secret_entries(&a).is_empty(), "never a raw op in the sealed type");
+        assert_eq!(sec_a.get("srv", "TOKEN").as_deref(), Some("Bearer t-1"));
+
+        // After the rotation the next pass writes it, sealed, with an empty fallback.
+        rotate(&mut a);
+        backfill_with(&mut a, &store_a, Some(&sec_a), 101).unwrap();
+        let entries = secret_entries(&a);
+        assert_eq!(entries.len(), 1);
+        let e = &entries[0];
+        assert!(e.op.is_empty(), "older peers see nothing");
+        assert!(e.value.as_ref().is_some_and(|v| v.seal.is_some()), "sealed");
+        let wire = serde_json::to_string(&load_log(&a).unwrap().iter().collect::<Vec<_>>()).unwrap();
+        assert!(!wire.contains("t-1"), "the value never appears in the log in the clear");
+        let snapshot = String::from_utf8(a.sync_meta(META_SNAPSHOT).unwrap().unwrap()).unwrap();
+        assert!(snapshot.contains("TOKEN") && !snapshot.contains("t-1"), "the snapshot keeps names and a digest only");
+        backfill_with(&mut a, &store_a, Some(&sec_a), 102).unwrap();
+        assert_eq!(secret_entries(&a).len(), 1, "nothing changed, nothing logged");
+
+        // The round trip leaves this device's secrets, and so its approval, as they were.
+        materialize_with(&mut a, &store_a, Some(&sec_a)).unwrap();
+        assert!(!materialize_with(&mut a, &store_a, Some(&sec_a)).unwrap(), "nothing more to write");
+        assert_eq!(sec_a.get("srv", "TOKEN").as_deref(), Some("Bearer t-1"));
+        assert!(approvals.is_approved(&secret_server(), &sec_a), "the approval still matches");
+
+        // Restart A, then B (same user, holding the epoch keys) gets the secret through sync.
+        drop(a);
+        let a = Library::open(&ta.path().join("lib"), &LibraryKey::from_bytes([7; 32])).unwrap();
+        let (_tb, mut b) = lib();
+        let node_b = weirdnet_net::Keypair::generate_ed25519();
+        bind_device(&mut b, SEED, &node_b, "b");
+        let mut roster = load_roster(&a).unwrap();
+        roster.merge(
+            &load_roster(&b).unwrap(),
+            &weirdnet_net::Keypair::ed25519_from_bytes(&mut SEED.clone()).unwrap().public(),
+            weirdnet_sync::roster::default_profile(),
+        );
+        save_roster(&mut b, &roster).unwrap();
+        morph_core::sync::save_epoch_keys(&mut b, &morph_core::sync::load_epoch_keys(&a).unwrap()).unwrap();
+        let store_b = MemoryStore::default();
+        let sec_b = MemorySecrets::default();
+        backfill_with(&mut b, &store_b, Some(&sec_b), 100).unwrap();
+        copy_entries(&a, &mut b, |_| true);
+        assert!(materialize_with(&mut b, &store_b, Some(&sec_b)).unwrap());
+        assert_eq!(sec_b.get("srv", "TOKEN").as_deref(), Some("Bearer t-1"), "read back after a restart, on another device");
+        let server_b = store_b.load_mcp().unwrap().unwrap().servers.into_iter().find(|s| s.id == "srv").unwrap();
+        assert_eq!(McpApprovals::fingerprint(&server_b, &sec_b), approved, "the same fingerprint where the secret came from sync");
+        backfill_with(&mut b, &store_b, Some(&sec_b), 200).unwrap();
+        assert!(secret_entries(&b).iter().all(|e| e.node_id.0 != node_b.public().to_peer_id().to_string()), "not logged back");
+
+        // A device without the epoch key cannot read it, and keeps what it has.
+        let (_tc, mut c) = lib();
+        bind_device(&mut c, SEED, &weirdnet_net::Keypair::generate_ed25519(), "c");
+        let store_c = MemoryStore::default();
+        let sec_c = MemorySecrets::default();
+        sec_c.set("srv", "TOKEN", "mine");
+        backfill_with(&mut c, &store_c, None, 100).unwrap();
+        copy_entries(&a, &mut c, |e| e.typ == MCP_SECRETS);
+        materialize_with(&mut c, &store_c, Some(&sec_c)).unwrap();
+        assert_eq!(sec_c.get("srv", "TOKEN").as_deref(), Some("mine"));
+
+        // Removing the server's secrets on A removes them on B, through a sealed write too.
+        let mut a = a;
+        sec_a.remove_server("srv");
+        backfill_with(&mut a, &store_a, Some(&sec_a), 300).unwrap();
+        let entries = secret_entries(&a);
+        assert_eq!(entries.len(), 2);
+        assert!(entries.iter().all(|e| e.op.is_empty() && e.value.as_ref().is_some_and(|v| v.seal.is_some())), "deletes are sealed writes too");
+        copy_entries(&a, &mut b, |e| e.typ == MCP_SECRETS && e.hlc.physical_ms >= 300);
+        assert!(materialize_with(&mut b, &store_b, Some(&sec_b)).unwrap());
+        assert_eq!(sec_b.get("srv", "TOKEN"), None);
+    }
+
+    #[test]
+    fn libraries_on_the_v4_defaults_pick_mcp_secrets_up_once() {
+        use morph_core::sync::{BOOKMARKS, HISTORY, SETTINGS, set_types};
+        let (_t, mut l) = lib();
+        enable(&mut l, "a", 10).unwrap();
+        let v4: Vec<String> = [BOOKMARKS, HISTORY, SETTINGS, COMPANIONS, GRANTS, CHATS, MCP, JOURNAL].iter().map(|s| s.to_string()).collect();
+        set_types(&mut l, &v4).unwrap();
+        l.set_sync_meta("defaults", b"4").unwrap();
+        enable(&mut l, "a", 11).unwrap();
+        assert!(on(&l).contains(&MCP_SECRETS));
     }
 
     #[test]
