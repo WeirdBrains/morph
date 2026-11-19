@@ -28,6 +28,59 @@ use crate::{Error, Result};
 
 /// The link scheme Morph shows and accepts.
 pub const SCHEME: &str = "weirdnet-morph://";
+
+/// Ymir's link scheme: a Ymir node (`ymirctl pool link`) shows a new
+/// device's code on it, made by the same weirdnet-device-link with only the
+/// prefix changed (the prefix is not signed), so Morph adds it like any
+/// device: profile password, then the six-digit check on both sides.
+pub const YMIR_SCHEME: &str = "weirdnet-ymir://";
+
+/// The schemes whose new-device codes (`<scheme>link/…`) Morph pairs with.
+/// Morph's own offers and invites stay on [`SCHEME`].
+pub const OFFER_SCHEMES: &[&str] = &[SCHEME, YMIR_SCHEME];
+
+/// The app that showed a new device's code, by its scheme.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OfferApp {
+    Morph,
+    Ymir,
+}
+
+/// Which of [`OFFER_SCHEMES`] `text` is a new device's code on (scheme and
+/// `link/` in any case), and the code with them in lowercase, as
+/// weirdnet-device-link reads it. Only the prefix is looked at here; the
+/// pairing checks the rest (encoding, version, signature, size).
+pub fn offer_scheme(text: &str) -> Option<(OfferApp, String)> {
+    let text = text.trim();
+    OFFER_SCHEMES.iter().find_map(|scheme| {
+        let prefix = format!("{scheme}link/");
+        let head = text.get(..prefix.len())?;
+        if !head.eq_ignore_ascii_case(&prefix) {
+            return None;
+        }
+        let app = if *scheme == YMIR_SCHEME { OfferApp::Ymir } else { OfferApp::Morph };
+        Some((app, format!("{prefix}{}", &text[prefix.len()..])))
+    })
+}
+
+/// Whether `text` is a new device's code Morph can pair with (Morph's or
+/// Ymir's), by its prefix.
+pub fn is_offer(text: &str) -> bool {
+    offer_scheme(text).is_some()
+}
+
+/// What Add a device calls the new device: its own hint, said to be Ymir
+/// when the code came from Ymir and the hint does not say so ("Ymir on
+/// gpu-box"). The hint is the new device's own words, from the code.
+pub fn device_label(app: OfferApp, hint: &str) -> String {
+    let hint = hint.trim();
+    match app {
+        OfferApp::Morph => hint.to_string(),
+        OfferApp::Ymir if hint.is_empty() || hint.eq_ignore_ascii_case("ymir") => "Ymir".to_string(),
+        OfferApp::Ymir if hint.to_ascii_lowercase().contains("ymir") => hint.to_string(),
+        OfferApp::Ymir => format!("Ymir on {hint}"),
+    }
+}
 use crate::profile_identity::NODE_AAD;
 
 /// The official WeirdBrains Weirdnet relay, built in on every platform: TCP
@@ -207,6 +260,7 @@ pub struct AddDevice {
     pairing: Pairing,
     seed: Key32,
     profile_name: String,
+    device: String,
 }
 
 impl std::fmt::Debug for AddDevice {
@@ -217,11 +271,17 @@ impl std::fmt::Debug for AddDevice {
 
 impl AddDevice {
     /// Checks the profile password first (nothing is dialled with a wrong
-    /// one), then reads `link`, dials the new device and pairs.
+    /// one), then reads `link` (Morph's or Ymir's new-device code), dials
+    /// the new device and pairs.
     pub fn start(profile_dir: &Path, profile_name: &str, password: &SecretString, link: &str, cfg: NodeConfig) -> Result<Self> {
         let seed = profile_identity::open_seed(profile_dir, password)?;
-        let pairing = Pairing::start(SCHEME, link.trim(), cfg).map_err(link_error)?;
-        Ok(Self { pairing, seed, profile_name: profile_name.to_string() })
+        let Some((app, link)) = offer_scheme(link) else {
+            return Err(Error::Message("That is not a new device's code (weirdnet-morph://link/… or weirdnet-ymir://link/…).".into()));
+        };
+        let scheme = if app == OfferApp::Ymir { YMIR_SCHEME } else { SCHEME };
+        let pairing = Pairing::start(scheme, &link, cfg).map_err(link_error)?;
+        let device = device_label(app, pairing.device());
+        Ok(Self { pairing, seed, profile_name: profile_name.to_string(), device })
     }
 
     /// The code to compare with the new device's screen.
@@ -229,9 +289,9 @@ impl AddDevice {
         self.pairing.sas()
     }
 
-    /// What the new device calls itself.
+    /// What the new device calls itself ([`device_label`]).
     pub fn device(&self) -> &str {
-        self.pairing.device()
+        &self.device
     }
 
     /// The pairing node's network status (connections, relay reservations).
@@ -390,6 +450,106 @@ mod tests {
             assert!(!body.contains(made.words.as_str()));
             assert!(!body.contains("new password"));
         }
+    }
+
+    #[test]
+    fn offer_schemes_are_morph_and_ymir_only() {
+        assert_eq!(offer_scheme(" weirdnet-morph://link/abc ").unwrap(), (OfferApp::Morph, "weirdnet-morph://link/abc".into()));
+        assert_eq!(offer_scheme("weirdnet-ymir://link/abc").unwrap(), (OfferApp::Ymir, "weirdnet-ymir://link/abc".into()));
+        assert_eq!(offer_scheme("WEIRDNET-YMIR://Link/AbC").unwrap(), (OfferApp::Ymir, "weirdnet-ymir://link/AbC".into()));
+        for not in [
+            "weirdnet-ymir://invite/abc",
+            "weirdnet-morph://invite/abc",
+            "weirdnet://link/abc",
+            "weirdnet-bragi://link/abc",
+            "ymir://link/a",
+            "",
+            "weirdnet-ymir://lin",
+        ] {
+            assert!(!is_offer(not), "{not}");
+        }
+        // Multi-byte text at the cut does not panic.
+        assert!(!is_offer("weirdnet-ymir://linké/x"));
+        assert!(!is_offer("ééééééééééééééééééééé"));
+    }
+
+    #[test]
+    fn a_ymir_code_says_ymir() {
+        assert_eq!(device_label(OfferApp::Ymir, "ymir"), "Ymir");
+        assert_eq!(device_label(OfferApp::Ymir, ""), "Ymir");
+        assert_eq!(device_label(OfferApp::Ymir, "gpu-box"), "Ymir on gpu-box");
+        assert_eq!(device_label(OfferApp::Ymir, "Ymir on gpu-box"), "Ymir on gpu-box");
+        assert_eq!(device_label(OfferApp::Morph, "Morph on laptop"), "Morph on laptop");
+        assert_eq!(device_label(OfferApp::Morph, "ymir"), "ymir", "a Morph code is not called Ymir");
+    }
+
+    /// A Ymir node's code, made exactly as `ymirctl pool link` makes it
+    /// (weirdnet-device-link's `HostNode` on `weirdnet-ymir://`, hint from
+    /// its node name), is added like a Morph device: password, six digits
+    /// on both sides, then the identity and a cert for the node's key.
+    #[test]
+    fn a_ymir_node_links_like_any_device() {
+        use weirdnet_device_link::HostNode;
+        let tmp = tempfile::tempdir().unwrap();
+        let old = tmp.path().join("old");
+        let made = create(&old, &pw("old password"), 1).unwrap();
+        let node_key = Keypair::generate_ed25519();
+        let ymir = HostNode::start(YMIR_SCHEME, node_key.clone(), memory(), "gpu-box").unwrap();
+        assert!(ymir.link().starts_with("weirdnet-ymir://link/"));
+        assert!(!is_invite(ymir.link()));
+
+        // A wrong password never dials Ymir either.
+        assert!(AddDevice::start(&old, "Work", &pw("wrong password"), ymir.link(), memory()).is_err());
+        assert_eq!(ymir.status(), HostStatus::Waiting);
+
+        let mut add = AddDevice::start(&old, "Work", &pw("old password"), ymir.link(), memory()).unwrap();
+        assert_eq!(add.device(), "Ymir on gpu-box");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let sas = loop {
+            if let HostStatus::Paired { sas } = ymir.status() {
+                break sas;
+            }
+            assert!(Instant::now() < deadline, "Ymir never paired");
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert_eq!(sas, add.sas());
+        // Nothing moves until Ymir's side confirms too.
+        assert!(ymir.take().is_err());
+        ymir.confirm();
+        let cert = add.send_with("{}", &["bookmarks".into()]).unwrap();
+        assert_eq!(cert.peer_id, node_key.public().to_peer_id().to_string());
+        assert_eq!(cert.user_id, made.identity.user_id);
+        assert_eq!(cert.label, "gpu-box", "the signed label is Ymir's own hint");
+        let t = ymir.take().unwrap();
+        assert_eq!(t.node_cert, cert);
+        assert_eq!(t.sync, ["bookmarks"]);
+    }
+
+    #[test]
+    fn a_tampered_or_foreign_ymir_code_is_refused() {
+        use weirdnet_device_link::HostNode;
+        let tmp = tempfile::tempdir().unwrap();
+        let old = tmp.path().join("old");
+        create(&old, &pw("old password"), 1).unwrap();
+        let ymir = HostNode::start(YMIR_SCHEME, Keypair::generate_ed25519(), memory(), "ymir").unwrap();
+        let link = ymir.link().to_string();
+        // A flipped character breaks the encoding or the signature.
+        let body = &link["weirdnet-ymir://link/".len()..];
+        let flip = |c: char| if c == 'A' { 'B' } else { 'A' };
+        let mid = body.len() / 2;
+        let tampered: String = format!("weirdnet-ymir://link/{}{}{}", &body[..mid], flip(body[mid..].chars().next().unwrap()), &body[mid + 1..]);
+        for bad in [tampered, "weirdnet-ymir://link/".into(), "weirdnet-ymir://link/!!!".into(), format!("weirdnet-ymir://link/{}", "A".repeat(5000))]
+        {
+            assert!(AddDevice::start(&old, "Work", &pw("old password"), &bad, memory()).is_err(), "{bad:.60}");
+        }
+        // A Ymir invite or bare weirdnet:// is not a new device's code.
+        let invite = link.replace("weirdnet-ymir://link/", "weirdnet-ymir://invite/");
+        let bare = link.replace("weirdnet-ymir://", "weirdnet://");
+        for not in [invite, bare] {
+            let e = AddDevice::start(&old, "Work", &pw("old password"), &not, memory()).unwrap_err().to_string();
+            assert!(e.contains("not a new device's code"), "{e}");
+        }
+        assert_eq!(ymir.status(), HostStatus::Waiting);
     }
 
     #[test]

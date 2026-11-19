@@ -10,8 +10,8 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::Instant;
 
 pub use morph_identity::device_link::LinkState;
-pub use morph_identity::device_link::is_invite;
 use morph_identity::device_link::{AddDevice, Invite, NetStatus, NewDevice, RelayProbe};
+pub use morph_identity::device_link::{is_invite, is_offer};
 use morph_identity::profile_identity::{self, ProfileIdentity, SecretString};
 
 use crate::home::{now_ms, profile_dir};
@@ -139,10 +139,12 @@ impl Links {
         }
     }
 
-    /// Existing device: check `profile_id`'s password, read `link` and pair
-    /// with the new device.
+    /// Existing device: check `profile_id`'s password, read `link` (a
+    /// Morph or Ymir new-device code) and pair with the new device. A
+    /// locked profile refuses before anything is read or dialled.
     pub fn add_device_start(&self, home: &Path, profile_id: &str, profile_name: &str, password: &SecretString, link: &str) -> Result<Pairing> {
         let dir = profile_dir(home, profile_id)?;
+        crate::profile_lock::require_unlocked(home, profile_id)?;
         let pairing = AddDevice::start(&dir, profile_name, password, link, crate::relays::link_config()).map_err(Error::failed)?;
         let view = Pairing { session: self.next_id(), sas: pairing.sas().to_string(), device: pairing.device().to_string() };
         guard(&self.pairings).insert(view.session, pairing);
@@ -306,6 +308,53 @@ mod tests {
         assert_eq!(linked.user_id, made.identity.user_id);
         links.invite_cancel(invite.session);
         assert!(matches!(links.invite_take(invite.session), Err(Error::LinkGone)));
+    }
+
+    /// A Ymir node's code (`ymirctl pool link`: weirdnet-device-link's
+    /// HostNode on `weirdnet-ymir://`) over real TCP: Add a device pairs with
+    /// it after the password, both sides show the same six digits, and the
+    /// node joins the profile's roster like any device. A locked profile
+    /// refuses the code before dialling.
+    #[test]
+    fn a_ymir_code_joins_the_roster_and_a_locked_profile_refuses_it() {
+        use morph_identity::device_link::{YMIR_SCHEME, net_config};
+        use weirdnet_device_link::{HostNode, HostStatus};
+        let links = Links::default();
+        let (_a, old) = home_with_work();
+        crate::identity::create(&old, "p1", &pw("old password")).unwrap();
+        let mut cfg = net_config();
+        cfg.relays.clear();
+        cfg.listen = vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()];
+        let node_key = weirdnet_net::Keypair::generate_ed25519();
+        let ymir = HostNode::start(YMIR_SCHEME, node_key.clone(), cfg, "gpu-box").unwrap();
+        assert!(is_offer(ymir.link()) && !is_invite(ymir.link()));
+
+        crate::profile_lock::lock(&old, "p1");
+        let refused = links.add_device_start(&old, "p1", "Work", &pw("old password"), ymir.link()).unwrap_err();
+        assert!(matches!(refused, Error::Locked), "{refused}");
+        assert_eq!(ymir.status(), HostStatus::Waiting, "nothing dialled while locked");
+        crate::library::unlock(&old, "p1", &pw("old password")).unwrap();
+
+        let pairing = links.add_device_start(&old, "p1", "Work", &pw("old password"), ymir.link()).unwrap();
+        assert_eq!(pairing.device, "Ymir on gpu-box");
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let sas = loop {
+            if let HostStatus::Paired { sas } = ymir.status() {
+                break sas;
+            }
+            assert!(Instant::now() < deadline, "Ymir never paired");
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        assert_eq!(sas, pairing.sas);
+        ymir.confirm();
+        links.add_device_send(pairing.session).unwrap();
+        let t = ymir.take().unwrap();
+        let peer = node_key.public().to_peer_id().to_string();
+        assert_eq!(t.node_cert.peer_id, peer);
+        let devices = crate::sync::devices(&old, "p1").unwrap();
+        let joined = devices.iter().find(|d| d.peer_id == peer).expect("Ymir is in the roster");
+        assert_eq!(joined.label, "gpu-box");
+        assert!(joined.revoked_ms.is_none() && !joined.this_device);
     }
 
     #[test]
