@@ -12,11 +12,22 @@ pub struct TextField {
     selected: Range<usize>,
     reversed: bool,
     marked: Option<Range<usize>>,
+    /// Line breaks stay in the text (a chat box) instead of becoming spaces.
+    multiline: bool,
 }
 
 impl TextField {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A field whose text may hold line breaks.
+    pub fn multiline() -> Self {
+        Self { multiline: true, ..Self::default() }
+    }
+
+    fn flatten(&self, text: &str) -> String {
+        if self.multiline { text.replace("\r\n", "\n").replace('\r', "\n") } else { single_line(text) }
     }
 
     pub fn text(&self) -> &str {
@@ -43,7 +54,7 @@ impl TextField {
     /// Replace the whole text and select all of it, as an address bar does
     /// when a page loads or the field is focused.
     pub fn set_text_selected(&mut self, text: &str) {
-        self.content = single_line(text);
+        self.content = self.flatten(text);
         self.selected = 0..self.content.len();
         self.reversed = false;
         self.marked = None;
@@ -54,7 +65,8 @@ impl TextField {
     /// moves the caret past it.
     pub fn append_selected(&mut self, suffix: &str) {
         let start = self.content.len();
-        self.content.push_str(&single_line(suffix));
+        let suffix = self.flatten(suffix);
+        self.content.push_str(&suffix);
         self.selected = start..self.content.len();
         self.reversed = false;
         self.marked = None;
@@ -63,7 +75,7 @@ impl TextField {
     /// Replace `range` (or the marked text, else the selection) with `text`
     /// and put the caret after it.
     pub fn replace(&mut self, range: Option<Range<usize>>, text: &str) {
-        let text = single_line(text);
+        let text = self.flatten(text);
         let range = self.clamp(range.or_else(|| self.marked.clone()).unwrap_or_else(|| self.selected.clone()));
         self.content.replace_range(range.clone(), &text);
         let end = range.start + text.len();
@@ -75,7 +87,7 @@ impl TextField {
     /// Like [`Self::replace`] for input-method composition: the new text is
     /// marked, and `selected_in_new` (relative to it) becomes the selection.
     pub fn replace_and_mark(&mut self, range: Option<Range<usize>>, text: &str, selected_in_new: Option<Range<usize>>) {
-        let text = single_line(text);
+        let text = self.flatten(text);
         let range = self.clamp(range.or_else(|| self.marked.clone()).unwrap_or_else(|| self.selected.clone()));
         self.content.replace_range(range.clone(), &text);
         let start = range.start;
@@ -238,6 +250,18 @@ fn single_line(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::TextField;
+
+    #[test]
+    fn a_multiline_field_keeps_line_breaks_and_a_one_line_field_does_not() {
+        let mut m = TextField::multiline();
+        m.replace(None, "a\r\nb\nc");
+        assert_eq!(m.text(), "a\nb\nc");
+        m.replace(None, "\n");
+        assert_eq!(m.text(), "a\nb\nc\n");
+        let mut one = TextField::new();
+        one.replace(None, "a\nb");
+        assert_eq!(one.text(), "a b");
+    }
 
     fn typed(text: &str) -> TextField {
         let mut field = TextField::new();

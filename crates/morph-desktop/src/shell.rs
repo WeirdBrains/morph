@@ -122,8 +122,6 @@ pub enum ShellRequest {
     Open { url: String, new_tab: bool },
     /// Hide the panel that asked.
     ClosePanel,
-    /// Hide the Companion panel (its ×; Ctrl+Shift+K folds and unfolds it).
-    CloseCompanions,
     /// The Companion panel folded to its strip or opened out: lay the window out again.
     CompanionsFolded,
     /// Take the keyboard back from the pages for the shell's own UI.
@@ -664,6 +662,7 @@ impl Shell {
         self.profile_subscriptions.push(cx.subscribe_in(&companions, window, |shell, _, request, window, cx| shell.request(request, window, cx)));
         self.components.push(Box::new(companions.clone()));
         self.companions = Some(companions);
+        self.keep_agents_bar_up();
         self.last_page = None;
         self.last_marked = None;
         self.last_caption = None;
@@ -741,6 +740,7 @@ impl Shell {
         self.last_session = Some((id.to_string(), first.clone()));
         crate::library::open_at_launch(&self.home, id);
         self.layout = layout::load(&self.home, id);
+        self.keep_agents_bar_up();
         self.build(first.map_or(WindowStart::Url(String::new()), WindowStart::Saved), window, cx);
         for saved in restored {
             if self.lock.is_some() {
@@ -835,6 +835,7 @@ impl Shell {
         };
         crate::library::open_at_launch(&self.home, &self.profile);
         self.layout = layout::load(&self.home, &self.profile);
+        self.keep_agents_bar_up();
         self.build(start, window, cx);
         self.focus_page_soon = true;
         for saved in more {
@@ -874,16 +875,6 @@ impl Shell {
             }
             ShellRequest::FocusShell => self.focus_shell(cx),
             ShellRequest::CompanionsFolded => cx.notify(),
-            ShellRequest::CloseCompanions => {
-                if self.layout.shown(Slot::Companion).is_some() {
-                    self.layout.toggle_kind(Slot::Companion, KindId::new(component::COMPANIONS));
-                    self.save_layout();
-                }
-                if let Some(main) = self.main() {
-                    main.focus_content(window, cx);
-                }
-                cx.notify();
-            }
             ShellRequest::AgentsChanged => {
                 if let Some(companions) = self.companions.clone() {
                     companions.update(cx, |view, cx| view.reload_agents(cx));
@@ -1141,16 +1132,20 @@ impl Shell {
         cx.notify();
     }
 
+    /// The agents bar is always up: a layout saved with it hidden shows it again (folded or
+    /// open is the panel's own remembered state).
+    fn keep_agents_bar_up(&mut self) {
+        if self.companions.is_some() && self.layout.shown(Slot::Companion).is_none() {
+            self.layout.toggle_kind(Slot::Companion, KindId::new(component::COMPANIONS));
+        }
+    }
+
     fn toggle_companions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(companions) = self.companions.clone() else {
             return;
         };
-        let shown = self.layout.shown(Slot::Companion).is_some();
-        let fold = companions_shortcut(shown, companions.read(cx).is_collapsed());
-        if !shown {
-            self.layout.toggle_kind(Slot::Companion, KindId::new(component::COMPANIONS));
-            self.save_layout();
-        }
+        self.keep_agents_bar_up();
+        let fold = companions_shortcut(companions.read(cx).is_collapsed());
         companions.update(cx, |view, cx| view.set_collapsed(fold, cx));
         let open = !fold;
         if open {
@@ -1468,10 +1463,10 @@ macro_rules! on_actions {
     };
 }
 
-/// Whether Ctrl+Shift+K leaves the Companion panel folded: a shown panel folds or opens out, a
-/// hidden one is shown opened out.
-fn companions_shortcut(shown: bool, collapsed: bool) -> bool {
-    shown && !collapsed
+/// Whether Ctrl+Shift+K leaves the agents bar folded: it switches between the strip and the
+/// full panel and never hides the bar.
+fn companions_shortcut(collapsed: bool) -> bool {
+    !collapsed
 }
 
 /// Width of the frameless window's resize border, in logical pixels.
@@ -2071,10 +2066,8 @@ mod tests {
         assert_eq!(page_action(&mac, "shift-cmd-k"), Some(Action::ToggleCompanions));
         assert!(gpui::Keystroke::parse("ctrl-shift-k").is_ok());
         // Open → folded → open; hidden → shown open.
-        assert!(companions_shortcut(true, false));
-        assert!(!companions_shortcut(true, true));
-        assert!(!companions_shortcut(false, false));
-        assert!(!companions_shortcut(false, true));
+        assert!(companions_shortcut(false), "open folds to the strip");
+        assert!(!companions_shortcut(true), "the strip opens out");
     }
 
     #[test]

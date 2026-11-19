@@ -111,9 +111,32 @@ pub struct Conversation {
     reasoning: String,
     /// When the current [`Activity`] began.
     since: Option<Instant>,
+    /// Messages typed while a turn ran: shown at once as the user's, marked queued, and sent as
+    /// the next turn when this one ends ([`Self::take_queued`]).
+    queued: Vec<String>,
 }
 
 impl Conversation {
+    /// Holds a message typed during a running turn; it shows at once, marked queued.
+    pub fn queue(&mut self, text: &str) {
+        if !text.trim().is_empty() {
+            self.queued.push(text.trim().to_string());
+        }
+    }
+
+    /// Messages waiting for the running turn to end.
+    pub fn queued(&self) -> &[String] {
+        &self.queued
+    }
+
+    /// Takes the queued messages as one next message once no turn runs.
+    pub fn take_queued(&mut self) -> Option<String> {
+        if self.running || self.queued.is_empty() {
+            return None;
+        }
+        Some(std::mem::take(&mut self.queued).join("\n\n"))
+    }
+
     pub fn entries(&self) -> &[Entry] {
         &self.entries
     }
@@ -412,6 +435,21 @@ mod tests {
 
     fn page() -> AttachedPage {
         AttachedPage { url: "https://a.com/".into(), title: "A".into() }
+    }
+
+    #[test]
+    fn a_message_typed_during_a_turn_is_visible_queued_until_the_turn_ends_then_taken_once() {
+        let mut c = Conversation::default();
+        c.start_task("first");
+        c.queue("  also check the docs ");
+        c.queue("and the date");
+        c.queue("   ");
+        assert_eq!(c.queued(), ["also check the docs", "and the date"]);
+        assert_eq!(c.take_queued(), None, "not while the turn runs");
+        c.apply(ViewUpdate::Finished { task_id: "t".into(), status: "done".into() });
+        assert_eq!(c.take_queued().as_deref(), Some("also check the docs\n\nand the date"));
+        assert!(c.queued().is_empty());
+        assert_eq!(c.take_queued(), None);
     }
 
     #[test]

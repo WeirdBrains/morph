@@ -85,6 +85,8 @@ pub struct CompanionView {
     attached_tab: HashMap<AgentId, u64>,
     /// "Use my signed-in session" for the next task only; off again after each send.
     signed_in_next: bool,
+    /// The "Research as" menu is open.
+    session_menu: bool,
     /// The next task is the "+5 pages" one the user just took.
     more_pages_next: bool,
     /// What the waiting card is about, when it is known before the card arrives.
@@ -147,7 +149,7 @@ fn load_collapsed(store: &FileStore) -> bool {
         .flatten()
         .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
         .and_then(|v| v.get("collapsed").and_then(serde_json::Value::as_bool))
-        .unwrap_or(false)
+        .unwrap_or(true)
 }
 
 /// What a companion says when asked while the profile is locked.
@@ -279,7 +281,7 @@ impl CompanionView {
         let runs_on = routed.runs_on();
         let worker = Worker::start_with(routed, policy.clone(), tools, Some(hosts));
         let selected = roster.default_companion().map(|c| c.id().clone()).unwrap_or_else(|| AgentId::new("local"));
-        let input = cx.new(|cx| TextInput::new("Ask a companion", theme, cx));
+        let input = cx.new(|cx| TextInput::new("Ask a companion", theme, cx).multiline(6));
         let sub = cx.subscribe_in(&input, window, |this, _, event, _, cx| match event {
             TextInputEvent::Submit { .. } => this.submit(cx),
             TextInputEvent::Cancel => cx.emit(ShellRequest::Run(morph_ui::actions::Action::ToggleCompanions)),
@@ -326,12 +328,13 @@ impl CompanionView {
             ops: Vec::new(),
             attached_tab: HashMap::new(),
             signed_in_next: false,
+            session_menu: false,
             more_pages_next: false,
             card_detail: HashMap::new(),
             last: HashMap::new(),
             exported: None,
             activity_frame: None,
-            collapsed: false,
+            collapsed: true,
             outline: Default::default(),
             guards: HashMap::new(),
             timed_out: HashSet::new(),
@@ -362,6 +365,20 @@ impl CompanionView {
             }
             view.research_tab = true;
             view.save_research();
+        }
+        // Headless screenshot checks: a turn in progress (the question, then reasoning), and a prefilled draft.
+        if std::env::var_os("MORPH_COMPANION_DEMO").is_some_and(|v| v == "thinking") {
+            let id = view.selected.clone();
+            let mut c = Conversation::default();
+            c.start_task("How does Tokio cancel a task?");
+            c.apply(morph_companion::ViewUpdate::Reasoning(
+                "The user wants to know how cancellation works in Tokio, so I should look at abort and drop.".into(),
+            ));
+            c.queue("Also compare it with async-std.");
+            view.conversations.insert(id, c);
+        }
+        if let Some(draft) = std::env::var_os("MORPH_COMPANION_DRAFT").and_then(|v| v.into_string().ok()) {
+            view.input.update(cx, |i, cx| i.set_text(&draft, cx));
         }
         if std::env::var_os("MORPH_COMPANION_DEMO").is_some_and(|v| v == "1") {
             let id = view.selected.clone();
@@ -545,8 +562,15 @@ impl CompanionView {
         cx.notify();
     }
 
-    fn toggle_signed_in(&mut self, cx: &mut Context<Self>) {
-        self.signed_in_next = !self.signed_in_next;
+    /// The chip opens or closes the two-option menu; nothing changes until an option is picked.
+    fn toggle_session_menu(&mut self, cx: &mut Context<Self>) {
+        self.session_menu = !self.session_menu;
+        cx.notify();
+    }
+
+    fn pick_session(&mut self, signed_in: bool, cx: &mut Context<Self>) {
+        self.signed_in_next = signed_in;
+        self.session_menu = false;
         cx.notify();
     }
 
@@ -555,6 +579,23 @@ impl CompanionView {
         self.input.update(cx, |i, cx| i.set_text("", cx));
         if self.research_tab {
             self.start_project(&text, cx);
+        } else {
+            self.send(text, cx);
+        }
+    }
+
+    /// Sends what was typed during the selected companion's last turn as its next turn; after a
+    /// Stop it goes back to the box instead.
+    fn send_queued(&mut self, cx: &mut Context<Self>) {
+        let Some(conv) = self.conversations.get_mut(&self.selected) else {
+            return;
+        };
+        let stopped = conv.status().is_some_and(|s| s.to_lowercase().contains("stop"));
+        let Some(text) = conv.take_queued() else {
+            return;
+        };
+        if stopped {
+            self.input.update(cx, |i, cx| i.set_text(&text, cx));
         } else {
             self.send(text, cx);
         }
@@ -844,8 +885,7 @@ impl CompanionView {
                     .items_center()
                     .gap(px(2.))
                     .child(div().flex_1().text_size(px(13.)).child("Companions"))
-                    .child(icon(t, "companions-collapse", "»").on_click(cx.listener(|this, _, _, cx| this.set_collapsed(true, cx))))
-                    .child(icon(t, "companions-close", "×").on_click(cx.listener(|_, _, _, cx| cx.emit(ShellRequest::CloseCompanions)))),
+                    .child(icon(t, "companions-collapse", "»").on_click(cx.listener(|this, _, _, cx| this.set_collapsed(true, cx)))),
             )
             .child(
                 div()
@@ -956,7 +996,13 @@ impl CompanionView {
         let not_here = self.roster.get(&id).and_then(|c| self.devices.not_here(c));
         let locked = (self.lock)();
         let conv = self.conversation();
-        if text.is_empty() || conv.is_running() {
+        if text.is_empty() {
+            cx.notify();
+            return;
+        }
+        if conv.is_running() {
+            // A steer mid-turn: shown at once as queued, sent when the turn ends.
+            conv.queue(&text);
             cx.notify();
             return;
         }
@@ -1342,6 +1388,7 @@ impl CompanionView {
                 }
             }
         }
+        self.send_queued(cx);
         // One parse of each streaming tail per tick, however many deltas arrived.
         for conv in self.conversations.values_mut() {
             conv.settle();
@@ -1363,6 +1410,14 @@ impl Focusable for CompanionView {
 fn dim(t: Theme, text: impl Into<SharedString>) -> gpui::Div {
     div().text_size(px(11.)).text_color(rgb(t.text_secondary)).child(text.into())
 }
+
+/// What the "Research as" chip says: the browser session research reads with.
+fn research_as_label(signed_in: bool) -> &'static str {
+    if signed_in { "Research as: signed in (this task) ▾" } else { "Research as: logged out ▾" }
+}
+
+const SESSION_TIP: &str =
+    "Which browser session research uses. Logged out reads sites without your cookies or accounts. Signed in uses your logins for this task only.";
 
 fn bubble(t: Theme, mine: bool) -> gpui::Div {
     div()
@@ -1529,9 +1584,9 @@ impl Render for CompanionView {
                     div()
                         .flex()
                         .flex_row()
-                        .items_center()
+                        .items_end()
                         .gap(px(6.))
-                        .child(div().flex_1().h(px(28.)).px(px(8.)).rounded(px(6.)).bg(rgb(t.background)).child(self.input.clone()))
+                        .child(div().flex_1().min_w(px(0.)).min_h(px(28.)).px(px(8.)).rounded(px(6.)).bg(rgb(t.background)).child(self.input.clone()))
                         .child(button(t, "research-start", "Start project", true).on_click(cx.listener(|this, _, _, cx| this.submit(cx)))),
                 );
         }
@@ -1596,6 +1651,11 @@ impl Render for CompanionView {
             .collect();
 
         let activity = conv.activity();
+        let queued: Vec<gpui::AnyElement> = conv
+            .queued()
+            .iter()
+            .map(|q| bubble(t, true).child(q.clone()).child(dim(t, "queued: sends when this turn ends").mt(px(4.))).into_any_element())
+            .collect();
         let loading = self.model_loading();
         let runs_on = self.runs_on.get();
         let attached = conv.attached().cloned();
@@ -1608,6 +1668,7 @@ impl Render for CompanionView {
         let can_export = !running && self.last.contains_key(&self.selected);
         let exported = self.exported.clone();
         let signed_in = self.signed_in_next;
+        let session_menu = self.session_menu;
         let can_make_project = !running && conv.entries().iter().any(|e| matches!(e, Entry::User { .. }));
 
         div()
@@ -1638,7 +1699,8 @@ impl Render for CompanionView {
                             .child("Ask a question, or attach this tab to talk about the page you are on.")
                     }))
                     .children(entries)
-                    .children(activity.map(|(a, since)| activity_row(t, &a, since, loading.as_deref(), runs_on.as_deref()))),
+                    .children(activity.map(|(a, since)| activity_row(t, &a, since, loading.as_deref(), runs_on.as_deref())))
+                    .children(queued),
             )
             .children((!rows.is_empty()).then(|| {
                 div()
@@ -1699,18 +1761,38 @@ impl Render for CompanionView {
                             .on_click(cx.listener(|this, _, _, cx| this.make_research_project(cx)))
                     }))
                     .child(
-                        chip(t, "companion-signed-in", if signed_in { "Research: signed in, this task" } else { "Research: logged out" }, signed_in)
+                        chip(t, "companion-signed-in", research_as_label(signed_in), signed_in)
                             .when(signed_in, |d| d.text_color(rgb(t.accent_alt)))
-                            .on_click(cx.listener(|this, _, _, cx| this.toggle_signed_in(cx))),
+                            .tooltip(crate::browser_view::tip(SESSION_TIP, t))
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_session_menu(cx))),
                     ),
             )
+            .children(session_menu.then(|| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .p(px(4.))
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(rgb(t.surface_variant))
+                    .child(
+                        chip(t, "companion-session-out", "Logged out", !signed_in)
+                            .on_click(cx.listener(|this, _, _, cx| this.pick_session(false, cx))),
+                    )
+                    .child(
+                        chip(t, "companion-session-in", "Signed in (this task)", signed_in)
+                            .when(signed_in, |d| d.text_color(rgb(t.accent_alt)))
+                            .on_click(cx.listener(|this, _, _, cx| this.pick_session(true, cx))),
+                    )
+            }))
             .child(
                 div()
                     .flex()
                     .flex_row()
-                    .items_center()
+                    .items_end()
                     .gap(px(6.))
-                    .child(div().flex_1().h(px(28.)).px(px(8.)).rounded(px(6.)).bg(rgb(t.background)).child(self.input.clone()))
+                    .child(div().flex_1().min_w(px(0.)).min_h(px(28.)).px(px(8.)).rounded(px(6.)).bg(rgb(t.background)).child(self.input.clone()))
                     .child(if running {
                         button(t, "companion-stop", "Stop", false).on_click(cx.listener(|this, _, _, cx| this.stop(cx))).into_any_element()
                     } else {
@@ -1835,17 +1917,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_folded_panel_is_remembered_per_profile_and_starts_open() {
+    fn the_research_chip_names_the_session_and_not_an_on_off_switch() {
+        assert_eq!(research_as_label(false), "Research as: logged out ▾");
+        assert_eq!(research_as_label(true), "Research as: signed in (this task) ▾");
+    }
+
+    #[test]
+    fn the_panel_state_is_remembered_per_profile_and_starts_folded() {
         let dir = tempfile::tempdir().unwrap();
         let (a, b) = (FileStore::new(dir.path().join("a/companions")), FileStore::new(dir.path().join("b/companions")));
-        assert!(!load_collapsed(&a), "open by default");
+        assert!(load_collapsed(&a), "folded by default");
+        save_collapsed(&a, false).unwrap();
+        assert!(!load_collapsed(&a), "opened out is remembered");
+        assert!(load_collapsed(&b), "another profile keeps its own");
         save_collapsed(&a, true).unwrap();
         assert!(load_collapsed(&a));
-        assert!(!load_collapsed(&b), "another profile keeps its own");
-        save_collapsed(&a, false).unwrap();
-        assert!(!load_collapsed(&a));
         a.write_file(PANEL_FILE, b"not json").unwrap();
-        assert!(!load_collapsed(&a), "a damaged file opens the panel");
+        assert!(load_collapsed(&a), "a damaged file leaves it folded");
     }
 
     #[test]

@@ -257,7 +257,7 @@ impl Render for Tip {
 }
 
 /// A tooltip builder for `text`.
-fn tip(text: impl Into<SharedString>, t: Theme) -> impl Fn(&mut Window, &mut App) -> gpui::AnyView + 'static {
+pub(crate) fn tip(text: impl Into<SharedString>, t: Theme) -> impl Fn(&mut Window, &mut App) -> gpui::AnyView + 'static {
     let text = text.into();
     move |_, cx| cx.new(|_| Tip(text.clone(), t)).into()
 }

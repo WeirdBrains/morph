@@ -353,6 +353,19 @@ fn project_detail(t: Theme, state: &ResearchState, p: &ResearchProject, i: usize
             if waiting > 0 { format!(" · {waiting} steer(s) wait for the step to end") } else { String::new() }
         )));
     }
+    // Each steer waiting for the running step shows as typed, marked queued, until it is applied.
+    for rec in &p.steering.pending {
+        d = d.child(
+            div()
+                .p(px(6.))
+                .rounded(px(6.))
+                .bg(rgb(t.surface_variant))
+                .text_size(px(11.))
+                .text_color(rgb(t.text_primary))
+                .child(rec.steer.describe())
+                .child(div().text_size(px(10.)).text_color(rgb(t.text_secondary)).child("queued: applies when the step ends")),
+        );
+    }
     d = d.children(replan_card(t, p, i, mine, cx));
     d = d.children(checkin_card(t, p, i, cx));
     if !mine {
