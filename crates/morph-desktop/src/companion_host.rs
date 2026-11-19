@@ -54,7 +54,7 @@ struct NoTools(Arc<ToolRegistry>);
 
 #[cfg(test)]
 impl ToolsSource for NoTools {
-    fn registry(&self) -> Arc<ToolRegistry> {
+    fn registry_for(&self, _companion: &str) -> Arc<ToolRegistry> {
         self.0.clone()
     }
 
@@ -81,7 +81,7 @@ impl Worker {
             .name("morph-companions".into())
             .spawn(move || {
                 // Browser and research tools arrive with their hosts; until then only MCP servers' tools.
-                let mut sessions = Sessions::new(models, tools.registry(), policy, approver);
+                let mut sessions = Sessions::new(models, tools.registry_for(""), policy, approver);
                 let _ = can_tx.send(sessions.canceller());
                 let Ok(rt) = tokio::runtime::Builder::new_current_thread().enable_time().build() else {
                     return;
@@ -89,7 +89,7 @@ impl Worker {
                 while let Ok(Cmd::Run { roster, companion, input }) = cmd_rx.recv() {
                     let tx = msg_tx.clone();
                     let id = companion.clone();
-                    sessions.set_tools(tools.registry());
+                    sessions.set_tools_for(&companion, tools.registry_for(companion.as_str()));
                     let task = sessions.run(&roster, &companion, &input, |u| {
                         let _ = tx.send(Msg::Update(id.clone(), u));
                     });

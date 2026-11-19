@@ -201,13 +201,14 @@ pub struct Snapshot {
 
 struct State {
     registry: Arc<ToolRegistry>,
+    scoped: BTreeMap<String, Arc<ToolRegistry>>,
     snapshot: Snapshot,
 }
 
 /// What the Companion worker needs from the manager to run tasks with MCP tools.
 pub trait ToolsSource: Send + Sync {
-    /// The registry to use for the next task.
-    fn registry(&self) -> Arc<ToolRegistry>;
+    /// The registry to use for `companion`'s next task.
+    fn registry_for(&self, companion: &str) -> Arc<ToolRegistry>;
     /// The runtime the registry's servers live on. Tasks run on it, so server connections (child
     /// pipes, HTTP connections) are driven the whole time, not only while a task runs.
     fn handle(&self) -> Option<tokio::runtime::Handle>;
@@ -224,7 +225,7 @@ pub struct McpManager {
 impl McpManager {
     fn start(companions: &Path) -> Arc<Self> {
         let (tx, rx) = mpsc::channel::<()>();
-        let state = Arc::new(Mutex::new(State { registry: Arc::new(ToolRegistry::new()), snapshot: Snapshot::default() }));
+        let state = Arc::new(Mutex::new(State { registry: Arc::new(ToolRegistry::new()), scoped: BTreeMap::new(), snapshot: Snapshot::default() }));
         let secrets = Arc::new(LocalSecrets::open(companions));
         // One worker thread drives the servers' pipes and connections for as long as they live.
         let rt = tokio::runtime::Builder::new_multi_thread()
@@ -249,7 +250,7 @@ impl McpManager {
                     // Dropping the old servers stops their processes; do it inside the runtime.
                     let _inside = rt.enter();
                     let mut s = lock(&state);
-                    let old = std::mem::replace(&mut s.registry, hub.registry);
+                    let old = (std::mem::replace(&mut s.registry, hub.registry), std::mem::replace(&mut s.scoped, hub.scoped));
                     s.snapshot = Snapshot { statuses: hub.statuses, busy: false, generation: s.snapshot.generation + 1 };
                     drop(s);
                     drop(old);
@@ -270,9 +271,10 @@ impl McpManager {
         let _ = lock(&self.trigger).send(());
     }
 
-    /// The tools of the connected servers. A new registry replaces it after each connect round.
-    pub fn registry(&self) -> Arc<ToolRegistry> {
-        lock(&self.state).registry.clone()
+    /// The tools `companion` may use. A new registry replaces it after each connect round.
+    pub fn registry_for(&self, companion: &str) -> Arc<ToolRegistry> {
+        let s = lock(&self.state);
+        s.scoped.get(companion).unwrap_or(&s.registry).clone()
     }
 
     pub fn snapshot(&self) -> Snapshot {
@@ -281,8 +283,8 @@ impl McpManager {
 }
 
 impl ToolsSource for McpManager {
-    fn registry(&self) -> Arc<ToolRegistry> {
-        McpManager::registry(self)
+    fn registry_for(&self, companion: &str) -> Arc<ToolRegistry> {
+        McpManager::registry_for(self, companion)
     }
 
     fn handle(&self) -> Option<tokio::runtime::Handle> {
@@ -414,6 +416,37 @@ done"#;
     }
 
     #[test]
+    fn a_server_limited_to_a_companion_reaches_only_that_companions_sessions() {
+        let (_d, companions) = dir();
+        let manager = get(&companions);
+        let secrets = manager.secrets().clone();
+        let mut env = BTreeMap::new();
+        env.insert("MCP_NAME".to_string(), plain("wiki"));
+        let mut s = server("Wiki", env);
+        s.companions = Some(["scout".to_string()].into());
+        save_server(&companions, &secrets, s.clone(), &[]).unwrap();
+        approve(&companions, &s.id).unwrap();
+        manager.reload();
+        let id = s.id.clone();
+        wait_for(&manager, |snap| matches!(snap.statuses.get(&id), Some(ServerStatus::Connected { .. })));
+        let names = |who: &str| manager.registry_for(who).specs().into_iter().map(|t| t.name).collect::<Vec<_>>();
+        assert_eq!(names("scout"), ["wiki_wiki_a", "wiki_wiki_b"]);
+        assert!(names("local").is_empty(), "another companion has no tools from it");
+        // Saving the form with the scope cleared opens it to everyone again.
+        let mut open = configs(&companions).servers[0].clone();
+        open.companions = None;
+        save_server(&companions, &secrets, open, &[]).unwrap();
+        manager.reload();
+        for _ in 0..200 {
+            if !names("local").is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(names("local"), ["wiki_wiki_a", "wiki_wiki_b"]);
+    }
+
+    #[test]
     fn the_manager_waits_for_approval_connects_and_honours_tool_switches() {
         let (_d, companions) = dir();
         let manager = get(&companions);
@@ -425,7 +458,7 @@ done"#;
         manager.reload();
         let snap = wait_for(&manager, |s| s.statuses.len() == 1);
         assert!(matches!(snap.statuses[&s.id], ServerStatus::NeedsApproval { .. }), "{:?}", snap.statuses);
-        assert!(manager.registry().specs().is_empty(), "nothing starts before the user agrees");
+        assert!(manager.registry_for("local").specs().is_empty(), "nothing starts before the user agrees");
         assert!(!is_approved(&companions, &configs(&companions).servers[0]));
 
         approve(&companions, &s.id).unwrap();
@@ -433,13 +466,13 @@ done"#;
         let id = s.id.clone();
         let snap = wait_for(&manager, |snap| matches!(snap.statuses.get(&id), Some(ServerStatus::Connected { .. })));
         assert!(matches!(snap.statuses[&s.id], ServerStatus::Connected { .. }), "{:?}", snap.statuses);
-        let names: Vec<String> = manager.registry().specs().into_iter().map(|t| t.name).collect();
+        let names: Vec<String> = manager.registry_for("local").specs().into_iter().map(|t| t.name).collect();
         assert_eq!(names, ["docs_docs_a", "docs_docs_b"]);
 
         set_tool(&companions, &s.id, "docs_b", false).unwrap();
         manager.reload();
         wait_for(&manager, |_| true);
-        let names: Vec<String> = manager.registry().specs().into_iter().map(|t| t.name).collect();
+        let names: Vec<String> = manager.registry_for("local").specs().into_iter().map(|t| t.name).collect();
         assert_eq!(names, ["docs_docs_a"]);
 
         // Changing the command asks again; switching off and removing work.
