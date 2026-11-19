@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use gpui::{Context, Entity, SharedString, Subscription, Window, div, prelude::*, px, rgb};
-use morph_ai::{AgentSettings, AiStore, FileStore, Grants, ModelChoice, Platform, Roster, SearchProvider};
+use morph_ai::{AgentSettings, AiStore, CpuLimit, FileStore, Grants, ModelChoice, OffloadMode, Platform, Roster, SearchProvider};
 use weirdnet_agent::{AgentId, AllowRule, CompanionScope, SiteLevel, StandingAllow};
 use weirdnet_model::{ModelStore, catalog, human};
 
@@ -125,6 +125,24 @@ pub fn set_provider(dir: &Path, provider: SearchProvider) -> Result<(), String> 
     store(dir).save_settings(&s).map_err(|e| e.to_string())
 }
 
+/// Where turns may run when this device cannot run local models.
+pub fn set_offload_mode(dir: &Path, mode: OffloadMode) -> Result<(), String> {
+    let mut s = load_settings(dir);
+    s.offload.mode = mode;
+    store(dir).save_settings(&s).map_err(|e| e.to_string())
+}
+
+/// Whether the model picker and companion setup offer local models: not on a CPU that lacks what
+/// the build's llama.cpp needs.
+pub fn local_models_offered(cpu: Option<&CpuLimit>) -> bool {
+    cpu.is_none()
+}
+
+/// The two lines Settings > Agents shows when local models cannot run: the reason, then the way out.
+pub fn cpu_notice(cpu: Option<&CpuLimit>) -> Option<(String, String)> {
+    cpu.map(|c| (format!("{}.", c.reason()), CpuLimit::INSTEAD.to_string()))
+}
+
 /// Where a companion's model stands on disk.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModelState {
@@ -217,6 +235,8 @@ pub struct State {
     pub new_level: SiteLevel,
     pub new_all: bool,
     pub custom_open: bool,
+    /// Set when this CPU cannot run local models (checked once).
+    pub cpu: Option<CpuLimit>,
     pub note: Option<String>,
 }
 
@@ -230,6 +250,7 @@ impl State {
             new_level: SiteLevel::Off,
             new_all: false,
             custom_open: false,
+            cpu: morph_ai::cpu_limit(),
             note: None,
         }
     }
@@ -401,6 +422,31 @@ impl SettingsView {
             cx,
         ));
 
+        if let Some((reason, instead)) = cpu_notice(self.agents.cpu.as_ref()) {
+            let mode = load_settings(&dir).offload.mode;
+            let chips = div().flex().flex_row().gap(px(6.)).children(
+                [(OffloadMode::Auto, "Automatic"), (OffloadMode::Always, "Another device")].into_iter().enumerate().map(|(i, (m, label))| {
+                    chip(t, ("agents-offload", i), label, mode == m).on_click(cx.listener(move |this, _, _, cx| {
+                        this.agents_apply(|d| set_offload_mode(d, m), cx);
+                    }))
+                }),
+            );
+            rows.push(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.))
+                    .px(px(12.))
+                    .py(px(10.))
+                    .rounded(px(8.))
+                    .bg(rgb(t.surface))
+                    .child(div().text_size(px(14.)).text_color(rgb(t.error)).child(reason))
+                    .child(dim(instead))
+                    .child(chips)
+                    .child(dim("Saved now; turns use it once linked-device routing is wired up.".into()))
+                    .into_any_element(),
+            );
+        }
         if let Some(p) = profile {
             let is_default = default_id.as_ref() == Some(p.id());
             let model = p.model.clone().unwrap_or_else(|| ModelChoice::default_for(Platform::Desktop));
@@ -437,7 +483,8 @@ impl SettingsView {
                     button(t, "agents-make-default", "Make default", false)
                         .on_click(cx.listener(move |this, _, _, cx| this.agents_set_default(id.clone(), cx)))
                 }));
-            let custom_row = (self.agents.custom_open || matches!(model, ModelChoice::Custom(_))).then(|| {
+            let local_ok = local_models_offered(self.agents.cpu.as_ref());
+            let custom_row = (local_ok && (self.agents.custom_open || matches!(model, ModelChoice::Custom(_)))).then(|| {
                 div().flex().flex_row().items_center().gap(px(8.)).child(div().w(px(240.)).child(self.agents.custom_model.clone())).child(
                     button(t, "agents-custom-set", "Use", false).on_click(cx.listener(|this, _, _, cx| {
                         let id = this.agents.custom_model.read(cx).text().trim().to_string();
@@ -459,9 +506,12 @@ impl SettingsView {
                     .child(div().text_size(px(14.)).child(format!("{}{}", p.name(), if is_default { " (default)" } else { "" })))
                     .child(rename_row)
                     .child(dim("Model".into()))
-                    .child(model_chips)
+                    .children(local_ok.then_some(model_chips))
                     .children(custom_row)
-                    .child(dim(format!("{}: {}", model.label(), state.text())))
+                    .child(dim(match &self.agents.cpu {
+                        Some(cpu) => format!("Local models are off: {}.", cpu.reason()),
+                        None => format!("{}: {}", model.label(), state.text()),
+                    }))
                     .into_any_element(),
             );
 
@@ -723,6 +773,27 @@ mod tests {
         assert_eq!(load_settings(&p).search_provider, SearchProvider::DuckDuckGo);
         set_provider(&p, SearchProvider::Google).unwrap();
         assert_eq!(load_settings(&p).search_provider, SearchProvider::Google);
+    }
+
+    #[test]
+    fn a_failing_cpu_check_hides_local_models_and_shows_one_reason_line() {
+        let weak = CpuLimit::from_check(Err(weirdnet_model::Error::UnsupportedCpu { missing: vec!["avx2".into(), "fma".into()] }));
+        assert!(!local_models_offered(weak.as_ref()), "the picker and setup do not offer local models");
+        let (line, instead) = cpu_notice(weak.as_ref()).unwrap();
+        assert_eq!(line, "This CPU lacks AVX2/FMA needed for local models.");
+        assert!(instead.contains("another device") && instead.contains("offload"));
+        // A CPU that passes sees today's page.
+        let ok = CpuLimit::from_check(Ok(()));
+        assert!(local_models_offered(ok.as_ref()) && cpu_notice(ok.as_ref()).is_none());
+    }
+
+    #[test]
+    fn the_offload_choice_is_saved_through_the_agent_settings() {
+        let (_d, p) = tmp();
+        assert_eq!(load_settings(&p).offload.mode, OffloadMode::Auto);
+        set_offload_mode(&p, OffloadMode::Always).unwrap();
+        assert_eq!(load_settings(&p).offload.mode, OffloadMode::Always);
+        assert_eq!(load_settings(&p).search_provider, SearchProvider::DuckDuckGo, "other settings stay");
     }
 
     #[test]
