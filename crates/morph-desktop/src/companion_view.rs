@@ -105,8 +105,19 @@ pub struct CompanionView {
     research_tab: bool,
     /// Long-term research projects (`companions/research.json`).
     research: crate::companion_research::ResearchState,
+    /// Dev: `MORPH_COMPANION_AUTOSTEER=<new scope>` steers the first running project once.
+    autosteer: Option<String>,
     /// The project step a companion is running now (one at a time).
     project_run: Option<ProjectRun>,
+}
+
+/// What a steer button does with the text in the composer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SteerInput {
+    Note,
+    Brief,
+    AddStep,
+    Source(morph_ai::steer::SourceRule),
 }
 
 /// A research project's step that is running as a companion task.
@@ -298,8 +309,9 @@ impl CompanionView {
             guards: HashMap::new(),
             timed_out: HashSet::new(),
             research_tab: false,
-            research: crate::companion_research::ResearchState { projects: Default::default(), open: None },
+            research: crate::companion_research::ResearchState { projects: Default::default(), open: None, steering_only: false },
             project_run: None,
+            autosteer: std::env::var("MORPH_COMPANION_AUTOSTEER").ok().filter(|q| !q.trim().is_empty()),
         };
         view.collapsed = load_collapsed(&view.store);
         view.research = crate::companion_research::ResearchState::load(&view.store);
@@ -315,6 +327,11 @@ impl CompanionView {
             view.research.set_state(&id, morph_ai::research::ProjectState::Running);
             if std::env::var_os("MORPH_COMPANION_AUTOPROJECT_ALLOW").is_some_and(|v| v == "1") {
                 view.research.toggle_allow(&id);
+            }
+            if let Some(ms) = std::env::var("MORPH_COMPANION_AUTOPROJECT_CHECKIN_MS").ok().and_then(|v| v.parse().ok())
+                && let Some(p) = view.research.projects.get_mut(&id)
+            {
+                p.steering.checkin_every_ms = ms;
             }
             view.research_tab = true;
             view.save_research();
@@ -571,6 +588,47 @@ impl CompanionView {
         cx.notify();
     }
 
+    /// Records a steer from a button (a check-in option, feedback, a source rule, a removal).
+    pub(crate) fn research_steer(&mut self, id: String, steer: morph_ai::steer::Steer, cx: &mut Context<Self>) {
+        self.research.steer(&id, steer);
+        self.save_research();
+        cx.notify();
+    }
+
+    /// A steer made of the text typed in the composer; the box is emptied when it was used.
+    pub(crate) fn research_steer_input(&mut self, id: String, kind: SteerInput, cx: &mut Context<Self>) {
+        use morph_ai::steer::Steer;
+        let text = self.input.read(cx).text().trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        self.input.update(cx, |i, cx| i.set_text("", cx));
+        let steer = match kind {
+            SteerInput::Note => Steer::Note { text },
+            SteerInput::Brief => Steer::Brief { text },
+            SteerInput::AddStep => Steer::AddStep { text },
+            SteerInput::Source(rule) => Steer::Source { pattern: text, rule },
+        };
+        self.research_steer(id, steer, cx);
+    }
+
+    pub(crate) fn research_undo(&mut self, id: String, replan: String, cx: &mut Context<Self>) {
+        self.research.undo_replan(&id, &replan);
+        self.save_research();
+        cx.notify();
+    }
+
+    pub(crate) fn research_toggle_wait(&mut self, id: String, cx: &mut Context<Self>) {
+        self.research.toggle_wait_for_me(&id);
+        self.save_research();
+        cx.notify();
+    }
+
+    pub(crate) fn research_toggle_history(&mut self, cx: &mut Context<Self>) {
+        self.research.steering_only = !self.research.steering_only;
+        cx.notify();
+    }
+
     pub(crate) fn research_toggle_allow(&mut self, id: String, cx: &mut Context<Self>) {
         self.research.toggle_allow(&id);
         self.save_research();
@@ -589,10 +647,14 @@ impl CompanionView {
     /// desktop on power until the device's battery state is read (a later slice).
     fn drive_projects(&mut self, cx: &mut Context<Self>) {
         use morph_ai::research::{Caps, Next, ProjectState, StepStatus, next_action, session_budget};
-        if self.project_run.is_some() || (self.lock)() {
+        if (self.lock)() {
             return;
         }
         let now = crate::companion_research::now_ms();
+        self.steer_tick(now);
+        if self.project_run.is_some() {
+            return;
+        }
         match next_action(&self.research.projects, &Caps::default(), now) {
             Next::Idle => {}
             Next::Finish(id) => {
@@ -649,6 +711,27 @@ impl CompanionView {
                 self.project_run = Some(ProjectRun { id, step, companion });
                 cx.notify();
             }
+        }
+    }
+
+    /// At a step boundary (no step running in a project): its waiting steers land, and a
+    /// direction check-in is posted when one is due.
+    fn steer_tick(&mut self, now: u64) {
+        // Dev: change the scope of the first project that has a step running (once).
+        if let Some(scope) = self.autosteer.clone()
+            && let Some(id) = self.research.projects.projects.iter().find(|p| p.step_running()).map(|p| p.id.clone())
+        {
+            self.autosteer = None;
+            self.research.steer(&id, morph_ai::steer::Steer::Brief { text: scope });
+            self.save_research();
+        }
+        let mut changed = false;
+        for p in &mut self.research.projects.projects {
+            changed |= p.apply_pending(now);
+            changed |= p.maybe_checkin(now);
+        }
+        if changed {
+            self.save_research();
         }
     }
 

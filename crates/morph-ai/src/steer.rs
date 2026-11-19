@@ -223,7 +223,7 @@ fn clip(t: &str, n: usize) -> String {
 }
 
 /// The host of a pattern or URL, lower case, without `www.`.
-fn host_of(s: &str) -> String {
+pub fn host_of(s: &str) -> String {
     let s = s.trim().to_lowercase();
     let rest = s.split_once("://").map_or(s.as_str(), |(_, r)| r);
     let host = rest.split(['/', '?', '#']).next().unwrap_or("");

@@ -6,6 +6,7 @@
 use gpui::{Context, div, prelude::*, px, rgb};
 use morph_ai::FileStore;
 use morph_ai::research::{ProjectState, Projects, ResearchProject, StepStatus};
+use morph_ai::steer::{DiffKind, SourceRule, Steer, Verdict, host_of};
 use morph_ui::theme::Theme;
 
 use crate::companion_view::CompanionView;
@@ -23,13 +24,15 @@ pub struct ResearchState {
     pub projects: Projects,
     /// The project shown open.
     pub open: Option<String>,
+    /// The history lists only steering entries (steers, replans, undos, check-ins).
+    pub steering_only: bool,
 }
 
 impl ResearchState {
     pub fn load(store: &FileStore) -> Self {
         let bytes = store.read_file(FILE).ok().flatten();
         let projects = Projects::from_bytes(bytes.as_deref(), now_ms()).unwrap_or_default();
-        Self { projects, open: None }
+        Self { projects, open: None, steering_only: false }
     }
 
     pub fn save(&self, store: &FileStore) {
@@ -45,6 +48,29 @@ impl ResearchState {
         self.projects.projects.insert(0, p);
         self.open = Some(id.clone());
         id
+    }
+
+    /// Records a steer for a project and applies it now when no step is running; otherwise it
+    /// lands at the step boundary.
+    pub fn steer(&mut self, id: &str, steer: Steer) {
+        let now = now_ms();
+        if let Some(p) = self.projects.get_mut(id) {
+            p.submit_steer(now, "this device", steer);
+            p.apply_pending(now);
+        }
+    }
+
+    pub fn undo_replan(&mut self, id: &str, replan: &str) -> bool {
+        self.projects.get_mut(id).is_some_and(|p| p.undo_replan(now_ms(), replan))
+    }
+
+    pub fn toggle_wait_for_me(&mut self, id: &str) {
+        let now = now_ms();
+        if let Some(p) = self.projects.get_mut(id) {
+            p.steering.wait_for_me = !p.steering.wait_for_me;
+            let on = p.steering.wait_for_me;
+            p.log_steer(now, if on { "check-ins now wait for you" } else { "check-ins no longer wait for you" });
+        }
     }
 
     pub fn set_state(&mut self, id: &str, state: ProjectState) {
@@ -184,7 +210,7 @@ fn project_detail(t: Theme, state: &ResearchState, p: &ResearchProject, i: usize
     let id = p.id.clone();
     let mut d = div().flex().flex_col().gap(px(6.)).mt(px(4.));
     d = d.child(div().text_size(px(12.)).text_color(rgb(t.text_primary)).child(p.brief.clone()));
-    for s in &p.plan {
+    for (n, s) in p.plan.iter().enumerate() {
         let (mark, c) = match s.status {
             StepStatus::Done => ("✓", t.accent),
             StepStatus::Running => ("…", t.accent_alt),
@@ -192,8 +218,31 @@ fn project_detail(t: Theme, state: &ResearchState, p: &ResearchProject, i: usize
             StepStatus::Skipped => ("–", t.text_secondary),
             StepStatus::Queued => ("·", t.text_secondary),
         };
-        d = d.child(div().text_size(px(11.)).text_color(rgb(c)).child(format!("{mark} {}", s.title)));
+        let mut line = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(4.))
+            .child(div().flex_1().min_w(px(0.)).text_size(px(11.)).text_color(rgb(c)).child(format!("{mark} {}", s.title)));
+        if s.status == StepStatus::Queued {
+            let rid = id.clone();
+            line = line.child(
+                chip(t, ("research-rm", i * 1000 + n), "Remove", false)
+                    .on_click(cx.listener(move |this, _, _, cx| this.research_steer(rid.clone(), Steer::RemoveStep { index: n }, cx))),
+            );
+        }
+        d = d.child(line);
     }
+    if p.steering.plan_version > 1 || !p.steering.pending.is_empty() {
+        let waiting = p.steering.pending.len();
+        d = d.child(div().text_size(px(10.)).text_color(rgb(t.text_secondary)).child(format!(
+            "Plan v{}{}",
+            p.steering.plan_version,
+            if waiting > 0 { format!(" · {waiting} steer(s) wait for the step to end") } else { String::new() }
+        )));
+    }
+    d = d.children(replan_card(t, p, i, cx));
+    d = d.children(checkin_card(t, p, i, cx));
     let running = p.state == ProjectState::Running;
     let ended = matches!(p.state, ProjectState::Done | ProjectState::Stopped);
     let (a, b, c) = (id.clone(), id.clone(), id.clone());
@@ -221,27 +270,186 @@ fn project_detail(t: Theme, state: &ResearchState, p: &ResearchProject, i: usize
     } else {
         "Caps apply: 60 pages and 90 min a day, 300 pages, 14 days, 30 pages an hour."
     }));
+    d = d.child(steer_row(t, p, i, cx));
+    d = d.children(sources_block(t, p, i, cx));
     if !p.findings.is_empty() {
         d = d.child(div().text_size(px(11.)).text_color(rgb(t.text_primary)).child(format!("Findings: {}", p.findings.len())));
-        if let Some(f) = p.findings.last() {
-            let mut text: String = f.text.chars().take(220).collect();
-            if f.text.chars().count() > 220 {
+        let first = p.findings.len().saturating_sub(2);
+        for (n, f) in p.findings.iter().enumerate().skip(first) {
+            let mut text: String = f.text.chars().take(160).collect();
+            if f.text.chars().count() > 160 {
                 text.push('…');
             }
-            d = d.child(div().text_size(px(11.)).text_color(rgb(t.text_secondary)).child(format!("{}: {text}", f.step)));
-            if !f.sources.is_empty() {
-                d = d.child(div().text_size(px(10.)).text_color(rgb(t.accent)).child(format!(
-                    "{} sources: {}",
-                    f.sources.len(),
-                    f.sources.join(" · ")
-                )));
+            let mark = match p.steering.verdict_of(n) {
+                Some(Verdict::Useful) => " · useful",
+                Some(Verdict::Wrong) => " · wrong",
+                Some(Verdict::DigDeeper) => " · dig deeper",
+                None => "",
+            };
+            d = d.child(div().text_size(px(11.)).text_color(rgb(t.text_secondary)).child(format!("{}{mark}: {text}", f.step)));
+            let mut fb = div().flex().flex_row().flex_wrap().gap(px(4.));
+            for (k, (label, v)) in
+                [("Useful", Verdict::Useful), ("Wrong", Verdict::Wrong), ("Dig deeper", Verdict::DigDeeper)].into_iter().enumerate()
+            {
+                let rid = id.clone();
+                fb =
+                    fb.child(chip(t, ("research-fb", i * 1000 + n * 10 + k), label, p.steering.verdict_of(n) == Some(v)).on_click(
+                        cx.listener(move |this, _, _, cx| this.research_steer(rid.clone(), Steer::Feedback { finding: n, verdict: v }, cx)),
+                    ));
             }
+            d = d.child(fb);
         }
     }
-    for l in p.log.iter().rev().take(4) {
-        d = d.child(div().text_size(px(10.)).text_color(rgb(t.text_secondary)).child(l.text.clone()));
+    d = d.child(
+        chip(t, ("research-history", i), if state.steering_only { "History: steering only" } else { "History: everything" }, state.steering_only)
+            .on_click(cx.listener(|this, _, _, cx| this.research_toggle_history(cx))),
+    );
+    for l in p.log.iter().rev().filter(|l| !state.steering_only || l.steer).take(7) {
+        d = d.child(div().text_size(px(10.)).text_color(rgb(if l.steer { t.accent_alt } else { t.text_secondary })).child(l.text.clone()));
     }
     d
+}
+
+/// The latest replan: a diff of the plan with its reason, and Undo while it can be undone.
+fn replan_card(t: Theme, p: &ResearchProject, i: usize, cx: &mut Context<CompanionView>) -> Option<gpui::Div> {
+    let r = p.steering.replans.last()?;
+    let mut c = div().flex().flex_col().gap(px(2.)).p(px(6.)).rounded(px(6.)).bg(rgb(t.background)).child(
+        div().text_size(px(11.)).text_color(rgb(t.accent_alt)).child(format!(
+            "Replanned (v{}){}: {}",
+            r.version,
+            if r.undone { " · undone" } else { "" },
+            r.reason
+        )),
+    );
+    for l in &r.diff {
+        let (mark, col) = match l.kind {
+            DiffKind::Added => ("+", t.accent),
+            DiffKind::Removed => ("−", t.error),
+            DiffKind::Changed => ("~", t.accent_alt),
+        };
+        c = c.child(div().text_size(px(10.)).text_color(rgb(col)).child(format!("{mark} {}", l.text)));
+    }
+    if p.can_undo(&r.id) {
+        let (pid, rid) = (p.id.clone(), r.id.clone());
+        c = c.child(
+            div().flex().flex_row().child(
+                button(t, ("research-undo", i), "Undo replan", false)
+                    .on_click(cx.listener(move |this, _, _, cx| this.research_undo(pid.clone(), rid.clone(), cx))),
+            ),
+        );
+    }
+    Some(c)
+}
+
+/// A direction check-in waiting for an answer: its options as chips.
+fn checkin_card(t: Theme, p: &ResearchProject, i: usize, cx: &mut Context<CompanionView>) -> Option<gpui::Div> {
+    let c = p.steering.open_checkin()?;
+    let mut row = div().flex().flex_row().flex_wrap().gap(px(4.));
+    for (k, o) in c.options.iter().enumerate() {
+        let (pid, cid, choice) = (p.id.clone(), c.id.clone(), o.clone());
+        row = row.child(button(t, ("research-checkin", i * 100 + k), o.clone(), k == 0).on_click(
+            cx.listener(move |this, _, _, cx| this.research_steer(pid.clone(), Steer::CheckIn { id: cid.clone(), choice: choice.clone() }, cx)),
+        ));
+    }
+    Some(
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(4.))
+            .p(px(6.))
+            .rounded(px(6.))
+            .border_1()
+            .border_color(rgb(t.accent_alt))
+            .child(div().text_size(px(11.)).text_color(rgb(t.text_primary)).child(format!("Check-in: {}", c.question)))
+            .child(row)
+            .child(div().text_size(px(10.)).text_color(rgb(t.text_secondary)).child(if p.steering.wait_for_me {
+                "The project waits for you. Or type your own direction below and press Note."
+            } else {
+                "No answer: the project goes on with its plan. Or type your own direction below and press Note."
+            })),
+    )
+}
+
+/// Buttons that steer with what is typed in the box below.
+fn steer_row(t: Theme, p: &ResearchProject, i: usize, cx: &mut Context<CompanionView>) -> gpui::Div {
+    use crate::companion_view::SteerInput;
+    let row =
+        div().flex().flex_col().gap(px(4.)).child(
+            div().text_size(px(10.)).text_color(rgb(t.text_secondary)).child("Steer with the box below (it lands when the running step ends):"),
+        );
+    let mut chips = div().flex().flex_row().flex_wrap().gap(px(4.));
+    let kinds = [
+        ("Note", SteerInput::Note),
+        ("Change question", SteerInput::Brief),
+        ("Add step", SteerInput::AddStep),
+        ("Pin", SteerInput::Source(SourceRule::Pin)),
+        ("Prefer", SteerInput::Source(SourceRule::Prefer)),
+        ("Exclude", SteerInput::Source(SourceRule::Exclude)),
+    ];
+    for (k, (label, kind)) in kinds.into_iter().enumerate() {
+        let pid = p.id.clone();
+        chips = chips.child(
+            button(t, ("research-steer", i * 100 + k), label, false)
+                .on_click(cx.listener(move |this, _, _, cx| this.research_steer_input(pid.clone(), kind, cx))),
+        );
+    }
+    let wid = p.id.clone();
+    chips = chips.child(
+        chip(t, ("research-wait", i), if p.steering.wait_for_me { "Check-ins wait for me" } else { "Check-ins don't wait" }, p.steering.wait_for_me)
+            .on_click(cx.listener(move |this, _, _, cx| this.research_toggle_wait(wid.clone(), cx))),
+    );
+    row.child(chips)
+}
+
+/// The source rules, and Pin / Exclude for the sites of the latest finding.
+fn sources_block(t: Theme, p: &ResearchProject, i: usize, cx: &mut Context<CompanionView>) -> Vec<gpui::Div> {
+    let mut out = Vec::new();
+    if !p.steering.sources.is_empty() {
+        let mut row = div().flex().flex_row().flex_wrap().gap(px(4.));
+        for (k, s) in p.steering.sources.iter().enumerate() {
+            let (pid, pat) = (p.id.clone(), s.pattern.clone());
+            row = row.child(
+                chip(t, ("research-rule", i * 100 + k), format!("{} {} ×", s.rule.label(), s.pattern), s.rule != SourceRule::Exclude)
+                    .on_click(cx.listener(move |this, _, _, cx| this.research_steer(pid.clone(), Steer::ForgetSource { pattern: pat.clone() }, cx))),
+            );
+        }
+        out.push(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .child(div().text_size(px(10.)).text_color(rgb(t.text_secondary)).child("Source rules (click to drop)"))
+                .child(row),
+        );
+    }
+    if let Some(f) = p.findings.last() {
+        let mut hosts: Vec<String> = Vec::new();
+        for u in &f.sources {
+            let h = host_of(u);
+            if !h.is_empty() && !hosts.contains(&h) && !p.steering.sources.iter().any(|s| s.pattern.eq_ignore_ascii_case(&h)) {
+                hosts.push(h);
+            }
+        }
+        for (k, h) in hosts.into_iter().take(3).enumerate() {
+            let mut row = div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(4.))
+                .child(div().flex_1().min_w(px(0.)).text_size(px(10.)).text_color(rgb(t.accent)).child(h.clone()));
+            for (m, (label, rule)) in
+                [("Pin", SourceRule::Pin), ("Prefer", SourceRule::Prefer), ("Exclude", SourceRule::Exclude)].into_iter().enumerate()
+            {
+                let (pid, pat) = (p.id.clone(), h.clone());
+                row =
+                    row.child(chip(t, ("research-src", i * 1000 + k * 10 + m), label, false).on_click(
+                        cx.listener(move |this, _, _, cx| this.research_steer(pid.clone(), Steer::Source { pattern: pat.clone(), rule }, cx)),
+                    ));
+            }
+            out.push(row);
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -268,5 +476,26 @@ mod tests {
         assert_eq!(p.state, ProjectState::Paused);
         assert_eq!(back.active(), 0);
         assert!(!p.signed_in, "Always allow never turns on the signed-in session");
+    }
+
+    #[test]
+    fn a_steer_lands_at_once_with_no_step_running_waits_otherwise_and_is_kept_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FileStore::new(dir.path());
+        let mut s = ResearchState::load(&store);
+        let id = s.add("How does Tokio cancel a task?", "atlas");
+        s.steer(&id, Steer::Brief { text: "Async drop proposals".into() });
+        assert_eq!(s.projects.get(&id).unwrap().brief, "Async drop proposals");
+        s.projects.get_mut(&id).unwrap().plan[0].status = StepStatus::Running;
+        s.steer(&id, Steer::Note { text: "only 2022 and later".into() });
+        assert_eq!(s.projects.get(&id).unwrap().steering.pending.len(), 1, "a running step is not cut");
+        s.toggle_wait_for_me(&id);
+        s.save(&store);
+        let back = ResearchState::load(&store);
+        let p = back.projects.get(&id).unwrap();
+        assert_eq!((p.steering.pending.len(), p.steering.replans.len(), p.steering.wait_for_me), (1, 1, true));
+        let rid = p.steering.replans[0].id.clone();
+        let mut back = back;
+        assert!(!back.undo_replan(&id, &rid), "the plan moved on: a step is running");
     }
 }
