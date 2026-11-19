@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use weirdnet_agent::{AgentId, AllowRule, CompanionScope, Policy, SharedPolicy, SiteLevel, StandingAllow};
 
 use crate::chats::ChatLog;
+use crate::file_io::{FileIo, PlainIo};
 use crate::journal::Journals;
 use crate::mcp::McpConfigs;
 use crate::roster::Roster;
@@ -17,6 +18,9 @@ pub enum StoreError {
     Io(String),
     #[error("stored data is unreadable: {0}")]
     Corrupt(String),
+    /// The profile is locked: the file is sealed and its key is not loaded. Nothing was changed.
+    #[error("the profile is locked")]
+    Locked,
 }
 
 /// Removes a companion from the stored roster and takes its id out of the MCP servers' scopes
@@ -150,27 +154,48 @@ impl AiStore for MemoryStore {
 /// `journals.json`) in a directory, written atomically.
 pub struct FileStore {
     dir: PathBuf,
+    io: Arc<dyn FileIo>,
 }
 
 impl FileStore {
+    /// Plain files in `dir`.
     pub fn new(dir: impl Into<PathBuf>) -> Self {
-        Self { dir: dir.into() }
+        Self::with_io(dir, Arc::new(PlainIo))
+    }
+
+    /// Files in `dir` through `io` (the profile's sealed files, in the desktop).
+    pub fn with_io(dir: impl Into<PathBuf>, io: Arc<dyn FileIo>) -> Self {
+        Self { dir: dir.into(), io }
+    }
+
+    /// The raw bytes of `name` (a path under the directory); `Ok(None)` if it does not exist.
+    pub fn read_file(&self, name: &str) -> Result<Option<Vec<u8>>, StoreError> {
+        self.io.read(&self.dir.join(name))
+    }
+
+    /// Replaces `name` (a path under the directory) with `bytes`.
+    pub fn write_file(&self, name: &str, bytes: &[u8]) -> Result<(), StoreError> {
+        self.io.write(&self.dir.join(name), bytes)
+    }
+
+    /// Adds `line` and a newline to the end of `name`, creating it if need be.
+    pub fn append_line(&self, name: &str, line: &str) -> Result<(), StoreError> {
+        let mut bytes = self.read_file(name)?.unwrap_or_default();
+        bytes.extend_from_slice(line.as_bytes());
+        bytes.push(b'\n');
+        self.write_file(name, &bytes)
     }
 
     fn read<T: serde::de::DeserializeOwned>(&self, name: &str) -> Result<Option<T>, StoreError> {
-        match std::fs::read(self.dir.join(name)) {
-            Ok(bytes) => serde_json::from_slice(&bytes).map(Some).map_err(|e| StoreError::Corrupt(format!("{name}: {e}"))),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(StoreError::Io(e.to_string())),
+        match self.read_file(name)? {
+            Some(bytes) => serde_json::from_slice(&bytes).map(Some).map_err(|e| StoreError::Corrupt(format!("{name}: {e}"))),
+            None => Ok(None),
         }
     }
 
     fn write<T: serde::Serialize>(&self, name: &str, value: &T) -> Result<(), StoreError> {
-        std::fs::create_dir_all(&self.dir).map_err(|e| StoreError::Io(e.to_string()))?;
         let bytes = serde_json::to_vec_pretty(value).map_err(|e| StoreError::Io(e.to_string()))?;
-        let tmp = self.dir.join(format!("{name}.tmp"));
-        std::fs::write(&tmp, bytes).map_err(|e| StoreError::Io(e.to_string()))?;
-        std::fs::rename(&tmp, self.dir.join(name)).map_err(|e| StoreError::Io(e.to_string()))
+        self.write_file(name, &bytes)
     }
 }
 

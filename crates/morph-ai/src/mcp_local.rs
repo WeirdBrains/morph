@@ -4,11 +4,13 @@
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
+use crate::file_io::{FileIo, PlainIo};
 use crate::mcp::{McpSecrets, McpServer, McpTransport, McpValue};
+use crate::store::StoreError;
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -53,7 +55,31 @@ impl McpSecrets for MemorySecrets {
 /// never shows a value.
 pub struct FileSecrets {
     path: PathBuf,
-    cache: Mutex<BTreeMap<String, BTreeMap<String, String>>>,
+    io: Arc<dyn FileIo>,
+    cache: Mutex<Loaded>,
+}
+
+/// The secrets read so far. `ready` stays false while the file could not be opened (a locked
+/// profile): nothing is written until it has been read, so a locked start never wipes it.
+#[derive(Default)]
+struct Loaded {
+    ready: bool,
+    map: BTreeMap<String, BTreeMap<String, String>>,
+}
+
+impl Loaded {
+    fn load(&mut self, io: &dyn FileIo, path: &Path) {
+        if self.ready {
+            return;
+        }
+        match io.read(path) {
+            Ok(bytes) => {
+                self.map = bytes.and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+                self.ready = true;
+            }
+            Err(_) => {}
+        }
+    }
 }
 
 impl std::fmt::Debug for FileSecrets {
@@ -63,37 +89,55 @@ impl std::fmt::Debug for FileSecrets {
 }
 
 impl FileSecrets {
-    /// Opens (reading it now if it exists) the file at `path`.
+    /// Opens (reading it now if it exists) the plain file at `path`.
     pub fn open(path: impl Into<PathBuf>) -> Self {
-        let path = path.into();
-        let cache = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
-        Self { path, cache: Mutex::new(cache) }
+        Self::open_with(path, Arc::new(PlainIo))
     }
 
-    fn save(&self, cache: &BTreeMap<String, BTreeMap<String, String>>) {
-        if let Ok(bytes) = serde_json::to_vec_pretty(cache) {
-            let _ = write_private(&self.path, &bytes);
+    /// Opens the file at `path` through `io`. A file that cannot be opened yet (locked) reads as
+    /// empty and is read again on the next use; nothing is saved until then.
+    pub fn open_with(path: impl Into<PathBuf>, io: Arc<dyn FileIo>) -> Self {
+        let mut cache = Loaded::default();
+        let path = path.into();
+        cache.load(io.as_ref(), &path);
+        Self { path, io, cache: Mutex::new(cache) }
+    }
+
+    fn save(&self, cache: &Loaded) {
+        if cache.ready {
+            if let Ok(bytes) = serde_json::to_vec_pretty(&cache.map) {
+                let _ = self.io.write(&self.path, &bytes);
+            }
         }
+    }
+
+    fn cache(&self) -> std::sync::MutexGuard<'_, Loaded> {
+        let mut c = lock(&self.cache);
+        c.load(self.io.as_ref(), &self.path);
+        c
     }
 
     /// Whether anything is kept for `server` (names only, never values).
     pub fn names(&self, server: &str) -> Vec<String> {
-        lock(&self.cache).get(server).map(|m| m.keys().cloned().collect()).unwrap_or_default()
+        self.cache().map.get(server).map(|m| m.keys().cloned().collect()).unwrap_or_default()
     }
 }
 
 impl McpSecrets for FileSecrets {
     fn get(&self, server: &str, name: &str) -> Option<String> {
-        lock(&self.cache).get(server).and_then(|m| m.get(name)).cloned()
+        self.cache().map.get(server).and_then(|m| m.get(name)).cloned()
     }
     fn set(&self, server: &str, name: &str, value: &str) {
-        let mut c = lock(&self.cache);
-        c.entry(server.to_string()).or_default().insert(name.to_string(), value.to_string());
+        let mut c = self.cache();
+        if !c.ready {
+            return;
+        }
+        c.map.entry(server.to_string()).or_default().insert(name.to_string(), value.to_string());
         self.save(&c);
     }
     fn remove_server(&self, server: &str) {
-        let mut c = lock(&self.cache);
-        if c.remove(server).is_some() {
+        let mut c = self.cache();
+        if c.ready && c.map.remove(server).is_some() {
             self.save(&c);
         }
     }
@@ -111,12 +155,22 @@ pub struct McpApprovals {
 impl McpApprovals {
     /// Reads the file; a missing or unreadable file approves nothing.
     pub fn load(path: &Path) -> Self {
-        std::fs::read(path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+        Self::load_with(path, &PlainIo)
+    }
+
+    /// [`load`](Self::load) through `io`: a locked profile approves nothing.
+    pub fn load_with(path: &Path, io: &dyn FileIo) -> Self {
+        io.read(path).ok().flatten().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
     }
 
     /// Writes the file (readable by the user only).
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
         write_private(path, &serde_json::to_vec_pretty(self).map_err(std::io::Error::other)?)
+    }
+
+    /// [`save`](Self::save) through `io`; refused while the profile is locked.
+    pub fn save_with(&self, path: &Path, io: &dyn FileIo) -> Result<(), StoreError> {
+        io.write(path, &serde_json::to_vec_pretty(self).map_err(|e| StoreError::Io(e.to_string()))?)
     }
 
     /// What a server is approved as: a SHA-256 over everything that decides what runs or where

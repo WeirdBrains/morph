@@ -14,6 +14,7 @@
 
 pub mod chats;
 pub mod host;
+mod file_io;
 mod ids;
 pub mod journal;
 #[cfg(feature = "local")]
@@ -31,6 +32,7 @@ pub mod settings;
 pub mod store;
 
 pub use chats::{CLIP_NOTE, ChatLog, ChatTurn, clip_markdown};
+pub use file_io::{FileIo, PlainIo};
 pub use host::{
     ActedOn, BrowserHost, FetchedPage, HostError, LIBRARY, PageElement, PageLink, PageSnapshot, PageTarget, ResearchHost, ScrollTo, SearchHit,
     TabInfo,
