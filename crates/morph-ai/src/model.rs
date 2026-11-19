@@ -1,6 +1,6 @@
 //! Which model a companion runs, and the seam to the inference crate.
 //!
-//! `weirdnet-model` is not a dependency yet; the app adapts it behind [`ModelProvider`].
+//! With the `local` feature, [`LocalModels`](crate::LocalModels) is the provider over `weirdnet-model`.
 
 use std::sync::Arc;
 

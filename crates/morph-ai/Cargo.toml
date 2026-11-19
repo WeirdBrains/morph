@@ -10,7 +10,13 @@ repository.workspace = true
 homepage.workspace = true
 publish = false
 
+[features]
+default = []
+# `LocalModels`: the provider over weirdnet-model (downloads, worker per model).
+local = ["dep:weirdnet-model", "weirdnet-model/agent"]
+
 [dependencies]
+weirdnet-model = { workspace = true, optional = true }
 weirdnet-agent.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -19,3 +25,4 @@ async-trait.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+tokio = { version = "1", features = ["rt"] }

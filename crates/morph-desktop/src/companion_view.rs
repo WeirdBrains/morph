@@ -7,8 +7,8 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use gpui::{App, Context, Entity, EventEmitter, FocusHandle, Focusable, SharedString, Subscription, Window, div, prelude::*, px, rgb};
-use morph_ai::{AiStore, FileStore, Grants, ModelChoice, Platform, Roster, UnavailableModels};
+use gpui::{App, Context, Entity, EventEmitter, FocusHandle, Focusable, SharedString, Subscription, Window, div, prelude::*, px, relative, rgb};
+use morph_ai::{AiStore, EngineFactory, FileStore, Grants, LocalModels, ModelChoice, ModelStatus, Platform, Roster};
 use morph_companion::{
     ApprovalCard, AttachedPage, Conversation, Entry, FootnoteView, NoticeView, OfferView, ToolState, TraceRowView, ViewUpdate, footnotes,
 };
@@ -30,6 +30,7 @@ pub struct CompanionView {
     trace_open: bool,
     input: Entity<TextInput>,
     worker: Worker,
+    models: Arc<LocalModels>,
     store: FileStore,
     focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
@@ -47,7 +48,12 @@ impl CompanionView {
         let policy = Grants::load(Arc::new(FileStore::new(morph_core::profiles::profile_dir(home, profile).join("companions"))))
             .map(|g| g.shared())
             .unwrap_or_else(|_| weirdnet_agent::Policy::new().shared());
-        let worker = Worker::start(Arc::new(UnavailableModels::default()), policy);
+        let factory: EngineFactory = Arc::new(|path| {
+            weirdnet_model::llama::LlamaEngine::load(path, weirdnet_model::llama::LlamaOptions::default())
+                .map(|e| Box::new(e) as Box<dyn weirdnet_model::Engine>)
+        });
+        let models = Arc::new(LocalModels::new(weirdnet_model::ModelStore::from_env(), factory));
+        let worker = Worker::start(models.clone(), policy);
         let selected = roster.default_companion().map(|c| c.id().clone()).unwrap_or_else(|| AgentId::new("local"));
         let input = cx.new(|cx| TextInput::new("Ask a companion", theme, cx));
         let sub = cx.subscribe_in(&input, window, |this, _, event, _, cx| match event {
@@ -64,6 +70,7 @@ impl CompanionView {
             trace_open: false,
             input,
             worker,
+            models,
             store,
             focus: cx.focus_handle(),
             _subscriptions: vec![sub],
@@ -93,6 +100,21 @@ impl CompanionView {
     pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.input.focus_handle(cx), cx);
         cx.emit(ShellRequest::FocusShell);
+        cx.notify();
+    }
+
+    /// The model the selected companion runs (its own, else the desktop default).
+    fn model_choice(&self) -> ModelChoice {
+        self.roster.get(&self.selected).and_then(|c| c.model.clone()).unwrap_or_else(|| ModelChoice::default_for(Platform::Desktop))
+    }
+
+    fn download_model(&mut self, cx: &mut Context<Self>) {
+        self.models.start_download(&self.model_choice());
+        cx.notify();
+    }
+
+    fn cancel_download(&mut self, cx: &mut Context<Self>) {
+        self.models.cancel_download(&self.model_choice());
         cx.notify();
     }
 
@@ -148,6 +170,9 @@ impl CompanionView {
     /// Pump what the worker sent. Returns whether the panel changed.
     pub fn poll(&mut self, cx: &mut Context<Self>) {
         let msgs = self.worker.poll();
+        if matches!(self.models.status(&self.model_choice()), ModelStatus::Downloading { .. }) {
+            cx.notify(); // progress
+        }
         if msgs.is_empty() {
             return;
         }
@@ -186,6 +211,64 @@ fn bubble(t: Theme, mine: bool) -> gpui::Div {
         .border_1()
         .border_color(rgb(if mine { t.surface_variant } else { t.border }))
         .text_color(rgb(t.text_primary))
+}
+
+/// The first-run download prompt, its progress, or a failure. Nothing shows once the model is ready.
+fn model_card(t: Theme, status: ModelStatus, cx: &mut Context<CompanionView>) -> Option<gpui::Div> {
+    let card = || {
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(4.))
+            .p(px(8.))
+            .rounded(px(8.))
+            .border_1()
+            .border_color(rgb(t.accent))
+            .text_size(px(12.))
+            .text_color(rgb(t.text_primary))
+    };
+    match status {
+        ModelStatus::Ready { .. } | ModelStatus::Unsupported { .. } => None,
+        ModelStatus::Missing { label, partial, consent, .. } => {
+            Some(
+                card()
+                    .child(format!("{label} is not on this device yet."))
+                    .children(consent.into_iter().map(|l| dim(t, l)))
+                    .children((partial > 0).then(|| dim(t, format!("{} already downloaded; it will resume.", weirdnet_model::human(partial)))))
+                    .child(div().flex().flex_row().child(
+                        chip(t, "companion-model-download", "Download", true).on_click(cx.listener(|this, _, _, cx| this.download_model(cx))),
+                    )),
+            )
+        }
+        ModelStatus::Downloading { label, done, total } => {
+            let frac = if total == 0 { 0. } else { (done as f32 / total as f32).clamp(0., 1.) };
+            Some(
+                card()
+                    .child(format!("Downloading {label}: {} of {} ({:.0}%)", weirdnet_model::human(done), weirdnet_model::human(total), frac * 100.))
+                    .child(
+                        div()
+                            .h(px(6.))
+                            .w_full()
+                            .rounded(px(3.))
+                            .bg(rgb(t.surface_variant))
+                            .child(div().h_full().w(relative(frac)).rounded(px(3.)).bg(rgb(t.accent))),
+                    )
+                    .child(
+                        div().flex().flex_row().child(
+                            chip(t, "companion-model-cancel", "Cancel", false).on_click(cx.listener(|this, _, _, cx| this.cancel_download(cx))),
+                        ),
+                    ),
+            )
+        }
+        ModelStatus::Failed { label, error } => Some(
+            card().child(div().text_color(rgb(t.error)).child(format!("{label} could not be downloaded: {error}"))).child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .child(chip(t, "companion-model-retry", "Retry", true).on_click(cx.listener(|this, _, _, cx| this.download_model(cx)))),
+            ),
+        ),
+    }
 }
 
 fn footnote_row(t: Theme, f: &FootnoteView) -> gpui::Div {
@@ -304,6 +387,7 @@ impl Render for CompanionView {
             )
             .child(div().flex().flex_row().flex_wrap().gap(px(4.)).children(picker))
             .child(dim(t, format!("{who} · {model} · runs on this device")))
+            .children(model_card(t, self.models.status(&self.model_choice()), cx))
             .child(
                 div()
                     .id("companion-log")

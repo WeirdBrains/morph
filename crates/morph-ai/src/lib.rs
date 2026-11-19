@@ -8,6 +8,8 @@
 //! - [`host`]: [`BrowserHost`] and [`ResearchHost`], what the app provides to tools.
 
 pub mod host;
+#[cfg(feature = "local")]
+pub mod local;
 pub mod model;
 pub mod roster;
 pub mod store;
@@ -16,3 +18,6 @@ pub use host::{BrowserHost, FetchedPage, HostError, PageSnapshot, ResearchHost, 
 pub use model::{ModelChoice, ModelProvider, Platform, UnavailableModels};
 pub use roster::{CompanionProfile, Roster, RosterError};
 pub use store::{AiStore, FileStore, Grants, MemoryStore, StoreError};
+
+#[cfg(feature = "local")]
+pub use local::{EngineFactory, LocalModels, ModelStatus};

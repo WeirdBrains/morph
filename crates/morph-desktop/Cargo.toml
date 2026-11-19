@@ -19,7 +19,8 @@ morph-core.workspace = true
 gpui.workspace = true
 gpui_platform.workspace = true
 image.workspace = true
-morph-ai.workspace = true
+morph-ai = { workspace = true, features = ["local"] }
+weirdnet-model = { workspace = true, features = ["llama"] }
 morph-browser.workspace = true
 morph-companion.workspace = true
 morph-identity.workspace = true
