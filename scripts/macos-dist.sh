@@ -26,9 +26,13 @@ if [ -f "$rt" ]; then
   export RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=$rt"
 fi
 
-for t in aarch64-apple-darwin x86_64-apple-darwin; do
-  cargo build --locked --release -p morph-desktop --target "$t"
-done
+# The Intel slice gets llama.cpp (local models) for an explicit x86-64-v3
+# baseline (AVX, AVX2, FMA, F16C, BMI2; no AVX-512), as on Linux and Windows;
+# weirdnet-model refuses local models cleanly on older CPUs. arm64 keeps the
+# defaults.
+x86_64_v3=(GGML_NATIVE=OFF GGML_AVX=ON GGML_AVX2=ON GGML_FMA=ON GGML_F16C=ON GGML_BMI2=ON GGML_AVX512=OFF)
+cargo build --locked --release -p morph-desktop --target aarch64-apple-darwin
+env "${x86_64_v3[@]}" cargo build --locked --release -p morph-desktop --target x86_64-apple-darwin
 
 stage="$(mktemp -d)"
 trap 'rm -rf "$stage"' EXIT

@@ -14,6 +14,15 @@ version="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json
 arch="$(uname -m)"
 name="morph-$version-$arch-unknown-linux-gnu"
 
+# llama.cpp (local models) for an explicit x86-64-v3 baseline rather than the
+# build machine's CPU: AVX, AVX2, FMA, F16C and BMI2 (Haswell / Zen 1, 2013 on),
+# no AVX-512. weirdnet-model's CPU guard refuses local models cleanly on older
+# CPUs. The deb, rpm, Nix and morph-bin packages repack this tarball. ARM keeps
+# llama.cpp's defaults.
+if [ "$arch" = x86_64 ]; then
+  export GGML_NATIVE=OFF GGML_AVX=ON GGML_AVX2=ON GGML_FMA=ON GGML_F16C=ON GGML_BMI2=ON GGML_AVX512=OFF
+fi
+
 cargo build --locked --release -p morph-desktop
 
 stage="$(mktemp -d)"

@@ -169,6 +169,16 @@ jobs:
   # VP8 (gstreamer1.0-plugins-good) and H.264 (gstreamer1.0-libav) decoders.
   desktop-linux:
     runs-on: ubuntu-24.04
+    # llama.cpp for the release x86-64-v3 baseline (scripts/linux-dist.sh sets
+    # the same), so every build in the job shares one llama.cpp build.
+    env:
+      GGML_NATIVE: "OFF"
+      GGML_AVX: "ON"
+      GGML_AVX2: "ON"
+      GGML_FMA: "ON"
+      GGML_F16C: "ON"
+      GGML_BMI2: "ON"
+      GGML_AVX512: "OFF"
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -292,6 +302,15 @@ jobs:
     runs-on: windows-latest
     env:
       CARGO_TARGET_DIR: C:\t\morph
+      # The release x86-64-v3 baseline for llama.cpp (scripts/windows-dist.ps1
+      # sets the same), so clippy, tests and the release build share it.
+      GGML_NATIVE: "OFF"
+      GGML_AVX: "ON"
+      GGML_AVX2: "ON"
+      GGML_FMA: "ON"
+      GGML_F16C: "ON"
+      GGML_BMI2: "ON"
+      GGML_AVX512: "OFF"
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
