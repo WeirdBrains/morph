@@ -52,12 +52,30 @@ lipo -info "$app/Contents/MacOS/morph"
 
 mkdir -p dist
 rm -f "dist/$name.zip" "dist/$name.dmg"
+echo "packing dist/$name.zip"
 ditto -c -k --sequesterRsrc --keepParent "$app" "dist/$name.zip"
 dmg="$stage/dmg"
 mkdir -p "$dmg"
 cp -R "$app" "$dmg/"
 ln -s /Applications "$dmg/Applications"
-hdiutil create -quiet -volname "Morph $version" -srcfolder "$dmg" -ov -format UDZO "dist/$name.dmg"
+# hdiutil on GitHub's macOS runners sometimes fails with "Resource busy"
+# while something (XProtect, Spotlight) still holds the staged files, and
+# with -quiet it said nothing, so the step only exited 1. Show its output and
+# retry a few times, with a pause, before giving up.
+dmg_ok=0
+for attempt in 1 2 3 4 5; do
+  if hdiutil create -volname "Morph $version" -srcfolder "$dmg" -ov -format UDZO "dist/$name.dmg"; then
+    dmg_ok=1
+    break
+  fi
+  echo "hdiutil create failed (attempt $attempt of 5); retrying" >&2
+  rm -f "dist/$name.dmg"
+  sleep $((attempt * 5))
+done
+if [ "$dmg_ok" != 1 ]; then
+  echo "hdiutil create failed 5 times" >&2
+  exit 1
+fi
 (cd dist && shasum -a 256 "$name.zip" "$name.dmg" > SHA256SUMS-macos)
 echo "dist/$name.zip"
 echo "dist/$name.dmg"
