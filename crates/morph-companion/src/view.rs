@@ -20,6 +20,8 @@ pub struct ApprovalCard {
     pub site: Option<String>,
     /// Shown as a warning when research would use the user's signed-in session.
     pub signed_in: bool,
+    /// What a tier 2 step acts on ("“Sign in”"), marked on the page while the card waits.
+    pub detail: Option<String>,
     pub offers: Vec<OfferView>,
 }
 
@@ -100,6 +102,7 @@ fn approval_card(companion: &str, prompt: &ApprovalPrompt) -> ApprovalCard {
         title,
         site: prompt.request.site.clone(),
         signed_in: prompt.request.signed_in,
+        detail: None,
         offers: prompt.offers.iter().map(|s| OfferView { scope: s.clone(), label: scope_label(s, prompt.request.site.as_deref()) }).collect(),
     }
 }
