@@ -29,6 +29,7 @@ pub mod model;
 #[cfg(feature = "local")]
 pub mod native_calls;
 pub mod remote;
+pub mod report;
 pub mod research;
 pub mod roster;
 pub mod settings;

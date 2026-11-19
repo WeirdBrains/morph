@@ -612,6 +612,23 @@ impl CompanionView {
         self.research_steer(id, steer, cx);
     }
 
+    /// Writes the project's latest report revision as Markdown into the profile's exports.
+    pub(crate) fn research_export(&mut self, id: String, cx: &mut Context<Self>) {
+        let now = crate::companion_research::now_ms();
+        if let Some(p) = self.research.projects.get_mut(&id)
+            && let Some(r) = p.reports.last().cloned()
+        {
+            let name = p.report_file(r.n);
+            let text = match self.store.write_file(&name, r.markdown.as_bytes()) {
+                Ok(_) => format!("exported revision {} to {name}", r.n),
+                Err(e) => format!("export failed: {e}"),
+            };
+            p.log(now, text);
+            self.save_research();
+        }
+        cx.notify();
+    }
+
     pub(crate) fn research_undo(&mut self, id: String, replan: String, cx: &mut Context<Self>) {
         self.research.undo_replan(&id, &replan);
         self.save_research();

@@ -139,6 +139,9 @@ pub struct ResearchProject {
     /// Steers, source rules, feedback, replans and check-ins (slices 4a to 4c).
     #[serde(default)]
     pub steering: Steering,
+    /// The living report's revisions (slice 4d).
+    #[serde(default)]
+    pub reports: Vec<crate::report::ReportRevision>,
     pub created_ms: u64,
 }
 
@@ -182,6 +185,7 @@ impl ResearchProject {
             log: Vec::new(),
             findings: Vec::new(),
             steering: Steering::default(),
+            reports: Vec::new(),
             created_ms: now,
         }
     }
@@ -562,6 +566,10 @@ pub fn finish_step(p: &mut ResearchProject, i: usize, end: StepEnd, now: u64) {
         } else if p.plan[i].status != StepStatus::Done {
             p.state = ProjectState::Paused;
         }
+    }
+    if p.plan[i].status == StepStatus::Done {
+        let why = format!("step done: {}", p.plan[i].title);
+        p.milestone(now, &why);
     }
 }
 

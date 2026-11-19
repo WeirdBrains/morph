@@ -271,6 +271,7 @@ fn project_detail(t: Theme, state: &ResearchState, p: &ResearchProject, i: usize
     } else {
         "Caps apply: 60 pages and 90 min a day, 300 pages, 14 days, 30 pages an hour."
     }));
+    d = d.children(report_block(t, p, i, cx));
     d = d.child(steer_row(t, p, i, cx));
     d = d.children(sources_block(t, p, i, cx));
     if !p.findings.is_empty() {
@@ -309,6 +310,41 @@ fn project_detail(t: Theme, state: &ResearchState, p: &ResearchProject, i: usize
         d = d.child(div().text_size(px(10.)).text_color(rgb(if l.steer { t.accent_alt } else { t.text_secondary })).child(l.text.clone()));
     }
     d
+}
+
+/// The living report: its revision, what changed since the last one, and Export.
+fn report_block(t: Theme, p: &ResearchProject, i: usize, cx: &mut Context<CompanionView>) -> Option<gpui::Div> {
+    let last = p.reports.last()?;
+    let mut c = div().flex().flex_col().gap(px(2.)).child(div().text_size(px(11.)).text_color(rgb(t.text_primary)).child(format!(
+        "Report: revision {} of {} kept · {}",
+        last.n,
+        p.reports.len(),
+        last.why
+    )));
+    if let Some(prev) = p.reports.iter().rev().nth(1) {
+        let diff = p.report_diff(prev.n, last.n);
+        let (add, rem) = (diff.iter().filter(|l| l.kind == DiffKind::Added).count(), diff.iter().filter(|l| l.kind == DiffKind::Removed).count());
+        c = c.child(
+            div().text_size(px(10.)).text_color(rgb(t.text_secondary)).child(format!("Since revision {}: +{add} lines, −{rem} lines", prev.n)),
+        );
+        for l in diff.iter().take(3) {
+            let (mark, col) = if l.kind == DiffKind::Added { ("+", t.accent) } else { ("−", t.error) };
+            let mut text: String = l.text.chars().take(90).collect();
+            if l.text.chars().count() > 90 {
+                text.push('…');
+            }
+            c = c.child(div().text_size(px(10.)).text_color(rgb(col)).child(format!("{mark} {text}")));
+        }
+    }
+    let pid = p.id.clone();
+    Some(
+        c.child(
+            div().flex().flex_row().child(
+                button(t, ("research-export", i), "Export as Markdown", false)
+                    .on_click(cx.listener(move |this, _, _, cx| this.research_export(pid.clone(), cx))),
+            ),
+        ),
+    )
 }
 
 /// The latest replan: a diff of the plan with its reason, and Undo while it can be undone.
