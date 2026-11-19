@@ -3,7 +3,7 @@
 # repository this PKGBUILD lives in) with cargo, so `makepkg -si` here
 # installs what is checked out. For the prebuilt release, see ../morph-bin.
 pkgname=morph
-pkgver=0.2.0
+pkgver=0.2.1
 pkgrel=1
 pkgdesc="Distributed web browser with local AI (GPUI desktop shell)"
 arch=('x86_64' 'aarch64')
