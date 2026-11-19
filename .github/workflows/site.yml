@@ -36,7 +36,16 @@ jobs:
         run: jaspr build --sitemap-domain https://morph.weirdbrains.com
       - name: Confirm CNAME and pages
         run: |
-          test -f build/jaspr/index.html
+          for page in index.html features/index.html roadmap/index.html download/index.html; do
+            test -f "build/jaspr/$page"
+          done
+          grep -q 'rel="canonical"' build/jaspr/features/index.html
+          grep -q 'Download Morph' build/jaspr/download/index.html
+          grep -q 'v0.5' build/jaspr/roadmap/index.html
+          # Every image a page uses is in the build.
+          for img in $(grep -oh 'src="images/[^"]*"' build/jaspr/*.html build/jaspr/*/index.html | sort -u | sed 's/src="//; s/"$//'); do
+            test -f "build/jaspr/$img" || { echo "missing $img"; exit 1; }
+          done
           if ! grep -qx 'morph.weirdbrains.com' build/jaspr/CNAME; then
             printf 'morph.weirdbrains.com\n' > build/jaspr/CNAME
           fi
