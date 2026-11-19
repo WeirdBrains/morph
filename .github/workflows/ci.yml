@@ -51,7 +51,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      # llama-cpp-sys-2's cached CMake build keeps the absolute path of the
+      # runner's CMake modules (share/cmake-4.4/...); a runner image with a
+      # newer CMake can't configure it again. The CMake version is in the key.
+      - id: cmake
+        shell: bash
+        run: echo "version=$(cmake --version | head -1 | awk '{print $3}')" >> "$GITHUB_OUTPUT"
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: cmake-${{ steps.cmake.outputs.version }}
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked -p morph-core -p morph-store -p morph-keystore
 
