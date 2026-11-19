@@ -10332,9 +10332,9 @@ checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
 
 [[package]]
 name = "weirdnet-agent"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da24a8678347252c62ee184226318bad09f7311e0573d2541c3f88122d94d179"
+checksum = "6a19bf0471d5223e6437abd42ff65f084a093b45221b3c82d3cbf5e02eebc128"
 dependencies = [
  "async-trait",
  "serde",
@@ -10390,9 +10390,9 @@ dependencies = [
 
 [[package]]
 name = "weirdnet-mcp"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "239a471458f5d9ba6798850c298993b93f6915ab4eabad5e0ec3bfd87755b0f5"
+checksum = "3c1f264519a0e10a360dccf7b920bbf4f04df2e679267a8b686ee3e08cd24200"
 dependencies = [
  "async-trait",
  "reqwest",
@@ -10403,9 +10403,9 @@ dependencies = [
 
 [[package]]
 name = "weirdnet-model"
-version = "0.2.1"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "949632453b9295fe95c55c626048bf8c70e2c593c91629a1c6dace8b5bc3c35e"
+checksum = "ca5bdfff7a48e17fba7b20a32ac0a5c6686e485a3ef8ec40789b200cc75cb35a"
 dependencies = [
  "async-trait",
  "dirs 6.0.0",
