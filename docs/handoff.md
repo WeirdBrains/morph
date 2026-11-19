@@ -120,10 +120,15 @@ macOS and Windows now, so the tools' page-world note can go (keep it for `PageWo
   test is its own job, `desktop-macos-smoke`, always on `macos-latest`
   (windows and screenshots never on m3talsmith's Mac); it downloads the
   `morph-macos-universal` artifact. Moving the runner to the WeirdBrains org
-  waits on m3talsmith's `admin:org` sign-in. `MAC_RUNNER` is unset for now:
-  the Mac lacks Xcode 26's Metal Toolchain (GPUI's build-time shaders;
-  `xcodebuild -downloadComponent MetalToolchain`, needs m3talsmith's OK), so
-  every macOS build is hosted until it is installed.
+  waits on m3talsmith's `admin:org` sign-in. Xcode 26's Metal Toolchain
+  (GPUI's build-time shaders) was installed on the Mac with m3talsmith's OK
+  (2026-11-19, `xcodebuild -downloadComponent MetalToolchain`, 17F42) and
+  `MAC_RUNNER` is `on`; the first Mac build passed (run 44582305417, about
+  18 min, peak about 6 GB of disk, all freed by the cleanup step). On the
+  Mac a newer push replaces an older `desktop-macos` still waiting (job
+  concurrency), so pushes don't pile up. `ios.yml` deletes its build output
+  (`app/build`, `app/.dart_tool/hooks_runner`) at the end of each run.
+  Set `MAC_RUNNER` to `off` to send every macOS build back to hosted.
 - **Not verified:** real use by a person on either OS (typing into pages,
   IME, Retina scaling, multi-monitor, dark mode), popups (`window.open`
   opens the engine's own window, not counted on the tab), crash/hang panels
