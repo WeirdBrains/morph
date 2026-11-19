@@ -18,6 +18,14 @@ short="${version%%-*}"
 name="morph-$version-universal-apple-darwin"
 export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-11.0}"
 
+# llama.cpp's Metal backend (ggml-metal-device.m) uses @available, which calls
+# ___isPlatformVersionAtLeast from clang's runtime; rustc's cc link step does
+# not pull that archive in, so name it (it is a fat archive, both arches).
+rt="$(clang -print-file-name=libclang_rt.osx.a)"
+if [ -f "$rt" ]; then
+  export RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=$rt"
+fi
+
 for t in aarch64-apple-darwin x86_64-apple-darwin; do
   cargo build --locked --release -p morph-desktop --target "$t"
 done
