@@ -14,6 +14,8 @@ use std::sync::{Arc, mpsc};
 
 mod download_auth;
 pub mod downloads;
+pub mod host_pages;
+pub use host_pages::{HostPageId, HostPageState};
 
 use morph_core::app_call::{self, AppCallError, AppCaller, AppPage};
 use morph_core::tabs::{TabId, TabSet};
@@ -425,6 +427,10 @@ pub struct Browser {
     log_base: u64,
     /// The pages were closed with their window; nothing is shown or pumped.
     closed: bool,
+    /// Background views hosts load and read.
+    host_pages: host_pages::HostPages,
+    /// Page reads under way, of host pages and tabs.
+    reads: morph_webview::PageReads,
 }
 
 /// Whether `url` is an address Morph opens itself (`morph:`,
@@ -463,6 +469,8 @@ impl Browser {
             auth: download_auth::AuthWork::default(),
             log_base: 0,
             closed: false,
+            host_pages: host_pages::HostPages::default(),
+            reads: morph_webview::PageReads::new(),
         };
         let first = browser.tabs.active_id();
         let url = config.start_url.trim().to_string();
@@ -1223,6 +1231,7 @@ impl Browser {
         self.closed = true;
         self.by_view.clear();
         self.pages.clear();
+        self.host_pages.clear();
         let _ = self.backend.poll();
     }
 
@@ -1649,7 +1658,7 @@ impl Browser {
                 polled.changed = true;
                 continue;
             }
-            if self.hidden_view_event(view, &event) {
+            if self.host_page_event(view, &event) || self.hidden_view_event(view, &event) {
                 continue;
             }
             let Some(&tab) = self.by_view.get(&view) else {
@@ -1671,6 +1680,7 @@ impl Browser {
         if self.poll_download_auth() {
             polled.changed = true;
         }
+        self.poll_host_pages(std::time::Instant::now());
         polled
     }
 
