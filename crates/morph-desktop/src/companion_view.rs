@@ -28,6 +28,8 @@ pub struct CompanionView {
     /// The tab the shell shows now; attaching copies it into the conversation.
     page: Option<Page>,
     trace_open: bool,
+    /// The footnote a marker in an answer pointed at.
+    focus_note: Option<u32>,
     input: Entity<TextInput>,
     worker: Worker,
     models: Arc<LocalModels>,
@@ -70,6 +72,7 @@ impl CompanionView {
             conversations: HashMap::new(),
             page: None,
             trace_open: false,
+            focus_note: None,
             input,
             worker,
             models,
@@ -118,6 +121,11 @@ impl CompanionView {
 
     fn cancel_download(&mut self, cx: &mut Context<Self>) {
         self.models.cancel_download(&self.model_choice());
+        cx.notify();
+    }
+
+    pub(crate) fn focus_footnote(&mut self, n: u32, cx: &mut Context<Self>) {
+        self.focus_note = if self.focus_note == Some(n) { None } else { Some(n) };
         cx.notify();
     }
 
@@ -217,6 +225,10 @@ impl CompanionView {
                 Msg::Done(id, Err(e)) => self.conversations.entry(id).or_default().fail(&e.to_string()),
             }
         }
+        // One parse of each streaming tail per tick, however many deltas arrived.
+        for conv in self.conversations.values_mut() {
+            conv.settle();
+        }
         let _ = self.store.save_roster(&self.roster);
         cx.notify();
     }
@@ -301,13 +313,15 @@ fn model_card(t: Theme, status: ModelStatus, cx: &mut Context<CompanionView>) ->
     }
 }
 
-fn footnote_row(t: Theme, f: &FootnoteView) -> gpui::Div {
+fn footnote_row(t: Theme, f: &FootnoteView, focused: bool) -> gpui::Div {
     let steps = f.steps.iter().map(|s| s.to_string()).collect::<Vec<_>>().join(", ");
     div()
         .flex()
         .flex_row()
         .gap(px(6.))
         .text_size(px(11.))
+        .rounded(px(4.))
+        .bg(rgb(if focused { t.selection } else { t.surface }))
         .child(div().text_color(rgb(t.accent)).child(format!("[{}]", f.n)))
         .child(div().flex_1().overflow_hidden().text_ellipsis().text_color(rgb(t.text_secondary)).child(f.label.clone()))
         .child(div().text_color(rgb(t.text_secondary)).child(format!("steps {steps}")))
@@ -353,6 +367,7 @@ impl Render for CompanionView {
         let who = self.roster.get(&self.selected).map(|c| c.name().to_string()).unwrap_or_default();
         let model = self.roster.get(&self.selected).and_then(|c| c.model.as_ref()).map(|m| m.label()).unwrap_or_else(|| "its own model".into());
 
+        let focus_note = self.focus_note;
         let entries: Vec<gpui::AnyElement> = conv
             .entries()
             .iter()
@@ -362,11 +377,11 @@ impl Render for CompanionView {
                     .child(text.clone())
                     .children(attached.as_ref().map(|p| dim(t, format!("with page: {}", p.title)).mt(px(4.))))
                     .into_any_element(),
-                Entry::Assistant { text, footnotes } => bubble(t, false)
+                Entry::Assistant { doc, footnotes, .. } => bubble(t, false)
                     .flex()
                     .flex_col()
                     .gap(px(6.))
-                    .child(div().child(text.clone()))
+                    .children(crate::companion_markdown::blocks(t, doc, i, cx))
                     .children((!footnotes.is_empty()).then(|| {
                         div()
                             .flex()
@@ -375,7 +390,7 @@ impl Render for CompanionView {
                             .border_t_1()
                             .border_color(rgb(t.surface_variant))
                             .pt(px(4.))
-                            .children(footnotes.iter().map(|f| footnote_row(t, f)))
+                            .children(footnotes.iter().map(|f| footnote_row(t, f, focus_note == Some(f.n))))
                     }))
                     .into_any_element(),
                 Entry::Card { card, answer } => approval_card(t, i, card, answer.as_deref(), cx).into_any_element(),
