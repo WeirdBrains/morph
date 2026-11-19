@@ -64,13 +64,14 @@ drops both.
 | Identity seed, node key | `identity/user.key`, `identity/node.key` | sealed under the password |
 | Saved passwords | `library.db` (`saved_logins`) | SQLCipher under the library key, and each password sealed again (XChaCha20-Poly1305) under the saver key |
 
-**Not encrypted yet** (open work, see "Limits"):
-
-- `companions/` (companion roster, `mcp.json`, chats), `ai/policy.json`
-- the MCP host's `mcp-approved.local.json` and `mcp-secrets.local.json`
-
-These are written by `morph-ai` and the MCP host. Moving them under the file
-key is Morph Dev's part (tracked in docs/handoff.md).
+**Companion and MCP files** are sealed too (`morph-services::profile_io`, through
+`morph_core::profile_files`): everything under `companions/` (roster, `policy.json`, settings,
+chats, journals, `mcp.json`, `exports/`, `tool-log.jsonl`) and every `mcp-*.local.json` beside it
+(`mcp-secrets.local.json`, `mcp-approved.local.json`). `morph-ai` reaches them only through its
+`FileIo` seam (`FileStore`, `FileSecrets`, `McpApprovals`), so it holds no key. While the profile is
+locked they read as `StoreError::Locked` (secrets and approvals read as empty and drop what they
+had in memory), nothing is written over them, and the next unlock seals any plaintext an older build
+left (`profile_io::seal_existing`, run by `library::{open, unlock, adopt_new_identity}`).
 
 **Web view data** (cookies, local storage, IndexedDB, cache under
 `profiles/<id>/webkit/`) is **not encrypted by Morph**. It sits in the
