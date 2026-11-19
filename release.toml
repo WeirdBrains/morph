@@ -13,6 +13,8 @@ next = [
   "python3 scripts/weirdnet_release.py assets {version}",
   "packaging/arch/*/PKGBUILD: pkgver={pkgver}, _ver={version}, the tarball's sha256; packaging/nix/release.json; .SRCINFO",
   "python3 scripts/weirdnet_release.py taur {version} --dry-run, then without --dry-run",
+  "Website: bump latestVersion/latestDate in site/lib/site.dart and sizes in site/lib/pages/download.dart; move shipped items in site/lib/content/features.dart and site/lib/pages/roadmap.dart; push, check the Site workflow and https://morph.weirdbrains.com/download (site/README.md)",
+  "Ping Morph intern (Morph site) and Weirdnet Lead Developer (net.weirdbrains.com) with the release link",
 ]
 
 [env]
