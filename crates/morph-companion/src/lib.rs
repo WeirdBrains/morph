@@ -18,9 +18,11 @@ pub mod tools;
 pub mod view;
 
 pub use citations::{Footnoted, parse_citations};
-pub use conversation::{AttachedPage, Conversation, Entry, ToolState};
+pub use conversation::{Activity, AttachedPage, Conversation, Entry, ToolState};
 pub use export::{chat_turn, export_markdown, journal_entry};
 pub use markdown::{Block, Link, Markdown, Span};
 pub use session::{Canceller, MORE_PAGES_PROMPT, SYSTEM_PROMPT, SessionError, Sessions, TaskOptions, more_pages_prompt, ran_out_of_pages};
 pub use tools::{BROWSER, PendingTarget, WEB, browser_tools, untrusted, web_tools};
-pub use view::{ApprovalCard, FootnoteView, NoticeView, OfferView, TraceRowView, ViewUpdate, footnotes, trace_rows, translate};
+pub use view::{
+    ApprovalCard, FootnoteView, NoticeView, OfferView, TraceRowView, ViewUpdate, doing_text, footnotes, provider_label, trace_rows, translate,
+};

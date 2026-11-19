@@ -65,6 +65,50 @@ pub enum ViewUpdate {
     Finished { task_id: String, status: String },
 }
 
+/// A search provider id as the panel names it ("duckduckgo" is "DuckDuckGo").
+pub fn provider_label(provider: &str) -> String {
+    match provider {
+        "duckduckgo" => "DuckDuckGo".into(),
+        "google" => "Google".into(),
+        "bing" => "Bing".into(),
+        "brave" => "Brave Search".into(),
+        "kagi" => "Kagi".into(),
+        "library" => "your Library".into(),
+        "" => "the web".into(),
+        other => other.to_string(),
+    }
+}
+
+/// "tokio.rs" for "https://www.tokio.rs/tokio/topics/shutdown".
+fn site_of(url: &str) -> String {
+    let rest = url.split_once("://").map_or(url, |(_, r)| r);
+    let host = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    let host = host.rsplit_once('@').map_or(host, |(_, h)| h);
+    let host = host.strip_prefix("www.").unwrap_or(host);
+    if host.is_empty() { "a page".into() } else { host.chars().take(60).collect() }
+}
+
+/// The live step line while a tool call runs: "Searching DuckDuckGo…", "Reading tokio.rs…".
+/// `provider` is the research provider `web.search` asks after the Library.
+pub fn doing_text(tool: &str, args: &serde_json::Value, provider: &str) -> String {
+    let arg = |k: &str| args.get(k).and_then(serde_json::Value::as_str).map(str::trim).filter(|v| !v.is_empty());
+    let label = |k: &str| arg(k).map(|v| format!(" “{}”", v.chars().take(40).collect::<String>())).unwrap_or_default();
+    match tool {
+        "web.search" => format!("Searching {}…", provider_label(provider)),
+        "web.read" | "web.fetch" => format!("Reading {}…", arg("url").map(site_of).unwrap_or_else(|| "a page".into())),
+        "page.text" | "page.selection" | "page.query" => "Reading the attached page…".into(),
+        "tabs.list" => "Looking at your tabs…".into(),
+        "tabs.open" | "browser.navigate" => format!("Opening {}…", arg("url").map(site_of).unwrap_or_else(|| "a page".into())),
+        "tabs.switch" => "Switching tabs…".into(),
+        "page.scroll" => "Scrolling the page…".into(),
+        "browser.find" => format!("Finding{} on the page…", label("query")),
+        "library.bookmark" => "Bookmarking the page…".into(),
+        "page.click" => format!("Clicking{}…", label("target")),
+        "page.fill" => format!("Filling in{}…", label("target")),
+        other => format!("Running {other}…"),
+    }
+}
+
 fn tier_verb(tier: Tier) -> &'static str {
     match tier {
         Tier::Read => "read the page you attached",
@@ -291,5 +335,17 @@ mod tests {
     fn finished_status_text() {
         let out = translate("L", &AgentEvent::Finished { task_id: "t".into(), stop: StopReason::Cancelled });
         assert_eq!(out, vec![ViewUpdate::Finished { task_id: "t".into(), status: "stopped".into() }]);
+    }
+
+    #[test]
+    fn step_lines_name_the_provider_the_site_and_the_label() {
+        use serde_json::json;
+        assert_eq!(doing_text("web.search", &json!({ "query": "x" }), "duckduckgo"), "Searching DuckDuckGo…");
+        assert_eq!(doing_text("web.read", &json!({ "url": "https://www.tokio.rs/tokio/topics/shutdown" }), ""), "Reading tokio.rs…");
+        assert_eq!(doing_text("web.fetch", &json!({ "url": "docs.rs/x?y=1" }), ""), "Reading docs.rs…");
+        assert_eq!(doing_text("web.read", &json!({}), ""), "Reading a page…");
+        assert_eq!(doing_text("page.fill", &json!({ "target": "Email", "value": "a@b.c" }), ""), "Filling in “Email”…");
+        assert_eq!(doing_text("page.click", &json!({ "target": " Subscribe " }), ""), "Clicking “Subscribe”…");
+        assert_eq!(doing_text("github.issues", &json!({}), ""), "Running github.issues…");
     }
 }

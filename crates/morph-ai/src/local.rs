@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use weirdnet_agent::{ModelBackend, ModelError};
@@ -94,6 +95,8 @@ struct State {
     failed: HashMap<String, String>,
     cancel: HashMap<String, bool>,
     workers: HashMap<String, Arc<Worker>>,
+    /// Set once a worker's model has loaded (the first question loads it).
+    loaded: HashMap<String, Arc<AtomicBool>>,
 }
 
 /// Opens catalog models from a [`ModelStore`].
@@ -121,6 +124,14 @@ impl LocalModels {
     pub fn with_cpu_limit(mut self, cpu: Option<CpuLimit>) -> Self {
         self.cpu = cpu;
         self
+    }
+
+    /// Whether `choice` is loaded and ready to answer at once. `false` until the first question
+    /// after launch has loaded it (which takes a while for a large model), so the panel can say
+    /// "Loading…" rather than "Thinking…".
+    pub fn is_loaded(&self, choice: &ModelChoice) -> bool {
+        let Some(spec) = spec_for(choice) else { return false };
+        self.state.lock().unwrap().loaded.get(&spec.id).is_some_and(|l| l.load(Ordering::SeqCst))
     }
 
     /// Why local models cannot run here, if they cannot.
@@ -213,11 +224,16 @@ impl ModelProvider for LocalModels {
         }
         let worker = {
             let mut st = self.state.lock().unwrap();
+            let loaded = st.loaded.entry(spec.id.clone()).or_default().clone();
             st.workers
                 .entry(spec.id.clone())
                 .or_insert_with(|| {
                     let (path, factory) = (self.store.path(&spec), self.factory.clone());
-                    Arc::new(Worker::spawn(move || factory(&path)))
+                    Arc::new(Worker::spawn(move || {
+                        let engine = factory(&path);
+                        loaded.store(engine.is_ok(), Ordering::SeqCst);
+                        engine
+                    }))
                 })
                 .clone()
         };
@@ -280,7 +296,9 @@ mod tests {
         install(dir.path(), &ModelChoice::Gemma4E2B);
         let m = models(dir.path());
         assert_eq!(m.status(&ModelChoice::Gemma4E2B), ModelStatus::Ready { label: "Gemma 4 E2B".into() });
+        assert!(!m.is_loaded(&ModelChoice::Gemma4E2B), "nothing loads before a question");
         let backend = m.open(&ModelChoice::Gemma4E2B).unwrap();
+        assert!(!m.is_loaded(&ModelChoice::Gemma4E2B), "opening does not load it either");
         let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
         let turn = rt
             .block_on(backend.complete(
@@ -291,6 +309,8 @@ mod tests {
             ))
             .unwrap();
         assert_eq!(turn.text, "hi there");
+        assert!(m.is_loaded(&ModelChoice::Gemma4E2B), "the first question loaded it");
+        assert!(!m.is_loaded(&ModelChoice::Gemma4E4B));
     }
 
     #[test]

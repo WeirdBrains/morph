@@ -19,7 +19,7 @@ use morph_ai::{
 };
 use morph_browser::{HostPageId, HostPageRequest, HostPageState};
 use morph_companion::{
-    ApprovalCard, AttachedPage, Conversation, Entry, FootnoteView, NoticeView, OfferView, TaskOptions, ToolState, TraceRowView, ViewUpdate,
+    Activity, ApprovalCard, AttachedPage, Conversation, Entry, FootnoteView, NoticeView, OfferView, TaskOptions, ToolState, TraceRowView, ViewUpdate,
     export_markdown, footnotes, more_pages_prompt, parse_citations, ran_out_of_pages,
 };
 use morph_core::tabs::TabId;
@@ -88,6 +88,8 @@ pub struct CompanionView {
     last: HashMap<AgentId, (String, Box<Outcome>, Vec<Citation>)>,
     /// Where the last export went.
     exported: Option<String>,
+    /// The working line's last drawn frame (a quarter second), so it redraws as it ticks.
+    activity_frame: Option<u128>,
 }
 
 /// What a companion says when asked while the profile is locked.
@@ -243,6 +245,7 @@ impl CompanionView {
             card_detail: HashMap::new(),
             last: HashMap::new(),
             exported: None,
+            activity_frame: None,
         };
         if std::env::var_os("MORPH_COMPANION_DEMO").is_some_and(|v| v == "1") {
             let id = view.selected.clone();
@@ -280,6 +283,14 @@ impl CompanionView {
     /// The model the selected companion runs (its own, else the desktop default).
     fn model_choice(&self) -> ModelChoice {
         self.roster.get(&self.selected).and_then(|c| c.model.clone()).unwrap_or_else(|| ModelChoice::default_for(Platform::Desktop))
+    }
+
+    /// The local model the selected companion runs on while it is still loading (its name), for
+    /// the working line. `None` for a loaded model and for companions that run elsewhere.
+    fn model_loading(&self) -> Option<String> {
+        let c = self.roster.get(&self.selected)?;
+        let choice = self.model_choice();
+        (c.identity.kind == weirdnet_agent::AgentKind::Local && !self.models.is_loaded(&choice)).then(|| choice.label())
     }
 
     fn download_model(&mut self, cx: &mut Context<Self>) {
@@ -681,6 +692,12 @@ impl CompanionView {
         if matches!(self.models.status(&self.model_choice()), ModelStatus::Downloading { .. }) {
             cx.notify(); // progress
         }
+        // The working line's pulse and seconds move while a task runs.
+        let frame = self.conversations.get(&self.selected).and_then(|c| c.activity()).map(|(_, since)| since.elapsed().as_millis() / 250);
+        if frame != self.activity_frame {
+            self.activity_frame = frame;
+            cx.notify();
+        }
         if msgs.is_empty() {
             return;
         }
@@ -694,6 +711,7 @@ impl CompanionView {
                         conv.set_card_detail(d);
                     }
                 }
+                Msg::Doing(id, text) => self.conversations.entry(id).or_default().set_doing(&text),
                 Msg::CardDetail(id, detail) => {
                     let conv = self.conversations.entry(id.clone()).or_default();
                     if conv.pending_card().is_some_and(|c| c.detail.is_none()) {
@@ -849,6 +867,30 @@ fn trace_row(t: Theme, r: &TraceRowView) -> gpui::Div {
         .child(div().text_color(rgb(if r.session == "logged out" { t.text_secondary } else { t.accent_alt })).child(r.session.clone()))
 }
 
+/// The working line under the transcript while a task runs: a pulsing dot, what the task is
+/// doing ("Thinking…", "Reading tokio.rs…", "Waiting for your approval") and for how long.
+fn activity_row(t: Theme, activity: &Activity, since: Instant, loading: Option<&str>) -> gpui::Div {
+    let elapsed = since.elapsed();
+    let pulse = (elapsed.as_millis() / 250 % 4) as f32;
+    let waiting = *activity == Activity::WaitingForApproval;
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(6.))
+        .text_size(px(12.))
+        .text_color(rgb(if waiting { t.accent_alt } else { t.text_secondary }))
+        .child(
+            div()
+                .size(px(8.))
+                .rounded(px(4.))
+                .bg(rgb(if waiting { t.accent_alt } else { t.accent }))
+                .opacity(0.35 + 0.65 * (1. - (pulse - 1.5).abs() / 1.5)),
+        )
+        .child(activity.label(loading))
+        .child(div().text_color(rgb(t.text_secondary)).child(format!("{} s", elapsed.as_secs())))
+}
+
 fn notice_row(t: Theme, i: usize, n: &NoticeView, running: bool, cx: &mut Context<CompanionView>) -> gpui::Div {
     let allow_id = n.allow_id;
     div()
@@ -929,6 +971,8 @@ impl Render for CompanionView {
             })
             .collect();
 
+        let activity = conv.activity();
+        let loading = self.model_loading();
         let attached = conv.attached().cloned();
         let can_attach = self.page.is_some();
         let running = conv.is_running();
@@ -972,7 +1016,8 @@ impl Render for CompanionView {
                             .text_color(rgb(t.text_secondary))
                             .child("Ask a question, or attach this tab to talk about the page you are on.")
                     }))
-                    .children(entries),
+                    .children(entries)
+                    .children(activity.map(|(a, since)| activity_row(t, &a, since, loading.as_deref()))),
             )
             .children((!rows.is_empty()).then(|| {
                 div()

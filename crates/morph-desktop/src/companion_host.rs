@@ -18,7 +18,7 @@ use morph_ai::{
     ActedOn, AiStore, BrowserHost, FetchedPage, FileStore, HostError, LIBRARY, ModelProvider, PageElement, PageSnapshot, PageTarget, ResearchHost,
     Roster, ScrollTo, SearchHit, SearchProvider, TabInfo,
 };
-use morph_companion::{Canceller, PendingTarget, SessionError, Sessions, TaskOptions, ViewUpdate, browser_tools, web_tools};
+use morph_companion::{Canceller, PendingTarget, SessionError, Sessions, TaskOptions, ViewUpdate, browser_tools, doing_text, web_tools};
 use morph_webview::{Action, ActionError, ActionRequest, ActionResult, Locator};
 use weirdnet_agent::{
     AgentId, ApprovalAnswer, ApprovalPrompt, Approver, CallTarget, Outcome, SharedPolicy, SourceKind, Tier, ToolContext, ToolError, ToolOutput,
@@ -35,6 +35,8 @@ pub enum Msg {
     Done(AgentId, Result<Box<Outcome>, SessionError>),
     /// What the card that is waiting (or about to arrive) is about.
     CardDetail(AgentId, String),
+    /// The step line of a tool call that is starting ("Reading tokio.rs…").
+    Doing(AgentId, String),
 }
 
 enum Cmd {
@@ -536,6 +538,42 @@ async fn with_hosts(sources: &[Arc<dyn ToolSource>], servers: Arc<ToolRegistry>)
     }
 }
 
+/// A tool source that tells the panel what each call is about to do ("Searching DuckDuckGo…",
+/// "Reading tokio.rs…") before it runs. `research` names the search provider.
+struct Reporting {
+    inner: Arc<dyn ToolSource>,
+    msgs: Sender<Msg>,
+    research: Option<Arc<dyn ResearchHost>>,
+}
+
+#[async_trait]
+impl ToolSource for Reporting {
+    fn id(&self) -> &str {
+        self.inner.id()
+    }
+
+    fn kind(&self) -> SourceKind {
+        self.inner.kind()
+    }
+
+    async fn list(&self) -> Result<Vec<ToolSpec>, ToolError> {
+        self.inner.list().await
+    }
+
+    fn target(&self, tool: &str, args: &serde_json::Value) -> CallTarget {
+        self.inner.target(tool, args)
+    }
+
+    async fn call(&self, tool: &str, ctx: &ToolContext, args: serde_json::Value) -> Result<ToolOutput, ToolError> {
+        let provider = match (&self.research, tool) {
+            (Some(r), "web.search") => r.provider(),
+            _ => String::new(),
+        };
+        let _ = self.msgs.send(Msg::Doing(ctx.agent.id.clone(), doing_text(tool, &args, &provider)));
+        self.inner.call(tool, ctx, args).await
+    }
+}
+
 /// A registry as one tool source, so MCP servers' tools sit beside the browser tools.
 struct Servers(Arc<ToolRegistry>);
 
@@ -586,7 +624,12 @@ impl Worker {
             calls: hosts.as_ref().and_then(|h| h.calls.clone()).map(Mutex::new),
         });
         let sources: Vec<Arc<dyn ToolSource>> = match hosts {
-            Some(h) => vec![Arc::new(browser_tools(h.browser, pending)), Arc::new(web_tools(h.research))],
+            Some(h) => {
+                let report = |inner: Arc<dyn ToolSource>| -> Arc<dyn ToolSource> {
+                    Arc::new(Reporting { inner, msgs: msg_tx.clone(), research: Some(h.research.clone()) })
+                };
+                vec![report(Arc::new(browser_tools(h.browser.clone(), pending))), report(Arc::new(web_tools(h.research.clone())))]
+            }
             None => Vec::new(),
         };
         std::thread::Builder::new()
@@ -766,6 +809,33 @@ mod tests {
         let hits = library_hits(home, &profile, "How to gracefully shut down a Tokio application?", 8);
         assert_eq!(hits.iter().map(|h| h.url.as_str()).collect::<Vec<_>>(), vec!["https://tokio.rs/tokio/topics/shutdown"]);
         assert_eq!(library_words("What's the best way to use tokio::signal?"), vec!["tokio", "signal"]);
+    }
+
+    #[test]
+    fn each_tool_call_tells_the_panel_its_step_line_before_it_runs() {
+        struct Echo;
+        #[async_trait]
+        impl weirdnet_agent::Tool for Echo {
+            fn spec(&self) -> ToolSpec {
+                ToolSpec::new("web.read", "read")
+            }
+            async fn call(&self, _: &ToolContext, _: serde_json::Value) -> Result<ToolOutput, ToolError> {
+                Ok(ToolOutput::text("page"))
+            }
+        }
+        let (msg_tx, msg_rx) = mpsc::channel();
+        let source = Reporting { inner: Arc::new(weirdnet_agent::LocalTools::new("web").with(Echo)), msgs: msg_tx, research: None };
+        let ctx = ToolContext {
+            agent: weirdnet_agent::AgentIdentity::new("local", "Local", weirdnet_agent::AgentKind::Local),
+            task_id: "t".into(),
+            session: weirdnet_agent::SessionMark::LoggedOut,
+            cancel: weirdnet_agent::CancelToken::new(),
+        };
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let out = rt.block_on(source.call("web.read", &ctx, serde_json::json!({ "url": "https://tokio.rs/tokio/topics/shutdown" }))).unwrap();
+        assert_eq!(out.content, "page");
+        assert!(matches!(msg_rx.try_recv(), Ok(Msg::Doing(id, d)) if id.as_str() == "local" && d == "Reading tokio.rs…"));
+        assert_eq!(source.id(), "web");
     }
 
     #[test]

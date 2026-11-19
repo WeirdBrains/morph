@@ -1,6 +1,8 @@
 //! The transcript the Companion panel draws for one companion, built from [`ViewUpdate`]s.
 //! Pure state: the panel reads it and the host feeds it.
 
+use std::time::Instant;
+
 use crate::markdown::Markdown;
 use crate::view::{ApprovalCard, FootnoteView, NoticeView, TraceRowView, ViewUpdate};
 
@@ -51,6 +53,32 @@ pub enum Entry {
     },
 }
 
+/// What a running task is doing now, for the panel's working line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Activity {
+    /// The model is on a turn and has not written anything in it yet.
+    Thinking,
+    /// The model's answer is streaming in.
+    Writing,
+    /// A tool call is running ("Searching DuckDuckGo…").
+    Doing(String),
+    /// An approval card waits for the user.
+    WaitingForApproval,
+}
+
+impl Activity {
+    /// The line the panel shows. `loading` names the local model while it is still loading.
+    pub fn label(&self, loading: Option<&str>) -> String {
+        match (self, loading) {
+            (Activity::Thinking, Some(model)) => format!("Loading {model}…"),
+            (Activity::Thinking, None) => "Thinking…".into(),
+            (Activity::Writing, _) => "Writing…".into(),
+            (Activity::Doing(text), _) => text.clone(),
+            (Activity::WaitingForApproval, _) => "Waiting for your approval".into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Conversation {
     entries: Vec<Entry>,
@@ -58,6 +86,12 @@ pub struct Conversation {
     running: bool,
     status: Option<String>,
     attached: Option<AttachedPage>,
+    /// The step line of the tool call that is running.
+    doing: Option<String>,
+    /// Text has come in since the model's turn began.
+    writing: bool,
+    /// When the current [`Activity`] began.
+    since: Option<Instant>,
 }
 
 impl Conversation {
@@ -72,6 +106,43 @@ impl Conversation {
 
     pub fn is_running(&self) -> bool {
         self.running
+    }
+
+    /// What the running task is doing and since when; `None` when no task runs.
+    pub fn activity(&self) -> Option<(Activity, Instant)> {
+        let now = self.kind()?;
+        Some((now, self.since.unwrap_or_else(Instant::now)))
+    }
+
+    fn kind(&self) -> Option<Activity> {
+        if !self.running {
+            return None;
+        }
+        Some(if self.pending_card().is_some() {
+            Activity::WaitingForApproval
+        } else if let Some(d) = &self.doing {
+            Activity::Doing(d.clone())
+        } else if self.writing {
+            Activity::Writing
+        } else {
+            Activity::Thinking
+        })
+    }
+
+    /// Runs `change`, restarting the activity clock when what the task is doing changed.
+    fn track(&mut self, change: impl FnOnce(&mut Self)) {
+        let before = self.kind();
+        change(self);
+        if self.kind() != before {
+            self.since = Some(Instant::now());
+        }
+    }
+
+    /// The step line for the tool call that just started ("Reading tokio.rs…").
+    pub fn set_doing(&mut self, text: &str) {
+        if self.running {
+            self.track(|c| c.doing = Some(text.to_string()));
+        }
     }
 
     /// How the last task ended ("done", "stopped"...), once it has.
@@ -104,6 +175,7 @@ impl Conversation {
         self.trace.clear();
         self.status = None;
         self.running = true;
+        (self.doing, self.writing, self.since) = (None, false, Some(Instant::now()));
     }
 
     /// Parse text that arrived since the last call (the tail of the streaming answer only). The
@@ -125,9 +197,11 @@ impl Conversation {
 
     /// Records the user's answer on the waiting card.
     pub fn answer_card(&mut self, label: &str) {
-        if let Some(Entry::Card { answer, .. }) = self.entries.iter_mut().rev().find(|e| matches!(e, Entry::Card { answer: None, .. })) {
-            *answer = Some(label.to_string());
-        }
+        self.track(|c| {
+            if let Some(Entry::Card { answer, .. }) = c.entries.iter_mut().rev().find(|e| matches!(e, Entry::Card { answer: None, .. })) {
+                *answer = Some(label.to_string());
+            }
+        });
     }
 
     /// Shows the checked footnotes under the last answer.
@@ -180,6 +254,7 @@ impl Conversation {
     pub fn fail(&mut self, message: &str) {
         self.entries.push(Entry::Error(message.to_string()));
         self.running = false;
+        (self.doing, self.writing) = (None, false);
     }
 
     pub fn clear(&mut self) {
@@ -187,24 +262,39 @@ impl Conversation {
     }
 
     pub fn apply(&mut self, update: ViewUpdate) {
+        self.track(|c| c.apply_now(update));
+    }
+
+    fn apply_now(&mut self, update: ViewUpdate) {
         match update {
             ViewUpdate::TaskStarted { .. } => self.running = true,
-            ViewUpdate::Text(delta) => match self.entries.last_mut() {
-                Some(Entry::Assistant { text, doc, .. }) => {
-                    text.push_str(&delta);
-                    doc.push_str(&delta);
+            ViewUpdate::Text(delta) if delta.is_empty() => {}
+            ViewUpdate::Text(delta) => {
+                self.writing = true;
+                match self.entries.last_mut() {
+                    Some(Entry::Assistant { text, doc, .. }) => {
+                        text.push_str(&delta);
+                        doc.push_str(&delta);
+                    }
+                    _ => {
+                        let mut doc = Markdown::new();
+                        doc.push_str(&delta);
+                        self.entries.push(Entry::Assistant { text: delta, doc, footnotes: Vec::new() });
+                    }
                 }
-                _ => {
-                    let mut doc = Markdown::new();
-                    doc.push_str(&delta);
-                    self.entries.push(Entry::Assistant { text: delta, doc, footnotes: Vec::new() });
-                }
-            },
+            }
             ViewUpdate::Approval(card) => self.entries.push(Entry::Card { card, answer: None }),
             ViewUpdate::Notice(n) => self.entries.push(Entry::Notice(n)),
             ViewUpdate::Blocked(text) => self.entries.push(Entry::Blocked(text)),
-            ViewUpdate::ToolRunning { call_id, tool } => self.entries.push(Entry::Tool { call_id, tool, state: ToolState::Running }),
+            ViewUpdate::ToolRunning { call_id, tool } => {
+                // The tool's own step line may have come first; it says more than the name.
+                self.doing.get_or_insert_with(|| format!("Running {tool}…"));
+                self.writing = false;
+                self.entries.push(Entry::Tool { call_id, tool, state: ToolState::Running });
+            }
             ViewUpdate::ToolDone { call_id, is_error, .. } => {
+                // The model takes its next turn.
+                (self.doing, self.writing) = (None, false);
                 if let Some(Entry::Tool { state, .. }) =
                     self.entries.iter_mut().rev().find(|e| matches!(e, Entry::Tool { call_id: c, .. } if *c == call_id))
                 {
@@ -214,6 +304,7 @@ impl Conversation {
             ViewUpdate::Trace(row) => self.trace.push(row),
             ViewUpdate::Finished { status, .. } => {
                 self.running = false;
+                (self.doing, self.writing) = (None, false);
                 self.status = Some(status);
             }
         }
@@ -361,5 +452,48 @@ mod tests {
         c.start_task("another question");
         c.apply(ViewUpdate::Finished { task_id: "t2".into(), status: "done".into() });
         assert_eq!(c.take_more_pages(), None, "an offer from before the last question is gone");
+    }
+
+    #[test]
+    fn the_working_line_follows_the_task_from_thinking_to_tools_cards_and_writing() {
+        let mut c = Conversation::default();
+        assert_eq!(c.activity(), None, "nothing runs");
+        c.start_task("q");
+        let (a, t0) = c.activity().unwrap();
+        assert_eq!(a, Activity::Thinking);
+        assert_eq!(a.label(Some("Gemma 4 E4B")), "Loading Gemma 4 E4B…");
+        assert_eq!(a.label(None), "Thinking…");
+        c.apply(ViewUpdate::Text(String::new()));
+        assert_eq!(c.activity().unwrap().0, Activity::Thinking, "an empty delta is not writing");
+        c.apply(ViewUpdate::Text("Let me look.".into()));
+        assert_eq!(c.activity().unwrap().0, Activity::Writing);
+        c.apply(ViewUpdate::Approval(card()));
+        assert_eq!(c.activity().unwrap().0.label(None), "Waiting for your approval");
+        c.answer_card("Allow once");
+        c.set_doing("Searching DuckDuckGo…");
+        c.apply(ViewUpdate::ToolRunning { call_id: "c1".into(), tool: "web.search".into() });
+        let (a, t1) = c.activity().unwrap();
+        assert_eq!(a.label(None), "Searching DuckDuckGo…", "the tool's own line beats its name");
+        assert!(t1 >= t0);
+        c.apply(ViewUpdate::ToolDone { call_id: "c1".into(), tool: "web.search".into(), is_error: false });
+        assert_eq!(c.activity().unwrap().0, Activity::Thinking, "the next model turn");
+        c.apply(ViewUpdate::ToolRunning { call_id: "c2".into(), tool: "github.issues".into() });
+        assert_eq!(c.activity().unwrap().0.label(None), "Running github.issues…");
+        c.apply(ViewUpdate::Finished { task_id: "t".into(), status: "done".into() });
+        assert_eq!(c.activity(), None);
+    }
+
+    #[test]
+    fn the_activity_clock_restarts_only_when_the_activity_changes() {
+        let mut c = Conversation::default();
+        c.start_task("q");
+        c.apply(ViewUpdate::Text("a".into()));
+        let (_, t) = c.activity().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        c.apply(ViewUpdate::Text("b".into()));
+        c.apply(ViewUpdate::Trace(TraceRowView { step: 1, text: "x".into(), session: "logged out".into() }));
+        assert_eq!(c.activity().unwrap().1, t, "still writing");
+        c.set_doing("Reading tokio.rs…");
+        assert!(c.activity().unwrap().1 > t);
     }
 }
