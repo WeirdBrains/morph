@@ -151,10 +151,13 @@ const features = <Feature>[
     body:
         'Local models, on by default with one switch to turn them off, and one action that clears the AI’s '
         'stored context. It starts as a chat partner and rubber duck; later a Student that learns only from '
-        'browsing you opt into, and a Researcher that keeps research journals.',
+        'browsing you opt into, and a Researcher that keeps research journals. Morph is MCP-native: its AI runs '
+        'on the shared weirdnet-agent runtime, where Model Context Protocol servers plug in as tool sources '
+        'beside Morph’s own, each with its own switch and the same per-site approvals, and outside agents that '
+        'drive Morph over MCP have to be approved first.',
     image: 'concept-local-ai.svg',
-    alt: 'Concept diagram: a web page beside a local model panel; AI runs on the device and can be switched off.',
-    caption: 'Local AI beside the page.',
+    alt: 'Concept diagram: a web page beside a local model panel with MCP tools; AI runs on the device and can be switched off.',
+    caption: 'Local AI beside the page, with MCP tools.',
     status: Status.planned,
     when: 'v0.4',
   ),
