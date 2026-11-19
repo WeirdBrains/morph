@@ -96,6 +96,19 @@ impl Sessions {
         Ok(outcome)
     }
 
+    /// Uses `tools` for sessions opened from now on (connected MCP servers changed). Sessions
+    /// that are not running are closed so they pick it up, which starts them with a fresh
+    /// conversation; a running task finishes with the tools it began with. Does nothing when
+    /// `tools` is the registry already in use.
+    pub fn set_tools(&mut self, tools: Arc<ToolRegistry>) {
+        if Arc::ptr_eq(&self.tools, &tools) {
+            return;
+        }
+        self.tools = tools;
+        let running = self.running.lock().unwrap();
+        self.open.retain(|id, _| running.contains_key(id));
+    }
+
     /// A handle that stops tasks from another thread.
     pub fn canceller(&self) -> Canceller {
         Canceller(self.running.clone())
@@ -177,6 +190,37 @@ mod tests {
         assert_eq!(e, SessionError::UnknownCompanion("nope".into()));
         let e = sessions.run(&roster, &AgentId::new("ext"), "x", |_| {}).await.unwrap_err();
         assert_eq!(e, SessionError::NoModel("Ext".into()));
+    }
+
+    #[tokio::test]
+    async fn new_tools_apply_to_the_next_session_and_the_same_registry_changes_nothing() {
+        let roster = Roster::first_run(ModelChoice::Gemma4E4B);
+        /// Each opened session gets the next script.
+        struct PerOpen(Mutex<Vec<Vec<ModelTurn>>>);
+        impl ModelProvider for PerOpen {
+            fn open(&self, _: &ModelChoice) -> Result<Arc<dyn ModelBackend>, ModelError> {
+                Ok(Arc::new(ScriptedModel::new(self.0.lock().unwrap().remove(0))))
+            }
+        }
+        let provider = PerOpen(Mutex::new(vec![
+            vec![turn("a", vec![])],
+            vec![turn("", vec![call("c1", "open_url", serde_json::json!({}))]), turn("b", vec![])],
+        ]));
+        let approver = Arc::new(ScriptedApprover::new(vec![ApprovalAnswer::Approve { scope: Scope::Once }]));
+        let mut sessions = Sessions::new(Arc::new(provider), Arc::new(ToolRegistry::new()), Policy::new().shared(), approver);
+        let id = AgentId::new("local");
+        // No tools yet; the registry given again is the same one, so the session stays open.
+        assert_eq!(sessions.run(&roster, &id, "x", |_| {}).await.unwrap().text, "a");
+        let same = sessions.tools.clone();
+        sessions.set_tools(same);
+        assert!(sessions.open.contains_key(&id));
+        // A new registry closes the idle session; the next one has the tool.
+        sessions.set_tools(registry().await);
+        assert!(!sessions.open.contains_key(&id));
+        let mut updates = Vec::new();
+        let out = sessions.run(&roster, &id, "open", |u| updates.push(u)).await.unwrap();
+        assert_eq!((out.stop, out.text.as_str()), (StopReason::Completed, "b"), "{updates:?}");
+        assert!(updates.iter().any(|u| matches!(u, ViewUpdate::ToolDone { is_error: false, .. })));
     }
 
     #[tokio::test]
