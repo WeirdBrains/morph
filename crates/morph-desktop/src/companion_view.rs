@@ -4,18 +4,32 @@
 //! answers to the worker in `companion_host`.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::mpsc::Receiver;
+use std::time::{Duration, Instant};
 
-use gpui::{App, Context, Entity, EventEmitter, FocusHandle, Focusable, SharedString, Subscription, Window, div, prelude::*, px, relative, rgb};
-use morph_ai::{AiStore, EngineFactory, FileStore, Grants, LocalModels, ModelChoice, ModelStatus, Platform, Roster};
-use morph_companion::{
-    ApprovalCard, AttachedPage, Conversation, Entry, FootnoteView, NoticeView, OfferView, ToolState, TraceRowView, ViewUpdate, footnotes,
+use gpui::{
+    App, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable, SharedString, Subscription, WeakEntity, Window, div, prelude::*, px,
+    relative, rgb,
 };
+use morph_ai::{
+    AiStore, EngineFactory, FileStore, Grants, HostError, LocalModels, ModelChoice, ModelStatus, PageLink, PageSnapshot, Platform, Roster, ScrollTo,
+    TabInfo,
+};
+use morph_browser::{HostPageId, HostPageState};
+use morph_companion::{
+    ApprovalCard, AttachedPage, Conversation, Entry, FootnoteView, NoticeView, OfferView, TaskOptions, ToolState, TraceRowView, ViewUpdate,
+    export_markdown, footnotes, parse_citations,
+};
+use morph_core::tabs::TabId;
 use morph_ui::theme::Theme;
-use weirdnet_agent::{AgentId, ApprovalAnswer};
+use morph_webview::page_read::Pending;
+use morph_webview::{Isolation, PageData, ReadRequest, Want};
+use weirdnet_agent::{AgentId, ApprovalAnswer, Citation, Outcome};
 
-use crate::companion_host::{Msg, Worker};
+use crate::browser_view::BrowserView;
+use crate::companion_host::{DesktopBrowser, DesktopResearch, HostCall, Hosts, Msg, Reply, Seen, Worker};
 use crate::shell::{Page, ShellRequest};
 use crate::text_input::{TextInput, TextInputEvent};
 use crate::widgets::{button, chip, heading, icon};
@@ -47,6 +61,82 @@ pub struct CompanionView {
     store: FileStore,
     focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
+    home: PathBuf,
+    profile: String,
+    /// The window's browser: the companion tools act on its tabs and read its pages.
+    browser: Option<WeakEntity<BrowserView>>,
+    /// Calls from the companion tools that only the UI thread can answer.
+    host_calls: Receiver<HostCall>,
+    seen: Seen,
+    /// Page reads, host-page loads and finds under way for those calls.
+    ops: Vec<Op>,
+    /// The tab each companion's conversation attached (read when the question is sent).
+    attached_tab: HashMap<AgentId, u64>,
+    /// "Use my signed-in session" for the next task only; off again after each send.
+    signed_in_next: bool,
+    /// What the waiting card is about, when it is known before the card arrives.
+    card_detail: HashMap<AgentId, String>,
+    /// Each companion's last finished task, for Markdown export.
+    last: HashMap<AgentId, (String, Box<Outcome>, Vec<Citation>)>,
+    /// Where the last export went.
+    exported: Option<String>,
+}
+
+/// One host call the panel is still answering.
+enum Op {
+    /// The attached tab is being read; the task starts when it answers.
+    Attach {
+        pending: Pending<morph_webview::page_read::ReadResult>,
+        companion: AgentId,
+        input: String,
+        options: TaskOptions,
+    },
+    /// A hidden host page is loading, then being read.
+    HostLoad {
+        id: HostPageId,
+        pending: Pending<HostPageState>,
+        reply: Reply<(PageSnapshot, Option<u16>)>,
+    },
+    HostRead {
+        id: HostPageId,
+        pending: Pending<morph_webview::page_read::ReadResult>,
+        reply: Reply<(PageSnapshot, Option<u16>)>,
+    },
+    /// Waiting for the page to count find matches.
+    Find {
+        until: Instant,
+        reply: Reply<u32>,
+    },
+}
+
+/// How a page read becomes text for a companion: the readable part when there is enough of it.
+fn snapshot(data: PageData) -> PageSnapshot {
+    let readable = data.readable.as_ref().map(|r| r.text.clone()).filter(|t| t.len() > 200);
+    let text = readable.or(data.text.clone()).unwrap_or_default();
+    PageSnapshot {
+        title: data.title.or(data.readable.map(|r| r.title)).unwrap_or_default(),
+        text,
+        selection: data.selection,
+        links: data.links.unwrap_or_default().into_iter().map(|l| PageLink { href: l.href, text: l.text }).collect(),
+        truncated: data.truncated,
+        // Page scripts can't touch a read in Morph's own script world (WebKitGTK); in the page's
+        // world (macOS, Windows) a hostile page can shape what the read says.
+        isolated: data.isolation == Some(Isolation::ScriptWorld),
+        url: data.url,
+    }
+}
+
+fn gone<T>() -> Result<T, HostError> {
+    Err(HostError::Gone)
+}
+
+fn read_error(e: morph_webview::ReadError) -> HostError {
+    HostError::Read(e.to_string())
+}
+
+/// What a page read asks for: never the raw HTML.
+fn page_request() -> ReadRequest {
+    ReadRequest::new(Want { title: true, text: true, readable: true, links: true, selection: true, html: false })
 }
 
 impl EventEmitter<ShellRequest> for CompanionView {}
@@ -69,7 +159,19 @@ impl CompanionView {
         let models = Arc::new(LocalModels::new(weirdnet_model::ModelStore::from_env(), factory));
         let tools = crate::mcp_host::get(&morph_core::profiles::profile_dir(home, profile).join("companions"));
         let policy_base = policy.read().unwrap_or_else(|e| e.into_inner()).clone();
-        let worker = Worker::start_with(models.clone(), policy.clone(), tools);
+        let (calls, host_calls) = std::sync::mpsc::channel();
+        let seen = Seen::default();
+        let hosts = Hosts {
+            browser: Arc::new(DesktopBrowser::new(calls.clone(), seen.clone())),
+            research: Arc::new(DesktopResearch::new(
+                calls.clone(),
+                home.to_path_buf(),
+                profile.to_string(),
+                FileStore::new(morph_core::profiles::profile_dir(home, profile).join("companions")),
+            )),
+            calls: Some(calls),
+        };
+        let worker = Worker::start_with(models.clone(), policy.clone(), tools, Some(hosts));
         let selected = roster.default_companion().map(|c| c.id().clone()).unwrap_or_else(|| AgentId::new("local"));
         let input = cx.new(|cx| TextInput::new("Ask a companion", theme, cx));
         let sub = cx.subscribe_in(&input, window, |this, _, event, _, cx| match event {
@@ -96,6 +198,17 @@ impl CompanionView {
             store,
             focus: cx.focus_handle(),
             _subscriptions: vec![sub],
+            home: home.to_path_buf(),
+            profile: profile.to_string(),
+            browser: None,
+            host_calls,
+            seen,
+            ops: Vec::new(),
+            attached_tab: HashMap::new(),
+            signed_in_next: false,
+            card_detail: HashMap::new(),
+            last: HashMap::new(),
+            exported: None,
         };
         if std::env::var_os("MORPH_COMPANION_DEMO").is_some_and(|v| v == "1") {
             let id = view.selected.clone();
@@ -108,6 +221,11 @@ impl CompanionView {
         self.theme = theme;
         self.input.update(cx, |i, cx| i.set_theme(theme, cx));
         cx.notify();
+    }
+
+    /// The window's browser, whose tabs and pages the companion tools use.
+    pub fn set_browser(&mut self, browser: WeakEntity<BrowserView>) {
+        self.browser = Some(browser);
     }
 
     /// The tab the main component shows (what "Attach this tab" would attach).
@@ -187,9 +305,25 @@ impl CompanionView {
 
     fn toggle_attach(&mut self, cx: &mut Context<Self>) {
         let page = self.page.clone().map(|p| AttachedPage { url: p.url, title: p.title });
+        let active = self.seen.tabs.lock().unwrap().iter().find(|t| t.active).map(|t| t.id);
+        let id = self.selected.clone();
         let conv = self.conversation();
         let now = if conv.attached().is_some() { None } else { page };
+        let attaching = now.is_some();
         conv.attach(now);
+        match (attaching, active) {
+            (true, Some(tab)) => {
+                self.attached_tab.insert(id, tab);
+            }
+            _ => {
+                self.attached_tab.remove(&id);
+            }
+        }
+        cx.notify();
+    }
+
+    fn toggle_signed_in(&mut self, cx: &mut Context<Self>) {
+        self.signed_in_next = !self.signed_in_next;
         cx.notify();
     }
 
@@ -225,13 +359,227 @@ impl CompanionView {
             cx.notify();
             return;
         }
-        let input = match conv.attached() {
-            Some(p) => format!("Attached page: {} <{}>\n\n{text}", p.title, p.url),
+        let attached = conv.attached().cloned();
+        let input = match &attached {
+            Some(p) => format!("I attached the page \"{}\" <{}>; read it with page.text.\n\n{text}", p.title.replace('"', "'"), p.url),
             None => text.clone(),
         };
         conv.start_task(&text);
-        self.worker.run(self.roster.clone(), id, input);
+        // Signed-in research is chosen per task and never kept.
+        let options = TaskOptions { signed_in: std::mem::take(&mut self.signed_in_next).then(|| self.profile.clone()) };
+        *self.seen.attached.lock().unwrap() = None;
+        self.exported = None;
+        match attached {
+            // The page is read now, because the user attached it to this question, and only then.
+            Some(_) => {
+                let tab = self.attached_tab.remove(&id);
+                let pending = self.with_browser(cx, |b| {
+                    let active = b.tabs().iter().find(|t| t.active).map(|t| t.id.0);
+                    if tab.is_none() || tab == active {
+                        b.read_active_tab(page_request())
+                    } else {
+                        b.read_tab(TabId(tab.unwrap_or_default()), page_request())
+                    }
+                });
+                match pending {
+                    Some(pending) => self.ops.push(Op::Attach { pending, companion: id, input, options }),
+                    None => self.conversation().fail("The page could not be read: this window has no browser."),
+                }
+            }
+            None => self.worker.run_with(self.roster.clone(), id, input, options),
+        }
         cx.notify();
+    }
+
+    /// Runs `f` on the window's browser, if it is still there.
+    fn with_browser<R>(&self, cx: &mut Context<Self>, f: impl FnOnce(&mut morph_browser::Browser) -> R) -> Option<R> {
+        let browser = self.browser.as_ref()?.upgrade()?;
+        Some(browser.update(cx, |view, _| f(view.browser_mut())))
+    }
+
+    /// Answers the companion tools' host calls and advances the reads they started.
+    fn serve_hosts(&mut self, cx: &mut Context<Self>) {
+        // What the tools check before a call: the active address and the tabs.
+        if let Some(tabs) = self.with_browser(cx, |b| {
+            b.tabs().into_iter().map(|t| TabInfo { id: t.id.0, title: t.label, url: String::new(), active: t.active }).collect::<Vec<_>>()
+        }) {
+            let urls = self.with_browser(cx, |b| b.tab_urls().0).unwrap_or_default();
+            let tabs: Vec<TabInfo> = tabs.into_iter().zip(urls).map(|(t, url)| TabInfo { url, ..t }).collect();
+            *self.seen.active.lock().unwrap() = tabs.iter().find(|t| t.active).map(|t| t.url.clone());
+            *self.seen.tabs.lock().unwrap() = tabs;
+        }
+        while let Ok(call) = self.host_calls.try_recv() {
+            self.serve(call, cx);
+        }
+        let ops = std::mem::take(&mut self.ops);
+        for op in ops {
+            match op {
+                Op::Attach { pending, companion, input, options } => match pending.try_take() {
+                    None => self.ops.push(Op::Attach { pending, companion, input, options }),
+                    Some(Ok(data)) => {
+                        *self.seen.attached.lock().unwrap() = Some(snapshot(data));
+                        self.worker.run_with(self.roster.clone(), companion, input, options);
+                    }
+                    Some(Err(e)) => {
+                        self.conversations.entry(companion).or_default().fail(&format!("The attached page could not be read: {e}"));
+                        cx.notify();
+                    }
+                },
+                Op::HostLoad { id, pending, reply } => match pending.try_take() {
+                    None => self.ops.push(Op::HostLoad { id, pending, reply }),
+                    Some(HostPageState::Loaded) => match self.with_browser(cx, |b| b.read_host_page(id, page_request())) {
+                        Some(pending) => self.ops.push(Op::HostRead { id, pending, reply }),
+                        None => {
+                            let _ = reply.send(Err(HostError::Gone));
+                        }
+                    },
+                    Some(state) => {
+                        self.with_browser(cx, |b| b.close_host_page(id));
+                        let why = match state {
+                            HostPageState::Failed(why) => why,
+                            other => format!("{other:?}"),
+                        };
+                        let _ = reply.send(Err(HostError::Fetch(why)));
+                    }
+                },
+                Op::HostRead { id, pending, reply } => match pending.try_take() {
+                    None => self.ops.push(Op::HostRead { id, pending, reply }),
+                    Some(result) => {
+                        // Close at once: hidden views end when their read does.
+                        self.with_browser(cx, |b| b.close_host_page(id));
+                        let _ = reply.send(result.map(|d| (snapshot(d), None)).map_err(read_error));
+                    }
+                },
+                Op::Find { until, reply } => match self.with_browser(cx, |b| b.find().and_then(|f| f.matches)).flatten() {
+                    Some(n) => {
+                        let _ = reply.send(Ok(n));
+                    }
+                    None if Instant::now() < until => self.ops.push(Op::Find { until, reply }),
+                    None => {
+                        let _ = reply.send(Ok(0));
+                    }
+                },
+            }
+        }
+    }
+
+    fn serve(&mut self, call: HostCall, cx: &mut Context<Self>) {
+        match call {
+            HostCall::Tabs(reply) => {
+                let _ = reply.send(Ok(self.seen.tabs.lock().unwrap().clone()));
+            }
+            HostCall::Open(url, reply) => {
+                let r = self.with_browser(cx, |b| {
+                    b.new_tab(&url);
+                    b.tabs().iter().find(|t| t.active).map(|t| t.id.0).ok_or(HostError::NoTab)
+                });
+                let _ = reply.send(r.unwrap_or_else(gone));
+            }
+            HostCall::Switch(tab, reply) => {
+                let r = self.with_browser(cx, |b| {
+                    if b.tabs().iter().any(|t| t.id.0 == tab) {
+                        b.select(TabId(tab));
+                        Ok(())
+                    } else {
+                        Err(HostError::NoTab)
+                    }
+                });
+                let _ = reply.send(r.unwrap_or_else(gone));
+            }
+            HostCall::Navigate(url, reply) => {
+                let r = self.with_browser(cx, |b| b.load(&url));
+                let _ = reply.send(r.ok_or(HostError::Gone));
+            }
+            HostCall::Scroll(to, reply) => {
+                let r = self.with_browser(cx, |b| {
+                    let area = b.page_area();
+                    let dy = match to {
+                        ScrollTo::Up => -8.0,
+                        ScrollTo::Down => 8.0,
+                        ScrollTo::Top => -10_000.0,
+                        ScrollTo::Bottom => 10_000.0,
+                    };
+                    b.page_input(morph_webview::Input::Scroll {
+                        x: area.width / 2.0,
+                        y: area.height / 2.0,
+                        dx: 0.0,
+                        dy,
+                        precise: false,
+                        modifiers: Default::default(),
+                    });
+                });
+                let _ = reply.send(r.ok_or(HostError::Gone));
+            }
+            HostCall::Find(query, reply) => {
+                if self
+                    .with_browser(cx, |b| {
+                        b.open_find();
+                        b.set_find_query("");
+                        b.set_find_query(&query);
+                    })
+                    .is_some()
+                {
+                    self.ops.push(Op::Find { until: Instant::now() + Duration::from_secs(3), reply });
+                } else {
+                    let _ = reply.send(gone());
+                }
+            }
+            HostCall::Highlight(text) => {
+                self.with_browser(cx, |b| match text {
+                    Some(t) => {
+                        b.open_find();
+                        b.set_find_query(&t);
+                    }
+                    None => b.close_find(),
+                });
+            }
+            HostCall::Bookmark { url, title, reply } => {
+                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or_default();
+                let r = morph_core::bookmarks::add_bookmark(&self.home, &self.profile, &url, &title, now)
+                    .map(|_| ())
+                    .map_err(|e| HostError::Fetch(e.to_string()));
+                let _ = reply.send(r);
+            }
+            HostCall::ReadHidden { url, reply } => {
+                let opened =
+                    self.with_browser(cx, |b| b.open_host_page(&url, morph_browser::host_pages::LOAD_TIMEOUT).map(|id| (id, b.host_page_loaded(id))));
+                match opened {
+                    Some(Ok((id, pending))) => self.ops.push(Op::HostLoad { id, pending, reply }),
+                    Some(Err(e)) => {
+                        let _ = reply.send(Err(HostError::Fetch(e.to_string())));
+                    }
+                    None => {
+                        let _ = reply.send(gone());
+                    }
+                }
+            }
+        }
+    }
+
+    /// Writes the selected companion's last task as Markdown (answer, footnotes, trace) next to
+    /// its chats and puts it on the clipboard.
+    fn export(&mut self, cx: &mut Context<Self>) {
+        let Some((question, outcome, citations)) = self.last.get(&self.selected) else { return };
+        let who = self.roster.get(&self.selected).map(|c| c.name().to_string()).unwrap_or_default();
+        let md = export_markdown(&who, question, outcome, citations.clone());
+        let dir = morph_core::profiles::profile_dir(&self.home, &self.profile).join("companions").join("exports");
+        let path = dir.join(format!("{}.md", outcome.task_id));
+        self.exported = Some(match std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&path, &md)) {
+            Ok(()) => format!("Saved {} and copied it", path.display()),
+            Err(e) => format!("Could not save: {e}"),
+        });
+        cx.write_to_clipboard(ClipboardItem::new_string(md));
+        cx.notify();
+    }
+
+    /// Appends a finished task's trace (steps and sessions, never page bodies) to the tool log.
+    fn log_task(&self, companion: &AgentId, outcome: &Outcome) {
+        let line = serde_json::json!({ "companion": companion, "task": outcome.task_id, "stop": outcome.stop, "usage": outcome.usage, "trace": outcome.trace });
+        let path = morph_core::profiles::profile_dir(&self.home, &self.profile).join("companions").join("tool-log.jsonl");
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            use std::io::Write;
+            let _ = writeln!(f, "{line}");
+        }
     }
 
     fn stop(&mut self, cx: &mut Context<Self>) {
@@ -240,6 +588,7 @@ impl CompanionView {
     }
 
     fn answer(&mut self, offer: Option<OfferView>, cx: &mut Context<Self>) {
+        self.card_detail.remove(&self.selected);
         let (label, answer) = match offer {
             Some(o) => (o.label.clone(), ApprovalAnswer::Approve { scope: o.scope }),
             None => ("Declined".to_string(), ApprovalAnswer::Deny),
@@ -260,6 +609,7 @@ impl CompanionView {
         if let Some(q) = self.autoask.take() {
             self.send(q, cx);
         }
+        self.serve_hosts(cx);
         let msgs = self.worker.poll();
         if matches!(self.models.status(&self.model_choice()), ModelStatus::Downloading { .. }) {
             cx.notify(); // progress
@@ -269,11 +619,39 @@ impl CompanionView {
         }
         for msg in msgs {
             match msg {
-                Msg::Update(id, update) => self.conversations.entry(id).or_default().apply(update),
+                Msg::Update(id, update) => {
+                    let is_card = matches!(update, ViewUpdate::Approval(_));
+                    let conv = self.conversations.entry(id.clone()).or_default();
+                    conv.apply(update);
+                    if is_card && let Some(d) = self.card_detail.get(&id) {
+                        conv.set_card_detail(d);
+                    }
+                }
+                Msg::CardDetail(id, detail) => {
+                    let conv = self.conversations.entry(id.clone()).or_default();
+                    if conv.pending_card().is_some_and(|c| c.detail.is_none()) {
+                        conv.set_card_detail(&detail);
+                    }
+                    self.card_detail.insert(id, detail);
+                }
                 Msg::Done(id, Ok(outcome)) => {
-                    let conv = self.conversations.entry(id).or_default();
-                    // The model has no footnote syntax yet, so no citations arrive; any that do are checked.
-                    conv.set_footnotes(footnotes(&outcome.trace, Vec::new()));
+                    // Footnotes the trace backs stay; unbacked ones go with their markers.
+                    let f = parse_citations(&outcome.text, &outcome.trace);
+                    let notes = footnotes(&outcome.trace, f.citations.clone());
+                    let conv = self.conversations.entry(id.clone()).or_default();
+                    conv.finish_answer(&f.text, notes);
+                    let question = conv
+                        .entries()
+                        .iter()
+                        .rev()
+                        .find_map(|e| if let Entry::User { text, .. } = e { Some(text.clone()) } else { None })
+                        .unwrap_or_default();
+                    self.log_task(&id, &outcome);
+                    self.card_detail.remove(&id);
+                    *self.seen.attached.lock().unwrap() = None;
+                    let mut shown = outcome;
+                    shown.text = f.text;
+                    self.last.insert(id, (question, shown, f.citations));
                 }
                 Msg::Done(id, Err(e)) => self.conversations.entry(id).or_default().fail(&e.to_string()),
             }
@@ -480,6 +858,9 @@ impl Render for CompanionView {
         let trace_summary = format!("Trace: {} step{}", rows.len(), if rows.len() == 1 { "" } else { "s" });
         let trace_open = self.trace_open;
         let status = conv.status().map(str::to_string);
+        let can_export = !running && self.last.contains_key(&self.selected);
+        let exported = self.exported.clone();
+        let signed_in = self.signed_in_next;
 
         div()
             .track_focus(&self.focus)
@@ -539,21 +920,41 @@ impl Render for CompanionView {
                             })),
                     )
                     .children(trace_open.then(|| div().flex().flex_col().gap(px(2.)).children(rows.iter().map(|r| trace_row(t, r)))))
+                    .children(trace_open.then(|| dim(t, "Every source in an answer links to a step here. A citation no step backs is never shown.")))
+            }))
+            .children(can_export.then(|| {
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(6.))
+                    .child(chip(t, "companion-export", "Export as Markdown", false).on_click(cx.listener(|this, _, _, cx| this.export(cx))))
+                    .children(exported.map(|e| dim(t, e)))
             }))
             .child(
-                div().flex().flex_row().items_center().gap(px(6.)).child(
-                    chip(
-                        t,
-                        "companion-attach",
-                        match &attached {
-                            Some(p) => format!("Attached: {}", p.title),
-                            None => "Attach this tab".to_string(),
-                        },
-                        attached.is_some(),
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(6.))
+                    .child(
+                        chip(
+                            t,
+                            "companion-attach",
+                            match &attached {
+                                Some(p) => format!("Attached: {}", p.title),
+                                None => "Attach this tab".to_string(),
+                            },
+                            attached.is_some(),
+                        )
+                        .when(!can_attach && attached.is_none(), |d| d.opacity(0.5))
+                        .on_click(cx.listener(|this, _, _, cx| this.toggle_attach(cx))),
                     )
-                    .when(!can_attach && attached.is_none(), |d| d.opacity(0.5))
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_attach(cx))),
-                ),
+                    .child(
+                        chip(t, "companion-signed-in", if signed_in { "Research: signed in, this task" } else { "Research: logged out" }, signed_in)
+                            .when(signed_in, |d| d.text_color(rgb(t.accent_alt)))
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_signed_in(cx))),
+                    ),
             )
             .child(
                 div()
@@ -581,6 +982,7 @@ fn approval_card(t: Theme, i: usize, card: &ApprovalCard, answer: Option<&str>, 
         .border_1()
         .border_color(rgb(if card.signed_in { t.accent_alt } else { t.accent }))
         .child(div().text_size(px(12.)).text_color(rgb(t.text_primary)).child(card.title.clone()))
+        .children(card.detail.clone().map(|d| dim(t, d)))
         .children(card.signed_in.then(|| div().text_size(px(11.)).text_color(rgb(t.accent_alt)).child("This would use your signed-in session.")));
     match answer {
         Some(a) => base.child(dim(t, a.to_string())),

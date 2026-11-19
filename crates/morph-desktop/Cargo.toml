@@ -37,6 +37,8 @@ serde_json.workspace = true
 async-trait.workspace = true
 # The Companion panel runs its sessions on a worker thread.
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time"] }
+# Logged-out research fetches with no cookie store (companion_web.rs).
+ureq = { version = "=3.5.2", default-features = false, features = ["rustls", "gzip"] }
 
 # Linux: GPUI's patched platform (the raw key behind a key event) and the
 # render check's process handling.

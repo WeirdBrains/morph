@@ -5628,6 +5628,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "unicode-segmentation",
+ "ureq",
  "weirdnet-agent",
  "weirdnet-model",
  "windows-sys 0.61.2",
