@@ -113,14 +113,14 @@ macOS and Windows now, so the tools' page-world note can go (keep it for `PageWo
 - **macOS runner (2026-11-19):** with the repo variable `MAC_RUNNER=on`,
   pushes to main, tags and manual runs build
   `desktop-macos` (clippy, tests, `scripts/macos-dist.sh`) on
-  m3talsmith's Apple silicon Mac, the repo runner `mac-runner-ios` (label
-  `weirdbrains-mac`; it also runs `ios.yml`), with a throwaway `HOME`,
+  m3talsmith's Apple silicon Mac, the org runner `mac-runner` (WeirdBrains org, runner
+  group `mac`, labels `ios`, `weirdbrains-mac`; it also runs `ios.yml`), with a throwaway `HOME`,
   `MORPH_HOME` and target dir deleted after the job, and nothing installed.
   Pull requests and `release/**` pushes build on `macos-latest`. The smoke
   test is its own job, `desktop-macos-smoke`, always on `macos-latest`
   (windows and screenshots never on m3talsmith's Mac); it downloads the
-  `morph-macos-universal` artifact. Moving the runner to the WeirdBrains org
-  waits on m3talsmith's `admin:org` sign-in. Xcode 26's Metal Toolchain
+  `morph-macos-universal` artifact. The runner moved from repo level to the WeirdBrains org
+  (2026-11-19, m3talsmith's OK). Xcode 26's Metal Toolchain
   (GPUI's build-time shaders) was installed on the Mac with m3talsmith's OK
   (2026-11-19, `xcodebuild -downloadComponent MetalToolchain`, 17F42) and
   `MAC_RUNNER` is `on`; the first Mac build passed (run 44582305417, about
