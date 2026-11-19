@@ -194,6 +194,7 @@ pub fn shard_meta(shard: &str) -> Option<(String, usize, u32)> {
 }
 
 pub fn open_seed(profile_dir: &Path, password: &SecretString) -> Result<Key32> {
+    finish_password_change(profile_dir)?;
     let identity = load(profile_dir)?.ok_or_else(|| Error::Message("this profile has no identity yet".into()))?;
     let raw = fs::read(sealed_path(profile_dir))?;
     let sealed: PasswordSealed = serde_json::from_slice(&raw).map_err(|e| Error::Message(format!("user.key: {e}")))?;
@@ -202,6 +203,66 @@ pub fn open_seed(profile_dir: &Path, password: &SecretString) -> Result<Key32> {
         return Err(Error::Message("identity key does not match identity.json".into()));
     }
     Ok(seed)
+}
+
+/// Staged copies of `user.key` and `node.key` during [`change_password`].
+fn staged(path: &Path) -> PathBuf {
+    PathBuf::from(format!("{}.next", path.display()))
+}
+
+/// Written once both staged files are complete: from then on the change rolls
+/// forward, before it the staged files are discarded.
+fn commit_marker(profile_dir: &Path) -> PathBuf {
+    identity_dir(profile_dir).join("password-change.commit")
+}
+
+/// Reseal the profile's user key (and this device's node key) under
+/// `new_password`, after `old_password` opens them. The seed does not change,
+/// so the library key, the recovery words and every linked device stay the
+/// same. Crash-safe: both files are staged, a commit marker is written, then
+/// they are renamed into place; [`finish_password_change`] completes or
+/// discards an interrupted change on the next open.
+pub fn change_password(profile_dir: &Path, old_password: &SecretString, new_password: &SecretString) -> Result<()> {
+    check_password(new_password)?;
+    let seed = open_seed(profile_dir, old_password)?;
+    let node = if node_key_path(profile_dir).is_file() {
+        let raw = fs::read(node_key_path(profile_dir))?;
+        let sealed: PasswordSealed = serde_json::from_slice(&raw).map_err(|e| Error::Message(format!("node.key: {e}")))?;
+        Some(password_open(old_password, &sealed, NODE_AAD)?)
+    } else {
+        None
+    };
+    let sealed_seed = password_seal(new_password, &seed.0, SEED_AAD)?;
+    write_private(&staged(&sealed_path(profile_dir)), &serde_json::to_vec_pretty(&sealed_seed).map_err(|e| Error::Message(e.to_string()))?)?;
+    if let Some(node) = &node {
+        let sealed_node = password_seal(new_password, node, NODE_AAD)?;
+        write_private(&staged(&node_key_path(profile_dir)), &serde_json::to_vec_pretty(&sealed_node).map_err(|e| Error::Message(e.to_string()))?)?;
+    }
+    write_private(&commit_marker(profile_dir), b"commit")?;
+    finish_password_change(profile_dir)
+}
+
+/// Complete a committed [`change_password`] that was interrupted, or drop
+/// the staged files of one that never committed. Nothing to do is `Ok`.
+pub fn finish_password_change(profile_dir: &Path) -> Result<()> {
+    let files = [sealed_path(profile_dir), node_key_path(profile_dir)];
+    if commit_marker(profile_dir).exists() {
+        for path in &files {
+            let next = staged(path);
+            if next.exists() {
+                fs::rename(&next, path)?;
+            }
+        }
+        fs::remove_file(commit_marker(profile_dir))?;
+    } else {
+        for path in &files {
+            match fs::remove_file(staged(path)) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+                _ => {}
+            }
+        }
+    }
+    Ok(())
 }
 
 fn user_from_seed(seed: &Key32) -> Result<UserIdentity> {
@@ -257,6 +318,7 @@ fn device_label() -> String {
 
 /// Open this device's node key, sealed like `user.key`.
 pub fn open_node_key(profile_dir: &Path, password: &SecretString) -> Result<Keypair> {
+    finish_password_change(profile_dir)?;
     let raw = fs::read(node_key_path(profile_dir))?;
     let sealed: PasswordSealed = serde_json::from_slice(&raw).map_err(|e| Error::Message(format!("node.key: {e}")))?;
     let bytes = password_open(password, &sealed, NODE_AAD)?;
@@ -452,5 +514,46 @@ mod tests {
         create(&dir, &pw("long enough"), 1).unwrap();
         fs::remove_file(sealed_path(&dir)).unwrap();
         assert!(load(&dir).is_err());
+    }
+
+    #[test]
+    fn a_password_change_keeps_the_identity_and_its_keys() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("p");
+        let made = create(&dir, &pw("old password"), 1).unwrap();
+        let node_before = open_node_key(&dir, &pw("old password")).unwrap().public();
+        assert!(change_password(&dir, &pw("wrong password"), &pw("new password")).is_err(), "needs the current password");
+        assert!(change_password(&dir, &pw("old password"), &pw("short")).is_err(), "the new one must be long enough");
+        change_password(&dir, &pw("old password"), &pw("new password")).unwrap();
+        assert!(unlock(&dir, &pw("old password")).is_err());
+        assert_eq!(unlock(&dir, &pw("new password")).unwrap().user_id, made.identity.user_id);
+        assert_eq!(library_key(&dir, &pw("new password")).unwrap().expose(), made.library_key.expose(), "the library key follows the seed");
+        assert_eq!(open_node_key(&dir, &pw("new password")).unwrap().public(), node_before);
+        assert!(!commit_marker(&dir).exists() && !staged(&sealed_path(&dir)).exists());
+    }
+
+    #[test]
+    fn an_interrupted_password_change_rolls_back_or_forward() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("p");
+        create(&dir, &pw("old password"), 1).unwrap();
+        // Staged but not committed: the old password still works and the staging goes.
+        let seed = open_seed(&dir, &pw("old password")).unwrap();
+        let staged_seed = password_seal(&pw("new password"), &seed.0, SEED_AAD).unwrap();
+        write_private(&staged(&sealed_path(&dir)), &serde_json::to_vec(&staged_seed).unwrap()).unwrap();
+        assert!(unlock(&dir, &pw("old password")).is_ok());
+        assert!(!staged(&sealed_path(&dir)).exists());
+        // Committed, then a crash before the renames: the next open finishes it.
+        let node = fs::read(node_key_path(&dir)).unwrap();
+        let sealed: PasswordSealed = serde_json::from_slice(&node).unwrap();
+        let raw = password_open(&pw("old password"), &sealed, NODE_AAD).unwrap();
+        write_private(&staged(&sealed_path(&dir)), &serde_json::to_vec(&staged_seed).unwrap()).unwrap();
+        let staged_node = password_seal(&pw("new password"), &raw, NODE_AAD).unwrap();
+        write_private(&staged(&node_key_path(&dir)), &serde_json::to_vec(&staged_node).unwrap()).unwrap();
+        write_private(&commit_marker(&dir), b"commit").unwrap();
+        assert!(unlock(&dir, &pw("new password")).is_ok());
+        assert!(open_node_key(&dir, &pw("new password")).is_ok());
+        assert!(unlock(&dir, &pw("old password")).is_err());
+        assert!(!commit_marker(&dir).exists());
     }
 }
