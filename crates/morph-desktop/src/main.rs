@@ -13,6 +13,7 @@ mod address;
 #[cfg(target_os = "linux")]
 mod backend;
 mod brand;
+mod bridge_selftest;
 mod browser_view;
 mod cli;
 mod companion_devices;

@@ -740,6 +740,27 @@ mod tests {
     }
 
     #[test]
+    fn the_page_channel_cannot_ask_for_actions() {
+        let called = std::rc::Rc::new(std::cell::Cell::new(false));
+        let c = called.clone();
+        let bridge = crate::PageBridge::with_context(
+            "",
+            std::rc::Rc::new(move |_: &crate::BridgeContext, _: &str| {
+                c.set(true);
+                None
+            }),
+        );
+        let view = crate::bridge::ViewBridge::new(ViewId(1), true, false);
+        for kind in ["host.action", "host.click", "host.fill", "host.scroll", "host.read"] {
+            let reply = bridge
+                .answer_page(&view, "https://evil.test/", &format!(r##"{{"id":"1","type":"{kind}","payload":{{"selector":"#pay"}}}}"##))
+                .unwrap();
+            assert!(reply.contains("refused"), "{reply}");
+        }
+        assert!(!called.get(), "no handler saw them");
+    }
+
+    #[test]
     fn oversized_answers_are_refused() {
         let r = parse_answer(ViewId(1), Isolation::ScriptWorld, "https://a.test/", Some(&format!("O{}", "x".repeat(ANSWER_MAX))));
         assert!(matches!(r, Err(ActionError::Script(_))));

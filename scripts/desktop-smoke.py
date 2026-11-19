@@ -11,12 +11,17 @@ Then the Identity panel: the shortcut pressed as a user would (Cmd+Shift+L
 through System Events on macOS, Ctrl+Shift+L through SendKeys on Windows)
 must open it, and so must a second launch that asks for it through
 MORPH_TEST_ACTIONS (the same path a menu or button takes). Last, every ☰
-menu entry through MORPH_TEST_MENU (the code path of a click).
+menu entry through MORPH_TEST_MENU (the code path of a click). Then the
+page bridge on this engine (MORPH_TEST_BRIDGE=1, on `?bridge`, where the page
+poisons the builtins a read or action in its own world would use): the tab is
+read and filled and clicked in Morph's script world, and a throwaway host
+page doesn't get the profile's cookie while a signed-in one does.
 
 Exits 0 when every check passed. Uses a throwaway MORPH_HOME.
 """
 import argparse
 import http.server
+import json
 import os
 import queue
 import re
@@ -32,22 +37,40 @@ PAGE = b"""<!doctype html>
 <h1>Morph smoke test</h1><p id="state">loading</p>
 <script>
 addEventListener("load", async () => {
+  const bridge = location.search === "?bridge";
   let reply = "no-bridge";
   try { reply = (await window.MorphBridge.ping()).type; } catch (e) { reply = "error-" + e.message; }
   history.pushState({}, "", "/pushed");
   document.getElementById("state").textContent = reply;
   document.title = "morph-smoke " + reply;
+  if (!bridge) return;
+  // For MORPH_TEST_BRIDGE: what the page sees of Morph's fill and click,
+  // and builtins a read or action in the page's own world would use, poisoned.
+  const realValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").get;
+  document.getElementById("go").addEventListener("click", () => { document.title = "morph-smoke clicked " + realValue.call(document.getElementById("field")); });
+  Object.defineProperty(HTMLInputElement.prototype, "value", { set() {}, get() { return "hacked"; } });
+  EventTarget.prototype.dispatchEvent = function () { return false; };
+  JSON.stringify = () => '"poisoned"';
 });
-</script></body></html>"""
+</script>
+<p><input id="field" aria-label="Smoke field"> <button id="go">Smoke button</button></p>
+</body></html>"""
 
 
 class Page(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
+        body, cookie = PAGE, True
+        if self.path.startswith("/cookie"):
+            # What a host page sends: the profile's cookie, or none.
+            sent = json.dumps(self.headers.get("Cookie") or "")
+            body, cookie = f"<!doctype html><title>pending</title><script>document.title = 'cookie=[' + {sent} + ']'</script>".encode(), False
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(PAGE)))
+        if cookie:
+            self.send_header("Set-Cookie", "smoke=profile; Max-Age=3600; Path=/")
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(PAGE)
+        self.wfile.write(body)
 
     def log_message(self, *args):
         pass
@@ -266,6 +289,26 @@ def main():
         proc4.kill()
         code = None
     check("menu: Quit quits with exit code 0", code == 0, f"exit code {code}")
+    # The page bridge on this engine (MORPH_TEST_BRIDGE, crates/morph-desktop/src/bridge_selftest.rs).
+    env5 = dict(env, MORPH_TEST_BRIDGE="1", MORPH_HOME=tempfile.mkdtemp(prefix="morph-smoke-bridge-"))
+    proc5, lines5 = launch(a.binary, url + "?bridge", env5)
+    wait_line(lines5, log, re.compile(r"morph-test-bridge (done|gave up)"), a.timeout)
+    got5 = {}
+    for line in log:
+        m = re.match(r"morph-test-bridge (\S+) (.*)", line)
+        if m:
+            got5[m.group(1)] = m.group(2)
+    bridge = [
+        ("read", "isolation=ScriptWorld title=morph-smoke pong", "a page read runs in Morph's script world"),
+        ("fill", "isolation=ScriptWorld value=filled-by-morph", "fill reads back from Morph's script world"),
+        ("click", "title=morph-smoke clicked filled-by-morph", "the page sees the fill and the click"),
+        ("ephemeral", "title=cookie=[]", "a throwaway host page has no profile cookie"),
+        ("signed-in", "title=cookie=[smoke=profile]", "a signed-in host page has the profile's cookie"),
+    ]
+    for key, want5, name in bridge:
+        check(f"bridge: {name}", got5.get(key) == want5, f"got {got5.get(key)!r}")
+    proc5.kill()
+    proc5.wait(timeout=30)
     server.shutdown()
     print("--- morph output ---")
     print("\n".join(log[-80:]))

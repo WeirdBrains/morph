@@ -127,6 +127,8 @@ pub struct BrowserView {
     /// labels), each opened and chosen as a click would, for the smoke
     /// tests on every desktop.
     test_menu: Vec<String>,
+    /// `MORPH_TEST_BRIDGE=1`: reads, actions and host pages on this engine (smoke tests).
+    bridge_test: Option<crate::bridge_selftest::BridgeSelfTest>,
     /// What the last frame drew (the star, the toast), for the event log.
     drawn: (bool, Option<SharedString>),
     /// The preferences page (morph://settings), drawn in the page area.
@@ -441,6 +443,7 @@ impl BrowserView {
             shell_menu_scroll: ScrollHandle::new(),
             shortcut_labels: HashMap::new(),
             toast: None,
+            bridge_test: crate::bridge_selftest::BridgeSelfTest::from_env(),
             test_menu: std::env::var("MORPH_TEST_MENU")
                 .unwrap_or_default()
                 .split(',')
@@ -804,6 +807,11 @@ impl BrowserView {
         }
         self.run_test_menu(window, cx);
         let polled = self.browser.poll();
+        if let Some(test) = &mut self.bridge_test
+            && test.tick(&mut self.browser)
+        {
+            self.bridge_test = None;
+        }
         if polled.changed {
             crate::perf::count(&crate::perf::NOTIFY_EVENTS);
             self.sync_focus(window, cx);
