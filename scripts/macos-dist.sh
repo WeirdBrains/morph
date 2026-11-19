@@ -50,9 +50,15 @@ ln -s /Applications "$dmg/Applications"
 # while something (XProtect, Spotlight) still holds the staged files, and
 # with -quiet it said nothing, so the step only exited 1. Show its output and
 # retry a few times, with a pause, before giving up.
+# hdiutil sizes the image from -srcfolder and can come up short ("No space
+# left on device" while copying Morph.app/Contents/MacOS/morph, on GitHub's
+# runners and on the Mac alike), so give it the staged size plus a fifth and
+# 20 MB.
+dmg_kb=$(du -sk "$dmg" | cut -f1)
+dmg_size="$((dmg_kb + dmg_kb / 5 + 20480))k"
 dmg_ok=0
 for attempt in 1 2 3 4 5; do
-  if hdiutil create -volname "Morph $version" -srcfolder "$dmg" -ov -format UDZO "dist/$name.dmg"; then
+  if hdiutil create -volname "Morph $version" -srcfolder "$dmg" -size "$dmg_size" -ov -format UDZO "dist/$name.dmg"; then
     dmg_ok=1
     break
   fi
