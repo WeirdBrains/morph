@@ -66,7 +66,7 @@ pub fn serve_inference<H: InferHost + 'static>(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::device_calls::DeviceCaller;
     use morph_ai::{LocalInferHost, ModelChoice, ModelProvider, OffloadPlan};
@@ -81,17 +81,48 @@ mod tests {
     use weirdnet_net::user::NodeCert;
     use weirdnet_sync::{Roster, SyncState, node_config, start_node};
 
-    fn said(text: &str) -> Arc<dyn ModelBackend> {
+    pub(crate) fn said(text: &str) -> Arc<dyn ModelBackend> {
         Arc::new(ScriptedModel::new(vec![ModelTurn { text: text.into(), tool_calls: vec![] }]))
     }
 
     /// The desk's model provider: ready, or refusing with a reason (no download, unsupported CPU).
-    struct Desk(Mutex<Option<String>>);
+    pub(crate) struct Desk {
+        pub(crate) refusal: Mutex<Option<String>>,
+        /// A marker the desk's model reads while it runs a turn (tests of the working line).
+        pub(crate) peek: Mutex<Option<crate::routed_models::RunsOn>>,
+        pub(crate) seen: Arc<Mutex<Vec<Option<String>>>>,
+    }
+
+    /// The desk's model: answers, and notes what the marker said while it did.
+    struct Peeking(Option<crate::routed_models::RunsOn>, Arc<Mutex<Vec<Option<String>>>>);
+
+    #[async_trait::async_trait]
+    impl ModelBackend for Peeking {
+        fn name(&self) -> String {
+            "desk-model".into()
+        }
+
+        async fn complete(
+            &self,
+            _m: &[Message],
+            _t: &[weirdnet_agent::tool::ToolSpec],
+            d: &DeltaSink,
+            _c: &CancelToken,
+        ) -> Result<ModelTurn, ModelError> {
+            if let Some(r) = &self.0 {
+                self.1.lock().unwrap().push(r.get());
+            }
+            for piece in "from the desk's model".split_inclusive(' ') {
+                d.text(piece);
+            }
+            Ok(ModelTurn { text: "from the desk's model".into(), tool_calls: vec![] })
+        }
+    }
 
     impl ModelProvider for Desk {
         fn open(&self, _choice: &ModelChoice) -> Result<Arc<dyn ModelBackend>, ModelError> {
-            match &*self.0.lock().unwrap() {
-                None => Ok(said("from the desk's model")),
+            match &*self.refusal.lock().unwrap() {
+                None => Ok(Arc::new(Peeking(self.peek.lock().unwrap().clone(), self.seen.clone()))),
                 Some(why) => Err(ModelError::Unavailable(why.clone())),
             }
         }
@@ -125,16 +156,16 @@ mod tests {
     }
 
     /// A desk serving (or not yet) and a phone linked to it.
-    struct Pair {
-        desk: DeviceRouter,
-        phone: Arc<dyn morph_ai::NodeRouter>,
-        desk_id: String,
-        provider: Arc<Desk>,
-        on: Arc<AtomicBool>,
-        busy: Arc<AtomicBool>,
+    pub(crate) struct Pair {
+        pub(crate) desk: DeviceRouter,
+        pub(crate) phone: Arc<dyn morph_ai::NodeRouter>,
+        pub(crate) desk_id: String,
+        pub(crate) provider: Arc<Desk>,
+        pub(crate) on: Arc<AtomicBool>,
+        pub(crate) busy: Arc<AtomicBool>,
     }
 
-    fn pair() -> Pair {
+    pub(crate) fn pair() -> Pair {
         let user = Keypair::generate_ed25519();
         let (a, b) = (device(&user, "desk"), device(&user, "phone"));
         let (server, listening) = up(&user, &a, &[&b.cert], None);
@@ -142,16 +173,21 @@ mod tests {
         let (phone, _) = up(&user, &b, &[&a.cert], Some(at));
         Pair {
             desk: DeviceRouter::new(server),
-            phone: Arc::new(DeviceRouter::new(phone)),
+            // The directory (capabilities) says the desk serves models, as it does once it asked.
+            phone: Arc::new(DeviceRouter::new(phone).with_info(|_| crate::node_router::NodeInfo {
+                platform: morph_ai::Platform::Desktop,
+                online: true,
+                serves_models: true,
+            })),
             desk_id: a.cert.peer_id,
-            provider: Arc::new(Desk(Mutex::new(None))),
+            provider: Arc::new(Desk { refusal: Mutex::new(None), peek: Mutex::default(), seen: Arc::default() }),
             on: Arc::new(AtomicBool::new(true)),
             busy: Arc::new(AtomicBool::new(false)),
         }
     }
 
     impl Pair {
-        fn serve(&self) -> Result<InferServing, RouteError> {
+        pub(crate) fn serve(&self) -> Result<InferServing, RouteError> {
             let (provider, on, busy) = (self.provider.clone(), self.on.clone(), self.busy.clone());
             serve_inference(
                 &self.desk,
@@ -198,11 +234,11 @@ mod tests {
     fn with_no_model_or_an_unsupported_cpu_the_turn_runs_on_the_phone() {
         let (rt, p) = (rt(), pair());
         let _serving = p.serve().unwrap();
-        *p.provider.0.lock().unwrap() = Some("Gemma 4 E4B is not downloaded yet".into());
+        *p.provider.refusal.lock().unwrap() = Some("Gemma 4 E4B is not downloaded yet".into());
         assert_eq!(p.ask(&rt), ("from the phone".into(), Some(Route::Fallback)));
-        *p.provider.0.lock().unwrap() = Some("This CPU lacks AVX2/FMA needed for local models".into());
+        *p.provider.refusal.lock().unwrap() = Some("This CPU lacks AVX2/FMA needed for local models".into());
         assert_eq!(p.ask(&rt), ("from the phone".into(), Some(Route::Fallback)));
-        *p.provider.0.lock().unwrap() = None;
+        *p.provider.refusal.lock().unwrap() = None;
         assert_eq!(p.ask(&rt).0, "from the desk's model");
     }
 

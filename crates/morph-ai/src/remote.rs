@@ -169,17 +169,30 @@ impl OffloadPlan {
     }
 }
 
-/// Plan where this device's model turns run.
-pub fn offload_plan(settings: &OffloadSettings, platform: Platform, nodes: &[LinkedNode]) -> OffloadPlan {
+/// Plan where this device's model turns run ("Run on" in Settings > Agents).
+///
+/// - `Never` (This device): here.
+/// - `Always` with `prefer` (a chosen device): that device when it serves models and is online,
+///   then here when `fallback_local` and the local model is there; with no `prefer`, any serving
+///   device, preferred ones first.
+/// - `Auto` (Automatic): here while the local model can run (`local_available`), except on a
+///   phone, which offloads to a desktop first; otherwise a serving device.
+///
+/// The asker gives the local model as the fallback only when it is available.
+pub fn offload_plan(settings: &OffloadSettings, platform: Platform, nodes: &[LinkedNode], local_available: bool) -> OffloadPlan {
     let offload = match settings.mode {
         OffloadMode::Never => false,
         OffloadMode::Always => true,
-        OffloadMode::Auto => platform == Platform::Phone,
+        OffloadMode::Auto => platform == Platform::Phone || !local_available,
     };
     if !offload {
         return OffloadPlan { nodes: Vec::new(), fallback_local: true };
     }
     let mut candidates: Vec<&LinkedNode> = nodes.iter().filter(|n| !n.this_device && n.online && n.serves_models).collect();
+    // A chosen device is the one asked, not just the first.
+    if let (OffloadMode::Always, Some(chosen)) = (settings.mode, settings.prefer.as_deref()) {
+        candidates.retain(|n| n.peer_id == chosen);
+    }
     // Preferred first, then desktops before phones, then by label.
     candidates.sort_by_key(|n| (settings.prefer.as_deref() != Some(n.peer_id.as_str()), n.platform == Platform::Phone, n.label.to_lowercase()));
     let nodes: Vec<String> = candidates.into_iter().map(|n| n.peer_id.clone()).collect();
@@ -219,18 +232,23 @@ mod tests {
     fn phones_offload_to_desktops_by_default_and_desktops_run_locally() {
         let nodes = vec![node("phone2", Platform::Phone, true), node("desk-b", Platform::Desktop, true), node("desk-a", Platform::Desktop, true)];
         let auto = OffloadSettings::default();
-        let plan = offload_plan(&auto, Platform::Phone, &nodes);
+        let plan = offload_plan(&auto, Platform::Phone, &nodes, true);
         assert_eq!(plan.nodes, ["desk-a", "desk-b", "phone2"], "desktops first");
         assert!(plan.fallback_local);
-        assert!(offload_plan(&auto, Platform::Desktop, &nodes).runs_here());
+        assert!(offload_plan(&auto, Platform::Desktop, &nodes, true).runs_here());
+        assert_eq!(
+            offload_plan(&auto, Platform::Desktop, &nodes, false).nodes,
+            ["desk-a", "desk-b", "phone2"],
+            "a desktop whose model cannot run asks the others"
+        );
 
         let prefer = OffloadSettings { mode: OffloadMode::Always, prefer: Some("desk-b".into()), fallback_local: false, serve: false };
-        let plan = offload_plan(&prefer, Platform::Desktop, &nodes);
-        assert_eq!(plan.nodes[0], "desk-b");
+        let plan = offload_plan(&prefer, Platform::Desktop, &nodes, true);
+        assert_eq!(plan.nodes, ["desk-b"], "the chosen device only");
         assert!(!plan.fallback_local);
 
         let never = OffloadSettings { mode: OffloadMode::Never, ..prefer.clone() };
-        assert!(offload_plan(&never, Platform::Phone, &nodes).runs_here());
+        assert!(offload_plan(&never, Platform::Phone, &nodes, false).runs_here());
     }
 
     #[test]
@@ -240,7 +258,7 @@ mod tests {
         let me = LinkedNode { this_device: true, ..node("me", Platform::Desktop, true) };
         let nodes = vec![quiet, me, node("off", Platform::Desktop, false)];
         let s = OffloadSettings { mode: OffloadMode::Always, prefer: None, fallback_local: false, serve: false };
-        let plan = offload_plan(&s, Platform::Phone, &nodes);
+        let plan = offload_plan(&s, Platform::Phone, &nodes, true);
         assert!(plan.runs_here());
         assert!(plan.fallback_local, "nothing to offload to: run here");
     }

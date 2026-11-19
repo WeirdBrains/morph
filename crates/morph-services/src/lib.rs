@@ -23,6 +23,7 @@ pub mod profile_io;
 pub mod profile_lock;
 pub mod profiles;
 pub mod relays;
+pub mod routed_models;
 pub mod sync;
 
 pub use morph_identity::profile_identity::{SecretString, Zeroizing};

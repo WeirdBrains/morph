@@ -619,7 +619,7 @@ mod tests {
         assert!(!by("gone").online && !by("gone").serves_models);
         assert!(by("phone").this_device && by("phone").online);
         // So offload from the phone picks the desk.
-        let plan = morph_ai::offload_plan(&morph_ai::OffloadSettings::default(), Platform::Phone, &nodes);
+        let plan = morph_ai::offload_plan(&morph_ai::OffloadSettings::default(), Platform::Phone, &nodes, true);
         assert_eq!(plan.nodes, std::slice::from_ref(&a.cert.peer_id));
     }
 
