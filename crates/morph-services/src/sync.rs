@@ -411,7 +411,12 @@ pub fn tick(home: &Path, profile_id: &str) -> Result<usize> {
         }
         {
             let mut st = state.lock().map_err(|_| Error::failed("sync state"))?;
-            merge_back(&mut st, &work);
+            // What reached the live log, not only what the pulls that
+            // succeeded counted: a pull refused part way (the peer rotated
+            // between its hello and a later page: epoch-behind) has already
+            // brought the pages before it. Counting only `Ok` left those ops
+            // stored but never materialized, and later pulls find nothing new.
+            n = n.max(merge_back(&mut st, &work));
         }
         let _ = library_db::with(home, profile_id, |lib| {
             let st = state.lock().expect("sync state");
@@ -522,12 +527,13 @@ fn snapshot(st: &SyncState) -> SyncState {
 
 /// Fold what a pull into a copy learned back into the live state: new log
 /// entries, cursors that moved forward, roster changes (a revocation is never
-/// undone) and the clock.
-fn merge_back(st: &mut SyncState, work: &SyncState) {
+/// undone) and the clock. Returns how many log entries were new to it.
+fn merge_back(st: &mut SyncState, work: &SyncState) -> usize {
+    let mut added = 0;
     for (nid, seq) in work.log.cursors() {
         let ops: Vec<_> = work.log.iter_node(&nid).cloned().collect();
         if let (Some(first), Some(last)) = (ops.first().map(|e| e.seq), ops.last().map(|e| e.seq)) {
-            st.log.integrate(&weirdnet_sync::LogPage { node_id: nid.clone(), from_seq: first, to_seq: last, ops });
+            added += st.log.integrate(&weirdnet_sync::LogPage { node_id: nid.clone(), from_seq: first, to_seq: last, ops });
         }
         if seq > st.log.cursor(&nid) {
             st.log.set_cursor(&nid, seq);
@@ -548,6 +554,7 @@ fn merge_back(st: &mut SyncState, work: &SyncState) {
     {
         st.clock = Some(c.clone());
     }
+    added
 }
 
 /// Addresses we may dial for a roster member: matching manual peers, plus
@@ -984,8 +991,9 @@ mod tests {
         });
         work.log.set_cursor(&peer, 1);
         work.clock = Some(weirdnet_sync::Hlc::new(60, 0, live.our_node.clone()));
-        merge_back(&mut live, &work);
+        assert_eq!(merge_back(&mut live, &work), 1, "the pulled op is new to the live log");
         assert!(live.log.get(&peer, 1).is_some(), "pulled ops land");
+        assert_eq!(merge_back(&mut live, &work), 0, "nothing is new the second time");
         assert!(live.log.get(&live.our_node, 1).is_some(), "local writes stay");
         assert_eq!(live.log.cursor(&peer), 1);
         assert!(!live.roster.get(&other).unwrap().active(), "the revocation stands");
