@@ -49,6 +49,11 @@ pub struct TaskOptions {
     /// The user took the "+5 pages" offer: this task reads at most [`Budget::page_extension`]
     /// pages, going on from the conversation so far.
     pub more_pages: bool,
+    /// A research project's step with Always allow for the research tools: the navigate and
+    /// research cards are answered for it (Task scope; never click, fill or submit cards).
+    pub always_allow: bool,
+    /// This task's budget instead of the sessions' (a project's session budget).
+    pub budget: Option<Budget>,
 }
 
 /// What a "+5 pages" task is asked to do (the conversation so far comes with it).
@@ -198,7 +203,8 @@ impl Sessions {
         let profile = roster.get(companion).ok_or_else(|| SessionError::UnknownCompanion(companion.to_string()))?;
         let name = profile.name().to_string();
         // A "+5 pages" task gets only the extension's pages; the next task the normal budget.
-        let budget = if options.more_pages { Budget { max_pages: self.budget.page_extension, ..self.budget } } else { self.budget };
+        let base = options.budget.unwrap_or(self.budget);
+        let budget = if options.more_pages { Budget { max_pages: base.page_extension, ..base } } else { base };
         if self.open.get(companion).is_some_and(|s| s.config().budget != budget) && !self.is_running(companion) {
             // The budget is fixed when a session opens: open it again, keeping the conversation.
             let kept = self.open.remove(companion).map(|s| s.messages().to_vec()).unwrap_or_default();

@@ -221,6 +221,23 @@ fn project_detail(t: Theme, state: &ResearchState, p: &ResearchProject, i: usize
     } else {
         "Caps apply: 60 pages and 90 min a day, 300 pages, 14 days, 30 pages an hour."
     }));
+    if !p.findings.is_empty() {
+        d = d.child(div().text_size(px(11.)).text_color(rgb(t.text_primary)).child(format!("Findings: {}", p.findings.len())));
+        if let Some(f) = p.findings.last() {
+            let mut text: String = f.text.chars().take(220).collect();
+            if f.text.chars().count() > 220 {
+                text.push('…');
+            }
+            d = d.child(div().text_size(px(11.)).text_color(rgb(t.text_secondary)).child(format!("{}: {text}", f.step)));
+            if !f.sources.is_empty() {
+                d = d.child(div().text_size(px(10.)).text_color(rgb(t.accent)).child(format!(
+                    "{} sources: {}",
+                    f.sources.len(),
+                    f.sources.join(" · ")
+                )));
+            }
+        }
+    }
     for l in p.log.iter().rev().take(4) {
         d = d.child(div().text_size(px(10.)).text_color(rgb(t.text_secondary)).child(l.text.clone()));
     }

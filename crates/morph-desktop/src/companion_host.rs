@@ -560,12 +560,22 @@ impl DesktopResearch {
 }
 
 type Slot = Arc<Mutex<Option<tokio::sync::oneshot::Sender<ApprovalAnswer>>>>;
+type Autos = Arc<Mutex<std::collections::HashSet<AgentId>>>;
+
+/// Whether a card is answered without the user: the companion's task has Always allow for the
+/// research tools, and the tool only navigates or researches.
+fn auto_answers(auto: &Autos, agent: &AgentId, tier: Tier) -> bool {
+    matches!(tier, Tier::Navigate | Tier::Research) && auto.lock().unwrap().contains(agent)
+}
 /// The answer to a running task's "+5 pages" card.
 type PagesSlot = Arc<Mutex<Option<tokio::sync::oneshot::Sender<bool>>>>;
 
 /// Asks the user through the panel: `decide` waits until [`Worker::answer`] is called. A tier 2
 /// card's target is marked on the page while it waits.
 struct PanelApprover {
+    /// Companions whose current task is a project step with Always allow: its navigate and
+    /// research cards are answered here (never a click, fill or submit card).
+    auto: Autos,
     slot: Slot,
     pages: PagesSlot,
     pending: PendingTarget,
@@ -576,6 +586,9 @@ struct PanelApprover {
 #[async_trait]
 impl Approver for PanelApprover {
     async fn decide(&self, prompt: &ApprovalPrompt, tool: &ToolSpec) -> ApprovalAnswer {
+        if auto_answers(&self.auto, &prompt.agent, tool.tier) {
+            return ApprovalAnswer::Approve { scope: weirdnet_agent::Scope::Task };
+        }
         let target = if tool.tier == Tier::Interact { self.pending.lock().unwrap().take() } else { None };
         // The tool and what it touches: the element's text, else the search engine or site.
         let detail = match (&target, &prompt.request.provider, &prompt.request.site) {
@@ -745,7 +758,9 @@ impl Worker {
         let approval: Slot = Arc::default();
         let pages: PagesSlot = Arc::default();
         let pending = PendingTarget::default();
+        let autos = Autos::default();
         let approver = Arc::new(PanelApprover {
+            auto: autos.clone(),
             slot: approval.clone(),
             pages: pages.clone(),
             pending: pending.clone(),
@@ -774,6 +789,9 @@ impl Worker {
                     let tx = msg_tx.clone();
                     let id = companion.clone();
                     sessions.set_tools_for(&companion, rt.block_on(with_hosts(&sources, tools.registry_for(companion.as_str()))));
+                    if options.always_allow {
+                        autos.lock().unwrap().insert(companion.clone());
+                    }
                     let task = sessions.run_with(&roster, &companion, &input, options, |u| {
                         let _ = tx.send(Msg::Update(id.clone(), u));
                     });
@@ -781,6 +799,7 @@ impl Worker {
                         Some(handle) => handle.block_on(task),
                         None => rt.block_on(task),
                     };
+                    autos.lock().unwrap().remove(&companion);
                     let _ = msg_tx.send(Msg::Done(companion, result.map(Box::new)));
                 }
             })
@@ -829,6 +848,17 @@ impl Worker {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn always_allow_answers_navigate_and_research_cards_but_never_interact_ones() {
+        let autos = Autos::default();
+        let me = AgentId::new("a");
+        assert!(!auto_answers(&autos, &me, Tier::Research), "no cards are answered without Always allow");
+        autos.lock().unwrap().insert(me.clone());
+        assert!(auto_answers(&autos, &me, Tier::Navigate) && auto_answers(&autos, &me, Tier::Research));
+        assert!(!auto_answers(&autos, &me, Tier::Interact), "click, fill and submit still ask");
+        assert!(!auto_answers(&autos, &AgentId::new("b"), Tier::Research), "only that companion's task");
+    }
+
     use std::time::{Duration, Instant};
 
     use morph_ai::{ModelChoice, UnavailableModels};
@@ -983,7 +1013,14 @@ mod tests {
         let pending = PendingTarget::default();
         *pending.lock().unwrap() = Some((PageTarget::label("Sign in"), "https://a.example/login?next=1".into()));
         let slot: Slot = Arc::default();
-        let approver = PanelApprover { slot: slot.clone(), pages: PagesSlot::default(), pending, msgs: msg_tx, calls: Some(Mutex::new(call_tx)) };
+        let approver = PanelApprover {
+            auto: Autos::default(),
+            slot: slot.clone(),
+            pages: PagesSlot::default(),
+            pending,
+            msgs: msg_tx,
+            calls: Some(Mutex::new(call_tx)),
+        };
         let prompt = ApprovalPrompt {
             agent: AgentId::new("local"),
             request: weirdnet_agent::ActionRequest::new(Tier::Interact).site("a.example"),
@@ -1166,7 +1203,14 @@ mod tests {
     fn a_more_pages_card_waits_for_the_panel_and_a_stop_says_no() {
         let (msg_tx, msg_rx) = mpsc::channel();
         let pages = PagesSlot::default();
-        let approver = PanelApprover { slot: Slot::default(), pages: pages.clone(), pending: PendingTarget::default(), msgs: msg_tx, calls: None };
+        let approver = PanelApprover {
+            auto: Autos::default(),
+            slot: Slot::default(),
+            pages: pages.clone(),
+            pending: PendingTarget::default(),
+            msgs: msg_tx,
+            calls: None,
+        };
         let prompt = weirdnet_agent::PagesPrompt { agent: AgentId::new("local"), task_id: "t".into(), used: 12, extension: 5 };
         let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
         let ask = |yes: Option<bool>| {

@@ -105,6 +105,15 @@ pub struct CompanionView {
     research_tab: bool,
     /// Long-term research projects (`companions/research.json`).
     research: crate::companion_research::ResearchState,
+    /// The project step a companion is running now (one at a time).
+    project_run: Option<ProjectRun>,
+}
+
+/// A research project's step that is running as a companion task.
+struct ProjectRun {
+    id: String,
+    step: usize,
+    companion: AgentId,
 }
 
 /// Width of the folded panel's strip, in logical pixels.
@@ -290,12 +299,25 @@ impl CompanionView {
             timed_out: HashSet::new(),
             research_tab: false,
             research: crate::companion_research::ResearchState { projects: Default::default(), open: None },
+            project_run: None,
         };
         view.collapsed = load_collapsed(&view.store);
         view.research = crate::companion_research::ResearchState::load(&view.store);
         if std::env::var_os("MORPH_COMPANION_DEMO_RESEARCH").is_some_and(|v| v == "1") {
             view.research_tab = true;
             view.research.demo();
+        }
+        // Dev: start a project from this question, running, with Always allow when
+        // `MORPH_COMPANION_AUTOPROJECT_ALLOW=1`.
+        if let Some(q) = std::env::var("MORPH_COMPANION_AUTOPROJECT").ok().filter(|q| !q.trim().is_empty()) {
+            let name = view.selected_name();
+            let id = view.research.add(&q, &name);
+            view.research.set_state(&id, morph_ai::research::ProjectState::Running);
+            if std::env::var_os("MORPH_COMPANION_AUTOPROJECT_ALLOW").is_some_and(|v| v == "1") {
+                view.research.toggle_allow(&id);
+            }
+            view.research_tab = true;
+            view.save_research();
         }
         if std::env::var_os("MORPH_COMPANION_DEMO").is_some_and(|v| v == "1") {
             let id = view.selected.clone();
@@ -538,6 +560,12 @@ impl CompanionView {
     }
 
     pub(crate) fn research_set(&mut self, id: String, state: morph_ai::research::ProjectState, cx: &mut Context<Self>) {
+        // Stop ends the step in flight; Pause lets it finish.
+        if state == morph_ai::research::ProjectState::Stopped
+            && let Some(run) = self.project_run.as_ref().filter(|r| r.id == id)
+        {
+            self.worker.cancel(&run.companion);
+        }
         self.research.set_state(&id, state);
         self.save_research();
         cx.notify();
@@ -553,6 +581,108 @@ impl CompanionView {
         self.research.toggle_allow_all();
         self.save_research();
         cx.notify();
+    }
+
+    /// Starts the next step of a running project as a task of its companion, when that
+    /// companion is free. Always allow (the project's or all projects') gives the step an
+    /// unthrottled budget and answers its navigate and research cards. Power rules assume a
+    /// desktop on power until the device's battery state is read (a later slice).
+    fn drive_projects(&mut self, cx: &mut Context<Self>) {
+        use morph_ai::research::{Caps, Next, ProjectState, StepStatus, next_action, session_budget};
+        if self.project_run.is_some() || (self.lock)() {
+            return;
+        }
+        let now = crate::companion_research::now_ms();
+        match next_action(&self.research.projects, &Caps::default(), now) {
+            Next::Idle => {}
+            Next::Finish(id) => {
+                self.research.set_state(&id, ProjectState::Done);
+                self.save_research();
+                cx.notify();
+            }
+            Next::Cap(id, hit) => {
+                self.research.set_state(&id, ProjectState::Paused);
+                if let Some(p) = self.research.projects.get_mut(&id) {
+                    p.log(now, format!("paused: {hit}"));
+                }
+                self.save_research();
+                cx.notify();
+            }
+            Next::Run(id, step, allow) => {
+                let Some(p) = self.research.projects.get(&id).cloned() else { return };
+                let Some(companion) = self.roster.companions().iter().find(|c| c.name() == p.companion).map(|c| c.id().clone()) else {
+                    self.research.set_state(&id, ProjectState::Paused);
+                    if let Some(p) = self.research.projects.get_mut(&id) {
+                        p.log(now, format!("paused: no companion named {}", p.companion));
+                    }
+                    self.save_research();
+                    return;
+                };
+                if self.conversations.get(&companion).is_some_and(|c| c.is_running()) {
+                    return; // the companion is busy with a chat; try again next tick
+                }
+                if let Some(reason) = self.roster.get(&companion).and_then(|c| self.devices.not_here(c)) {
+                    self.research.set_state(&id, ProjectState::Paused);
+                    if let Some(p) = self.research.projects.get_mut(&id) {
+                        p.log(now, format!("paused: {reason}"));
+                    }
+                    self.save_research();
+                    return;
+                }
+                if let Some(p) = self.research.projects.get_mut(&id) {
+                    p.plan[step].status = StepStatus::Running;
+                    p.plan[step].attempts += 1;
+                    p.log(now, format!("started: {}", p.plan[step].title));
+                }
+                self.save_research();
+                let options = TaskOptions {
+                    signed_in: p.signed_in.then(|| self.profile.clone()),
+                    more_pages: false,
+                    always_allow: allow,
+                    budget: Some(session_budget(allow)),
+                };
+                let shown = format!("Research project \u{201c}{}\u{201d}: {}", p.title, p.plan[step].title);
+                self.conversations.entry(companion.clone()).or_default().start_task(&shown);
+                self.guards.insert(companion.clone(), crate::companion_host::WallGuard::new(Instant::now()));
+                *self.seen.attached.lock().unwrap() = None;
+                self.worker.run_with(self.roster.clone(), companion.clone(), p.step_prompt(step), options);
+                self.project_run = Some(ProjectRun { id, step, companion });
+                cx.notify();
+            }
+        }
+    }
+
+    /// The task of the running project step ended (`None`: it could not run).
+    fn project_finished(&mut self, companion: &AgentId, ended: Option<(&Outcome, &str, &[Citation])>, error: Option<String>) {
+        use morph_ai::research::StepEnd;
+        if self.project_run.as_ref().is_none_or(|r| r.companion != *companion) {
+            return;
+        }
+        let Some(run) = self.project_run.take() else { return };
+        let now = crate::companion_research::now_ms();
+        let end = match (ended, error) {
+            (Some((o, text, cites)), _) => {
+                let (pages, tool_ms) = (o.usage.pages, o.usage.elapsed_ms);
+                if matches!(o.stop, weirdnet_agent::StopReason::Completed) {
+                    let mut sources: Vec<String> = Vec::new();
+                    for c in cites {
+                        if let weirdnet_agent::CitationTarget::Url { url, .. } = &c.target
+                            && !sources.contains(url)
+                        {
+                            sources.push(url.clone());
+                        }
+                    }
+                    StepEnd::Completed { text: text.to_string(), sources, pages, tool_ms }
+                } else {
+                    StepEnd::Failed { why: format!("{:?}", o.stop), pages, tool_ms }
+                }
+            }
+            (None, e) => StepEnd::Failed { why: e.unwrap_or_else(|| "did not run".into()), pages: 0, tool_ms: 0 },
+        };
+        if let Some(p) = self.research.projects.get_mut(&run.id) {
+            morph_ai::research::finish_step(p, run.step, end, now);
+        }
+        self.save_research();
     }
 
     /// Header: title, fold and close, and the Chat / Research tabs.
@@ -712,6 +842,8 @@ impl CompanionView {
         let options = TaskOptions {
             signed_in: std::mem::take(&mut self.signed_in_next).then(|| self.profile.clone()),
             more_pages: std::mem::take(&mut self.more_pages_next),
+            always_allow: false,
+            budget: None,
         };
         *self.seen.attached.lock().unwrap() = None;
         self.exported = None;
@@ -979,6 +1111,7 @@ impl CompanionView {
             let q = self.autoask.take().unwrap_or_default();
             self.send(q, cx);
         }
+        self.drive_projects(cx);
         self.serve_hosts(cx);
         let msgs = self.worker.poll();
         if matches!(self.models.status(&self.model_choice()), ModelStatus::Downloading { .. }) {
@@ -1041,11 +1174,13 @@ impl CompanionView {
                     *self.seen.attached.lock().unwrap() = None;
                     let mut shown = outcome;
                     shown.text = f.text;
+                    self.project_finished(&id, Some((&shown, &shown.text.clone(), &f.citations)), None);
                     self.last.insert(id, (question, shown, f.citations));
                 }
                 Msg::Done(id, Err(e)) => {
                     self.clear_outline(cx);
                     self.task_ended(&id);
+                    self.project_finished(&id, None, Some(e.to_string()));
                     self.conversations.entry(id).or_default().fail(&e.to_string());
                 }
             }

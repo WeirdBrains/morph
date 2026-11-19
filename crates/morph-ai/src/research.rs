@@ -78,7 +78,7 @@ pub struct Usage {
 }
 
 impl Usage {
-    fn record(&mut self, now: u64, pages: u32, tool_ms: u64) {
+    pub fn record(&mut self, now: u64, pages: u32, tool_ms: u64) {
         self.pages += pages;
         self.tool_ms += tool_ms;
         self.recent.retain(|(at, ..)| now.saturating_sub(*at) < DAY_MS);
@@ -94,6 +94,16 @@ impl Usage {
 pub struct LogEntry {
     pub at_ms: u64,
     pub text: String,
+}
+
+/// What a finished step found: the answer text with its footnotes, and the pages it read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Finding {
+    pub step: String,
+    pub text: String,
+    #[serde(default)]
+    pub sources: Vec<String>,
+    pub at_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -120,6 +130,8 @@ pub struct ResearchProject {
     pub notes: Vec<LogEntry>,
     #[serde(default)]
     pub log: Vec<LogEntry>,
+    #[serde(default)]
+    pub findings: Vec<Finding>,
     pub created_ms: u64,
 }
 
@@ -161,6 +173,7 @@ impl ResearchProject {
             sessions: 0,
             notes: Vec::new(),
             log: Vec::new(),
+            findings: Vec::new(),
             created_ms: now,
         }
     }
@@ -173,6 +186,33 @@ impl ResearchProject {
     pub fn add_note(&mut self, now: u64, text: &str) {
         self.notes.push(LogEntry { at_ms: now, text: text.into() });
         self.log(now, format!("note: {text}"));
+    }
+
+    /// What to ask the companion for plan step `i`: the brief, the user's notes, what earlier
+    /// steps found (each cut short) and this step alone. The companion cites what it reads.
+    pub fn step_prompt(&self, i: usize) -> String {
+        let clip = |t: &str, n: usize| -> String {
+            let mut c: String = t.chars().take(n).collect();
+            if t.chars().count() > n {
+                c.push('…');
+            }
+            c
+        };
+        let mut p = format!("You are working on a long research project, one step at a time.\nProject question: {}\n", self.brief);
+        if !self.notes.is_empty() {
+            p.push_str("The user's notes (follow them):\n");
+            for n in &self.notes {
+                p.push_str(&format!("- {}\n", clip(&n.text, 300)));
+            }
+        }
+        if !self.findings.is_empty() {
+            p.push_str("What earlier steps found:\n");
+            for f in self.findings.iter().rev().take(3).rev() {
+                p.push_str(&format!("- {}: {}\n", f.step, clip(&f.text, 600)));
+            }
+        }
+        p.push_str(&format!("\nDo only this step now: {}\nUse web.search and web.read as needed and cite every claim with [n] and a Sources list. Keep the answer short.", self.plan[i].title));
+        p
     }
 
     /// The next step to run: the first that is queued.
@@ -460,6 +500,82 @@ pub fn may_run(power: Power, run_now: bool) -> Result<(), Hold> {
         return Err(Hold::Busy);
     }
     Ok(())
+}
+
+/// How a project step ended when a companion's task ran it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StepEnd {
+    /// The task completed with an answer.
+    Completed { text: String, sources: Vec<String>, pages: u32, tool_ms: u64 },
+    /// The task stopped (cancelled, a limit, a model error) or gave no answer.
+    Failed { why: String, pages: u32, tool_ms: u64 },
+}
+
+/// Records how step `i` ended: a finding and the usage on success; the step goes back to the
+/// queue on failure (and fails for good on its second attempt); the project pauses, or is
+/// done when no step is left. A project the user already paused or stopped keeps that state.
+pub fn finish_step(p: &mut ResearchProject, i: usize, end: StepEnd, now: u64) {
+    let title = p.plan[i].title.clone();
+    match end {
+        StepEnd::Completed { text, sources, pages, tool_ms } if !text.trim().is_empty() => {
+            p.plan[i].status = StepStatus::Done;
+            p.usage.record(now, pages, tool_ms);
+            p.log(now, format!("done: {title} ({pages} pages)"));
+            p.findings.push(Finding { step: title, text, sources, at_ms: now });
+        }
+        StepEnd::Completed { pages, tool_ms, .. } => {
+            p.usage.record(now, pages, tool_ms);
+            fail_step(p, i, "no answer".into(), now);
+        }
+        StepEnd::Failed { why, pages, tool_ms } => {
+            p.usage.record(now, pages, tool_ms);
+            fail_step(p, i, why, now);
+        }
+    }
+    if p.state == ProjectState::Running {
+        if p.plan.iter().all(|s| matches!(s.status, StepStatus::Done | StepStatus::Skipped | StepStatus::Failed)) {
+            p.state = ProjectState::Done;
+            p.log(now, "all steps finished");
+        } else if p.plan[i].status != StepStatus::Done {
+            p.state = ProjectState::Paused;
+        }
+    }
+}
+
+fn fail_step(p: &mut ResearchProject, i: usize, why: String, now: u64) {
+    let title = p.plan[i].title.clone();
+    p.plan[i].status = if p.plan[i].attempts >= 2 { StepStatus::Failed } else { StepStatus::Queued };
+    p.log(now, format!("step stopped: {title}: {why}"));
+}
+
+/// What the driver does next.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Next {
+    /// Nothing is running or waiting.
+    Idle,
+    /// A running project has no step left: mark it done.
+    Finish(String),
+    /// A running project hit a cap: pause it.
+    Cap(String, CapHit),
+    /// Run plan step `.1` of project `.0`, in an unthrottled budget when `.2`.
+    Run(String, usize, bool),
+}
+
+/// The first running project and what to do for it. Always allow (the project's or the all-projects
+/// setting) skips the caps; the site rate and the power rules are the caller's.
+pub fn next_action(projects: &Projects, caps: &Caps, now: u64) -> Next {
+    for p in &projects.projects {
+        if p.state != ProjectState::Running {
+            continue;
+        }
+        let Some(i) = p.next_step() else { return Next::Finish(p.id.clone()) };
+        let allow = projects.allowed(p);
+        if let Err(c) = check_caps(p, caps, allow, now) {
+            return Next::Cap(p.id.clone(), c);
+        }
+        return Next::Run(p.id.clone(), i, allow);
+    }
+    Next::Idle
 }
 
 /// What a step did.
@@ -930,6 +1046,76 @@ mod tests {
         assert!(b.max_pages > 100_000 && b.max_steps > 100_000);
         assert_eq!(session_budget(false).max_pages, 25);
         assert_eq!(session_budget(false).per_task, Duration::from_secs(600));
+    }
+
+    #[test]
+    fn the_driver_runs_steps_in_order_records_findings_and_finishes() {
+        let (mut ps, id) = setup(2);
+        ps.get_mut(&id).unwrap().state = ProjectState::Running;
+        let caps = Caps::default();
+        assert_eq!(next_action(&ps, &caps, 5), Next::Run(id.clone(), 0, false));
+        let end = |t: &str| StepEnd::Completed { text: t.into(), sources: vec!["https://tokio.rs/".into()], pages: 2, tool_ms: 900 };
+        finish_step(ps.get_mut(&id).unwrap(), 0, end("found a"), 10);
+        assert_eq!(next_action(&ps, &caps, 11), Next::Run(id.clone(), 1, false));
+        finish_step(ps.get_mut(&id).unwrap(), 1, end("found b"), 20);
+        let p = ps.get(&id).unwrap();
+        assert_eq!((p.state, p.findings.len(), p.usage.pages), (ProjectState::Done, 2, 4));
+        assert_eq!(p.findings[0].sources, vec!["https://tokio.rs/"]);
+        assert_eq!(next_action(&ps, &caps, 30), Next::Idle);
+    }
+
+    #[test]
+    fn a_failed_step_pauses_the_project_retries_once_then_fails() {
+        let (mut ps, id) = setup(2);
+        let p = ps.get_mut(&id).unwrap();
+        p.state = ProjectState::Running;
+        p.plan[0].attempts = 1;
+        finish_step(p, 0, StepEnd::Failed { why: "cancelled".into(), pages: 0, tool_ms: 0 }, 1);
+        assert_eq!((p.state, p.plan[0].status), (ProjectState::Paused, StepStatus::Queued));
+        p.state = ProjectState::Running;
+        p.plan[0].attempts = 2;
+        finish_step(p, 0, StepEnd::Completed { text: "  ".into(), sources: vec![], pages: 0, tool_ms: 0 }, 2);
+        assert_eq!(p.plan[0].status, StepStatus::Failed, "an empty answer is a failure");
+        assert!(p.findings.is_empty());
+    }
+
+    #[test]
+    fn a_stopped_project_keeps_its_state_when_the_step_ends() {
+        let (mut ps, id) = setup(2);
+        let p = ps.get_mut(&id).unwrap();
+        p.state = ProjectState::Stopped;
+        finish_step(p, 0, StepEnd::Completed { text: "late".into(), sources: vec![], pages: 1, tool_ms: 1 }, 1);
+        assert_eq!(p.state, ProjectState::Stopped);
+        assert_eq!(p.findings.len(), 1, "what the step found is kept");
+    }
+
+    #[test]
+    fn the_driver_stops_at_a_cap_unless_always_allow_and_skips_projects_that_are_not_running() {
+        let (mut ps, id) = setup(3);
+        let caps = Caps::default();
+        assert_eq!(next_action(&ps, &caps, 5), Next::Idle, "a paused project is not driven");
+        {
+            let p = ps.get_mut(&id).unwrap();
+            p.state = ProjectState::Running;
+            p.usage.record(5, 31, 0);
+        }
+        assert_eq!(next_action(&ps, &caps, 6), Next::Cap(id.clone(), CapHit::PagesPerHour));
+        ps.always_allow_all = true;
+        assert_eq!(next_action(&ps, &caps, 6), Next::Run(id.clone(), 0, true));
+        ps.always_allow_all = false;
+        ps.get_mut(&id).unwrap().always_allow = true;
+        assert_eq!(next_action(&ps, &caps, 6), Next::Run(id, 0, true));
+    }
+
+    #[test]
+    fn a_step_prompt_has_the_brief_notes_earlier_findings_and_only_its_own_step() {
+        let mut p = ResearchProject::from_question("How does Tokio cancel a task?", "atlas", 1);
+        p.add_note(2, "only 2022 and later");
+        p.findings.push(Finding { step: "step one".into(), text: "x".repeat(900), sources: vec![], at_ms: 3 });
+        let text = p.step_prompt(1);
+        assert!(text.contains("How does Tokio cancel a task?") && text.contains("only 2022 and later"));
+        assert!(text.contains("step one") && text.contains('…'), "earlier findings are cut short");
+        assert!(text.contains("Read the best sources") && !text.contains("Write the findings"));
     }
 
     #[test]
