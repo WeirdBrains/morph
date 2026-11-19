@@ -719,6 +719,7 @@ impl CompanionView {
                     more_pages: false,
                     always_allow: allow,
                     budget: Some(session_budget(allow)),
+                    excluded: p.steering.excluded_patterns(),
                 };
                 let shown = format!("Research project \u{201c}{}\u{201d}: {}", p.title, p.plan[step].title);
                 self.conversations.entry(companion.clone()).or_default().start_task(&shown);
@@ -944,6 +945,7 @@ impl CompanionView {
             more_pages: std::mem::take(&mut self.more_pages_next),
             always_allow: false,
             budget: None,
+            excluded: Vec::new(),
         };
         *self.seen.attached.lock().unwrap() = None;
         self.exported = None;

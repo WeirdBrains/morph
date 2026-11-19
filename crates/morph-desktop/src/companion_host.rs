@@ -18,7 +18,9 @@ use morph_ai::{
     ActedOn, AiStore, BrowserHost, FetchedPage, FileStore, HostError, LIBRARY, ModelProvider, PageElement, PageSnapshot, PageTarget, ResearchHost,
     Roster, ScrollTo, SearchHit, SearchProvider, TabInfo,
 };
-use morph_companion::{Canceller, PendingTarget, SessionError, Sessions, TaskOptions, ViewUpdate, browser_tools, doing_text, web_tools};
+use morph_companion::{
+    Canceller, Exclusions, PendingTarget, SessionError, Sessions, TaskOptions, ViewUpdate, browser_tools_with, doing_text, web_tools_with,
+};
 use morph_webview::{Action, ActionError, ActionRequest, ActionResult, Locator};
 use weirdnet_agent::{
     AgentId, ApprovalAnswer, ApprovalPrompt, Approver, CallTarget, Outcome, SharedPolicy, SourceKind, Tier, ToolContext, ToolError, ToolOutput,
@@ -767,12 +769,16 @@ impl Worker {
             msgs: msg_tx.clone(),
             calls: hosts.as_ref().and_then(|h| h.calls.clone()).map(Mutex::new),
         });
+        let exclusions = Exclusions::default();
         let sources: Vec<Arc<dyn ToolSource>> = match hosts {
             Some(h) => {
                 let report = |inner: Arc<dyn ToolSource>| -> Arc<dyn ToolSource> {
                     Arc::new(Reporting { inner, msgs: msg_tx.clone(), research: Some(h.research.clone()) })
                 };
-                vec![report(Arc::new(browser_tools(h.browser.clone(), pending))), report(Arc::new(web_tools(h.research.clone())))]
+                vec![
+                    report(Arc::new(browser_tools_with(h.browser.clone(), pending, exclusions.clone()))),
+                    report(Arc::new(web_tools_with(h.research.clone(), exclusions.clone()))),
+                ]
             }
             None => Vec::new(),
         };
@@ -792,6 +798,7 @@ impl Worker {
                     if options.always_allow {
                         autos.lock().unwrap().insert(companion.clone());
                     }
+                    exclusions.set(options.excluded.clone());
                     let task = sessions.run_with(&roster, &companion, &input, options, |u| {
                         let _ = tx.send(Msg::Update(id.clone(), u));
                     });
@@ -800,6 +807,7 @@ impl Worker {
                         None => rt.block_on(task),
                     };
                     autos.lock().unwrap().remove(&companion);
+                    exclusions.set(Vec::new());
                     let _ = msg_tx.send(Msg::Done(companion, result.map(Box::new)));
                 }
             })

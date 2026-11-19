@@ -25,7 +25,7 @@ pub use session::{
     Canceller, MORE_PAGES_PROMPT, READ_NUDGE, SYSTEM_PROMPT, SessionError, Sessions, TaskOptions, answered_without_reading, more_pages_prompt,
     ran_out_of_pages, with_current_tab,
 };
-pub use tools::{BROWSER, PendingTarget, WEB, browser_tools, untrusted, web_tools};
+pub use tools::{BROWSER, Exclusions, PendingTarget, WEB, browser_tools, browser_tools_with, untrusted, web_tools, web_tools_with};
 pub use view::{
     ApprovalCard, FootnoteView, NoticeView, OfferView, TraceRowView, ViewUpdate, doing_text, footnotes, provider_label, trace_rows, translate,
 };

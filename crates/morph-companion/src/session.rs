@@ -54,6 +54,9 @@ pub struct TaskOptions {
     pub always_allow: bool,
     /// This task's budget instead of the sessions' (a project's session budget).
     pub budget: Option<Budget>,
+    /// Sites the user excluded for this task (a project's source rules); the worker hands them
+    /// to the web tools ([`crate::Exclusions`]).
+    pub excluded: Vec<String>,
 }
 
 /// What a "+5 pages" task is asked to do (the conversation so far comes with it).

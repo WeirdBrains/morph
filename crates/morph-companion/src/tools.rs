@@ -170,6 +170,32 @@ fn acted_text(done: &str, target: &PageTarget, a: &ActedOn) -> String {
     s
 }
 
+/// Sites the user excluded for the task now running (a research project's source rules). The
+/// worker sets it before a task and clears it after; one task runs at a time. The web tools
+/// drop excluded search results and refuse to read, fetch, open or navigate to them.
+#[derive(Clone, Default)]
+pub struct Exclusions(Arc<Mutex<Vec<String>>>);
+
+impl Exclusions {
+    pub fn set(&self, patterns: Vec<String>) {
+        *self.0.lock().unwrap() = patterns;
+    }
+
+    pub fn blocks(&self, url: &str) -> bool {
+        morph_ai::steer::matches_any(&self.0.lock().unwrap(), url)
+    }
+
+    /// The error a refused address gets: clear, and it says nothing was loaded.
+    fn refuse(&self, url: &str) -> Result<(), ToolError> {
+        if self.blocks(url) {
+            return Err(ToolError::Failed(format!(
+                "Refused: {url} is on the user's excluded sources for this project, so it is never read, opened or used. Nothing was loaded. Choose a different source."
+            )));
+        }
+        Ok(())
+    }
+}
+
 fn signed_in(ctx: &ToolContext) -> Option<&str> {
     match &ctx.session {
         SessionMark::SignedIn { profile } => Some(profile.as_str()),
@@ -219,6 +245,7 @@ struct BrowserTool {
     name: &'static str,
     host: Arc<dyn BrowserHost>,
     pending: PendingTarget,
+    exclusions: Exclusions,
     /// The address each page action was checked and approved for, by its arguments: the call
     /// is refused if the tab is on another site by the time it runs.
     approved: Mutex<HashMap<String, String>>,
@@ -358,6 +385,7 @@ impl Tool for BrowserTool {
             }
             "tabs.open" => {
                 let url = web_url(&args)?;
+                self.exclusions.refuse(&url)?;
                 let tab = h.open_url(&url).await.map_err(host_err)?;
                 format!("Opened {url} in tab {tab}.")
             }
@@ -368,6 +396,7 @@ impl Tool for BrowserTool {
             }
             "browser.navigate" => {
                 let url = web_url(&args)?;
+                self.exclusions.refuse(&url)?;
                 h.navigate(&url).await.map_err(host_err)?;
                 format!("Loading {url}.")
             }
@@ -425,9 +454,20 @@ impl Tool for BrowserTool {
 
 /// The browser tools as a tool source. `pending` receives a tier 2 call's target before its card.
 pub fn browser_tools(host: Arc<dyn BrowserHost>, pending: PendingTarget) -> LocalTools {
+    browser_tools_with(host, pending, Exclusions::default())
+}
+
+/// [`browser_tools`] that refuses the sites in `exclusions` for `tabs.open` and `browser.navigate`.
+pub fn browser_tools_with(host: Arc<dyn BrowserHost>, pending: PendingTarget, exclusions: Exclusions) -> LocalTools {
     let mut tools = LocalTools::new(BROWSER);
     for name in BROWSER_TOOLS {
-        tools.add(Arc::new(BrowserTool { name, host: host.clone(), pending: pending.clone(), approved: Mutex::default() }));
+        tools.add(Arc::new(BrowserTool {
+            name,
+            host: host.clone(),
+            pending: pending.clone(),
+            exclusions: exclusions.clone(),
+            approved: Mutex::default(),
+        }));
     }
     tools
 }
@@ -436,6 +476,7 @@ pub fn browser_tools(host: Arc<dyn BrowserHost>, pending: PendingTarget) -> Loca
 struct WebTool {
     name: &'static str,
     host: Arc<dyn ResearchHost>,
+    exclusions: Exclusions,
 }
 
 fn hits_text(provider: &str, hits: &[SearchHit]) -> String {
@@ -490,8 +531,15 @@ impl Tool for WebTool {
                 let query = str_arg(&args, "query")?;
                 let provider = self.host.provider();
                 // Library first: the user's own bookmarks and history, then the web provider.
-                let library = self.host.search(LIBRARY, query).await.unwrap_or_default();
-                let web = self.host.search(&provider, query).await;
+                let mut dropped = 0usize;
+                let mut keep = |hits: Vec<SearchHit>| -> Vec<SearchHit> {
+                    let n = hits.len();
+                    let kept: Vec<SearchHit> = hits.into_iter().filter(|h| !self.exclusions.blocks(&h.url)).collect();
+                    dropped += n - kept.len();
+                    kept
+                };
+                let library = keep(self.host.search(LIBRARY, query).await.unwrap_or_default());
+                let web = self.host.search(&provider, query).await.map(&mut keep);
                 let mut text = hits_text("Library", &library);
                 let mut out = ToolOutput::default().with_step(StepKind::Search {
                     provider: LIBRARY.into(),
@@ -513,13 +561,19 @@ impl Tool for WebTool {
                         out.is_error = library.is_empty();
                     }
                 }
+                if dropped > 0 {
+                    text.push_str(&format!("\n{dropped} result(s) from sites the user excluded for this project were left out."));
+                }
                 text.push_str("\nThese are leads, not sources: read the most relevant pages with web.read before you answer, and cite the reads.");
                 out.content = text;
                 Ok(out)
             }
             "web.fetch" => {
                 let url = web_url(&args)?;
+                self.exclusions.refuse(&url)?;
                 let page = self.host.fetch(&url, signed_in(ctx)).await.map_err(host_err)?;
+                // A redirect to an excluded site is refused too: its text is not handed on.
+                self.exclusions.refuse(&page.url)?;
                 let text = format!(
                     "Address: {}\nStatus: {}\n\n{}",
                     page.url,
@@ -530,7 +584,9 @@ impl Tool for WebTool {
             }
             "web.read" => {
                 let url = web_url(&args)?;
+                self.exclusions.refuse(&url)?;
                 let (page, status) = self.host.read(&url, signed_in(ctx)).await.map_err(host_err)?;
+                self.exclusions.refuse(&page.url)?;
                 let mut text = format!("{}\n{}", page_header(&page), untrusted(&page.text, MAX_TEXT));
                 if !page.links.is_empty() {
                     text.push_str("\n\nLinks:\n");
@@ -550,9 +606,14 @@ impl Tool for WebTool {
 
 /// The research tools as a tool source.
 pub fn web_tools(host: Arc<dyn ResearchHost>) -> LocalTools {
+    web_tools_with(host, Exclusions::default())
+}
+
+/// [`web_tools`] that enforces the user's excluded sources (see [`Exclusions`]).
+pub fn web_tools_with(host: Arc<dyn ResearchHost>, exclusions: Exclusions) -> LocalTools {
     let mut tools = LocalTools::new(WEB);
     for name in ["web.search", "web.fetch", "web.read"] {
-        tools.add(Arc::new(WebTool { name, host: host.clone() }));
+        tools.add(Arc::new(WebTool { name, host: host.clone(), exclusions: exclusions.clone() }));
     }
     tools
 }
@@ -654,6 +715,8 @@ mod tests {
     #[derive(Default)]
     struct FakeWeb {
         sessions: StdMutex<Vec<Option<String>>>,
+        /// Also offer a hit from this site.
+        extra_hit: Option<&'static str>,
     }
 
     #[async_trait]
@@ -665,11 +728,15 @@ mod tests {
             "duckduckgo".into()
         }
         async fn search(&self, provider: &str, _q: &str) -> Result<Vec<SearchHit>, HostError> {
-            Ok(vec![SearchHit {
+            let mut hits = vec![SearchHit {
                 title: format!("{provider} hit"),
                 url: "https://tokio.rs/tokio/topics/shutdown".into(),
                 snippet: "Graceful shutdown".into(),
-            }])
+            }];
+            if let Some(site) = self.extra_hit {
+                hits.push(SearchHit { title: "spam".into(), url: format!("https://{site}/post"), snippet: "buy now".into() });
+            }
+            Ok(hits)
         }
         async fn fetch(&self, url: &str, signed_in: Option<&str>) -> Result<FetchedPage, HostError> {
             self.sessions.lock().unwrap().push(signed_in.map(str::to_string));
@@ -750,15 +817,27 @@ mod tests {
     #[test]
     fn switching_to_a_tab_on_an_off_site_is_checked_against_that_site() {
         let pending = PendingTarget::default();
-        let tool = BrowserTool { name: "tabs.switch", host: Arc::new(FakeBrowser::default()), pending: pending.clone(), approved: Mutex::default() };
+        let tool = BrowserTool {
+            name: "tabs.switch",
+            host: Arc::new(FakeBrowser::default()),
+            pending: pending.clone(),
+            exclusions: Exclusions::default(),
+            approved: Mutex::default(),
+        };
         assert_eq!(tool.target(&json!({ "tab": 7 })).resolved_site().as_deref(), Some("bank.example"));
-        let click = BrowserTool { name: "page.click", host: Arc::new(FakeBrowser::default()), pending: pending.clone(), approved: Mutex::default() };
+        let click = BrowserTool {
+            name: "page.click",
+            host: Arc::new(FakeBrowser::default()),
+            pending: pending.clone(),
+            exclusions: Exclusions::default(),
+            approved: Mutex::default(),
+        };
         assert_eq!(click.target(&json!({ "target": "Sign in" })).resolved_site().as_deref(), Some("tokio.rs"));
         assert_eq!(pending.lock().unwrap().clone(), Some((PageTarget::label("Sign in"), "https://tokio.rs/tokio/tutorial".into())));
     }
 
     fn tool(name: &'static str, host: Arc<FakeBrowser>) -> BrowserTool {
-        BrowserTool { name, host, pending: PendingTarget::default(), approved: Mutex::default() }
+        BrowserTool { name, host, pending: PendingTarget::default(), exclusions: Exclusions::default(), approved: Mutex::default() }
     }
 
     async fn run_tool(t: &BrowserTool, args: Value) -> Result<String, ToolError> {
@@ -850,6 +929,35 @@ mod tests {
         assert_eq!(f.dropped, vec![2]);
         assert_eq!(f.text, "Cancel with a token [1]. Also see.");
         assert_eq!(web.sessions.lock().unwrap().as_slice(), &[None], "logged out by default");
+    }
+
+    #[tokio::test]
+    async fn excluded_sources_are_dropped_from_search_and_refused_by_read_fetch_and_navigate() {
+        let roster = Roster::first_run(ModelChoice::Gemma4E4B);
+        let provider = Provider(StdMutex::new(vec![
+            turn("", vec![call("c1", "web.search", json!({ "query": "tokio shutdown" }))]),
+            turn("", vec![call("c2", "web.read", json!({ "url": "https://www.bad.example/post" }))]),
+            turn("", vec![call("c3", "web.fetch", json!({ "url": "https://bad.example/x" }))]),
+            turn("", vec![call("c4", "browser.navigate", json!({ "url": "https://sub.bad.example/" }))]),
+            turn("", vec![call("c5", "web.read", json!({ "url": "https://tokio.rs/tokio/topics/shutdown" }))]),
+            turn("done", vec![]),
+        ]));
+        let approver = Arc::new(ScriptedApprover::new(vec![ApprovalAnswer::Approve { scope: Scope::Task }]));
+        let web = Arc::new(FakeWeb { extra_hit: Some("bad.example"), ..Default::default() });
+        let browser = Arc::new(FakeBrowser::default());
+        let exclusions = Exclusions::default();
+        exclusions.set(vec!["bad.example".into()]);
+        let mut r = ToolRegistry::new();
+        r.add_source(Arc::new(browser_tools_with(browser.clone(), PendingTarget::default(), exclusions.clone())));
+        r.add_source(Arc::new(web_tools_with(web.clone(), exclusions)));
+        r.refresh().await.unwrap();
+        let mut sessions = Sessions::new(Arc::new(provider), Arc::new(r), Policy::new().shared(), approver);
+        let out = sessions.run(&roster, &AgentId::new("local"), "go", |_| {}).await.unwrap();
+        let counts: Vec<u32> =
+            out.trace.steps.iter().filter_map(|s| if let StepKind::Search { results, .. } = &s.kind { Some(*results) } else { None }).collect();
+        assert_eq!(counts, vec![1, 1], "the library hit and the web hit are both the one allowed site's");
+        assert_eq!(web.sessions.lock().unwrap().len(), 1, "only the allowed read reached the host; the excluded read and fetch did not");
+        assert!(!browser.calls.lock().unwrap().iter().any(|c| c.contains("bad.example")), "navigate never reached the browser");
     }
 
     #[tokio::test]

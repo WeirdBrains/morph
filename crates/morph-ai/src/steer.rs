@@ -245,6 +245,11 @@ impl SourceEntry {
     }
 }
 
+/// Whether `url` is covered by any of `patterns` (sites or pages, as a [`SourceEntry`] matches).
+pub fn matches_any(patterns: &[String], url: &str) -> bool {
+    patterns.iter().any(|p| SourceEntry { pattern: p.clone(), rule: SourceRule::Exclude }.matches(url))
+}
+
 impl Steering {
     /// Whether the user excluded this URL.
     pub fn excluded(&self, url: &str) -> bool {
@@ -270,6 +275,11 @@ impl Steering {
             p.push_str(&format!("Never read, use or cite: {}\n", exclude.join(", ")));
         }
         p
+    }
+
+    /// The patterns of the sources the user excluded, for the web tools to enforce.
+    pub fn excluded_patterns(&self) -> Vec<String> {
+        self.sources.iter().filter(|s| s.rule == SourceRule::Exclude).map(|s| s.pattern.clone()).collect()
     }
 
     /// The check-in that waits for an answer.
@@ -614,6 +624,18 @@ mod tests {
         p.apply_pending(4);
         assert!(!p.steering.excluded("https://medium.com/a"), "a rule for a site is replaced, not added twice");
         assert_eq!(p.steering.sources.len(), 3);
+    }
+
+    #[test]
+    fn matches_any_covers_sites_and_pages() {
+        let pats = vec!["bad.example".to_string(), "https://x.example/private".to_string()];
+        assert!(matches_any(&pats, "https://www.bad.example/a") && matches_any(&pats, "https://x.example/private/2"));
+        assert!(!matches_any(&pats, "https://x.example/public") && !matches_any(&[], "https://bad.example/"));
+        let mut p = project();
+        p.submit_steer(1, "me", Steer::Source { pattern: "bad.example".into(), rule: SourceRule::Exclude });
+        p.submit_steer(1, "me", Steer::Source { pattern: "good.example".into(), rule: SourceRule::Pin });
+        p.apply_pending(2);
+        assert_eq!(p.steering.excluded_patterns(), vec!["bad.example"], "pins stay prompt hints");
     }
 
     #[test]
