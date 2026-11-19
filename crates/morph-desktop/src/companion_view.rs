@@ -35,6 +35,13 @@ pub struct CompanionView {
     models: Arc<LocalModels>,
     /// The policy the worker enforces; Settings changes reach it through [`Self::reload_agents`].
     policy: weirdnet_agent::SharedPolicy,
+    /// The policy as last loaded or saved: saves replay only what changed here since then onto
+    /// what is on disk (`morph_ai::rebase_shared`), so a sync or Settings change is kept.
+    policy_base: weirdnet_agent::Policy,
+    /// `companion_sync::applied()` when the panel last took in synced files.
+    synced: u64,
+    /// The first-run roster is not on disk yet (saved once, never over a stored one).
+    roster_unsaved: bool,
     /// `MORPH_COMPANION_AUTOASK=<question>`: a dev flag that sends one question when the panel first polls.
     autoask: Option<String>,
     store: FileStore,
@@ -47,10 +54,11 @@ impl EventEmitter<ShellRequest> for CompanionView {}
 impl CompanionView {
     pub fn new(home: &Path, profile: &str, theme: Theme, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let store = FileStore::new(morph_core::profiles::profile_dir(home, profile).join("companions"));
-        let roster = match store.load_roster() {
-            Ok(Some(r)) if r.default_companion().is_some() => r,
-            _ => Roster::first_run(ModelChoice::default_for(Platform::Desktop)),
+        let (roster, roster_unsaved) = match store.load_roster() {
+            Ok(Some(r)) if r.default_companion().is_some() => (r, false),
+            _ => (Roster::first_run(ModelChoice::default_for(Platform::Desktop)), true),
         };
+        let synced = morph_services::companion_sync::applied();
         let policy = Grants::load(Arc::new(FileStore::new(morph_core::profiles::profile_dir(home, profile).join("companions"))))
             .map(|g| g.shared())
             .unwrap_or_else(|_| weirdnet_agent::Policy::new().shared());
@@ -60,6 +68,7 @@ impl CompanionView {
         });
         let models = Arc::new(LocalModels::new(weirdnet_model::ModelStore::from_env(), factory));
         let tools = crate::mcp_host::get(&morph_core::profiles::profile_dir(home, profile).join("companions"));
+        let policy_base = policy.read().unwrap_or_else(|e| e.into_inner()).clone();
         let worker = Worker::start_with(models.clone(), policy.clone(), tools);
         let selected = roster.default_companion().map(|c| c.id().clone()).unwrap_or_else(|| AgentId::new("local"));
         let input = cx.new(|cx| TextInput::new("Ask a companion", theme, cx));
@@ -80,6 +89,9 @@ impl CompanionView {
             worker,
             models,
             policy,
+            policy_base,
+            synced,
+            roster_unsaved,
             autoask: std::env::var("MORPH_COMPANION_AUTOASK").ok().filter(|q| !q.trim().is_empty()),
             store,
             focus: cx.focus_handle(),
@@ -133,23 +145,33 @@ impl CompanionView {
         cx.notify();
     }
 
-    /// Settings changed the roster, grants or allows on disk: take them in.
+    /// Settings or sync changed the roster, grants or allows on disk: take them in, keeping
+    /// any approval made here that is not saved yet.
     pub fn reload_agents(&mut self, cx: &mut Context<Self>) {
         if let Ok(Some(r)) = self.store.load_roster()
             && r.default_companion().is_some()
         {
             self.roster = r;
+            self.roster_unsaved = false;
         }
         if self.roster.get(&self.selected).is_none() {
             self.selected = self.roster.default_companion().map(|c| c.id().clone()).unwrap_or_else(|| AgentId::new("local"));
         }
-        let _ = morph_ai::reload_shared(&self.store, &self.policy);
+        self.save_policy();
         cx.notify();
+    }
+
+    /// Save the live policy over what is on disk now, not over what the panel loaded.
+    fn save_policy(&mut self) {
+        if let Ok(base) = morph_ai::rebase_shared(&self.store, &self.policy, &self.policy_base) {
+            self.policy_base = base;
+        }
     }
 
     /// Stop on a skipped-approval notice: revoke that Always allow and end the running task.
     fn stop_notice(&mut self, allow_id: u64, cx: &mut Context<Self>) {
-        let _ = morph_ai::revoke_shared(&self.store, &self.policy, allow_id);
+        self.policy.write().unwrap_or_else(|e| e.into_inner()).revoke(allow_id);
+        self.save_policy();
         self.worker.cancel(&self.selected);
         cx.notify();
     }
@@ -229,6 +251,12 @@ impl CompanionView {
 
     /// Pump what the worker sent. Returns whether the panel changed.
     pub fn poll(&mut self, cx: &mut Context<Self>) {
+        // A sync merge wrote companion files: take them in before anything here is saved.
+        let synced = morph_services::companion_sync::applied();
+        if synced != self.synced {
+            self.synced = synced;
+            self.reload_agents(cx);
+        }
         if let Some(q) = self.autoask.take() {
             self.send(q, cx);
         }
@@ -254,8 +282,10 @@ impl CompanionView {
         for conv in self.conversations.values_mut() {
             conv.settle();
         }
-        let _ = self.store.save_roster(&self.roster);
-        let _ = morph_ai::save_shared(&self.store, &self.policy);
+        if self.roster_unsaved && self.store.save_roster(&self.roster).is_ok() {
+            self.roster_unsaved = false;
+        }
+        self.save_policy();
         cx.notify();
     }
 }
