@@ -32,8 +32,7 @@ Progress note for whoever picks this up next (update it with each push).
 - Open: seal `companions/`, `ai/policy.json` and the MCP host's
   `mcp-*.local.json` under the file key (with Morph Dev); show locked
   profiles in `profiles_view`; auto-lock after idle; OS authentication
-  unlock; the Flutter gate with biometrics; the password saver decision (see
-  "Password saver" below).
+  unlock; the Flutter gate with biometrics; OS authentication backends (see "Password saver" below).
 
 ## Keys
 
@@ -63,7 +62,7 @@ drops both.
 | Bookmarks, history, sync log, sync seed, epoch keys and node key copy, companion sync records | `library.db` | SQLCipher under the library key |
 | Settings, open windows and tabs | `settings.json.sealed`, `tabs.json.sealed` | XChaCha20-Poly1305 under the file key, bound to the file name |
 | Identity seed, node key | `identity/user.key`, `identity/node.key` | sealed under the password |
-| Password saver | not built yet (v0.3) | will live in `library.db` |
+| Saved passwords | `library.db` (`saved_logins`) | SQLCipher under the library key, and each password sealed again (XChaCha20-Poly1305) under the saver key |
 
 **Not encrypted yet** (open work, see "Limits"):
 
@@ -191,25 +190,57 @@ Does not protect against:
 - a profile whose password is turned off: anyone who can unlock your OS
   keystore can open it
 
-## Password saver (not built yet): relationship to this lock
+## Password saver
 
-Reported before any change; nothing in the saver is touched here.
+Approved by m3talsmith on Nov 19, 2026: **no separate master password**.
 
-- The plan (`docs/library-sync.md` section 7) gives saved passwords "a
-  separate opt-in and key". With this lock, the profile password already
-  protects `library.db` at rest, so a separate **master password** would be a
-  second secret for the same data on the same device.
-- Proposal: no master password by default. Saved passwords live in
-  `library.db` (SQLCipher under the library key, so the profile password
-  gates them), each value additionally sealed under a saver key derived from
-  the identity seed (HKDF label of its own), so sync carries them sealed and a
-  device without the identity never reads them.
-- A profile with its password turned off, or without an identity, should not
-  offer the saver (or should ask for OS authentication before filling),
-  since nothing but the OS keystore would protect it.
-- Optional "ask again before filling" (re-enter the profile password or OS
-  authentication) would be a saver setting, not a second password.
-- Decision needed from m3talsmith before the saver's storage is written.
+Code: `morph-store/src/saver_store.rs` (table `saved_logins`, migration 7),
+`morph-core/src/password_saver.rs` (keys, sealing, requirement, `OsAuth`),
+`morph-services/src/password_saver.rs` (the fill gate for front ends).
+
+- Saved logins live in `library.db`, so the profile password already gates
+  them at rest. Each password is also sealed under a **saver key**:
+  `seed ─HKDF "morph/library-db/v1"▶ library key ─HKDF "morph/password-saver/v1"▶ saver key`.
+  The seed is not held after unlock, so the saver key is derived through the
+  library key; both follow the seed, so another device with the same
+  identity derives the same key and sealed values can sync as they are. A
+  device without the identity cannot open them. The saver key is kept beside
+  the file key and dropped on lock.
+- Each sealed value is bound (AAD) to its row's id, origin and username, so a
+  row cannot be repointed at another site or user.
+- Only `http` and `https` origins; the origin is normalized (default ports
+  dropped). One login per origin and username (saving again updates it).
+- **No identity:** no key, so the saver is not offered.
+- **Password on (default):** the unlock was the proof; filling asks for nothing
+  more.
+- **Password off:** filling needs OS authentication (`OsAuth`). Where the OS
+  cannot authenticate, which is every platform today, the saver is not
+  offered (`Unavailable::NoOsAuth`).
+- **"Ask again before filling"** (sealed profile file `password-saver.json`):
+  the fill re-checks the profile password (same backoff as the lock screen),
+  not a second password. Turning it off needs the profile password. With the
+  password off it adds to the OS authentication.
+- `fill` reveals a password only with a `FillPermit` built after the proof(s)
+  the profile's requirement names. That is a seam against misuse, not a
+  boundary against code in the same process: the key is in memory while the
+  profile is open.
+
+### Status (password saver)
+
+- Done: storage table; sealing and `reveal`; requirement and `OsAuth` trait
+  with the `NoOsAuth` stub; sealed saver settings; services layer (`offer`,
+  `save`, `list`, `delete`, `fill`, `set_ask_again`); tests in all three
+  crates.
+- Left, nothing here is wired to a UI yet:
+  - a platform `OsAuth` (polkit on Linux, Touch ID, Windows Hello);
+  - capture and fill in the page (webview bridge fill exists for the
+    companion; the saver needs its own prompt and origin matching rules);
+  - Settings > Privacy switch for "ask again" and a saved-passwords list;
+  - **password sync**: waits for weirdnet-sync. The `hlc` and `node_id`
+    columns exist and are empty; deletes need a tombstone then. Values are
+    already sealed, so nothing in the sync step needs the plaintext;
+  - import from other managers (1Password, Bitwarden, LastPass work as
+    extensions in v0.5).
 
 ## Not done yet
 

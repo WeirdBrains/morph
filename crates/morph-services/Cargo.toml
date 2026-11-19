@@ -14,6 +14,7 @@ morph-core.workspace = true
 morph-identity.workspace = true
 morph-keystore.workspace = true
 morph-store.workspace = true
+weirdnet-keys.workspace = true
 thiserror.workspace = true
 serde_json.workspace = true
 # Weirdnet app calls (`weirdnet-<app>://` addresses): resolve, call, stream.

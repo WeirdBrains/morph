@@ -17,6 +17,7 @@ pub mod identity;
 pub mod library;
 pub mod network;
 pub mod node_router;
+pub mod password_saver;
 pub mod profile_lock;
 pub mod profiles;
 pub mod relays;

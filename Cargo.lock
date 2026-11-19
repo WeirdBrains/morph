@@ -5698,6 +5698,7 @@ dependencies = [
  "ureq",
  "weirdnet-agent",
  "weirdnet-device-link",
+ "weirdnet-keys",
  "weirdnet-net",
  "weirdnet-sync",
 ]
