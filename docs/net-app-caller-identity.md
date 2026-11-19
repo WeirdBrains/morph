@@ -16,7 +16,7 @@ itself: callers choose `DeviceCaller` when the far end is one of the user's devi
 
 ## The check (both ends)
 
-`check_caller(profile, roster, user_key, peer, presented) -> CallerCheck`:
+`Roster::check_caller(profile, user_key, peer, presented) -> CallerCheck` (weirdnet-sync 0.4):
 
 1. `peer` is the transport-authenticated peer id, never something the caller sent.
 2. A presented cert must be for `peer` and for this user and verify under the user key
@@ -29,8 +29,8 @@ itself: callers choose `DeviceCaller` when the far end is one of the user's devi
 
 Refusal reasons on the wire: `unknown-device`, `revoked`, `wrong-user`, `needs-admission`.
 
-The same rule is in `weirdnet-sync` main as `Roster::check_caller` / `CallerCheck`
-(unreleased). Morph keeps its own copy until it moves to that release, then calls the crate's.
+Morph calls `weirdnet-sync`'s `Roster::check_caller` and re-exports its `CallerCheck` from
+`morph_services::device_calls`; it keeps no copy of the rule.
 
 ## API sketch
 
@@ -72,6 +72,4 @@ roster is authoritative either way.
 
 ## Not done yet
 
-- Morph stays on `weirdnet-net` 0.6 and `weirdnet-sync` 0.3.1. Moving to `weirdnet-net` 0.7
-  needs a `weirdnet-sync` release on it (main has the bump and `check_caller`).
 - No Morph feature calls `DeviceCaller` yet; `NodeRouter` is the first user.

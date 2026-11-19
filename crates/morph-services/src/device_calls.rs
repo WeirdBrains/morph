@@ -6,86 +6,30 @@
 //! [`DeviceCaller`] instead: it uses the profile's running sync node, so the caller is the
 //! device's node key (its peer id is what Noise authenticates) and every call carries the
 //! device's cert from the linked-devices roster ([`CERT_HEADER`]). The serving side
-//! ([`DeviceCaller::serve`], [`DeviceCaller::accept_streams`]) runs [`check_caller`] against
-//! its own live roster before anything reaches the handler: an unknown, revoked, foreign or
-//! not-yet-admitted device is refused with the reason. The caller checks the far end the same
-//! way: only an active device of the same identity is dialled.
+//! ([`DeviceCaller::serve`], [`DeviceCaller::accept_streams`]) runs
+//! [`weirdnet_sync::Roster::check_caller`] against its own live roster before anything
+//! reaches the handler: an unknown, revoked, foreign or not-yet-admitted device is refused
+//! with the reason. The caller checks the far end the same way: only an active device of the
+//! same identity is dialled.
 //!
-//! [`check_caller`] is the rule `weirdnet-sync` main has as `Roster::check_caller`
-//! (unreleased); this copy goes when Morph moves to that release. See
-//! `docs/net-app-caller-identity.md`.
+//! See `docs/net-app-caller-identity.md`.
 
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use weirdnet_net::profile::{Profile, WEIRDNET};
+use weirdnet_net::profile::WEIRDNET;
 use weirdnet_net::stream::{Incoming, Limits, Stream};
-use weirdnet_net::user::{self, NodeCert};
-use weirdnet_net::{AppError, AppHandler, AppRequest, AppResponse, Multiaddr, Node, PeerId, PublicKey};
-use weirdnet_sync::{Roster, SyncState};
+use weirdnet_net::user::NodeCert;
+use weirdnet_net::{AppError, AppHandler, AppRequest, AppResponse, Multiaddr, Node, PeerId};
+pub use weirdnet_sync::CallerCheck;
+use weirdnet_sync::SyncState;
 
 /// The header a device call carries its cert in (JSON of [`NodeCert`]).
 pub const CERT_HEADER: &str = "weirdnet-device-cert";
 /// How long a device call may take to connect and get its status and headers.
 pub const CALL_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// What [`check_caller`] decided about a peer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CallerCheck {
-    /// An active, verified device of this user, in the key chain's head once there is one.
-    Linked,
-    /// No cert for this peer in the roster. A presented cert is not enough: anyone holding
-    /// the seed (a revoked device too) can mint one.
-    Unknown,
-    /// Revoked here, or it presented a revoked cert.
-    Revoked,
-    /// The cert is for another user or another peer, or does not verify.
-    WrongUser,
-    /// In the roster but not a member of the current key chain's head.
-    NotAdmitted,
-}
-
-impl CallerCheck {
-    /// The refusal reason, `None` for [`CallerCheck::Linked`].
-    pub fn reason(self) -> Option<&'static str> {
-        match self {
-            CallerCheck::Linked => None,
-            CallerCheck::Unknown => Some("unknown-device"),
-            CallerCheck::Revoked => Some("revoked"),
-            CallerCheck::WrongUser => Some("wrong-user"),
-            CallerCheck::NotAdmitted => Some("needs-admission"),
-        }
-    }
-}
-
-/// Whether `peer` (the transport-authenticated peer id, never one the caller sent) is a
-/// linked device of the user whose key is `user_key`. `presented` is the cert the caller
-/// sent, if any: it must match the peer and the user, and a revoked one is refused, but only
-/// the roster's own cert admits a caller.
-pub fn check_caller(profile: &Profile, roster: &Roster, user_key: &PublicKey, peer: &str, presented: Option<&NodeCert>) -> CallerCheck {
-    let uid = user::user_id(user_key);
-    if let Some(p) = presented {
-        if p.peer_id != peer || p.user_id != uid || !profile.verify_cert(user_key, p) {
-            return CallerCheck::WrongUser;
-        }
-        if !p.active() {
-            return CallerCheck::Revoked;
-        }
-    }
-    let Some(cert) = roster.get(peer) else { return CallerCheck::Unknown };
-    if !cert.active() {
-        return CallerCheck::Revoked;
-    }
-    if cert.user_id != uid || !profile.verify_cert(user_key, cert) {
-        return CallerCheck::WrongUser;
-    }
-    if roster.chain_view().head().is_some_and(|h| !h.members.contains(peer)) {
-        return CallerCheck::NotAdmitted;
-    }
-    CallerCheck::Linked
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DeviceCallError {
@@ -176,7 +120,7 @@ impl DeviceCaller {
 
     /// Check `peer` against the live roster (the same rule both ends use).
     pub fn check(&self, peer: &str, presented: Option<&NodeCert>) -> CallerCheck {
-        self.with_state(|st| check_caller(&WEIRDNET, &st.roster, &st.user_key, peer, presented))
+        self.with_state(|st| st.roster.check_caller(&WEIRDNET, &st.user_key, peer, presented))
     }
 
     /// The far end, if it is another linked device: its peer id and addresses.
@@ -263,7 +207,7 @@ impl LinkedStreams {
 mod tests {
     use super::*;
     use weirdnet_net::Keypair;
-    use weirdnet_sync::{node_config, start_node};
+    use weirdnet_sync::{Roster, node_config, start_node};
 
     struct Device {
         key: Keypair,
@@ -303,16 +247,16 @@ mod tests {
         r.upsert(a.cert.clone());
         r.upsert(b.cert.clone());
         let k = user.public();
-        assert_eq!(check_caller(&WEIRDNET, &r, &k, &b.cert.peer_id, None), CallerCheck::Linked);
-        assert_eq!(check_caller(&WEIRDNET, &r, &k, &b.cert.peer_id, Some(&b.cert)), CallerCheck::Linked);
-        assert_eq!(check_caller(&WEIRDNET, &r, &k, &b.cert.peer_id, Some(&a.cert)), CallerCheck::WrongUser, "another device's cert");
-        assert_eq!(check_caller(&WEIRDNET, &r, &k, &c.cert.peer_id, Some(&c.cert)), CallerCheck::Unknown, "a minted cert alone");
+        assert_eq!(r.check_caller(&WEIRDNET, &k, &b.cert.peer_id, None), CallerCheck::Linked);
+        assert_eq!(r.check_caller(&WEIRDNET, &k, &b.cert.peer_id, Some(&b.cert)), CallerCheck::Linked);
+        assert_eq!(r.check_caller(&WEIRDNET, &k, &b.cert.peer_id, Some(&a.cert)), CallerCheck::WrongUser, "another device's cert");
+        assert_eq!(r.check_caller(&WEIRDNET, &k, &c.cert.peer_id, Some(&c.cert)), CallerCheck::Unknown, "a minted cert alone");
         let stranger = device(&Keypair::generate_ed25519(), "x");
-        assert_eq!(check_caller(&WEIRDNET, &r, &k, &stranger.cert.peer_id, Some(&stranger.cert)), CallerCheck::WrongUser);
+        assert_eq!(r.check_caller(&WEIRDNET, &k, &stranger.cert.peer_id, Some(&stranger.cert)), CallerCheck::WrongUser);
         let stale = r.clone();
         let revoked = r.revoke(&WEIRDNET, &user, &b.cert.peer_id, 5).unwrap();
-        assert_eq!(check_caller(&WEIRDNET, &r, &k, &b.cert.peer_id, None), CallerCheck::Revoked);
-        assert_eq!(check_caller(&WEIRDNET, &stale, &k, &b.cert.peer_id, Some(&revoked)), CallerCheck::Revoked);
+        assert_eq!(r.check_caller(&WEIRDNET, &k, &b.cert.peer_id, None), CallerCheck::Revoked);
+        assert_eq!(stale.check_caller(&WEIRDNET, &k, &b.cert.peer_id, Some(&revoked)), CallerCheck::Revoked);
     }
 
     /// A serves an app to its linked devices: B (linked) gets through, D (revoked on A) and

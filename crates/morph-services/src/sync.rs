@@ -272,6 +272,7 @@ fn build_state(lib: &Library) -> Option<(Arc<Mutex<SyncState>>, Keypair)> {
             // Start the key chain right after the first link, or once after an
             // upgrade from seed-only keys (once every device has a device key).
             auto_first_rotation: true,
+            records: Default::default(),
         })),
         node_key,
     ))
@@ -305,6 +306,7 @@ fn offline_state(lib: &Library) -> Option<(SyncState, Keypair)> {
         device: Device::from_node_key(&node_key).ok(),
         keys: core::load_epoch_keys(lib).ok()?,
         auto_first_rotation: true,
+        records: Default::default(),
     };
     st.publish_device_key(now_ms()).ok()?;
     st.refresh_keys();
@@ -482,6 +484,7 @@ fn snapshot(st: &SyncState) -> SyncState {
         device: st.device.clone(),
         keys: st.keys.clone(),
         auto_first_rotation: st.auto_first_rotation,
+        records: st.records.clone(),
     }
 }
 
@@ -924,6 +927,7 @@ mod tests {
             device: None,
             keys: Default::default(),
             auto_first_rotation: false,
+            records: Default::default(),
         };
         let mut work = snapshot(&live);
         // While the copy pulls, the live state revokes `other` and writes locally.
@@ -941,6 +945,7 @@ mod tests {
                 typ: "bookmarks".into(),
                 record_id: "theirs".into(),
                 op: vec![2],
+                value: None,
             }],
         });
         work.log.set_cursor(&peer, 1);
