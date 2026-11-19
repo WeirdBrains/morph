@@ -88,6 +88,8 @@ pub(crate) mod tests {
     /// The desk's model provider: ready, or refusing with a reason (no download, unsupported CPU).
     pub(crate) struct Desk {
         pub(crate) refusal: Mutex<Option<String>>,
+        /// A real provider to serve instead of the scripted model (the ignored Gemma test).
+        pub(crate) real: Mutex<Option<Arc<dyn ModelProvider>>>,
         /// A marker the desk's model reads while it runs a turn (tests of the working line).
         pub(crate) peek: Mutex<Option<crate::routed_models::RunsOn>>,
         pub(crate) seen: Arc<Mutex<Vec<Option<String>>>>,
@@ -120,7 +122,10 @@ pub(crate) mod tests {
     }
 
     impl ModelProvider for Desk {
-        fn open(&self, _choice: &ModelChoice) -> Result<Arc<dyn ModelBackend>, ModelError> {
+        fn open(&self, choice: &ModelChoice) -> Result<Arc<dyn ModelBackend>, ModelError> {
+            if let Some(real) = &*self.real.lock().unwrap() {
+                return real.open(choice);
+            }
             match &*self.refusal.lock().unwrap() {
                 None => Ok(Arc::new(Peeking(self.peek.lock().unwrap().clone(), self.seen.clone()))),
                 Some(why) => Err(ModelError::Unavailable(why.clone())),
@@ -180,7 +185,7 @@ pub(crate) mod tests {
                 serves_models: true,
             })),
             desk_id: a.cert.peer_id,
-            provider: Arc::new(Desk { refusal: Mutex::new(None), peek: Mutex::default(), seen: Arc::default() }),
+            provider: Arc::new(Desk { refusal: Mutex::new(None), real: Mutex::default(), peek: Mutex::default(), seen: Arc::default() }),
             on: Arc::new(AtomicBool::new(true)),
             busy: Arc::new(AtomicBool::new(false)),
         }
@@ -270,5 +275,39 @@ pub(crate) mod tests {
         let p = pair();
         let _first = p.serve().unwrap();
         assert!(p.serve().is_err());
+    }
+
+    /// A real Gemma over the loopback, with the timing:
+    /// `cargo test -p morph-services --release -- --ignored --nocapture real_gemma`
+    /// (needs the model downloaded in the default models directory).
+    #[test]
+    #[ignore = "needs the Gemma 4 E4B model on disk and takes a while"]
+    fn real_gemma_over_the_loopback() {
+        use std::time::Instant;
+        let factory: morph_ai::EngineFactory = Arc::new(|path| {
+            weirdnet_model::llama::LlamaEngine::load(path, weirdnet_model::llama::LlamaOptions::default())
+                .map(|e| Box::new(e) as Box<dyn weirdnet_model::Engine>)
+        });
+        let models = Arc::new(morph_ai::LocalModels::new(weirdnet_model::ModelStore::from_env(), factory));
+        let (rt, p) = (rt(), pair());
+        *p.provider.real.lock().unwrap() = Some(models);
+        let _serving = p.serve().unwrap();
+        let plan = OffloadPlan { nodes: vec![p.desk_id.clone()], fallback_local: false };
+        let model = protocols::remote_model(p.phone.clone(), &plan, None);
+        let t0 = Instant::now();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let sink = DeltaSink::new(Some(tx));
+        let messages = [Message::user("Reply with one short sentence: what is the capital of France?")];
+        let (turn, first) = rt.block_on(async {
+            let first = tokio::spawn(async move {
+                rx.recv().await;
+                t0.elapsed()
+            });
+            let turn = model.complete(&messages, &[], &sink, &CancelToken::new()).await.expect("the remote turn");
+            drop(sink);
+            (turn, first.await.unwrap())
+        });
+        println!("REAL GEMMA: total {:?}, first delta {:?}, route {:?}, text {:?}", t0.elapsed(), first, model.last_route(), turn.text);
+        assert!(turn.text.to_lowercase().contains("paris"), "{}", turn.text);
     }
 }

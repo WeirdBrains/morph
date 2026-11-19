@@ -5702,6 +5702,7 @@ dependencies = [
  "weirdnet-agent",
  "weirdnet-device-link",
  "weirdnet-keys",
+ "weirdnet-model",
  "weirdnet-net",
  "weirdnet-sync",
 ]
