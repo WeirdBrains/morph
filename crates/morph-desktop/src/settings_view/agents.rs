@@ -91,6 +91,17 @@ pub fn set_level(dir: &Path, who: &Who, site: &str, level: SiteLevel) -> Result<
     g.set_site_level_for(&agents, &site, level).map_err(|e| e.to_string())
 }
 
+/// Adds an Always allow by hand (Agents › Permissions › Add): navigate on `site` or everywhere,
+/// or research with any provider, for one companion or all of them.
+pub fn add_allow(dir: &Path, who: &Who, rule: AllowRule) -> Result<(), String> {
+    let companion = match who {
+        Who::One(id) => CompanionScope::One(id.clone()),
+        Who::All => CompanionScope::All,
+    };
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or_default();
+    grants(dir)?.add_allow(companion, rule, now).map(|_| ()).map_err(|e| e.to_string())
+}
+
 pub fn revoke(dir: &Path, allow_id: u64) -> Result<bool, String> {
     grants(dir)?.revoke(allow_id).map_err(|e| e.to_string())
 }
@@ -556,6 +567,23 @@ impl SettingsView {
                     ),
             );
         }
+        // Add: navigate everywhere or research, for the selected companion or all of them.
+        if let Some(sel) = self.agents_selected(&roster) {
+            let name = roster.get(&sel).map(|c| c.name().to_string()).unwrap_or_default();
+            let adds = [
+                (format!("+ Navigate everywhere · {name}"), Who::One(sel.clone()), AllowRule::Navigate { site: None }),
+                ("+ Navigate everywhere · all".to_string(), Who::All, AllowRule::Navigate { site: None }),
+                (format!("+ Research · {name}"), Who::One(sel.clone()), AllowRule::Research { provider: None }),
+                ("+ Research · all".to_string(), Who::All, AllowRule::Research { provider: None }),
+            ];
+            card =
+                card.child(div().flex().flex_row().flex_wrap().gap(px(6.)).children(adds.into_iter().enumerate().map(|(i, (label, who, rule))| {
+                    button(t, ("agents-add-allow", i), label, false).on_click(cx.listener(move |this, _, _, cx| {
+                        let (who, rule) = (who.clone(), rule.clone());
+                        this.agents_apply(|d| add_allow(d, &who, rule), cx);
+                    }))
+                })));
+        }
         if allows.len() > 1 {
             card = card.child(div().flex().flex_row().child(button(t, "agents-revoke-all", "Revoke all", false).on_click(cx.listener(
                 |this, _, _, cx| {
@@ -710,5 +738,19 @@ mod tests {
         assert_eq!(model_state(&ModelChoice::Custom("org/x".into()), &models), ModelState::NotInCatalog);
         assert!(ModelState::NotInCatalog.text().contains("cannot") || ModelState::NotInCatalog.text().contains("Not a model"));
         assert!(model_state(&ModelChoice::Gemma4E4B, &models).text().contains("GB"));
+    }
+
+    #[test]
+    fn allows_can_be_added_by_hand_for_one_companion_or_all() {
+        let home = tempfile::tempdir().unwrap();
+        let d = home.path().join("companions");
+        add_allow(&d, &Who::One(AgentId::new("local")), AllowRule::Navigate { site: None }).unwrap();
+        add_allow(&d, &Who::All, AllowRule::Research { provider: None }).unwrap();
+        let allows = grants(&d).unwrap().allows();
+        assert_eq!(allows.len(), 2);
+        assert_eq!(allows[0].companion, CompanionScope::One(AgentId::new("local")));
+        assert_eq!(allows[1].companion, CompanionScope::All);
+        assert!(revoke(&d, allows[0].id).unwrap());
+        assert_eq!(grants(&d).unwrap().allows().len(), 1);
     }
 }
