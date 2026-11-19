@@ -108,6 +108,13 @@ impl Roster {
         Ok(())
     }
 
+    /// Choose the model a companion runs.
+    pub fn set_model(&mut self, id: &AgentId, model: ModelChoice) -> Result<(), RosterError> {
+        let c = self.companions.iter_mut().find(|c| c.id() == id).ok_or_else(|| RosterError::Unknown(id.to_string()))?;
+        c.model = Some(model);
+        Ok(())
+    }
+
     /// Removes a companion. The caller also forgets its grants (see [`crate::Grants::forget`]).
     pub fn remove(&mut self, id: &AgentId) -> Result<CompanionProfile, RosterError> {
         let i = self.companions.iter().position(|c| c.id() == id).ok_or_else(|| RosterError::Unknown(id.to_string()))?;
@@ -168,5 +175,14 @@ mod tests {
         let r = roster();
         let back: Roster = serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
         assert_eq!(r, back);
+    }
+
+    #[test]
+    fn a_companions_model_can_change() {
+        let mut r = Roster::first_run(ModelChoice::Gemma4E4B);
+        let id = r.default_companion().unwrap().id().clone();
+        r.set_model(&id, ModelChoice::Custom("org/m".into())).unwrap();
+        assert_eq!(r.get(&id).unwrap().model, Some(ModelChoice::Custom("org/m".into())));
+        assert!(r.set_model(&AgentId::new("nope"), ModelChoice::Gemma4E2B).is_err());
     }
 }
