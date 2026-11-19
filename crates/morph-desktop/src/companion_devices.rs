@@ -46,7 +46,8 @@ impl CompanionDevices {
         Self { home, profile, links: None, checked: None, asking: Arc::new(AtomicBool::new(false)), locked }
     }
 
-    /// The profile lock this panel follows (tests set their own).
+    /// Follow the panel's profile lock check (the one its hosts refuse on), so the two never
+    /// disagree; tests set their own.
     pub fn with_lock(self, locked: LockCheck) -> Self {
         Self { locked, ..self }
     }

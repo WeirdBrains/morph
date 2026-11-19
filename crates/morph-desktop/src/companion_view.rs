@@ -222,7 +222,7 @@ impl CompanionView {
             policy_base,
             synced,
             roster_unsaved,
-            devices: crate::companion_devices::CompanionDevices::new(home.to_path_buf(), profile.to_string()),
+            devices: crate::companion_devices::CompanionDevices::new(home.to_path_buf(), profile.to_string()).with_lock(lock.clone()),
             autoask: std::env::var("MORPH_COMPANION_AUTOASK").ok().filter(|q| !q.trim().is_empty()),
             lock,
             lock_seen: None,
