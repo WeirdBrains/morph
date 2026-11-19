@@ -114,17 +114,12 @@ pub fn share_secrets(profile_dir: &Path, secrets: &Arc<dyn McpSecrets>) {
     all.push((profile_dir.to_path_buf(), Arc::downgrade(secrets)));
 }
 
-/// The profile's shared MCP secrets store, if the host has one open and the profile is
-/// unlocked (a locked store reads empty, which must never look like deleted secrets). None:
-/// sync leaves the secrets as they were merged last, reading and writing nothing.
+/// The profile's shared MCP secrets store, if the host has one open. None: sync leaves the
+/// secrets as they were merged last, reading and writing nothing. A locked store reads empty,
+/// which must never look like deleted secrets: a pass on a locked profile stops at its first
+/// file read (`StoreError::Locked` through `FileIo`), and [`read_secrets`] reads again after
+/// the values. (No lock-status call here: it is used inside `library_db::with`.)
 pub fn secrets_for(profile_dir: &Path) -> Option<Arc<dyn McpSecrets>> {
-    if crate::profile_lock::is_locked_in(&profile_dir.join("companions")) {
-        return None;
-    }
-    shared_secrets(profile_dir)
-}
-
-fn shared_secrets(profile_dir: &Path) -> Option<Arc<dyn McpSecrets>> {
     SECRETS.lock().unwrap_or_else(|p| p.into_inner()).iter().find(|(p, _)| p == profile_dir).and_then(|(_, w)| w.upgrade())
 }
 
@@ -1418,17 +1413,58 @@ mod tests {
         assert_eq!(sec_b.get("srv", "TOKEN"), None);
     }
 
+    /// Files of a locked profile: every read and write is refused.
+    struct LockedIo;
+    impl morph_ai::FileIo for LockedIo {
+        fn read(&self, _: &Path) -> std::result::Result<Option<Vec<u8>>, StoreError> {
+            Err(StoreError::Locked)
+        }
+        fn write(&self, _: &Path, _: &[u8]) -> std::result::Result<(), StoreError> {
+            Err(StoreError::Locked)
+        }
+        fn locked(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn a_locked_profile_never_logs_its_empty_secrets_as_removals() {
+        use morph_ai::MemorySecrets;
+        let (t, mut l) = lib();
+        bind_device(&mut l, [5; 32], &weirdnet_net::Keypair::generate_ed25519(), "a");
+        rotate(&mut l);
+        let dir = t.path().join("companions");
+        let store = FileStore::new(&dir);
+        let mut cfg = McpConfigs::default();
+        cfg.upsert(secret_server());
+        store.save_mcp(&cfg).unwrap();
+        let sec = MemorySecrets::default();
+        sec.set("srv", "TOKEN", "t-1");
+        backfill_with(&mut l, &store, Some(&sec), 100).unwrap();
+        let count = |l: &Library| load_log(l).unwrap().iter().filter(|e| e.typ == MCP_SECRETS).count();
+        assert_eq!(count(&l), 1);
+
+        // Locked: the files refuse, and the secrets store reads empty.
+        let locked = FileStore::with_io(&dir, Arc::new(LockedIo));
+        let empty = MemorySecrets::default();
+        assert!(matches!(backfill_with(&mut l, &locked, Some(&empty), 200), Err(CompanionSyncError::Files(StoreError::Locked))));
+        assert!(materialize_with(&mut l, &locked, Some(&empty)).is_err());
+        assert_eq!(count(&l), 1, "no removal logged");
+        // Unlocked again, nothing changed.
+        backfill_with(&mut l, &store, Some(&sec), 300).unwrap();
+        assert_eq!(count(&l), 1);
+    }
+
     #[test]
     fn sync_uses_only_the_secrets_store_the_host_shares() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(shared_secrets(dir.path()).is_none(), "nothing shared: secrets are left alone");
+        assert!(secrets_for(dir.path()).is_none(), "nothing shared: secrets are left alone");
         let shared: Arc<dyn McpSecrets> = Arc::new(morph_ai::MemorySecrets::default());
         share_secrets(dir.path(), &shared);
         shared.set("srv", "TOKEN", "t");
-        assert_eq!(shared_secrets(dir.path()).unwrap().get("srv", "TOKEN").as_deref(), Some("t"));
-        assert!(secrets_for(dir.path()).is_none(), "not an unlocked profile: no secrets for sync");
+        assert_eq!(secrets_for(dir.path()).unwrap().get("srv", "TOKEN").as_deref(), Some("t"));
         drop(shared);
-        assert!(shared_secrets(dir.path()).is_none(), "only while the host holds it");
+        assert!(secrets_for(dir.path()).is_none(), "only while the host holds it");
     }
 
     #[test]
