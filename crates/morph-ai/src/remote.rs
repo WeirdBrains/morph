@@ -2,10 +2,11 @@
 //! another linked device) and inference offload (a phone, or any device, sending model turns to
 //! a stronger one).
 //!
-//! The transport sits behind [`NodeRouter`], so this code does not depend on how devices are
-//! reached. The app implements it over Weirdnet streams with the device key and certificate
-//! (`NetAppCaller`), and the generic protocols on top (`weirdnet-agent` `remote::infer` and
-//! `remote::task`) run over the [`Link`] it opens.
+//! The transport sits behind [`NodeRouter`] (calling) and [`LinkHandler`] (serving), so this
+//! code does not depend on how devices are reached. `morph-services` `node_router` implements
+//! both over Weirdnet streams on the device's identity (`device_calls::DeviceCaller`), and the
+//! generic protocols on top (`weirdnet-agent` `remote::infer` and `remote::task`) run over the
+//! [`Link`] it opens.
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -66,6 +67,14 @@ pub trait NodeRouter: Send + Sync {
     /// the user's linked devices and refuse anything else; the serving side checks the caller
     /// the same way before it runs anything.
     async fn open(&self, peer: &str, protocol: &str) -> Result<Link, RouteError>;
+}
+
+/// The serving side: runs one protocol session on a link a linked device opened. The router
+/// has checked the caller against the roster before this is called.
+#[async_trait]
+pub trait LinkHandler: Send + Sync {
+    /// `from` is the caller's peer id (transport-authenticated). Returning ends the session.
+    async fn handle(&self, from: String, link: Link);
 }
 
 /// Where a companion's task runs.
