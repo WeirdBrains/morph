@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - After restoring an identity from its recovery words, shards or a backup, Morph says to link this device again from one of your other devices so it can read what they sync.
 
+- Page bridge for companions (docs/bridge-api.md): handlers get the view, the engine's address and origin, the frame and whether the view is hidden; Morph's own scripts talk on a channel pages can't reach (a script world of its own on Linux, a per-view secret everywhere), and pages can no longer send host-only messages. Morph can load pages out of sight and read their title, text, a readable extract, links, selection or HTML (at most 8 MiB, in chunks, with a timeout).
+
 ## [0.2.1] - 2026-11-18
 
 - New window: Ctrl+N (⌘N on macOS) and ☰ → New window.
