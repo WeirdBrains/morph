@@ -97,9 +97,10 @@ fn history_entries(log: &weirdnet_sync::OpLog, lib: &Library) -> morph_store::Re
     for e in lib.sync_log()? {
         nodes.insert(e.node_id);
     }
+    let revoked = crate::sync::revoked_writers(&crate::sync::load_roster(lib)?);
     let mut out = Vec::new();
     for n in &nodes {
-        out.extend(log.iter_node(&NodeId::new(n.clone())).filter(|e| e.typ == HISTORY).cloned());
+        out.extend(log.iter_node(&NodeId::new(n.clone())).filter(|e| e.typ == HISTORY && !crate::sync::late_from_revoked(&revoked, e)).cloned());
     }
     Ok(out)
 }
