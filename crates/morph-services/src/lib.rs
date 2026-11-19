@@ -14,6 +14,7 @@ pub mod device_calls;
 pub mod device_link;
 pub mod home;
 pub mod identity;
+pub mod infer_serving;
 pub mod library;
 pub mod network;
 pub mod node_router;
