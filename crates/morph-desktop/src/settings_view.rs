@@ -28,6 +28,7 @@ use morph_services::relays::{RelayReport, RelayStatus};
 use morph_services::sync::DeviceView;
 
 mod agents;
+mod servers;
 
 use crate::default_browser::{self, Status};
 use crate::shell::ShellRequest;
@@ -120,7 +121,9 @@ impl Section {
             Section::Relays => {
                 "relays relay network weirdnet connected connection reservation slot link devices nat peer discovery mdns dht corporate lan"
             }
-            Section::Agents => "agents companions ai model gemma grants permissions always allow site research search provider mcp",
+            Section::Agents => {
+                "agents companions ai model gemma grants permissions always allow site research search provider mcp connected servers tools tokens"
+            }
             Section::About => "about version licence license notices",
         }
     }
@@ -260,6 +263,7 @@ pub struct SettingsView {
     /// The shown profile's linked devices (its sync roster).
     devices: Vec<DeviceView>,
     agents: agents::State,
+    servers: servers::State,
     /// A device whose Revoke was pressed once and waits for Confirm.
     confirm_revoke: Option<String>,
     _subscriptions: Vec<gpui::Subscription>,
@@ -341,6 +345,7 @@ impl SettingsView {
             peer_input,
             devices: Vec::new(),
             agents: agents_state,
+            servers: servers::State::default(),
             confirm_revoke: None,
             _subscriptions: subscriptions,
         };
@@ -514,6 +519,7 @@ impl SettingsView {
     /// Pick up finished default-browser work; called by the host's tick.
     pub fn poll(&mut self, cx: &mut Context<Self>) {
         self.poll_relays(cx);
+        self.servers_poll(cx);
         let Some((status, made)) = self.browser_check.as_ref().and_then(|c| c.take()) else {
             return;
         };
@@ -1048,7 +1054,7 @@ impl SettingsView {
         rows
     }
 
-    fn section_rows(&self, section: Section, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+    fn section_rows(&mut self, section: Section, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
         let t = self.theme;
         let s = self.settings.clone();
         match section {

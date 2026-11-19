@@ -8,7 +8,11 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use morph_ai::{ModelProvider, Roster};
 use morph_companion::{Canceller, SessionError, Sessions, ViewUpdate};
-use weirdnet_agent::{AgentId, ApprovalAnswer, ApprovalPrompt, Approver, Outcome, SharedPolicy, ToolRegistry, ToolSpec};
+
+use crate::mcp_host::ToolsSource;
+#[cfg(test)]
+use weirdnet_agent::ToolRegistry;
+use weirdnet_agent::{AgentId, ApprovalAnswer, ApprovalPrompt, Approver, Outcome, SharedPolicy, ToolSpec};
 
 /// What the worker tells the panel.
 #[derive(Debug)]
@@ -44,8 +48,30 @@ pub struct Worker {
     approval: Slot,
 }
 
+/// No tools: the registry is the same empty one for every task.
+#[cfg(test)]
+struct NoTools(Arc<ToolRegistry>);
+
+#[cfg(test)]
+impl ToolsSource for NoTools {
+    fn registry(&self) -> Arc<ToolRegistry> {
+        self.0.clone()
+    }
+
+    fn handle(&self) -> Option<tokio::runtime::Handle> {
+        None
+    }
+}
+
 impl Worker {
+    #[cfg(test)]
     pub fn start(models: Arc<dyn ModelProvider>, policy: SharedPolicy) -> Self {
+        Self::start_with(models, policy, Arc::new(NoTools(Arc::new(ToolRegistry::new()))))
+    }
+
+    /// Like [`start`](Self::start), with tools (connected MCP servers) taken from `tools` at each
+    /// task. When `tools` has a runtime, tasks run on it.
+    pub fn start_with(models: Arc<dyn ModelProvider>, policy: SharedPolicy, tools: Arc<dyn ToolsSource>) -> Self {
         let (cmd, cmd_rx) = mpsc::channel::<Cmd>();
         let (msg_tx, msgs) = mpsc::channel::<Msg>();
         let (can_tx, can_rx) = mpsc::channel();
@@ -54,8 +80,8 @@ impl Worker {
         std::thread::Builder::new()
             .name("morph-companions".into())
             .spawn(move || {
-                // Tools arrive with the browser and research hosts; until then the registry is empty.
-                let mut sessions = Sessions::new(models, Arc::new(ToolRegistry::new()), policy, approver);
+                // Browser and research tools arrive with their hosts; until then only MCP servers' tools.
+                let mut sessions = Sessions::new(models, tools.registry(), policy, approver);
                 let _ = can_tx.send(sessions.canceller());
                 let Ok(rt) = tokio::runtime::Builder::new_current_thread().enable_time().build() else {
                     return;
@@ -63,9 +89,14 @@ impl Worker {
                 while let Ok(Cmd::Run { roster, companion, input }) = cmd_rx.recv() {
                     let tx = msg_tx.clone();
                     let id = companion.clone();
-                    let result = rt.block_on(sessions.run(&roster, &companion, &input, |u| {
+                    sessions.set_tools(tools.registry());
+                    let task = sessions.run(&roster, &companion, &input, |u| {
                         let _ = tx.send(Msg::Update(id.clone(), u));
-                    }));
+                    });
+                    let result = match tools.handle() {
+                        Some(handle) => handle.block_on(task),
+                        None => rt.block_on(task),
+                    };
                     let _ = msg_tx.send(Msg::Done(companion, result.map(Box::new)));
                 }
             })
