@@ -146,6 +146,9 @@ pub enum ShellRequest {
     CloseWindow,
     /// Open a new window (same profile) starting with this.
     NewWindow(WindowStart),
+    /// The address bar's `>`: show the Companion panel and ask `name` (the default companion when
+    /// `None`). The current tab is not attached.
+    AskCompanion { name: Option<String>, question: String },
 }
 
 /// What a new window starts with.
@@ -688,6 +691,7 @@ impl Shell {
                 }
             }
             ShellRequest::FocusShell => self.focus_shell(cx),
+            ShellRequest::AskCompanion { name, question } => self.ask_companion(name.clone(), question.clone(), window, cx),
             ShellRequest::LibraryUnlocked => self.last_marked = None,
             ShellRequest::SwitchProfile(id) => self.switch_profile(id, window, cx),
             ShellRequest::ProfileRenamed => {
@@ -912,6 +916,23 @@ impl Shell {
     }
 
     /// Open or close the Companion panel. It is window-level: switching tabs leaves it as it is.
+    /// Show the Companion panel if it is hidden and send the question there.
+    fn ask_companion(&mut self, name: Option<String>, question: String, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(companions) = self.companions.clone() else {
+            return;
+        };
+        if self.layout.shown(Slot::Companion).is_none() {
+            self.layout.toggle_kind(Slot::Companion, KindId::new(component::COMPANIONS));
+            self.save_layout();
+        }
+        companions.update(cx, |view, cx| {
+            view.ask(name.as_deref(), &question, cx);
+            view.focus(window, cx);
+        });
+        self.focus_shell(cx);
+        cx.notify();
+    }
+
     fn toggle_companions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(companions) = self.companions.clone() else {
             return;

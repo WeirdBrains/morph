@@ -1202,7 +1202,7 @@ impl BrowserView {
     }
 
     fn submit(&mut self, _: &Submit, window: &mut Window, cx: &mut Context<Self>) {
-        if self.open_selected_suggestion(window, cx) {
+        if self.open_selected_suggestion(window, cx) || self.submit_companion(window, cx) {
             return;
         }
         if let Some(i) = self.address_menu.as_ref().and_then(|m| m.highlighted) {
