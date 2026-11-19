@@ -121,9 +121,9 @@ fn snapshot(data: PageData) -> PageSnapshot {
         selection: data.selection,
         links: data.links.unwrap_or_default().into_iter().map(|l| PageLink { href: l.href, text: l.text }).collect(),
         truncated: data.truncated,
-        // Page scripts can't touch a read in Morph's own script world (WebKitGTK); in the page's
-        // world (macOS, Windows) a hostile page can shape what the read says.
-        isolated: data.isolation == Some(Isolation::ScriptWorld),
+        // Reads run in Morph's own script world on every desktop engine now; only a read in the
+        // page's own world (an engine without one) gets the "page scripts could change this" note.
+        isolated: data.isolation != Some(Isolation::PageWorld),
         url: data.url,
     }
 }
@@ -1072,6 +1072,27 @@ fn demo_conversation() -> Conversation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_page_world_read_is_marked_as_one_page_scripts_could_change() {
+        let data = |isolation| PageData {
+            view: morph_webview::ViewId(1),
+            url: "https://a.example/".into(),
+            origin: "https://a.example".into(),
+            isolation,
+            title: Some("A".into()),
+            text: Some("text".into()),
+            readable: None,
+            links: None,
+            selection: None,
+            html: None,
+            truncated: false,
+            bytes: 4,
+        };
+        assert!(snapshot(data(Some(Isolation::ScriptWorld))).isolated);
+        assert!(snapshot(data(None)).isolated);
+        assert!(!snapshot(data(Some(Isolation::PageWorld))).isolated);
+    }
 
     #[test]
     fn the_demo_conversation_has_every_row_kind() {
