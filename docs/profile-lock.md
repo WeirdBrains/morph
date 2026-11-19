@@ -194,7 +194,7 @@ Does not protect against:
 
 Approved by m3talsmith on Nov 19, 2026: **no separate master password**.
 
-Code: `morph-store/src/saver_store.rs` (table `saved_logins`, migration 7),
+Code: `morph-store/src/saver_store.rs` (table `saved_logins`, migration 6),
 `morph-core/src/password_saver.rs` (keys, sealing, requirement, `OsAuth`),
 `morph-services/src/password_saver.rs` (the fill gate for front ends).
 
