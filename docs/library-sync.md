@@ -230,6 +230,33 @@ key; old keys stay for history.
   revoked device can still sign revocations of other devices. It cannot read
   anything, but undoing that needs a new identity.
 
+### What a revoked device wrote
+
+A revoked device may still hold old pages, and another device may relay ops it
+wrote after the revocation. Merging treats its ops as void by its writer and
+HLC, never by when the page arrived:
+
+- Bookmarks, history, settings, chats and journals: an op whose writer is
+  revoked and whose HLC is after the revocation (`revoked_at`) is void
+  (`sync::late_from_revoked`). What it wrote before the revocation stands.
+- Companions, grants and MCP configs (`companion_sync::SENSITIVE`): every op of
+  a revoked writer is void, from before the revocation too, removals included.
+  Each record falls back to the latest entry from a writer that is not revoked,
+  or to the local value when there is none.
+- This applies on merge, on load (sync start), when the revoked set in the
+  roster changes (from any device), and right after a local revoke. The
+  services rematerialize every type then and record the revocations the merged
+  rows reflect (`sync_meta` `revoked-applied`), so a missed pass is redone.
+- Morph keeps the writer of each synced MCP record in its own merge snapshot
+  (`mcp_writers`); the record types are unchanged. A stdio MCP server starts
+  only when `morph_services::sync::mcp_may_start` allows it: written on this
+  device, or by a linked device that is not revoked. When the library is locked
+  it refuses. The first start of any stdio config on a device still needs the
+  local "Review and allow" (`morph-ai` per-machine approvals, never synced).
+- Limits: a server already running when its writer is revoked keeps running
+  until the MCP host reloads its configs; the approval fingerprint covers
+  command, args and env names, not env values (`morph-ai`).
+
 ## Transport and protocol
 
 Reuse the link node's listen addresses and relay list
