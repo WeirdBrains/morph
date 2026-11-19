@@ -46,6 +46,9 @@ pub enum Action {
     ShowDownloads,
     /// Open or close the Companion panel (the right-hand slot).
     ToggleCompanions,
+    /// Lock the shown profile now: every window of it shows the lock screen
+    /// until its password is entered (profiles with an identity only).
+    LockProfile,
 }
 
 impl Action {
@@ -79,6 +82,7 @@ impl Action {
             Action::ShowSearchSettings => "shell.show_search_settings".into(),
             Action::ShowDownloads => "browser.show_downloads".into(),
             Action::ToggleCompanions => "shell.toggle_companions".into(),
+            Action::LockProfile => "shell.lock_profile".into(),
         }
     }
 
@@ -111,6 +115,7 @@ impl Action {
             Action::ShowSearchSettings,
             Action::ShowDownloads,
             Action::ToggleCompanions,
+            Action::LockProfile,
         ];
         if let Some(action) = fixed.into_iter().find(|a| a.name() == name) {
             return Some(action);

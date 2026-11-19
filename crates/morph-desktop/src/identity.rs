@@ -506,7 +506,7 @@ impl Identity {
             }
             Step::Words(_) => {
                 self.step = Step::Overview;
-                self.notice = Some("Keep the recovery words somewhere safe; they are the only way back without this device.".into());
+                self.notice = Some(format!("Keep the recovery words somewhere safe; they are the only way back without this device. {LOCK_NOTE}"));
                 Ok(Outcome::Stay)
             }
             Step::Import => {
@@ -631,7 +631,7 @@ impl Identity {
     fn done(&mut self, identity: ProfileIdentity, notice: &str) -> Result<Outcome, String> {
         self.identity = Some(identity);
         self.step = Step::Overview;
-        self.notice = Some(notice.into());
+        self.notice = Some(format!("{notice} {LOCK_NOTE}"));
         Ok(Outcome::IdentityChanged)
     }
 }
@@ -643,6 +643,10 @@ impl Drop for Identity {
 }
 
 /// A restore's notice, with what a restored install needs after keys rotated.
+/// Said once a profile has an identity: from now on it is encrypted and locked.
+pub const LOCK_NOTE: &str = "This profile is now encrypted and asks for its password every time it opens; \
+you can turn that off in Settings > Privacy and site data.";
+
 fn restored(what: &str) -> String {
     format!("{what} {}", morph_services::sync::RESTORED_NOTE)
 }

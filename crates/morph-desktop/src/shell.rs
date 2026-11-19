@@ -22,6 +22,7 @@ use crate::companion_view::CompanionView;
 use crate::identity_view::IdentityView;
 use crate::library::Tab;
 use crate::library_view::LibraryView;
+use crate::lock_view::LockView;
 use crate::profiles_view::ProfilesView;
 use crate::settings_view::SettingsView;
 
@@ -61,7 +62,8 @@ actions!(
         ShowAbout,
         ShowSearchSettings,
         ShowDownloads,
-        ToggleCompanions
+        ToggleCompanions,
+        LockProfile
     ]
 );
 
@@ -102,6 +104,7 @@ pub(crate) fn gpui_action(action: Action) -> Box<dyn gpui::Action> {
         Action::ShowSearchSettings => Box::new(ShowSearchSettings),
         Action::ShowDownloads => Box::new(ShowDownloads),
         Action::ToggleCompanions => Box::new(ToggleCompanions),
+        Action::LockProfile => Box::new(LockProfile),
     }
 }
 
@@ -123,6 +126,8 @@ pub enum ShellRequest {
     FocusShell,
     /// The profile's library was unlocked.
     LibraryUnlocked,
+    /// The lock screen unlocked this profile: build it in every window that waits on it.
+    ProfileUnlocked(String),
     /// Show this profile in the window.
     SwitchProfile(String),
     /// A profile's name changed.
@@ -422,6 +427,13 @@ pub struct Shell {
     /// work while its own chrome (not a page or a field) has the keyboard.
     focus: FocusHandle,
     library: Option<Entity<LibraryView>>,
+    /// The lock screen, while the profile is locked: nothing of the profile
+    /// is built until it unlocks.
+    lock: Option<Entity<LockView>>,
+    /// What the window shows once the profile unlocks.
+    pending_start: Option<WindowStart>,
+    /// The profile's other saved windows, to open once it unlocks.
+    pending_windows: Vec<morph_core::session::WindowSession>,
     profiles: Option<Entity<ProfilesView>>,
     settings: Option<Entity<SettingsView>>,
     identity: Option<Entity<IdentityView>>,
@@ -502,6 +514,9 @@ impl Shell {
             last_title: String::new(),
             focus: cx.focus_handle(),
             library: None,
+            lock: None,
+            pending_start: None,
+            pending_windows: Vec::new(),
             profiles: Some(profiles),
             settings: Some(settings),
             identity: None,
@@ -547,6 +562,25 @@ impl Shell {
         self.components.retain(|c| !PER_PROFILE.contains(&c.kind().as_str()));
         self.profile_subscriptions.clear();
         let (home, profile, theme) = (self.home.clone(), self.profile.clone(), self.theme);
+        self.lock = None;
+        if morph_services::profile_lock::is_locked(&home, &profile) {
+            // A locked profile: no pages, tabs or panels of it (not even a
+            // web view with its cookies) until its password unlocks it.
+            let lock = cx.new(|cx| LockView::new(&home, &profile, theme, window, cx));
+            self.profile_subscriptions.push(cx.subscribe_in(&lock, window, |shell, _, request, window, cx| shell.request(request, window, cx)));
+            lock.update(cx, |view, cx| view.focus(window, cx));
+            self.lock = Some(lock);
+            self.pending_start = Some(start);
+            (self.library, self.identity, self.companions) = (None, None, None);
+            self.error = None;
+            self.update_profile_label(cx);
+            self.update_profile_list(cx);
+            if std::env::var_os("MORPH_LOG_EVENTS").is_some_and(|v| v == "1") {
+                println!("morph-event profile locked");
+            }
+            cx.notify();
+            return;
+        }
         let keystrokes = page_shortcuts(&self.keymap);
         let (url, session, more, active, engine) = match start {
             WindowStart::Url(url) => (url, None, Vec::new(), 0, None),
@@ -675,7 +709,7 @@ impl Shell {
             return;
         }
         self.save_layout();
-        self.profile = id.to_string();
+        let from = std::mem::replace(&mut self.profile, id.to_string());
         let mut restored = Windows::switch(cx, window.window_handle(), leaving, id).into_iter();
         let first = restored.next();
         // What the window shows now, as the session has it already.
@@ -684,10 +718,105 @@ impl Shell {
         self.layout = layout::load(&self.home, id);
         self.build(first.map_or(WindowStart::Url(String::new()), WindowStart::Saved), window, cx);
         for saved in restored {
+            if self.lock.is_some() {
+                // Locked: they open once the password is in.
+                self.pending_windows.push(saved);
+                continue;
+            }
             let profile = id.to_string();
             cx.defer(move |cx| open_window(cx, profile, WindowStart::Saved(saved), None));
         }
+        // Leaving a profile locks it once no window shows it (its tabs were saved above).
+        self.lock_if_unused(&from, window, cx);
         cx.notify();
+    }
+
+    /// Lock `profile` if it asks for its password and no other window shows it.
+    fn lock_if_unused(&self, profile: &str, window: &Window, cx: &App) {
+        if profile == self.profile || !morph_core::profile_lock::requires_password(&self.home, profile) {
+            return;
+        }
+        if !Windows::shown_elsewhere(cx, window.window_handle(), profile) {
+            morph_services::profile_lock::lock(&self.home, profile);
+        }
+    }
+
+    /// Lock profile now (the menu's Lock profile): its tabs are saved, then
+    /// every window of it drops its pages and shows the lock screen.
+    fn lock_profile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !morph_core::profile_lock::has_identity(&self.home, &self.profile) {
+            eprintln!("morph: this profile has no identity, so it is not encrypted and cannot be locked");
+            return;
+        }
+        if self.lock.is_some() {
+            return;
+        }
+        let profile = self.profile.clone();
+        let me = window.window_handle();
+        let session = self.main().and_then(|m| m.session(cx));
+        Windows::update_session(cx, me, session);
+        self.lock_now(window, cx);
+        cx.defer(move |cx| Windows::each_other(cx, me, |shell, window, cx| shell.locked_elsewhere(&profile, window, cx)));
+    }
+
+    /// Show the lock screen in this window, keeping its tabs to restore.
+    fn lock_now(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let start = self.main().and_then(|m| m.session(cx)).map_or(WindowStart::Url(String::new()), WindowStart::Saved);
+        self.save_layout();
+        morph_services::profile_lock::lock(&self.home, &self.profile);
+        self.build(start, window, cx);
+    }
+
+    /// Another window locked `profile`: if this one shows it, lock too.
+    fn locked_elsewhere(&mut self, profile: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.profile == profile && self.lock.is_none() {
+            let session = self.main().and_then(|m| m.session(cx));
+            Windows::update_session(cx, window.window_handle(), session);
+            self.lock_now(window, cx);
+        }
+    }
+
+    /// The lock screen took the password: build the profile, with the tabs
+    /// the window was to show. A window with nothing in hand while no other
+    /// window shows the profile (a launch into a locked profile) brings back
+    /// what its `tabs.json` kept.
+    fn unlocked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.lock.is_none() {
+            return;
+        }
+        let start = self.pending_start.take().unwrap_or(WindowStart::Url(String::new()));
+        let mut more = std::mem::take(&mut self.pending_windows);
+        let start = match start {
+            WindowStart::Url(url) if !morph_core::scheme::is_link(&url) && !Windows::shown_elsewhere(cx, window.window_handle(), &self.profile) => {
+                let mut saved = morph_core::session::load(&self.home, &self.profile).windows.into_iter();
+                match saved.next() {
+                    Some(first) => {
+                        if !url.is_empty() {
+                            self.pending_links.push(url);
+                        }
+                        more.extend(saved);
+                        WindowStart::Saved(first)
+                    }
+                    None => WindowStart::Url(url),
+                }
+            }
+            start => start,
+        };
+        crate::library::open_at_launch(&self.home, &self.profile);
+        self.layout = layout::load(&self.home, &self.profile);
+        self.build(start, window, cx);
+        for saved in more {
+            let profile = self.profile.clone();
+            cx.defer(move |cx| open_window(cx, profile, WindowStart::Saved(saved), None));
+        }
+        cx.notify();
+    }
+
+    /// Another window unlocked `profile`: a window waiting on it opens too.
+    fn unlocked_elsewhere(&mut self, profile: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.profile == profile && self.lock.is_some() && !morph_services::profile_lock::is_locked(&self.home, profile) {
+            self.unlocked(window, cx);
+        }
     }
 
     fn main(&self) -> Option<&dyn Hosted> {
@@ -719,6 +848,11 @@ impl Shell {
             }
             ShellRequest::AskCompanion { name, question } => self.ask_companion(name.clone(), question.clone(), window, cx),
             ShellRequest::LibraryUnlocked => self.last_marked = None,
+            ShellRequest::ProfileUnlocked(profile) => {
+                self.unlocked(window, cx);
+                let (me, profile) = (window.window_handle(), profile.clone());
+                cx.defer(move |cx| Windows::each_other(cx, me, |shell, window, cx| shell.unlocked_elsewhere(&profile, window, cx)));
+            }
             ShellRequest::SwitchProfile(id) => self.switch_profile(id, window, cx),
             ShellRequest::ProfileRenamed => {
                 self.update_profile_label(cx);
@@ -783,6 +917,10 @@ impl Shell {
     /// The window's tabs as the session should keep them, handed to the
     /// app's window list (and saved) when they changed.
     fn report_session(&mut self, window: &Window, cx: &mut App) {
+        // A locked window shows nothing of its profile: what it had stays saved as it was.
+        if self.lock.is_some() {
+            return;
+        }
         let now = (self.profile.clone(), self.main().and_then(|m| m.session(cx)));
         if self.last_session.as_ref() == Some(&now) {
             return;
@@ -1020,6 +1158,7 @@ impl Shell {
             Action::ShowSearchSettings => return self.show_settings(Some(crate::settings_view::Section::Search), window, cx),
             Action::ShowIdentity => return self.show_identity(window, cx),
             Action::ToggleCompanions => return self.toggle_companions(window, cx),
+            Action::LockProfile => return self.lock_profile(window, cx),
             _ => {}
         }
         let main = self.layout.shown(Slot::Main).cloned();
@@ -1081,6 +1220,20 @@ impl Shell {
         } else {
             Vec::new()
         };
+        if self.lock.is_some() {
+            // Links for a locked profile wait for its password (never opened in another profile).
+            self.pending_links.extend(handed.into_iter().filter_map(|r| match r {
+                crate::single::Request::Open(url) => Some(url),
+                _ => None,
+            }));
+            if self.pending_links.len() > 64 {
+                self.pending_links.drain(..self.pending_links.len() - 64);
+            }
+            if let Some(action) = self.test_actions.pop() {
+                self.run(action, window, cx);
+            }
+            return;
+        }
         handed.extend(self.pending_links.drain(..).map(crate::single::Request::Open));
         for request in handed {
             if let crate::single::Request::Open(url) = &request {
@@ -1279,6 +1432,7 @@ impl Render for Shell {
             ShowSearchSettings => Action::ShowSearchSettings,
             ShowDownloads => Action::ShowDownloads,
             ToggleCompanions => Action::ToggleCompanions,
+            LockProfile => Action::LockProfile,
         ]);
         let root = root.on_any_mouse_down(cx.listener(|this, _, _, cx| this.focus_shell(cx)));
         let root = root
@@ -1300,6 +1454,9 @@ impl Render for Shell {
             );
         if let Some(error) = &self.error {
             return root.items_center().justify_center().child(div().max_w(px(640.)).p(px(24.)).child(error.clone()));
+        }
+        if let Some(lock) = &self.lock {
+            return root.child(lock.clone());
         }
         let middle = div()
             .flex()
@@ -1534,6 +1691,18 @@ impl Windows {
     }
 
     /// Run `f` on every window but `me`.
+    /// Whether a window other than `me` shows `profile` unlocked.
+    fn shown_elsewhere(cx: &App, me: gpui::AnyWindowHandle, profile: &str) -> bool {
+        let Some(windows) = cx.try_global::<Windows>() else {
+            return false;
+        };
+        windows
+            .list
+            .iter()
+            .filter(|e| e.handle.window_id() != me.window_id())
+            .any(|e| e.handle.read(cx).is_ok_and(|shell| shell.profile == profile && shell.lock.is_none()))
+    }
+
     fn each_other(cx: &mut App, me: gpui::AnyWindowHandle, f: impl Fn(&mut Shell, &mut Window, &mut Context<Shell>)) {
         let others: Vec<_> = cx
             .try_global::<Windows>()

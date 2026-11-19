@@ -231,11 +231,17 @@ struct Hooks {
     may_start: MayStart,
     /// Changes whenever synced data or a revocation was applied.
     revision: Arc<dyn Fn() -> u64 + Send + Sync>,
+    /// The profile is locked (password not entered): no server runs for it.
+    locked: Arc<dyn Fn(&Path) -> bool + Send + Sync>,
 }
 
 impl Hooks {
     fn sync() -> Self {
-        Self { may_start: Arc::new(morph_services::sync::mcp_may_start_in), revision: Arc::new(morph_services::sync::applied_revision) }
+        Self {
+            may_start: Arc::new(morph_services::sync::mcp_may_start_in),
+            revision: Arc::new(morph_services::sync::applied_revision),
+            locked: Arc::new(morph_services::profile_lock::is_locked_in),
+        }
     }
 }
 
@@ -254,7 +260,7 @@ impl McpManager {
         let handle = rt.handle().clone();
         let manager = Arc::new(Self { secrets: secrets.clone(), trigger: Mutex::new(tx), state: state.clone(), handle });
         let dir = companions.to_path_buf();
-        let watch = (Arc::downgrade(&manager), hooks.revision.clone());
+        let watch = (Arc::downgrade(&manager), hooks.revision.clone(), hooks.locked.clone(), dir.clone());
         let hooks = hooks.clone();
         std::thread::Builder::new()
             .name("morph-mcp".into())
@@ -263,6 +269,10 @@ impl McpManager {
                     while rx.try_recv().is_ok() {}
                     lock(&state).snapshot.busy = true;
                     let mut configs = configs(&dir);
+                    // A locked profile runs no servers at all (Lead Dev's profile lock).
+                    if (hooks.locked)(&dir) {
+                        configs.servers.clear();
+                    }
                     // A synced local command never starts unless this device or a linked,
                     // unrevoked one wrote its config (Lead Dev's sync layer decides).
                     for s in configs.servers.iter_mut() {
@@ -288,12 +298,12 @@ impl McpManager {
         std::thread::Builder::new()
             .name("morph-mcp-watch".into())
             .spawn(move || {
-                let (manager, revision) = watch;
-                let mut seen = revision();
+                let (manager, revision, locked, dir) = watch;
+                let mut seen = (revision(), locked(&dir));
                 loop {
                     std::thread::sleep(Duration::from_millis(250));
                     let Some(m) = manager.upgrade() else { return };
-                    let now = revision();
+                    let now = (revision(), locked(&dir));
                     if now != seen {
                         seen = now;
                         m.reload();
@@ -467,7 +477,11 @@ done"#;
     ) -> Arc<McpManager> {
         use std::sync::atomic::Ordering::SeqCst;
         let (allowed, revision) = (allowed.clone(), revision.clone());
-        let hooks = Hooks { may_start: Arc::new(move |_, _| allowed.load(SeqCst)), revision: Arc::new(move || revision.load(SeqCst)) };
+        let hooks = Hooks {
+            may_start: Arc::new(move |_, _| allowed.load(SeqCst)),
+            revision: Arc::new(move || revision.load(SeqCst)),
+            locked: Arc::new(|_| false),
+        };
         let m = McpManager::start(companions, hooks);
         m.reload();
         m

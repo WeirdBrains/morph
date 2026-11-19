@@ -110,11 +110,15 @@ impl Library {
             Ok(unlocked) => {
                 self.locked = false;
                 self.error = None;
-                self.notice = (!unlocked.remembered).then(|| {
+                self.notice = (!unlocked.remembered && !unlocked.password_required).then(|| {
                     let why = unlocked.reason.map(|r| format!(" ({r})")).unwrap_or_default();
                     format!("Unlocked for this session; the system keystore could not keep the key{why}.")
                 });
                 true
+            }
+            Err(e @ morph_services::Error::TooSoon { .. }) => {
+                self.error = Some(format!("Too many wrong passwords ({e})."));
+                false
             }
             Err(_) => {
                 // Never echo what came back: it may describe the secret.
@@ -394,7 +398,13 @@ mod tests {
 
         morph_services::identity::create(&home, "p1", &SecretString::from("long enough".to_string())).unwrap();
         library::lock(&home, "p1");
-        assert!(open_at_launch(&home, "p1"), "the saved key opens it");
+        assert!(!open_at_launch(&home, "p1"), "the password is on by default");
+
+        let password = SecretString::from("long enough".to_string());
+        morph_services::library::unlock(&home, "p1", &password).unwrap();
+        morph_services::profile_lock::set_require_password(&home, "p1", &password, false).unwrap();
+        library::lock(&home, "p1");
+        assert!(open_at_launch(&home, "p1"), "with it off, the saved key opens it");
 
         library::lock(&home, "p1");
         morph_keystore::forget(&morph_core::profiles::profile_dir(&home, "p1")).unwrap();

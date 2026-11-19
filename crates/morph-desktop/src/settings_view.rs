@@ -28,6 +28,7 @@ use morph_services::relays::{RelayReport, RelayStatus};
 use morph_services::sync::DeviceView;
 
 mod agents;
+mod lock;
 mod servers;
 
 use crate::default_browser::{self, Status};
@@ -47,6 +48,7 @@ impl Section {
             "identity" => Section::Identity,
             "devices" => Section::Devices,
             "about" => Section::About,
+            "privacy" => Section::Privacy,
             _ => return None,
         })
     }
@@ -115,7 +117,7 @@ impl Section {
             Section::Layout => "tabs position top bottom left right collapse side width",
             Section::Appearance => "theme dark light colours colors",
             Section::Downloads => "downloads folder save files",
-            Section::Privacy => "clear browsing data cookies cache site permissions camera microphone location",
+            Section::Privacy => "clear browsing data cookies cache site permissions camera microphone location profile password lock security",
             Section::Identity => "identity backup recovery restore devices link",
             Section::Devices => "devices linked sync revoke remove lost stolen phone laptop",
             Section::Relays => {
@@ -163,6 +165,10 @@ pub enum Item {
     Discovery,
     ManualPeers,
     DefaultCompanion,
+    /// Require password to open this profile (on, off, or kept on by policy).
+    ProfilePassword,
+    /// Change the profile password.
+    ChangePassword,
     OpenAbout,
 }
 
@@ -176,7 +182,7 @@ impl Item {
             Item::TabPosition | Item::Collapsed | Item::SideWidth => Section::Layout,
             Item::Theme => Section::Appearance,
             Item::ChooseDownloads | Item::DefaultDownloads => Section::Downloads,
-            Item::ClearData => Section::Privacy,
+            Item::ClearData | Item::ProfilePassword | Item::ChangePassword => Section::Privacy,
             Item::OpenIdentity => Section::Identity,
             Item::Devices => Section::Devices,
             Item::CheckRelays | Item::Discovery | Item::ManualPeers => Section::Relays,
@@ -185,7 +191,7 @@ impl Item {
         }
     }
 
-    pub const ALL: [Item; 21] = [
+    pub const ALL: [Item; 23] = [
         Item::OpenBookmarks,
         Item::OpenHistory,
         Item::ClearHistory,
@@ -200,6 +206,8 @@ impl Item {
         Item::ChooseDownloads,
         Item::DefaultDownloads,
         Item::ClearData,
+        Item::ProfilePassword,
+        Item::ChangePassword,
         Item::OpenIdentity,
         Item::Devices,
         Item::CheckRelays,
@@ -266,6 +274,8 @@ pub struct SettingsView {
     servers: servers::State,
     /// A device whose Revoke was pressed once and waits for Confirm.
     confirm_revoke: Option<String>,
+    /// The profile password rows ([`lock`]).
+    lock: lock::State,
     _subscriptions: Vec<gpui::Subscription>,
 }
 
@@ -278,6 +288,8 @@ impl SettingsView {
         let peer_input = cx.new(|cx| TextInput::new("/ip4/…/tcp/…/p2p/<peer id>", theme, cx));
         let agents_state = agents::State::new(theme, cx);
         let mut subscriptions = agents::subscribe(&agents_state, window, cx);
+        let lock_state = lock::State::new(theme, cx);
+        subscriptions.extend(lock::subscribe(&lock_state, window, cx));
         subscriptions.extend(vec![
             cx.subscribe_in(&search, window, |this, _, event, window, cx| match event {
                 TextInputEvent::Changed => {
@@ -347,6 +359,7 @@ impl SettingsView {
             agents: agents_state,
             servers: servers::State::default(),
             confirm_revoke: None,
+            lock: lock_state,
             _subscriptions: subscriptions,
         };
         view.reload_quietly();
@@ -627,6 +640,7 @@ impl SettingsView {
                 cx.emit(ShellRequest::ClearBrowsingData);
                 self.note = Some("Cookies, cache, site storage and history cleared for this profile.".into());
             }
+            Item::ProfilePassword | Item::ChangePassword => self.lock_activate(item, window, cx),
             Item::OpenIdentity => cx.emit(ShellRequest::Run(Action::ShowIdentity)),
             Item::Devices => {
                 self.devices = self.profile_id().and_then(|id| morph_services::sync::devices(&self.home, &id).ok()).unwrap_or_default();
@@ -1235,7 +1249,10 @@ impl SettingsView {
                     .text_color(rgb(t.text_secondary))
                     .child("Site permissions: per-site controls for camera, microphone, location and notifications are coming soon.")
                     .into_any_element(),
-            ],
+            ]
+            .into_iter()
+            .chain(self.lock_rows(cx))
+            .collect(),
             Section::Identity => vec![
                 self.row(
                     Item::OpenIdentity,

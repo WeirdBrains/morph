@@ -370,7 +370,7 @@ struct ShellMenu {
 /// The main menu: the old Flutter dot menu's entries (Find in page,
 /// Bookmarks, History, Identity, Settings) with New tab, Profiles and
 /// About added.
-pub const MAIN_MENU: [(&str, Action, bool); 11] = [
+pub const MAIN_MENU: [(&str, Action, bool); 12] = [
     ("New tab", Action::NewTab, false),
     ("New window", Action::NewWindow, false),
     ("Find in page", Action::Find, true),
@@ -379,6 +379,7 @@ pub const MAIN_MENU: [(&str, Action, bool); 11] = [
     ("Downloads", Action::ShowDownloads, false),
     ("Identity", Action::ShowIdentity, true),
     ("Profiles", Action::ShowProfiles, false),
+    ("Lock profile", Action::LockProfile, false),
     ("Settings", Action::ShowSettings, false),
     ("About Morph", Action::ShowAbout, true),
     ("Quit", Action::Quit, true),

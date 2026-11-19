@@ -29,6 +29,7 @@ mod identity_view;
 mod legacy_desktop;
 mod library;
 mod library_view;
+mod lock_view;
 mod mcp_host;
 mod menu_view;
 mod notices;

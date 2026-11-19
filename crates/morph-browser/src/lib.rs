@@ -1337,6 +1337,7 @@ impl Browser {
             | Action::ShowProfiles
             | Action::ShowIdentity
             | Action::ToggleCompanions
+            | Action::LockProfile
             // The shell's downloads panel.
             | Action::ShowDownloads => {
                 return false;
