@@ -229,6 +229,52 @@ fn title_word_starts(title_lower: &str, term: &str) -> bool {
     title_lower.split(|c: char| !c.is_alphanumeric()).any(|w| w.starts_with(term))
 }
 
+/// What the address bar's text means: an address or search as always, or a question for a
+/// Companion (`> question` for the default one, `>name question` for a named one).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Mode {
+    /// Everything that does not start with `>`: URLs, searches, history and bookmark matching.
+    Normal,
+    Companion(Ask),
+}
+
+/// A `>` input, taken apart.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ask {
+    /// The companion's name as typed, `None` for the default companion.
+    pub name: Option<String>,
+    /// The question, trimmed (empty while it is still being typed).
+    pub question: String,
+    /// The name is still being typed: no space has followed it yet.
+    pub typing_name: bool,
+}
+
+/// Decide the mode for the bar's text. Only a leading `>` (after spaces) starts Companion mode;
+/// nothing else changes how input is handled.
+pub fn dispatch(text: &str) -> Mode {
+    let Some(rest) = text.trim_start().strip_prefix('>') else {
+        return Mode::Normal;
+    };
+    if rest.is_empty() || rest.starts_with(char::is_whitespace) {
+        return Mode::Companion(Ask { name: None, question: rest.trim().to_string(), typing_name: rest.is_empty() });
+    }
+    match rest.split_once(char::is_whitespace) {
+        Some((name, question)) => Mode::Companion(Ask { name: Some(name.to_string()), question: question.trim().to_string(), typing_name: false }),
+        None => Mode::Companion(Ask { name: Some(rest.to_string()), question: String::new(), typing_name: true }),
+    }
+}
+
+/// Companion names that continue what was typed after `>`, in roster order (case-insensitive prefix).
+pub fn complete_names<'a>(typed: &str, names: &'a [String]) -> Vec<&'a str> {
+    let typed = typed.to_lowercase();
+    names.iter().map(String::as_str).filter(|n| n.to_lowercase().starts_with(&typed)).collect()
+}
+
+/// The roster name `typed` means: an exact match ignoring case.
+pub fn resolve_name<'a>(typed: &str, names: &'a [String]) -> Option<&'a str> {
+    names.iter().map(String::as_str).find(|n| n.eq_ignore_ascii_case(typed) || n.to_lowercase() == typed.to_lowercase())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -379,5 +425,48 @@ mod tests {
         // Generous for debug builds on a busy machine; release is ~100x faster.
         assert!(built.as_millis() < 500, "build {built:?}");
         assert!(per_key.as_millis() < 50, "per keystroke {per_key:?}");
+    }
+    fn ask(name: Option<&str>, question: &str, typing_name: bool) -> Mode {
+        Mode::Companion(Ask { name: name.map(String::from), question: question.into(), typing_name })
+    }
+
+    #[test]
+    fn a_leading_chevron_is_companion_mode_and_nothing_else_is() {
+        assert_eq!(dispatch("> what is rust"), ask(None, "what is rust", false));
+        assert_eq!(dispatch("  >   spaced  "), ask(None, "spaced", false));
+        assert_eq!(dispatch(">"), ask(None, "", true));
+        assert_eq!(dispatch(">atlas what is rust"), ask(Some("atlas"), "what is rust", false));
+        assert_eq!(dispatch(">atlas"), ask(Some("atlas"), "", true));
+        assert_eq!(dispatch(">atlas "), ask(Some("atlas"), "", false));
+        for normal in
+            ["", "github.com", "https://example.com/a?b=>1", "rust > go", "a>b", "what is >", "morph://bookmarks", "localhost:8080", "<script>"]
+        {
+            assert_eq!(dispatch(normal), Mode::Normal, "{normal:?}");
+        }
+    }
+
+    #[test]
+    fn names_complete_by_case_insensitive_prefix_and_resolve_exactly() {
+        let names = vec!["Atlas".to_string(), "Archie".to_string(), "Bo".to_string()];
+        assert_eq!(complete_names("a", &names), ["Atlas", "Archie"]);
+        assert_eq!(complete_names("AT", &names), ["Atlas"]);
+        assert_eq!(complete_names("", &names), ["Atlas", "Archie", "Bo"]);
+        assert!(complete_names("z", &names).is_empty());
+        assert_eq!(resolve_name("atlas", &names), Some("Atlas"));
+        assert_eq!(resolve_name("at", &names), None);
+    }
+
+    #[test]
+    fn normal_input_still_gets_history_and_bookmark_suggestions_and_completion() {
+        let index = Index::build(&[visit("https://github.com/WeirdBrains/morph", "Morph", 1)], &[("https://example.com/".into(), "Example".into())]);
+        for typed in ["git", "morph", "example"] {
+            assert_eq!(dispatch(typed), Mode::Normal);
+            assert!(!index.suggest(typed, NOW, MAX_SUGGESTIONS).is_empty(), "{typed}");
+        }
+        assert_eq!(index.complete("git", NOW).as_deref(), Some("github.com"));
+        assert_eq!(index.suggest("morph", NOW, 6)[0].source, Source::History);
+        assert_eq!(index.suggest("example", NOW, 6)[0].source, Source::Bookmark);
+        // The index itself never treats the chevron as special; the bar decides by `dispatch`.
+        assert!(index.suggest(">", NOW, 6).is_empty());
     }
 }
