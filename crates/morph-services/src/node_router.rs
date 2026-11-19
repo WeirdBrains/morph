@@ -388,7 +388,7 @@ pub mod protocols {
     /// (the agent crate calls it before anything else) and `open` and friends check again, so
     /// a host cannot be reached around the gate. The rule is the one [`DeviceCaller`] applies to
     /// streams and app calls: [`weirdnet_sync::Roster::check_caller`] on the live roster.
-    pub struct RosterHost<H> {
+    pub(crate) struct RosterHost<H> {
         inner: H,
         gate: DeviceCaller,
     }
@@ -396,13 +396,13 @@ pub mod protocols {
     impl<H: InferHost> RosterHost<H> {
         /// The profile's lock is the `gate`'s own ([`DeviceCaller::check_unlocked`]), so there is
         /// no profile to forget to pass.
-        pub fn new(inner: H, gate: DeviceCaller) -> Self {
+        pub(crate) fn new(inner: H, gate: DeviceCaller) -> Self {
             Self { inner, gate }
         }
 
         /// The gate: the profile is unlocked, and `caller` (the Noise-authenticated peer, plus
         /// the certificate it presented, if any) is a current linked device.
-        pub fn check(&self, caller: &Caller) -> Result<(), RemoteError> {
+        pub(crate) fn check(&self, caller: &Caller) -> Result<(), RemoteError> {
             if self.gate.check_unlocked().is_err() {
                 return Err(RemoteError::refused("profile-locked"));
             }
