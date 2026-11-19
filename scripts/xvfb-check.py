@@ -1796,12 +1796,17 @@ def open_identity(m, r, area):
     """Ctrl+Shift+L opens the identity panel beside the page."""
     win = wait_for(m.own_window, 20)
     m.activate(win)
-    # A Morph just started may still be taking its size (Wayland, scale 2).
-    _, s0 = settled_layout(m, win, state(m) or {})
+    # A Morph just started may still be taking its size (Wayland, scale 2: a
+    # page seen 395 wide reached 510 after the key press, so the panel looked
+    # wider). Wait for a longer still period, measure again after the click,
+    # and judge the panel on the settled layout on both sides.
+    _, s0 = settled_layout(m, win, state(m) or {}, timeout=20.0, still=2.0)
     m.click(win, 300, 76 + 300)
-    w0 = (state(m) or s0).get("w", 0)
+    _, s1 = settled_layout(m, win, s0, timeout=10.0, still=1.0)
+    w0 = s1.get("w", 0)
     m.key("ctrl+shift+l", delay=1.0)
-    r.check(area, "Ctrl+Shift+L opens the identity panel beside the page", wait_for(lambda: (state(m) or {}).get("w", 0) < w0), f"{w0} -> {(state(m) or {}).get('w')}")
+    _, s2 = settled_layout(m, win, s1, timeout=10.0, still=1.0)
+    r.check(area, "Ctrl+Shift+L opens the identity panel beside the page", s2.get("w", 0) < w0, f"{w0} -> {s2.get('w')}")
     return win, w0
 
 
