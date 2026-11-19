@@ -12,11 +12,13 @@ pub mod host;
 pub mod local;
 pub mod model;
 pub mod roster;
+pub mod settings;
 pub mod store;
 
 pub use host::{BrowserHost, FetchedPage, HostError, PageSnapshot, ResearchHost, SearchHit};
 pub use model::{ModelChoice, ModelProvider, Platform, UnavailableModels};
 pub use roster::{CompanionProfile, Roster, RosterError};
+pub use settings::{AgentSettings, SearchProvider};
 pub use store::{AiStore, FileStore, Grants, MemoryStore, StoreError};
 
 #[cfg(feature = "local")]

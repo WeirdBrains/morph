@@ -3,9 +3,10 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use weirdnet_agent::{AgentId, AllowRule, CompanionScope, Policy, SharedPolicy, SiteLevel};
+use weirdnet_agent::{AgentId, AllowRule, CompanionScope, Policy, SharedPolicy, SiteLevel, StandingAllow};
 
 use crate::roster::Roster;
+use crate::settings::AgentSettings;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -22,12 +23,15 @@ pub trait AiStore: Send + Sync {
     fn save_roster(&self, roster: &Roster) -> Result<(), StoreError>;
     fn load_policy(&self) -> Result<Option<Policy>, StoreError>;
     fn save_policy(&self, policy: &Policy) -> Result<(), StoreError>;
+    fn load_settings(&self) -> Result<Option<AgentSettings>, StoreError>;
+    fn save_settings(&self, settings: &AgentSettings) -> Result<(), StoreError>;
 }
 
 #[derive(Default)]
 pub struct MemoryStore {
     roster: Mutex<Option<Roster>>,
     policy: Mutex<Option<Policy>>,
+    settings: Mutex<Option<AgentSettings>>,
 }
 
 impl AiStore for MemoryStore {
@@ -43,6 +47,13 @@ impl AiStore for MemoryStore {
     }
     fn save_policy(&self, policy: &Policy) -> Result<(), StoreError> {
         *self.policy.lock().unwrap() = Some(policy.clone());
+        Ok(())
+    }
+    fn load_settings(&self) -> Result<Option<AgentSettings>, StoreError> {
+        Ok(self.settings.lock().unwrap().clone())
+    }
+    fn save_settings(&self, settings: &AgentSettings) -> Result<(), StoreError> {
+        *self.settings.lock().unwrap() = Some(settings.clone());
         Ok(())
     }
 }
@@ -86,6 +97,12 @@ impl AiStore for FileStore {
     }
     fn save_policy(&self, policy: &Policy) -> Result<(), StoreError> {
         self.write("policy.json", policy)
+    }
+    fn load_settings(&self) -> Result<Option<AgentSettings>, StoreError> {
+        self.read("settings.json")
+    }
+    fn save_settings(&self, settings: &AgentSettings) -> Result<(), StoreError> {
+        self.write("settings.json", settings)
     }
 }
 
@@ -132,6 +149,24 @@ impl Grants {
     /// Drops a removed companion's grants and allows.
     pub fn forget(&self, agent: &AgentId) -> Result<(), StoreError> {
         self.change(|p| p.forget_agent(agent))
+    }
+
+    /// Set one level for several companions at once (the "all companions" choice).
+    pub fn set_site_level_for(&self, agents: &[AgentId], site: &str, level: SiteLevel) -> Result<(), StoreError> {
+        self.change(|p| agents.iter().for_each(|a| p.set_site_level(a, site, level)))
+    }
+
+    /// A companion's per-site levels that differ from Ask, sorted by site.
+    pub fn sites_for(&self, agent: &AgentId) -> Vec<(String, SiteLevel)> {
+        let p = self.policy.read().unwrap_or_else(|e| e.into_inner());
+        let mut v: Vec<(String, SiteLevel)> = p.grants_for(agent).map(|(s, l)| (s.to_string(), l)).collect();
+        v.sort_by(|a, b| a.0.cmp(&b.0));
+        v
+    }
+
+    /// Every standing allow, oldest first.
+    pub fn allows(&self) -> Vec<StandingAllow> {
+        self.policy.read().unwrap_or_else(|e| e.into_inner()).allows().to_vec()
     }
 
     pub fn site_level(&self, agent: &AgentId, site: &str) -> SiteLevel {
@@ -193,5 +228,20 @@ mod tests {
         assert_eq!(s.load_policy().unwrap(), Some(p));
         std::fs::write(dir.path().join("ai/policy.json"), b"{nope").unwrap();
         assert!(matches!(s.load_policy(), Err(StoreError::Corrupt(_))));
+    }
+
+    #[test]
+    fn all_companions_levels_sites_and_allows_list_in_order() {
+        let g = Grants::load(Arc::new(MemoryStore::default())).unwrap();
+        let (a, b) = (AgentId::new("atlas"), AgentId::new("scout"));
+        g.set_site_level_for(&[a.clone(), b.clone()], "Example.com", SiteLevel::Off).unwrap();
+        g.set_site_level(&a, "b.org", SiteLevel::Act).unwrap();
+        assert_eq!(g.sites_for(&a), [("b.org".to_string(), SiteLevel::Act), ("example.com".to_string(), SiteLevel::Off)]);
+        assert_eq!(g.sites_for(&b), [("example.com".to_string(), SiteLevel::Off)]);
+        g.set_site_level(&a, "b.org", SiteLevel::Ask).unwrap();
+        assert_eq!(g.sites_for(&a).len(), 1, "Ask is the default and is not listed");
+        let id1 = g.add_allow(CompanionScope::One(a.clone()), AllowRule::Navigate { site: Some("tokio.rs".into()) }, 1).unwrap();
+        let id2 = g.add_allow(CompanionScope::All, AllowRule::Research { provider: Some("duckduckgo".into()) }, 2).unwrap();
+        assert_eq!(g.allows().iter().map(|x| x.id).collect::<Vec<_>>(), [id1, id2]);
     }
 }
