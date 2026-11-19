@@ -19,8 +19,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Synced records too large for one entry (chunked) or sealed now survive a restart: the sync log keeps each entry's full value in library.db, along with how each record type is written. Logs from earlier builds load as before.
 
-- Switching a window to another profile no longer loses its tabs. The tabs it showed stay saved with the profile it left (on disk at once, so a crash or quit keeps them too), and switching back brings them back in order with the same active tab; a profile with several windows gets all of them back, the others in new windows.
-
 - Local models on an older x86 CPU (without AVX2, most from before 2013) are refused with a clear message instead of crashing Morph; use remote inference there. Release builds for x86_64 (Linux tarball, deb, rpm, Arch, Nix, Windows, the Intel half of the macOS app) build llama.cpp for a fixed x86-64-v3 baseline (AVX, AVX2, FMA, F16C, BMI2, no AVX-512) instead of the build machine's CPU. ARM builds are unchanged.
 
 - Updated to weirdnet-sync 0.4.0, weirdnet-net 0.7.0 and weirdnet-model 0.2.0. Linked-device calls use weirdnet-sync's own caller check.
@@ -50,6 +48,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - After restoring an identity from its recovery words, shards or a backup, Morph says to link this device again from one of your other devices so it can read what they sync.
 
 - Page bridge for companions (docs/bridge-api.md): handlers get the view, the engine's address and origin, the frame and whether the view is hidden; Morph's own scripts talk on a channel pages can't reach (a script world of its own on Linux, a per-view secret everywhere), and pages can no longer send host-only messages. Morph can load pages out of sight and read their title, text, a readable extract, links, selection or HTML (at most 8 MiB, in chunks, with a timeout).
+
+## [0.2.2] - 2026-11-19
+
+- Switching a window to another profile no longer loses its tabs. The tabs it showed stay saved with the profile it left (on disk at once, so a crash or quit keeps them too), and switching back brings them back in order with the same active tab; a profile with several windows gets all of them back, the others in new windows.
 
 ## [0.2.1] - 2026-11-18
 
