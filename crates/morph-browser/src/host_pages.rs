@@ -208,6 +208,21 @@ impl Browser {
         }
     }
 
+    /// The tab whose page is web view `view` (not a host page's view).
+    pub fn tab_of_view(&self, view: ViewId) -> Option<TabId> {
+        self.by_view.get(&view).copied()
+    }
+
+    /// The tab the window shows.
+    pub fn active_tab_id(&self) -> TabId {
+        self.tabs.active_id()
+    }
+
+    /// Tab `tab`'s address, as the engine last reported it.
+    pub fn tab_url(&self, tab: TabId) -> Option<&str> {
+        self.tabs.tab(tab).map(|t| t.url.as_str())
+    }
+
     /// [`Self::tab_action`] in the active tab.
     pub fn active_tab_action(&mut self, request: ActionRequest) -> Pending<ActionResult> {
         self.tab_action(self.tabs.active_id(), request)

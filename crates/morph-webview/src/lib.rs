@@ -24,6 +24,7 @@ pub mod clipboard;
 pub mod fake;
 pub mod icons;
 pub mod keys;
+pub mod login_form;
 pub mod native_page;
 #[cfg(target_os = "linux")]
 pub mod offscreen;
