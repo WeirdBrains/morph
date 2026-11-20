@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Updated to weirdnet-sync 0.5.2, so the build has one copy of weirdnet-sync alongside weirdnet-agent 0.4.5.
+
 - A device's link code or a Morph invite typed or pasted in the desktop address bar now opens the Identity panel (Add device, or receiving the identity for an invite) with it filled in, instead of trying to call an app. An invite opened as a `weirdnet-morph://invite/…` link goes to receiving the identity on this device after it is checked; a locked profile refuses both.
 
 - On Windows, Morph registers `weirdnet-ymir://` only when no other app handles it (or the handler is Morph's own), in the app and the MSI, so Ymir's own registration is never replaced.
