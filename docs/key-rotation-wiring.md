@@ -26,9 +26,10 @@ revoke that leaves devices without a key out (wired). Current behavior is descri
 
 1. **State**: `build_state` sets `device: Device::from_node_key(&node_key)` and
    `keys: load_epoch_keys(lib)`, then `publish_device_key` and `refresh_keys`.
-   `snapshot` clones both. `merge_back` calls `st.take_keys_from(work)` and
-   `refresh_keys()` after merging the roster. Without that, a rotation made
-   in the pull copy would leave the live state without its own key.
+   `tick` pulls into `SyncState::snapshot` and folds it back with weirdnet-sync's
+   `SyncState::merge_back` (0.5.1), which merges the roster, then the keys (and
+   `refresh_keys`). Without that, a rotation made in the pull copy would leave the
+   live state without its own key.
 2. **Storage**: `META_EPOCH_KEYS` in `library.db` (encrypted): `EpochKeys::export` /
    `import`. Save it next to the roster after every tick, revoke and approve.
 3. **refresh_live**: merge the stored roster with the live one, and merge the stored keys,

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Updated to weirdnet-sync 0.5.1, weirdnet-agent 0.4.1, weirdnet-model 0.4.2 and weirdnet-mcp 0.5.1. Library sync now uses weirdnet-sync's own pull copy and merge, which keeps what a pull brought before the other device refused a later page, so those changes still show up on this device.
+
 - Ymir nodes can join your devices: open or paste the `weirdnet-ymir://link/…` code `ymirctl pool link` shows, and Morph's Add device pairs with it after the profile password and the same six-digit check (it names the node "Ymir on …"). A new device's `weirdnet-morph://link/…` code opened as a link now goes to Add device too, with the code filled in. Morph registers `weirdnet-ymir://` alongside `weirdnet-morph://` (desktop entry, macOS, Windows, Android, iOS). A locked profile refuses these codes (docs/qr-login.md).
 
 - A `weirdnet-<app>://<name>/…` address whose name lookup stalls (the system's DNS not answering) now says it couldn't reach the name after 25 s instead of waiting on the resolver.
