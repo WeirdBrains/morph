@@ -28,7 +28,7 @@ morph-ai = { path = "crates/morph-ai" }
 morph-companion = { path = "crates/morph-companion" }
 weirdnet-keys = "=0.1.0"
 weirdnet-net = "=0.8.1"
-weirdnet-sync = "=0.5.2"
+weirdnet-sync = "=0.7.0"
 weirdnet-text = "=0.1.0"
 weirdnet-agent = "=0.4.5"
 weirdnet-mcp = { version = "=0.5.2", default-features = false }

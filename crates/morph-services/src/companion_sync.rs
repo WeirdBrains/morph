@@ -388,7 +388,8 @@ fn sync_state(lib: &Library) -> Option<SyncState> {
         (Vec::new(), user.public(), user_id, weirdnet_sync::Roster::new(), cert, None)
     });
     let mut st = SyncState {
-        seed,
+        // A full device (never a service device): it holds the seed.
+        seed: Some(seed),
         user_id,
         user_key,
         our_cert,

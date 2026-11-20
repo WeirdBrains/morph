@@ -276,7 +276,7 @@ fn build_state(lib: &Library) -> Option<(Arc<Mutex<SyncState>>, Keypair)> {
     let our_cert = roster.get(&our).cloned()?;
     Some((
         Arc::new(Mutex::new(SyncState {
-            seed,
+            seed: Some(seed),
             user_id,
             user_key: user.public(),
             our_cert,
@@ -313,7 +313,7 @@ fn offline_state(lib: &Library) -> Option<(SyncState, Keypair)> {
     let roster = core::load_roster(lib).ok()?;
     let our_cert = roster.get(&our).cloned()?;
     let mut st = SyncState {
-        seed,
+        seed: Some(seed),
         user_id,
         user_key: user.public(),
         our_cert,
@@ -905,7 +905,7 @@ mod tests {
         roster.upsert(mine.clone());
         roster.upsert(theirs);
         let mut live = SyncState {
-            seed: vec![1; 32],
+            seed: Some(vec![1; 32]),
             user_id: uid,
             user_key: user.public(),
             our_cert: mine,
