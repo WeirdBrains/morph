@@ -55,8 +55,12 @@ class RoadmapPage extends StatelessComponent {
               ),
               ('Switching profiles keeps each profile’s tabs and windows (0.2.2)', Status.shipped),
               ('weirdnet- links call the app over Weirdnet', Status.shipped),
+              (
+                'Packages list the company as maintainer, vendor and copyright holder; a smaller macOS disk image (0.2.3)',
+                Status.shipped,
+              ),
             ],
-            note: 'Released as $latestVersion. No 0.2.3 is planned: the next fixes ship with v0.3.',
+            note: 'Released as $latestVersion, a packaging patch. The next fixes ship with v0.3.',
           ),
           _milestone(
             id: 'v0-3',

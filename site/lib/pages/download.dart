@@ -4,7 +4,7 @@ import 'package:jaspr/jaspr.dart';
 import '../components/layout.dart';
 import '../site.dart';
 
-/// Files on the v0.2.2 GitHub release (name, what it is, size).
+/// Files on the v0.2.3 GitHub release (name, what it is, size).
 const _linux = [
   ('morph-$latestVersion-x86_64-unknown-linux-gnu.tar.gz', 'Tarball', '16.2 MB'),
   ('morph-$latestVersion-x86_64-unknown-linux-gnu.zip', 'Zip', '16.2 MB'),
@@ -14,12 +14,12 @@ const _linux = [
   ('morph-standalone-$latestVersion-1.x86_64.rpm', 'RPM package, binary only', '16.1 MB'),
 ];
 const _mac = [
-  ('morph-$latestVersion-universal-apple-darwin.dmg', 'Disk image', '22.7 MB'),
+  ('morph-$latestVersion-universal-apple-darwin.dmg', 'Disk image', '22.6 MB'),
   ('morph-$latestVersion-universal-apple-darwin.zip', 'Zip with Morph.app', '21.2 MB'),
 ];
 const _windows = [
   ('morph-$latestVersion-x86_64-pc-windows-msvc.msi', 'Installer', '9.6 MB'),
-  ('morph-$latestVersion-x86_64-pc-windows-msvc.zip', 'Zip, no installation', '11.1 MB'),
+  ('morph-$latestVersion-x86_64-pc-windows-msvc.zip', 'Zip, no installation', '11.0 MB'),
 ];
 const _android = [
   ('morph-$latestVersion-android-arm64.apk', 'arm64 release APK, signed with a test key', '22.7 MB'),
