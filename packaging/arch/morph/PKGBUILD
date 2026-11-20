@@ -1,4 +1,4 @@
-# Maintainer: m3talsmith <m3talsmith@gmail.com>
+# Maintainer: Weird Brains LLC <m3talsmith@gmail.com>
 # Source package: builds the GPUI desktop shell from this checkout (the
 # repository this PKGBUILD lives in) with cargo, so `makepkg -si` here
 # installs what is checked out. For the prebuilt release, see ../morph-bin.

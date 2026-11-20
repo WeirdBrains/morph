@@ -7,6 +7,7 @@ Release:        1
 Summary:        Distributed web browser with local AI (GPUI desktop shell)
 License:        BSD-3-Clause
 URL:            https://github.com/WeirdBrains/morph
+Vendor:         Weird Brains LLC
 Requires:       webkit2gtk4.1
 Requires:       gtk3
 Requires:       libxkbcommon-x11

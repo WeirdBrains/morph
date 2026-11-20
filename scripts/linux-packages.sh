@@ -69,7 +69,7 @@ for form in desktop standalone; do
     echo "Package: $pkg"
     echo "Version: $pkgver-1"
     echo "Architecture: $debarch"
-    echo "Maintainer: m3talsmith <m3talsmith@gmail.com>"
+    echo "Maintainer: Weird Brains LLC <m3talsmith@gmail.com>"
     echo "Depends: $deb_depends"
     echo "Recommends: mesa-vulkan-drivers | vulkan-icd"
     [ "$form" = standalone ] && echo "Conflicts: morph" && echo "Provides: morph"
