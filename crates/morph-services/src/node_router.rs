@@ -103,8 +103,12 @@ impl DeviceRouter {
 
     /// Serve `protocol` to linked devices: each accepted stream becomes a [`Link`] for
     /// `handler`, and sessions run concurrently. Streams are accepted from the moment this
-    /// returns; drive the returned future (on any executor) to run the sessions. It ends when
-    /// the node stops accepting.
+    /// returns; drive the returned future to run the sessions. It ends when the node stops
+    /// accepting. The router itself needs no particular executor, but the handlers in
+    /// [`protocols`] ([`protocols::InferService`], [`protocols::TaskService`]) race every stream
+    /// against `tokio::time::sleep`, so they must be driven on a tokio runtime with its timer
+    /// enabled (`serve_inference` does; a runtime built without `enable_time` panics at the
+    /// first stream).
     ///
     /// The handler sees a stream only once its first message arrived (within the
     /// [`Self::with_session_limits`] time, else the stream is closed unseen), and a device with
@@ -826,6 +830,11 @@ pub mod protocols {
     }
 
     /// Serves [`TASK`]: Node companion tasks, cards answered on the asking device.
+    ///
+    /// Where it is wired (`DeviceRouter::serve(TASK, ..)`), drive the returned future on a tokio
+    /// runtime with the timer enabled (`enable_time` or `enable_all`): each stream is watched
+    /// with `tokio::time::sleep`, and a runtime without it panics at the first task. Nothing in
+    /// the app serves tasks yet; the tests do.
     pub struct TaskService {
         host: Arc<dyn TaskHost>,
         gate: DeviceCaller,
