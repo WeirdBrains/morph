@@ -41,6 +41,7 @@ package() {
   repo="$(_repo)"
   install -Dm755 "$srcdir/target/release/morph" "$pkgdir/usr/bin/morph"
   install -Dm644 "$repo/packaging/linux/morph.desktop" "$pkgdir/usr/share/applications/morph.desktop"
+  install -Dm644 "$repo/packaging/linux/com.weirdbrains.morph.policy" "$pkgdir/usr/share/polkit-1/actions/com.weirdbrains.morph.policy"
   local size
   for size in 16 24 32 48 64 128 256 512; do
     install -Dm644 "$repo/docs/brand/png/morph-icon-$size.png" \

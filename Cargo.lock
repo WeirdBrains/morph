@@ -5668,6 +5668,8 @@ dependencies = [
  "block2 0.6.2",
  "core-foundation 0.10.1",
  "objc2 0.6.5",
+ "windows 0.62.2",
+ "windows-future 0.3.2",
  "windows-sys 0.61.2",
  "winreg",
 ]

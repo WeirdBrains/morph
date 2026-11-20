@@ -5,11 +5,14 @@
 //!   has one, so a hung `xdg-mime` or settings app never hangs Morph);
 //! * [`windows`]: Morph as a browser in the Windows registry (Default apps
 //!   lists it), the `weirdnet-morph://` protocol, and Windows Settings;
-//! * [`macos`]: Morph as the default browser through Launch Services.
+//! * [`macos`]: Morph as the default browser through Launch Services;
+//! * [`os_auth`]: asking the system who is at the keyboard (polkit,
+//!   LocalAuthentication, Windows Hello or CredUI) for the password saver.
 
 use std::time::{Duration, Instant};
 
 pub mod macos;
+pub mod os_auth;
 pub mod windows;
 
 /// How long a desktop call may take before Morph gives up on it.

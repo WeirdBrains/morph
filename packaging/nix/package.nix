@@ -25,6 +25,10 @@ stdenv.mkDerivation {
     runHook preInstall
     install -Dm755 bin/morph $out/bin/morph
     install -Dm644 LICENSE $out/share/licenses/morph/LICENSE
+    # The password saver's polkit action (in tarballs after 0.2.3).
+    if [ -f share/polkit-1/actions/com.weirdbrains.morph.policy ]; then
+      install -Dm644 share/polkit-1/actions/com.weirdbrains.morph.policy $out/share/polkit-1/actions/com.weirdbrains.morph.policy
+    fi
   '' + lib.optionalString desktop ''
     cp -a share/applications share/icons $out/share/
   '' + ''

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!-- Morph's password saver asks for the user's own password before it
+     fills or shows a saved password on a profile whose password is off.
+     The answer is never kept: every fill asks again. -->
+<policyconfig>
+  <vendor>Weird Brains LLC</vendor>
+  <vendor_url>https://weirdbrains.com</vendor_url>
+  <action id="com.weirdbrains.morph.authenticate">
+    <description>Use a saved password in Morph</description>
+    <message>Morph needs your password to fill or show a saved password</message>
+    <icon_name>morph</icon_name>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_self</allow_active>
+    </defaults>
+  </action>
+</policyconfig>

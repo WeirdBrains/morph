@@ -30,6 +30,8 @@ trap 'rm -rf "$stage"' EXIT
 dir="$stage/$name"
 install -Dm755 "$target_dir/release/morph" "$dir/bin/morph"
 install -Dm644 packaging/linux/morph.desktop "$dir/share/applications/morph.desktop"
+# The password saver's polkit action (crates/morph-os/src/os_auth.rs).
+install -Dm644 packaging/linux/com.weirdbrains.morph.policy "$dir/share/polkit-1/actions/com.weirdbrains.morph.policy"
 for size in 16 24 32 48 64 128 256 512; do
   install -Dm644 "docs/brand/png/morph-icon-$size.png" "$dir/share/icons/hicolor/${size}x${size}/apps/morph.png"
 done

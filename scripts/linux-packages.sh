@@ -53,6 +53,8 @@ built=("$name.zip")
 tree() { # tree DIR FORM
   install -Dm755 "$bundle/bin/morph" "$1/usr/bin/morph"
   install -Dm644 "$bundle/LICENSE" "$1/usr/share/licenses/morph/LICENSE"
+  # Both forms: the password saver's polkit action (system authentication).
+  install -Dm644 "$bundle/share/polkit-1/actions/com.weirdbrains.morph.policy" "$1/usr/share/polkit-1/actions/com.weirdbrains.morph.policy"
   if [ "$2" = desktop ]; then
     cp -a "$bundle/share/applications" "$bundle/share/icons" "$1/usr/share/"
   fi
@@ -83,7 +85,7 @@ for form in desktop standalone; do
       echo " Morph with its desktop entry and icons; it can be the default browser."
     else
       echo "Description: Distributed web browser with local AI (standalone binary)"
-      echo " Only the morph binary, without a desktop entry or icons."
+      echo " Only the morph binary and its polkit action, without a desktop entry or icons."
     fi
   } > "$d/DEBIAN/control"
   file="${pkg}_${pkgver}-1_${debarch}.deb"
