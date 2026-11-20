@@ -65,6 +65,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Page bridge for companions (docs/bridge-api.md): handlers get the view, the engine's address and origin, the frame and whether the view is hidden; Morph's own scripts talk on a channel pages can't reach (a script world of its own on Linux, a per-view secret everywhere), and pages can no longer send host-only messages. Morph can load pages out of sight and read their title, text, a readable extract, links, selection or HTML (at most 8 MiB, in chunks, with a timeout).
 
+## [0.2.3] - 2026-11-20
+
+- Packages name [Weird Brains](https://weirdbrains.com) as the maintainer and copyright holder: "Weird Brains LLC" is the Maintainer of the .deb and the Arch PKGBUILDs, the Vendor of the .rpm, the Manufacturer of the Windows installer, and the copyright holder in the macOS and iOS app info and the LICENSE files.
+
+- Docs, code comments, tests and configs no longer carry machine-specific details; the build's target directory comes from `CARGO_TARGET_DIR` in the environment.
+
+- macOS: the .dmg build gives the disk image an explicit size, so it no longer runs out of space while copying the app.
+
 ## [0.2.2] - 2026-11-19
 
 - Switching a window to another profile no longer loses its tabs. The tabs it showed stay saved with the profile it left (on disk at once, so a crash or quit keeps them too), and switching back brings them back in order with the same active tab; a profile with several windows gets all of them back, the others in new windows.
