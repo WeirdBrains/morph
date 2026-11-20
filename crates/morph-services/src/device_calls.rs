@@ -155,7 +155,8 @@ impl DeviceCaller {
     /// ([`DeviceCaller::check_unlocked`] fails closed on both).
     pub fn lock_state(&self) -> LockState {
         match &self.profile {
-            None => LockState::Unlocked,
+            // No profile refuses as locked, as `check_unlocked` does.
+            None => LockState::Locked,
             Some(p) => match crate::profile_lock::status(&p.0, &p.1) {
                 Ok(s) if s.unlocked => LockState::Unlocked,
                 Ok(_) => LockState::Locked,
