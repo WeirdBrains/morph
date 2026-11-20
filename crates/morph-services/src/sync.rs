@@ -18,7 +18,7 @@ use morph_identity::profile_identity::{self, SecretString};
 use morph_store::Library;
 use weirdnet_net::user::NodeCert;
 use weirdnet_net::{Keypair, Multiaddr, Node, NodeConfig, PeerId};
-use weirdnet_sync::{Device, KeyStatus, PAGE_MAX, Roster, SyncState, node_config, pull_from, start_node};
+use weirdnet_sync::{Device, KeyStatus, PAGE_MAX, Roster, SyncState, node_config, pull_from_outcome, start_node};
 
 use crate::home::{now_ms, profile_dir};
 use crate::{Error, Result};
@@ -389,18 +389,22 @@ pub fn tick(home: &Path, profile_id: &str) -> Result<usize> {
         // time. Holding the lock across the network would stall both sides.
         let mut work = {
             let st = state.lock().map_err(|_| Error::failed("sync state"))?;
-            snapshot(&st)
+            st.snapshot()
         };
         let mut n = 0usize;
         for typ in core::SUPPORTED_TYPES {
             if !work.types.iter().any(|t| t == typ) {
                 continue;
             }
-            match pull_from(&mut work, node.as_ref(), peer, &addrs, typ) {
-                Ok(got) => n += got,
-                Err(e) => eprintln!("morph-sync: {typ} pull from {peer} failed: {e}"),
+            // A pull refused part way (the peer rotated between its hello and a
+            // later page: epoch-behind) has already applied the pages before it;
+            // they count, so this tick materializes them.
+            let pulled = pull_from_outcome(&mut work, node.as_ref(), peer, &addrs, typ);
+            n += pulled.applied;
+            if let Some(e) = pulled.error {
+                eprintln!("morph-sync: {typ} pull from {peer} failed: {e}");
             }
-            // `pull_from` brings a type's chunks along; ask again for any a record still
+            // The pull brings a type's chunks along; ask again for any a record still
             // misses (another device may have written them since).
             if !work.log.pending_blobs(typ).is_empty() {
                 match weirdnet_sync::pull_chunks(&mut work, node.as_ref(), peer, &addrs, typ) {
@@ -411,12 +415,7 @@ pub fn tick(home: &Path, profile_id: &str) -> Result<usize> {
         }
         {
             let mut st = state.lock().map_err(|_| Error::failed("sync state"))?;
-            // What reached the live log, not only what the pulls that
-            // succeeded counted: a pull refused part way (the peer rotated
-            // between its hello and a later page: epoch-behind) has already
-            // brought the pages before it. Counting only `Ok` left those ops
-            // stored but never materialized, and later pulls find nothing new.
-            n = n.max(merge_back(&mut st, &work));
+            n = n.max(st.merge_back(&work).entries);
         }
         let _ = library_db::with(home, profile_id, |lib| {
             let st = state.lock().expect("sync state");
@@ -505,56 +504,6 @@ pub fn mcp_may_start_in(companions: &Path, server_id: &str) -> bool {
 
 fn revoked_ids(roster: &Roster) -> Vec<String> {
     roster.certs.iter().filter(|c| !c.active()).map(|c| c.peer_id.clone()).collect()
-}
-
-fn snapshot(st: &SyncState) -> SyncState {
-    SyncState {
-        seed: st.seed.clone(),
-        user_id: st.user_id.clone(),
-        user_key: st.user_key.clone(),
-        our_cert: st.our_cert.clone(),
-        our_node: st.our_node.clone(),
-        types: st.types.clone(),
-        roster: st.roster.clone(),
-        log: st.log.clone(),
-        clock: st.clock.clone(),
-        device: st.device.clone(),
-        keys: st.keys.clone(),
-        auto_first_rotation: st.auto_first_rotation,
-        records: st.records.clone(),
-    }
-}
-
-/// Fold what a pull into a copy learned back into the live state: new log
-/// entries, cursors that moved forward, roster changes (a revocation is never
-/// undone) and the clock. Returns how many log entries were new to it.
-fn merge_back(st: &mut SyncState, work: &SyncState) -> usize {
-    let mut added = 0;
-    for (nid, seq) in work.log.cursors() {
-        let ops: Vec<_> = work.log.iter_node(&nid).cloned().collect();
-        if let (Some(first), Some(last)) = (ops.first().map(|e| e.seq), ops.last().map(|e| e.seq)) {
-            added += st.log.integrate(&weirdnet_sync::LogPage { node_id: nid.clone(), from_seq: first, to_seq: last, ops });
-        }
-        if seq > st.log.cursor(&nid) {
-            st.log.set_cursor(&nid, seq);
-        }
-    }
-    for ((nid, typ), seq) in work.log.type_cursors() {
-        if seq > st.log.cursor_for(&nid, &typ) {
-            st.log.set_cursor_for(&nid, &typ, seq);
-        }
-    }
-    let key = st.user_key.clone();
-    st.roster.merge(&work.roster, &key, &weirdnet_net::WEIRDNET);
-    // A rotation or admission the copy picked up (or made) comes with its keys.
-    st.take_keys_from(work);
-    st.refresh_keys();
-    if let Some(c) = &work.clock
-        && st.clock.as_ref().is_none_or(|l| c.cmp_total(l).is_gt())
-    {
-        st.clock = Some(c.clone());
-    }
-    added
 }
 
 /// Addresses we may dial for a roster member: matching manual peers, plus
@@ -970,7 +919,7 @@ mod tests {
             auto_first_rotation: false,
             records: Default::default(),
         };
-        let mut work = snapshot(&live);
+        let mut work = live.snapshot();
         // While the copy pulls, the live state revokes `other` and writes locally.
         live.roster.revoke(&weirdnet_net::WEIRDNET, &user, &other, 5).unwrap();
         live.local_op(10, "bookmarks", "mine", vec![1]);
@@ -991,13 +940,13 @@ mod tests {
         });
         work.log.set_cursor(&peer, 1);
         work.clock = Some(weirdnet_sync::Hlc::new(60, 0, live.our_node.clone()));
-        assert_eq!(merge_back(&mut live, &work), 1, "the pulled op is new to the live log");
+        assert_eq!(live.merge_back(&work).entries, 1, "the pulled op is new to the live log");
         assert!(live.log.get(&peer, 1).is_some(), "pulled ops land");
-        assert_eq!(merge_back(&mut live, &work), 0, "nothing is new the second time");
+        assert_eq!(live.merge_back(&work).entries, 0, "nothing is new the second time");
         assert!(live.log.get(&live.our_node, 1).is_some(), "local writes stay");
         assert_eq!(live.log.cursor(&peer), 1);
         assert!(!live.roster.get(&other).unwrap().active(), "the revocation stands");
-        assert_eq!(live.clock.as_ref().unwrap().physical_ms, 60);
+        assert!(live.clock.as_ref().unwrap().physical_ms >= 60, "the clock moves past the pulled one");
     }
 
     fn visits(home: &Path) -> Vec<morph_core::library::HistoryEntry> {
