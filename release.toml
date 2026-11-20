@@ -16,8 +16,10 @@ next = [
   "python3 scripts/weirdnet_release.py taur {version} --dry-run, then without --dry-run",
 ]
 
-[env]
-CARGO_TARGET_DIR = "<scratch-dir>/cargo-target/morph"
+# CARGO_TARGET_DIR is not set here: export it to a scratch directory outside
+# the checkout before running the release (the builds are large), e.g.
+#   CARGO_TARGET_DIR=<scratch-dir>/cargo-target/morph python3 scripts/weirdnet_release.py ...
+# A machine-specific path can go in an [env] table of an untracked local copy.
 
 [[files]]                       # only the desktop shell carries the release version
 kind = "cargo-package"

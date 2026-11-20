@@ -896,7 +896,7 @@ def busy_page(r, binary, display, base):
     """A page like Gmail at rest (busy.html: a request and a timer every
     100 ms, an endless animation) keeps its scripts on time, with the page
     alone and with the identity panel's link QR open beside it (Compose
-    in Gmail stalled for 20 s on my-desktop, NVIDIA GPU at scale 2: the web
+    in Gmail stalled for 20 s on an NVIDIA desktop at scale 2: the web
     process spent its time reading GPU frames back into memory). Frames are
     copied at most 60 times a second, and none while a page is still."""
     g = "busy page"
