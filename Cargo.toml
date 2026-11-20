@@ -8,7 +8,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.99"
 license = "BSD-3-Clause"
-authors = ["m3talsmith <m3talsmith@gmail.com>"]
+authors = ["Weird Brains LLC <m3talsmith@gmail.com>"]
 repository = "https://github.com/WeirdBrains/morph"
 homepage = "https://github.com/WeirdBrains/morph"
 

@@ -6,6 +6,8 @@
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright © 2026 Weird Brains LLC</string>
 	<key>CFBundleDisplayName</key>
 	<string>Morph</string>
 	<key>CFBundleExecutable</key>
