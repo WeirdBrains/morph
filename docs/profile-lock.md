@@ -32,7 +32,8 @@ Progress note for whoever picks this up next (update it with each push).
 - Open: seal `companions/`, `ai/policy.json` and the MCP host's
   `mcp-*.local.json` under the file key (with Morph Dev); show locked
   profiles in `profiles_view`; auto-lock after idle; OS authentication
-  unlock; the Flutter gate with biometrics; OS authentication backends (see "Password saver" below).
+  unlock; the Flutter gate with biometrics; turning the password saver on by
+  default (see "Password saver" below).
 
 ## Keys
 
@@ -197,7 +198,16 @@ Approved by m3talsmith on Nov 19, 2026: **no separate master password**.
 
 Code: `morph-store/src/saver_store.rs` (table `saved_logins`, migration 6),
 `morph-core/src/password_saver.rs` (keys, sealing, requirement, `OsAuth`),
-`morph-services/src/password_saver.rs` (the fill gate for front ends).
+`morph-services/src/password_saver.rs` (the fill gate for front ends),
+`morph-os/src/os_auth.rs` (system authentication),
+`morph-webview/src/login_form.rs` (capture and fill in the page),
+`morph-desktop/src/password_saver.rs` and `browser_view/saver.rs` (the bar),
+`morph-desktop/src/settings_view/passwords.rs` (Settings > Privacy).
+
+**Hidden for now.** Until the saver is finished and turned on by default, the
+desktop shows none of it (no page script, no bar, no Settings rows) unless
+Morph starts with `MORPH_PASSWORD_SAVER=1`. Saved logins and settings stay in
+the profile either way.
 
 - Saved logins live in `library.db`, so the profile password already gates
   them at rest. Each password is also sealed under a **saver key**:
@@ -209,14 +219,34 @@ Code: `morph-store/src/saver_store.rs` (table `saved_logins`, migration 6),
   the file key and dropped on lock.
 - Each sealed value is bound (AAD) to its row's id, origin and username, so a
   row cannot be repointed at another site or user.
-- Only `http` and `https` origins; the origin is normalized (default ports
-  dropped). One login per origin and username (saving again updates it).
+- Only `https` origins are saved or filled; the origin is normalized (default
+  ports dropped). One login per origin and username (saving again updates it).
+- **Origin matching:** a login fills only on a page whose scheme, host and port
+  are exactly the saved origin's (`page_matches`): no subdomains, no `http`,
+  never in a frame. The fill runs in Morph's script world, pinned to that
+  origin (`on_origin`), so a navigation in between refuses it.
+- **Capture:** a host script (main frame only, Morph's own world where the
+  engine has one) reports a shown password field once and a submitted login
+  (submit, a trusted click on a submit button, or Enter in a field). Rust takes
+  it only from the host channel, the main frame, an `https` page, and not
+  from hidden or popup views (`login_form::parse`). The bar then offers to
+  save (new), update (changed password) or nothing (same login).
+- **Filling is asked for:** the bar offers "Fill" on a matching page; nothing
+  is filled on its own.
 - **No identity:** no key, so the saver is not offered.
 - **Password on (default):** the unlock was the proof; filling asks for nothing
   more.
-- **Password off:** filling needs OS authentication (`OsAuth`). Where the OS
-  cannot authenticate, which is every platform today, the saver is not
-  offered (`Unavailable::NoOsAuth`).
+- **Password off:** filling needs OS authentication (`OsAuth`, through
+  `morph_os::os_auth`): polkit on Linux (`pkcheck` for the action
+  `com.weirdbrains.morph.authenticate`, `auth_self`, never kept, shipped in
+  `packaging/linux/com.weirdbrains.morph.policy`), LocalAuthentication on
+  macOS (Touch ID or the account password), Windows Hello on Windows, else a
+  CredUI prompt checked with `LogonUserW` against the signed-in user. Where
+  none is available (no polkit, no policy file, no agent), the saver is not
+  offered (`Unavailable::NoOsAuth`). Android and iOS have no backend yet.
+- **Showing a password** in Settings always asks for a fresh proof (the
+  profile password if it has one, else OS authentication), and hides it again
+  after 60 seconds.
 - **"Ask again before filling"** (sealed profile file `password-saver.json`):
   the fill re-checks the profile password (same backoff as the lock screen),
   not a second password. Turning it off needs the profile password. With the
@@ -228,15 +258,18 @@ Code: `morph-store/src/saver_store.rs` (table `saved_logins`, migration 6),
 
 ### Status (password saver)
 
-- Done: storage table; sealing and `reveal`; requirement and `OsAuth` trait
-  with the `NoOsAuth` stub; sealed saver settings; services layer (`offer`,
-  `save`, `list`, `delete`, `fill`, `set_ask_again`); tests in all three
-  crates.
-- Left, nothing here is wired to a UI yet:
-  - a platform `OsAuth` (polkit on Linux, Touch ID, Windows Hello);
-  - capture and fill in the page (webview bridge fill exists for the
-    companion; the saver needs its own prompt and origin matching rules);
-  - Settings > Privacy switch for "ask again" and a saved-passwords list;
+- Done: storage table; sealing and `reveal`; requirement; sealed saver
+  settings (on/off, ask again); services layer (`offer`, `save`, `captured`,
+  `list`, `delete`, `fill`, `reveal`, `set_enabled`, `set_ask_again`);
+  system authentication on Linux, macOS and Windows; capture and exact-origin
+  fill in the page; the desktop bar; Settings > Privacy (on/off, ask again,
+  saved logins with show behind a fresh proof, copy and delete). Tests in
+  each crate, and `morph-webview/tests/login_webkit.rs` in a real WebKitGTK
+  page (docs/bridge-api.md).
+- Left:
+  - turning it on by default (drop the `MORPH_PASSWORD_SAVER` gate) once the
+    system prompts have been tried on real desktops;
+  - the phone (BiometricPrompt, Face ID / Touch ID);
   - **password sync**: waits for weirdnet-sync. The `hlc` and `node_id`
     columns exist and are empty; deletes need a tombstone then. Values are
     already sealed, so nothing in the sync step needs the plaintext;

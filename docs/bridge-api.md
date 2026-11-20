@@ -201,6 +201,24 @@ page-read chunks and timeouts. Futures are `!Send` and resolve on the UI thread.
   still have run. There is no bridge message for any of this; `host.*` types stay refused on
   the page channel.
 
+## Login forms
+
+The password saver's page side (`morph_webview::login_form`, docs/profile-lock.md,
+"Password saver"):
+
+- `HOST_SCRIPT` is a host script: main frame only, in Morph's world where the engine has
+  one. It posts `host.saver.form` once per page when a shown password field appears (a
+  `MutationObserver` that stops once one is found) and `host.saver.submit`
+  `{username, password}` on a form submit, a trusted click on a submit button or a
+  trusted Enter in a field, once per distinct login. Values are capped at `FIELD_MAX`
+  (4 KiB).
+- `parse` accepts these only with `Trust::Host`, `FrameKind::Main`, from an `https`
+  page, and not from hidden (`background`) or popup views. The same types on the page
+  channel are refused like any `host.*` message.
+- `fill_actions(origin, username, password)` builds `Action::Fill` requests pinned to
+  the origin (`on_origin`): `USERNAME_FIELDS` then `PASSWORD_FIELDS`. The password is
+  never read back (`secret`). `fill_allowed` is false for anything but `https`.
+
 Generic beyond Morph: `page_read` and `page_action` (their scripts and types) would fit a
 weirdnet crate (a "webview automation" crate over any engine that can run a script in an
 isolated world); they stay in `morph-webview` for now, next to the backends that provide
@@ -229,13 +247,17 @@ profile's cookie nor its localStorage, nor another ephemeral page's; fill by rol
 label, password not read back, `<select>` by text, contenteditable, click seen by the
 page's listener, covered/disabled/missing/bad-selector refusals, scroll by and to, highlight and clear (one, all, repeated), on a
 page that poisons `HTMLInputElement.prototype.value`, `dispatchEvent`, `querySelectorAll`,
-`JSON.stringify` and `getBoundingClientRect`), which need a display:
+`JSON.stringify` and `getBoundingClientRect`) and
+`crates/morph-webview/tests/login_webkit.rs` (the saver's host script reports the form
+once and the submitted login on the host channel only, a frame's login and a page's forged
+`host.saver.submit` never arrive, and the fill puts the username and password in, refused
+for another origin), which need a display:
 
 ```sh
 cargo test -p morph-webview --test bridge_webkit --no-run   # prints the test binary
 env -i HOME=$HOME PATH=/usr/bin:/bin XDG_RUNTIME_DIR=$(mktemp -d) MORPH_BRIDGE_WEBKIT=1 \
   xvfb-run --server-num=137 target/debug/deps/bridge_webkit-<hash>
-# the same for session_actions_webkit-<hash>
+# the same for session_actions_webkit-<hash> and login_webkit-<hash>
 ```
 
 On macOS and Windows the same checks run in CI on the release build:
