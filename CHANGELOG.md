@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- A device's link code or a Morph invite typed or pasted in the desktop address bar now opens the Identity panel (Add device, or receiving the identity for an invite) with it filled in, instead of trying to call an app. An invite opened as a `weirdnet-morph://invite/…` link goes to receiving the identity on this device after it is checked; a locked profile refuses both.
+
+- On Windows, Morph registers `weirdnet-ymir://` only when no other app handles it (or the handler is Morph's own), in the app and the MSI, so Ymir's own registration is never replaced.
+
+- Linked devices can no longer hold served streams open idle: a stream that sends nothing for 10 s is closed, and one device gets at most 16 open sessions of a protocol at once.
+
 - Updated to weirdnet-sync 0.5.1, weirdnet-agent 0.4.1, weirdnet-model 0.4.2 and weirdnet-mcp 0.5.1. Library sync now uses weirdnet-sync's own pull copy and merge, which keeps what a pull brought before the other device refused a later page, so those changes still show up on this device.
 
 - Ymir nodes can join your devices: open or paste the `weirdnet-ymir://link/…` code `ymirctl pool link` shows, and Morph's Add device pairs with it after the profile password and the same six-digit check (it names the node "Ymir on …"). A new device's `weirdnet-morph://link/…` code opened as a link now goes to Add device too, with the code filled in. Morph registers `weirdnet-ymir://` alongside `weirdnet-morph://` (desktop entry, macOS, Windows, Android, iOS). A locked profile refuses these codes (docs/qr-login.md).

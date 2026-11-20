@@ -1136,6 +1136,17 @@ matrix; BSD later, with the engine fork):
 - On install or first run the app registers **its own** prefixed schemes only
   (Morph registers `weirdnet-morph://`, including `join/` and `answer/`).
   **`weirdnet://` is not registered with the OS.**
+- **Exception: `weirdnet-ymir://`** _(added 2026-11-19)_. Ymir is a headless
+  node app with no UI of its own to accept a link, and `ymirctl pool link`
+  shows `weirdnet-ymir://link/…` codes that are opened in Morph (Identity >
+  Add device, same pairing and six-digit check). So Morph also registers
+  `weirdnet-ymir://`, but only as a fallback: it never takes the scheme over.
+  Linux adds it to `mimeapps.list` only when no list names a handler;
+  Windows (the app's HKCU keys and the MSI's HKLM component) writes it only
+  when no handler is registered or the one there carries Morph's
+  `MorphHandler` mark; macOS lists it as an `Alternate` handler. Morph acts
+  only on `weirdnet-ymir://link/<code>`; anything else on that scheme is
+  refused with a note. Any other app's scheme stays that app's alone.
 
 **When the target app isn't installed.** The resolver shows the publisher, app
 name and capabilities from the record, then offers the fallback hint. Nothing is
@@ -2877,3 +2888,17 @@ them ("The other device runs an older Morph. Update it to link.") in
 `morph-identity::device_link::link_error`. The relay round trip lookup name is
 `weirdnet-relay-check`. CI installs the `local-relay` example with `cargo
 install`. Cargo.lock has one `weirdnet-keys` 0.1.0 and `weirdnet-net` 0.8.0.
+
+### 2026-11-19 — weirdnet-ymir codes, invites and the address bar
+
+- Morph registers Ymir's `weirdnet-ymir://` as a fallback handler only (the
+  exception under "Local resolution and OS-level registration"): Linux and
+  Windows/MSI write it only when nothing else handles the scheme, and never
+  replace Ymir's own registration.
+- A device-link code (`weirdnet-morph://link/…`, `weirdnet-ymir://link/…`)
+  or a Morph invite (`weirdnet-morph://invite/…`) typed or pasted in the
+  desktop address bar goes to the Identity panel exactly as an opened link
+  does, never to an app call. An opened invite goes to the new-device step
+  with the invite filled in, after `decode_invite` checks it; a profile that
+  has an identity is told to open it on the new device. All of them are
+  refused while the profile is locked (`scheme::is_pairing_link`).
