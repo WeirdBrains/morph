@@ -99,10 +99,10 @@ impl std::fmt::Display for Unavailable {
     }
 }
 
-/// OS authentication (polkit, Touch ID, Windows Hello). **Not implemented on
-/// any platform yet**: [`NoOsAuth`] is the stub every caller gets until a
-/// platform backend exists, so a profile whose password is off does not offer
-/// the saver.
+/// OS authentication (polkit, Touch ID, Windows Hello). The desktop's
+/// backend is `morph_os::os_auth` behind this trait; [`NoOsAuth`] is for
+/// systems without one (a profile whose password is off then does not offer
+/// the saver) and tests fake it.
 pub trait OsAuth: Send + Sync {
     /// Whether this system can ask the user to authenticate.
     fn available(&self) -> bool;
@@ -132,11 +132,25 @@ impl OsAuth for NoOsAuth {
 }
 
 /// The saver's per-profile settings (a sealed profile file).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SaverSettings {
     /// Re-ask the profile password before every fill (not a second password).
     #[serde(default)]
     pub ask_again: bool,
+    /// Offer to save logins and to fill saved ones (Settings > Privacy).
+    /// Off keeps what is saved; the list in Settings still shows it.
+    #[serde(default = "on")]
+    pub enabled: bool,
+}
+
+fn on() -> bool {
+    true
+}
+
+impl Default for SaverSettings {
+    fn default() -> Self {
+        Self { ask_again: false, enabled: true }
+    }
 }
 
 fn settings_path(home: &Path, id: &str) -> PathBuf {
@@ -184,6 +198,15 @@ pub fn requirement(home: &Path, id: &str, os: &dyn OsAuth) -> Result<Requirement
         return Err(SaverError::Unavailable(Unavailable::NoOsAuth));
     }
     Ok(Requirement { os_auth: true, password: ask_again })
+}
+
+/// What revealing a saved password **to the user** needs (Settings, "Show"):
+/// always a fresh proof, even where filling needs none. Password on: the
+/// profile password; password off: OS authentication (and the password too
+/// with "ask again"). Not offered where [`requirement`] is not.
+pub fn reveal_requirement(home: &Path, id: &str, os: &dyn OsAuth) -> Result<Requirement, SaverError> {
+    let fill = requirement(home, id, os)?;
+    Ok(if fill.os_auth { fill } else { Requirement { os_auth: false, password: true } })
 }
 
 /// Proof that a [`Requirement`] was met, needed by [`reveal`]. Built by the
@@ -244,6 +267,12 @@ pub fn origin_of(url: &str) -> Option<String> {
     (!host.is_empty()).then(|| format!("{scheme}://{host}"))
 }
 
+/// Whether a login saved for `saved_origin` may be filled into the page at
+/// `page_url`: https, and exactly the same origin (scheme, host, port).
+pub fn page_matches(saved_origin: &str, page_url: &str) -> bool {
+    saved_origin.starts_with("https://") && origin_of(page_url).as_deref() == Some(saved_origin)
+}
+
 fn with_lib<T>(home: &Path, id: &str, f: impl FnOnce(&mut morph_store::Library) -> morph_store::Result<T>) -> Result<T, SaverError> {
     library_db::with(home, id, f)?.ok_or(SaverError::Profile(ProfileError::Locked))
 }
@@ -252,12 +281,17 @@ fn gate(home: &Path, id: &str, os: &dyn OsAuth) -> Result<(), SaverError> {
     requirement(home, id, os).map(|_| ())
 }
 
+/// The https origin of `page_url`, or why a login there cannot be saved.
+fn secure_origin(page_url: &str) -> Result<String, SaverError> {
+    origin_of(page_url).filter(|o| o.starts_with("https://")).ok_or_else(|| SaverError::Other("only https pages can have saved passwords".into()))
+}
+
 /// Save (or update) the login for `origin` and `username`; returns its id.
 /// Needs the saver to be offered (an identity, and the password on or OS
-/// authentication available) and the profile unlocked.
+/// authentication available), the profile unlocked and an https page.
 pub fn save(home: &Path, id: &str, os: &dyn OsAuth, page_url: &str, username: &str, password: &str, now_ms: i64) -> Result<String, SaverError> {
     gate(home, id, os)?;
-    let origin = origin_of(page_url).ok_or_else(|| SaverError::Other("only http and https pages can have saved passwords".into()))?;
+    let origin = secure_origin(page_url)?;
     let key = key_for(home, id)?;
     let existing = with_lib(home, id, |lib| Ok(lib.logins(Some(&origin))?.into_iter().find(|l| l.username == username)))?;
     let (login_id, created_ms) = match &existing {
@@ -283,6 +317,43 @@ pub fn list(home: &Path, id: &str, os: &dyn OsAuth, page_url: Option<&str>) -> R
         None => None,
     };
     with_lib(home, id, |lib| Ok(lib.logins(origin.as_deref())?.iter().map(LoginInfo::from).collect()))
+}
+
+/// How a login the user just submitted compares with what is saved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Captured {
+    /// Nothing saved for this origin and username: offer to save.
+    New,
+    /// Saved with another password (the id): offer to update.
+    Changed(String),
+    /// Saved with this password: nothing to ask.
+    Same,
+}
+
+/// Compare a submitted login with the saved one, without handing out any
+/// saved password (the comparison happens here). Needs the saver offered.
+pub fn captured(home: &Path, id: &str, os: &dyn OsAuth, page_url: &str, username: &str, password: &str) -> Result<Captured, SaverError> {
+    gate(home, id, os)?;
+    let origin = secure_origin(page_url)?;
+    let key = key_for(home, id)?;
+    let Some(login) = with_lib(home, id, |lib| Ok(lib.logins(Some(&origin))?.into_iter().find(|l| l.username == username)))? else {
+        return Ok(Captured::New);
+    };
+    let same = serde_json::from_slice::<Sealed>(&login.sealed)
+        .ok()
+        .and_then(|sealed| weirdnet_keys::open(&key, &sealed, &aad(&login.id, &login.origin, &login.username)).ok())
+        .is_some_and(|plain| same_bytes(&plain, password.as_bytes()));
+    Ok(if same { Captured::Same } else { Captured::Changed(login.id) })
+}
+
+/// Compare without stopping at the first difference.
+fn same_bytes(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+/// One saved login (no password).
+pub fn login(home: &Path, id: &str, login_id: &str) -> Result<LoginInfo, SaverError> {
+    with_lib(home, id, |lib| lib.login(login_id))?.as_ref().map(LoginInfo::from).ok_or(SaverError::NotFound)
 }
 
 /// Delete a saved login; whether it existed.
@@ -359,6 +430,49 @@ mod tests {
     }
 
     #[test]
+    fn only_https_pages_save_and_fill_matches_the_exact_origin() {
+        let (_tmp, home, _) = unlocked(true);
+        assert!(save(&home, "default", &NoOsAuth, "http://example.com/login", "amy", "pw", 1).is_err(), "no saving on http");
+        assert!(page_matches("https://example.com", "https://example.com/login"));
+        assert!(page_matches("https://example.com:8443", "https://example.com:8443/"));
+        for page in ["http://example.com/", "https://www.example.com/", "https://example.com:8443/", "https://example.com.evil.test/", "about:blank"]
+        {
+            assert!(!page_matches("https://example.com", page), "{page}");
+        }
+        assert!(!page_matches("http://example.com", "http://example.com/"), "never http");
+    }
+
+    #[test]
+    fn a_submitted_login_is_compared_without_revealing_the_saved_one() {
+        let (_tmp, home, _) = unlocked(true);
+        let os = NoOsAuth;
+        assert_eq!(captured(&home, "default", &os, "https://example.com/", "amy", "one").unwrap(), Captured::New);
+        let id = save(&home, "default", &os, "https://example.com/", "amy", "one", 1).unwrap();
+        assert_eq!(captured(&home, "default", &os, "https://example.com/x", "amy", "one").unwrap(), Captured::Same);
+        assert_eq!(captured(&home, "default", &os, "https://example.com/", "amy", "two").unwrap(), Captured::Changed(id.clone()));
+        assert_eq!(captured(&home, "default", &os, "https://example.com/", "bob", "one").unwrap(), Captured::New);
+        assert_eq!(captured(&home, "default", &os, "https://other.example/", "amy", "one").unwrap(), Captured::New);
+        assert!(captured(&home, "default", &os, "http://example.com/", "amy", "one").is_err());
+        assert_eq!(login(&home, "default", &id).unwrap().origin, "https://example.com");
+        assert!(matches!(login(&home, "default", "nope"), Err(SaverError::NotFound)));
+    }
+
+    #[test]
+    fn revealing_to_the_user_always_needs_a_fresh_proof() {
+        let (_tmp, home, _) = unlocked(true);
+        assert_eq!(reveal_requirement(&home, "default", &NoOsAuth).unwrap(), Requirement { os_auth: false, password: true });
+        profile_lock::set_require_password(&home, "default", false).unwrap();
+        assert!(reveal_requirement(&home, "default", &NoOsAuth).is_err());
+        assert_eq!(reveal_requirement(&home, "default", &Os(true)).unwrap(), Requirement { os_auth: true, password: false });
+    }
+
+    #[test]
+    fn old_settings_files_keep_the_saver_on() {
+        let old: SaverSettings = serde_json::from_str(r#"{"ask_again":true}"#).unwrap();
+        assert_eq!(old, SaverSettings { ask_again: true, enabled: true });
+    }
+
+    #[test]
     fn a_row_cannot_be_repointed_at_another_site_or_user() {
         let (_tmp, home, _) = unlocked(true);
         let id = save(&home, "default", &NoOsAuth, "https://bank.example/", "amy", "secret-one", 1).unwrap();
@@ -416,7 +530,8 @@ mod tests {
     fn ask_again_adds_the_profile_password_and_a_permit_must_cover_it() {
         let (_tmp, home, _) = unlocked(true);
         assert!(!settings(&home, "default").unwrap().ask_again);
-        save_settings(&home, "default", &SaverSettings { ask_again: true }).unwrap();
+        assert!(settings(&home, "default").unwrap().enabled, "on by default");
+        save_settings(&home, "default", &SaverSettings { ask_again: true, enabled: true }).unwrap();
         assert!(settings(&home, "default").unwrap().ask_again);
         let req = requirement(&home, "default", &NoOsAuth).unwrap();
         assert_eq!(req, Requirement { os_auth: false, password: true });
