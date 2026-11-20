@@ -18,7 +18,7 @@ morph-identity = { path = "crates/morph-identity" }
 morph-store = { path = "crates/morph-store" }
 morph-keystore = { path = "crates/morph-keystore" }
 morph-webview-control = { path = "crates/morph-webview-control" }
-weirdnet-device-link = "=0.3.0"
+weirdnet-device-link = "=0.3.1"
 morph-ui = { path = "crates/morph-ui" }
 morph-webview = { path = "crates/morph-webview" }
 morph-browser = { path = "crates/morph-browser" }
@@ -27,7 +27,7 @@ morph-os = { path = "crates/morph-os" }
 morph-ai = { path = "crates/morph-ai" }
 morph-companion = { path = "crates/morph-companion" }
 weirdnet-keys = "=0.1.0"
-weirdnet-net = "=0.8.0"
+weirdnet-net = "=0.8.1"
 weirdnet-sync = "=0.5.2"
 weirdnet-agent = "=0.4.5"
 weirdnet-mcp = { version = "=0.5.2", default-features = false }
@@ -45,8 +45,6 @@ hkdf = "0.13.0"
 sha2 = "0.11.1"
 # Keyed digests of MCP secrets (sync snapshot, approvals); already in the tree through weirdnet-sync.
 blake3 = "1.8.7"
-jni-sys = "0.4.1"
-ndk-context = "0.1.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # morph-webview: per-view bridge secrets (docs/bridge-api.md).

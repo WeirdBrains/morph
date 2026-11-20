@@ -23,10 +23,10 @@ morph-services.workspace = true
 morph-webview-control.workspace = true
 
 # hickory-resolver (libp2p DNS inside weirdnet-net) reads the system DNS
-# servers through ndk-context on Android; see src/android.rs.
+# servers through ndk-context on Android; weirdnet-net exports the JNI init
+# (src/android.rs).
 [target.'cfg(target_os = "android")'.dependencies]
-jni-sys.workspace = true
-ndk-context.workspace = true
+weirdnet-net.workspace = true
 
 [dev-dependencies]
 # Tests never touch the real OS keystore.
