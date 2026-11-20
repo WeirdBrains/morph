@@ -1,7 +1,7 @@
 name: morph
 description: Morph, a distributed web browser with local AI.
 publish_to: "none"
-version: 0.2.2+10407
+version: 0.2.3+10408
 homepage: https://github.com/WeirdBrains/morph
 repository: https://github.com/WeirdBrains/morph
 
