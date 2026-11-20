@@ -77,6 +77,15 @@ pub struct LinkedDevice {
 type SyncNode = Node<Vec<u8>, Vec<u8>>;
 type AddrsFor = dyn Fn(&NodeCert) -> Vec<Multiaddr> + Send + Sync;
 
+/// The profile lock as read once: see [`DeviceCaller::lock_state`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockState {
+    Unlocked,
+    Locked,
+    /// The status could not be read (an I/O error).
+    Unknown,
+}
+
 /// Calls to and from the user's linked devices on this device's identity (module docs).
 #[derive(Clone)]
 pub struct DeviceCaller {
@@ -140,6 +149,19 @@ impl DeviceCaller {
     /// make, so a host takes it from the caller rather than being handed a profile.
     pub fn check_unlocked(&self) -> Result<(), DeviceCallError> {
         self.unlocked()
+    }
+
+    /// What the lock is right now, telling a real lock from a failed read of it
+    /// ([`DeviceCaller::check_unlocked`] fails closed on both).
+    pub fn lock_state(&self) -> LockState {
+        match &self.profile {
+            None => LockState::Unlocked,
+            Some(p) => match crate::profile_lock::status(&p.0, &p.1) {
+                Ok(s) if s.unlocked => LockState::Unlocked,
+                Ok(_) => LockState::Locked,
+                Err(_) => LockState::Unknown,
+            },
+        }
     }
 
     /// Refuse while the profile is locked.

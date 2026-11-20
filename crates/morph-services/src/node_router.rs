@@ -402,7 +402,7 @@ pub mod protocols {
     use weirdnet_agent::remote::{self, Channel, Dialer, FrameRx, FrameTx, RemoteError};
     use weirdnet_agent::{CancelToken, DeltaSink, Message, ModelBackend, ModelError, ModelTurn, ToolSpec};
 
-    use crate::device_calls::DeviceCaller;
+    use crate::device_calls::{DeviceCaller, LockState};
 
     /// Model turns for inference offload.
     pub const INFER: &str = remote::infer::PROTOCOL;
@@ -468,6 +468,50 @@ pub mod protocols {
     /// How often a served stream is checked against the roster and the lock while it runs.
     const WATCH: Duration = Duration::from_millis(250);
 
+    /// How many reads of the lock in a row may fail before the profile counts as locked.
+    const UNKNOWN_TICKS: u32 = 3;
+
+    /// The profile lock, read once per tick on a thread of its own for every stream a service
+    /// runs: reading it is file I/O, which must not run per stream on the (single-threaded)
+    /// serving runtime. A positive "locked" counts at once; a failed read only after
+    /// [`UNKNOWN_TICKS`] in a row, so one transient error does not end every stream. The
+    /// thread stops when the last clone is dropped.
+    #[derive(Clone)]
+    pub(crate) struct LockWatch(Arc<std::sync::atomic::AtomicBool>);
+
+    impl LockWatch {
+        pub(crate) fn of(gate: &DeviceCaller) -> Self {
+            let gate = gate.clone();
+            Self::reading(move || gate.lock_state(), WATCH)
+        }
+
+        pub(crate) fn reading(read: impl Fn() -> LockState + Send + 'static, tick: Duration) -> Self {
+            use std::sync::atomic::Ordering::SeqCst;
+            let (mut unknown, locked) = (0u32, |s: LockState| s == LockState::Locked);
+            let first = read();
+            let flag = Arc::new(std::sync::atomic::AtomicBool::new(locked(first) || first == LockState::Unknown));
+            let weak = Arc::downgrade(&flag);
+            let spawned = std::thread::Builder::new().name("morph-lock-watch".into()).spawn(move || {
+                loop {
+                    std::thread::sleep(tick);
+                    let Some(flag) = weak.upgrade() else { return };
+                    let state = read();
+                    unknown = if state == LockState::Unknown { unknown + 1 } else { 0 };
+                    flag.store(locked(state) || unknown >= UNKNOWN_TICKS, SeqCst);
+                }
+            });
+            if spawned.is_err() {
+                // No thread, no way to know: fail closed.
+                flag.store(true, SeqCst);
+            }
+            Self(flag)
+        }
+
+        pub(crate) fn locked(&self) -> bool {
+            self.0.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
     /// The gate: the profile is unlocked, and `caller` is a current linked device.
     fn admit(gate: &DeviceCaller, caller: &Caller) -> Result<(), RemoteError> {
         if gate.check_unlocked().is_err() {
@@ -489,6 +533,7 @@ pub mod protocols {
     /// Needs a runtime with a timer.
     async fn watched(
         gate: &DeviceCaller,
+        lock: &LockWatch,
         caller: &Caller,
         served: impl std::future::Future<Output = Result<(), RemoteError>>,
     ) -> Result<(), RemoteError> {
@@ -498,8 +543,12 @@ pub mod protocols {
         let gone = async {
             loop {
                 tokio::time::sleep(WATCH).await;
-                if let Err(e) = admit(gate, caller) {
-                    return e;
+                // The lock is the watch thread's reading; the roster is in memory.
+                if lock.locked() {
+                    return RemoteError::refused("profile-locked");
+                }
+                if let Some(reason) = gate.check(&caller.peer, None).reason() {
+                    return RemoteError::refused(reason);
                 }
             }
         };
@@ -619,6 +668,7 @@ pub mod protocols {
     pub struct InferService {
         host: Arc<dyn InferHost>,
         gate: DeviceCaller,
+        lock: LockWatch,
         admission: Admission,
         /// Serve infer/2 on this stream (register the service under [`INFER_V2`]), else infer/1.
         v2: bool,
@@ -626,13 +676,26 @@ pub mod protocols {
 
     impl InferService {
         pub fn new<H: InferHost + 'static>(host: H, gate: DeviceCaller, admission: Admission) -> Self {
-            Self { host: Arc::new(RosterHost::new(host, gate.clone())), gate, admission, v2: false }
+            let lock = LockWatch::of(&gate);
+            Self { host: Arc::new(RosterHost::new(host, gate.clone())), gate, lock, admission, v2: false }
         }
 
         /// The same service for [`INFER_V2`] streams.
         pub fn v2(mut self) -> Self {
             self.v2 = true;
             self
+        }
+
+        /// An infer/2 service over `host` beside this one: it shares the gate, the admission and
+        /// the lock reading (one watch thread, not one per protocol).
+        pub fn v2_beside<H: InferHost + 'static>(&self, host: H) -> Self {
+            Self {
+                host: Arc::new(RosterHost::new(host, self.gate.clone())),
+                gate: self.gate.clone(),
+                lock: self.lock.clone(),
+                admission: self.admission.clone(),
+                v2: true,
+            }
         }
     }
 
@@ -643,9 +706,10 @@ pub mod protocols {
         async fn handle(&self, from: String, link: Link) {
             let caller = Caller::new(from.clone());
             let served = if self.v2 {
-                watched(&self.gate, &caller, remote::infer::v2::serve(channel(link), caller.clone(), self.host.as_ref(), &self.admission)).await
+                watched(&self.gate, &self.lock, &caller, remote::infer::v2::serve(channel(link), caller.clone(), self.host.as_ref(), &self.admission))
+                    .await
             } else {
-                watched(&self.gate, &caller, remote::infer::serve(channel(link), &caller, self.host.as_ref(), &self.admission)).await
+                watched(&self.gate, &self.lock, &caller, remote::infer::serve(channel(link), &caller, self.host.as_ref(), &self.admission)).await
             };
             if let Err(e) = served {
                 eprintln!("morph-agent: inference for {from}: {e}");
@@ -657,13 +721,15 @@ pub mod protocols {
     pub struct TaskService {
         host: Arc<dyn TaskHost>,
         gate: DeviceCaller,
+        lock: LockWatch,
     }
 
     impl TaskService {
         /// `gate` is checked while a task runs, not only when its stream is accepted: a revoke or a
         /// lock ends the task within 250 ms.
         pub fn new(host: Arc<dyn TaskHost>, gate: DeviceCaller) -> Self {
-            Self { host, gate }
+            let lock = LockWatch::of(&gate);
+            Self { host, gate, lock }
         }
     }
 
@@ -671,7 +737,7 @@ pub mod protocols {
     impl LinkHandler for TaskService {
         async fn handle(&self, from: String, link: Link) {
             let caller = Caller::new(from.clone());
-            if let Err(e) = watched(&self.gate, &caller, remote::task::serve(channel(link), self.host.as_ref())).await {
+            if let Err(e) = watched(&self.gate, &self.lock, &caller, remote::task::serve(channel(link), self.host.as_ref())).await {
                 eprintln!("morph-agent: task for {from}: {e}");
             }
         }
@@ -1134,6 +1200,30 @@ mod tests {
             let done =
                 rt.block_on(async { tokio::time::timeout(std::time::Duration::from_secs(1), service.handle(peer.to_string(), link)).await.ok() });
             (done, waits.load(std::sync::atomic::Ordering::SeqCst))
+        }
+
+        #[test]
+        fn one_failed_read_of_the_lock_does_not_end_streams_but_a_real_lock_does_at_once() {
+            use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+            let script = |states: Vec<crate::device_calls::LockState>| {
+                let at = Arc::new(AtomicUsize::new(0));
+                let watch = protocols::LockWatch::reading(
+                    {
+                        let at = at.clone();
+                        move || states[at.fetch_add(1, SeqCst).min(states.len() - 1)]
+                    },
+                    std::time::Duration::from_millis(10),
+                );
+                std::thread::sleep(std::time::Duration::from_millis(400));
+                watch.locked()
+            };
+            use crate::device_calls::LockState::{Locked, Unknown, Unlocked};
+            assert!(!script(vec![Unlocked]), "unlocked stays unlocked");
+            assert!(!script(vec![Unlocked, Unknown, Unlocked]), "one error is not a lock");
+            assert!(!script(vec![Unlocked, Unknown, Unknown, Unlocked]), "nor two in a row");
+            assert!(script(vec![Unlocked, Unknown, Unknown, Unknown]), "an error that repeats fails closed");
+            assert!(script(vec![Unlocked, Locked]), "a positive locked counts at once and stays");
+            assert!(script(vec![Unknown]), "unreadable from the start fails closed");
         }
 
         #[test]

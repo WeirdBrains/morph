@@ -46,8 +46,8 @@ pub fn serve_inference<H: InferHost + 'static>(
     admission: Admission,
 ) -> Result<InferServing, RouteError> {
     let gate = router.caller().clone();
-    let v1 = protocols::InferService::new(make(), gate.clone(), admission.clone());
-    let v2 = protocols::InferService::new(make(), gate, admission).v2();
+    let v1 = protocols::InferService::new(make(), gate, admission);
+    let v2 = v1.v2_beside(make());
     let first = router.serve(protocols::INFER, std::sync::Arc::new(v1))?;
     let second = router.serve(protocols::INFER_V2, std::sync::Arc::new(v2))?;
     let (abort, registration) = AbortHandle::new_pair();
