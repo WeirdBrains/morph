@@ -70,7 +70,7 @@ Packages and tests:
 
 - `cd packaging/arch/morph && makepkg -si` builds and installs the package from
   the checkout; `packaging/arch/morph-bin` installs the prebuilt release
-  (on the WeirdBrains TAUR server as `morph-bin`).
+  (on the [Weird Brains](https://weirdbrains.com) TAUR server as `morph-bin`).
 - `scripts/linux-dist.sh` builds the release tarball and `SHA256SUMS` in `dist/`.
 - `scripts/xvfb-check.py --bin <path to morph>` drives the shell in Xvfb with
   xdotool (needs `Xvfb`, `xdotool`, `openbox` for the F11 check and `xfwm4`

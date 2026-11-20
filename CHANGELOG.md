@@ -193,7 +193,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.0-alpha.13] - 2026-11-16
 
 - Relays: Settings has a Relays section (desktop and phone) listing the
-  relays device linking uses (the built-in WeirdBrains public relay, or
+  relays device linking uses (the built-in [Weird Brains](https://weirdbrains.com) public relay, or
   `MORPH_LINK_RELAYS`), each with its peer id, addresses and live state:
   not connected, connecting, connected, or connected with a slot reserved.
   The state is read from the running nodes' own status (weirdnet-net

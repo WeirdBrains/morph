@@ -295,7 +295,7 @@ device hello's every node in its roster, directly or via the relay, and
 pulls each node from `sync_cursor`. If none are reachable, it waits; there
 is no server copy. A desktop left running is the practical "always-on" node
 for a phone. An optional self-run store of *sealed* pages is a later
-addition and must not be enabled on the official WeirdBrains relay.
+addition and must not be enabled on the official [Weird Brains](https://weirdbrains.com) relay.
 
 Applying a page is transactional: merge into `library.db`, advance the
 cursor, then ack. A crash mid-page replays from the last cursor. Unknown

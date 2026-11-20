@@ -153,7 +153,7 @@ Build `v0.2.0-alpha.9`.
               carrier NAT), relays as the fallback that always works
             - Phones are reachable only while Morph is open (iOS) or a foreground service runs
               (Android)
-            - A WeirdBrains push service wakes phones, carrying only small encrypted wake-ups
+            - A [Weird Brains](https://weirdbrains.com) push service wakes phones, carrying only small encrypted wake-ups
               _(changed 2026-11-11)_
                 - APNs/FCM push is on by default; a clear per-device toggle in Settings turns
                   it off, falling back to reachable only while open
@@ -170,7 +170,7 @@ Build `v0.2.0-alpha.9`.
         - Stay on libp2p; contribute key-only dialing, data-capable relays and seamless
           relay/direct path switching to Weirdnet _(agreed 2026-11-11)_
         - Relays for peers DNS can't reach _(changed)_
-            - WeirdBrains runs public relays. In Priorities 1 they also forward public HTTPS for
+            - [Weird Brains](https://weirdbrains.com) runs public relays. In Priorities 1 they also forward public HTTPS for
               users without their own relay, with no bandwidth limits yet _(changed 2026-11-11)_
             - Every relay serves a page that broadcasts its name and connection details
               _(added 2026-11-16)_
@@ -197,14 +197,14 @@ Build `v0.2.0-alpha.9`.
               combines the ACME code from Mouser, Muninn, itcmdr and TAUR, with DNS-01 through
               grindvakt-core _(agreed 2026-11-11)_
             - When the host has no public address, traffic is routed through your own relay, a
-              trusted Weirdnet peer or a WeirdBrains public relay _(changed 2026-11-11)_, which
+              trusted Weirdnet peer or a [Weird Brains](https://weirdbrains.com) public relay _(changed 2026-11-11)_, which
               reads only the TLS server name and forwards the encrypted bytes (TLS stays end to
               end; the relay never holds the key)
-            - Abuse reports about sites forwarded through WeirdBrains relays go to a contact
-              address; WeirdBrains may revoke forwarding per site on its own relays. Every
+            - Abuse reports about sites forwarded through [Weird Brains](https://weirdbrains.com) relays go to a contact
+              address; [Weird Brains](https://weirdbrains.com) may revoke forwarding per site on its own relays. Every
               device can blacklist a forwarded site or turn off site forwarding
               _(new 2026-11-11)_
-            - Still no WeirdBrains-run gateway or shared WeirdBrains domain: the site keeps your
+            - Still no [Weird Brains](https://weirdbrains.com)-run gateway or shared [Weird Brains](https://weirdbrains.com) domain: the site keeps your
               domain and TLS terminates on your host _(changed 2026-11-11)_
             - Public + Open: the full site; Public + Gated: only the public card; Private: never
     - Gated or Open (default)
@@ -223,7 +223,7 @@ Build `v0.2.0-alpha.9`.
     - Updates come from Salty Gull (plan by 0072); Morph uses it, rather than
       designing its own
     - Signed updates, distributed over Weirdnet; every relay can carry update
-      announcements from WeirdBrains so devices behind NAT can receive them
+      announcements from [Weird Brains](https://weirdbrains.com) so devices behind NAT can receive them
     - Never forced: the user opts in per update, or opts in to all updates
     - No fees beyond our own server costs; self-hostable
     - Store builds: asset, downloaded-UI (Remote Flutter Widgets) and WASM updates;
@@ -290,7 +290,7 @@ Build `v0.2.0-alpha.9`.
     - Phase 1 builds the same hooks for Morph's own features first
 - Linux web view: GTK 4 (WebKitGTK 6.0), and native X11 beyond XWayland
   _(moved later, 2026-11-11)_
-- Relays: bandwidth controls and rate limits for WeirdBrains relays and HTTPS forwarding
+- Relays: bandwidth controls and rate limits for [Weird Brains](https://weirdbrains.com) relays and HTTPS forwarding
   _(moved from Priorities 1, 2026-11-11)_
 - Phone wake: UnifiedPush support _(moved later, 2026-11-11; phase 1 uses APNs/FCM on
   by default, and an opt-in Weirdnet-relay wake path that is off by default)_
