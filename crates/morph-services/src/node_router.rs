@@ -492,6 +492,9 @@ pub mod protocols {
         caller: &Caller,
         served: impl std::future::Future<Output = Result<(), RemoteError>>,
     ) -> Result<(), RemoteError> {
+        // Nothing starts for a caller that is already gone: `remote::task::serve` has no
+        // authorize hook, and the watcher below would only look after its first tick.
+        admit(gate, caller)?;
         let gone = async {
             loop {
                 tokio::time::sleep(WATCH).await;
@@ -1098,6 +1101,67 @@ mod tests {
             crate::profile_lock::lock(&home, "default");
             assert!(matches!(host.authorize(&caller), Err(RemoteError::Refused { message }) if message == "profile-locked"));
             assert!(host.open(&caller, None).is_err());
+        }
+
+        /// A link whose far end says nothing, counting how often the serving side waits on it.
+        struct Quiet(Arc<std::sync::atomic::AtomicUsize>);
+        struct Mute(Arc<std::sync::atomic::AtomicUsize>);
+
+        #[async_trait]
+        impl LinkTx for Mute {
+            async fn send(&mut self, _message: Vec<u8>) -> Result<(), RouteError> {
+                Ok(())
+            }
+        }
+
+        #[async_trait]
+        impl LinkRx for Quiet {
+            async fn recv(&mut self) -> Result<Option<Vec<u8>>, RouteError> {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                std::future::pending().await
+            }
+        }
+
+        fn quiet_link() -> (Link, Arc<std::sync::atomic::AtomicUsize>) {
+            let waits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            (Link { tx: Box::new(Mute(waits.clone())), rx: Box::new(Quiet(waits.clone())) }, waits)
+        }
+
+        /// How long `handle` takes to return for `peer` (None: still running after a second) and
+        /// whether it ever waited for the caller's request.
+        fn handle_task(rt: &tokio::runtime::Runtime, service: &TaskService, peer: &str) -> (Option<()>, usize) {
+            let (link, waits) = quiet_link();
+            let done =
+                rt.block_on(async { tokio::time::timeout(std::time::Duration::from_secs(1), service.handle(peer.to_string(), link)).await.ok() });
+            (done, waits.load(std::sync::atomic::Ordering::SeqCst))
+        }
+
+        #[test]
+        fn a_caller_revoked_or_locked_before_its_task_starts_never_starts_it() {
+            let rt = tokio();
+            let tmp = tempfile::tempdir().unwrap();
+            let home = tmp.path().join("h");
+            morph_core::profiles::load_catalog(&home).unwrap();
+            crate::identity::create(&home, "default", &morph_identity::profile_identity::SecretString::from("a long password".to_string())).unwrap();
+            let user = Keypair::generate_ed25519();
+            let (a, b, d) = (device(&user, "desk"), device(&user, "phone"), device(&user, "gone"));
+            let (server, st, _) = up(&user, &a, &[&b.cert, &d.cert], None);
+            let server = server.for_locked_profile(&home, "default");
+            let service = TaskService::new(Arc::new(Companions), server);
+
+            // A member is waited for: the task would start on its first message.
+            let (done, waits) = handle_task(&rt, &service, &b.cert.peer_id);
+            assert!(done.is_none() && waits >= 1, "a member's task runs (waits for its request): {done:?} {waits}");
+
+            // Revoked between the accept and the first message: returns at once, reads nothing.
+            drop(st.lock().unwrap().roster.revoke(&WEIRDNET, &user, &d.cert.peer_id, 5).unwrap());
+            let (done, waits) = handle_task(&rt, &service, &d.cert.peer_id);
+            assert!(done.is_some() && waits == 0, "revoked: {done:?} {waits}");
+
+            // Locked: nobody's task starts.
+            crate::profile_lock::lock(&home, "default");
+            let (done, waits) = handle_task(&rt, &service, &b.cert.peer_id);
+            assert!(done.is_some() && waits == 0, "locked: {done:?} {waits}");
         }
 
         /// A host whose turns take half a minute (or until they are stopped) and count their starts.
