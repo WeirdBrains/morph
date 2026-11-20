@@ -38,9 +38,17 @@ fn value(key: &str, name: &str, data: &str) -> Value {
     Value { key: key.to_string(), name: name.to_string(), data: data.to_string() }
 }
 
+/// Ymir's scheme class. Ymir (a headless node app) shows device-link codes
+/// that open in Morph, but the scheme is Ymir's: Morph registers it only
+/// when no other handler has (see [`may_claim_ymir`]).
+pub const YMIR_CLASS: &str = r"Software\Classes\weirdnet-ymir";
+/// The value Morph writes in [`YMIR_CLASS`] to mark the handler as its own
+/// (so Morph may update it, and never takes over anyone else's).
+pub const MORPH_MARK: &str = "MorphHandler";
+
 /// Every value that registers Morph (at `exe`) as a browser and as the
-/// `weirdnet-morph://` handler, and the `weirdnet-ymir://` one (Ymir is a
-/// headless node app; its device-link codes open in Morph).
+/// `weirdnet-morph://` handler. The `weirdnet-ymir://` handler is separate
+/// ([`ymir_registration`]) and conditional.
 pub fn registration(exe: &str) -> Vec<Value> {
     let icon = format!("{exe},0");
     let open = format!("\"{exe}\" \"%1\"");
@@ -56,7 +64,6 @@ pub fn registration(exe: &str) -> Vec<Value> {
         value(&format!(r"{caps}\URLAssociations"), "http", PROG_ID),
         value(&format!(r"{caps}\URLAssociations"), "https", PROG_ID),
         value(&format!(r"{caps}\URLAssociations"), "weirdnet-morph", "weirdnet-morph"),
-        value(&format!(r"{caps}\URLAssociations"), "weirdnet-ymir", "weirdnet-ymir"),
         value(&format!(r"{caps}\FileAssociations"), ".htm", PROG_ID),
         value(&format!(r"{caps}\FileAssociations"), ".html", PROG_ID),
         value(r"Software\RegisteredApplications", APP_NAME, &caps),
@@ -67,11 +74,31 @@ pub fn registration(exe: &str) -> Vec<Value> {
         value(r"Software\Classes\weirdnet-morph", "URL Protocol", ""),
         value(r"Software\Classes\weirdnet-morph\DefaultIcon", "", &icon),
         value(r"Software\Classes\weirdnet-morph\shell\open\command", "", &open),
-        value(r"Software\Classes\weirdnet-ymir", "", "URL:weirdnet-ymir"),
-        value(r"Software\Classes\weirdnet-ymir", "URL Protocol", ""),
-        value(r"Software\Classes\weirdnet-ymir\DefaultIcon", "", &icon),
-        value(r"Software\Classes\weirdnet-ymir\shell\open\command", "", &open),
     ]
+}
+
+/// The values that make Morph (at `exe`) the `weirdnet-ymir://` handler,
+/// marked as Morph's ([`MORPH_MARK`]). Written only when
+/// [`may_claim_ymir`] says so.
+pub fn ymir_registration(exe: &str) -> Vec<Value> {
+    let icon = format!("{exe},0");
+    let open = format!("\"{exe}\" \"%1\"");
+    vec![
+        value(&format!(r"{CLIENT}\Capabilities\URLAssociations"), "weirdnet-ymir", "weirdnet-ymir"),
+        value(YMIR_CLASS, "", "URL:weirdnet-ymir"),
+        value(YMIR_CLASS, "URL Protocol", ""),
+        value(YMIR_CLASS, MORPH_MARK, "1"),
+        value(&format!(r"{YMIR_CLASS}\DefaultIcon"), "", &icon),
+        value(&format!(r"{YMIR_CLASS}\shell\open\command"), "", &open),
+    ]
+}
+
+/// Whether Morph may register `weirdnet-ymir://`, given the open command
+/// already registered for it (any hive) and whether that registration
+/// carries [`MORPH_MARK`]: only when nothing handles it yet, or the handler
+/// is Morph's own (an update). Ymir's or anyone else's is never replaced.
+pub fn may_claim_ymir(command: Option<&str>, marked_morph: bool) -> bool {
+    command.is_none_or(|c| c.trim().is_empty()) || marked_morph
 }
 
 /// Whether the user's choices (the ProgIDs for http and https) are Morph's.
@@ -99,14 +126,20 @@ pub fn user_choice_key(scheme: &str) -> String {
 mod imp {
     use super::*;
     use winreg::RegKey;
-    use winreg::enums::{HKEY_CURRENT_USER, KEY_READ};
+    use winreg::enums::{HKEY_CLASSES_ROOT, HKEY_CURRENT_USER, KEY_READ};
 
-    /// Write [`registration`] for this executable under HKCU and tell the
+    /// Write [`registration`] for this executable under HKCU, and
+    /// [`ymir_registration`] when [`may_claim_ymir`] allows it, and tell the
     /// shell associations changed.
     pub fn register() -> Result<(), String> {
         let exe = std::env::current_exe().map_err(|e| format!("where is morph.exe? {e}"))?;
+        let exe = exe.to_string_lossy();
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-        for v in registration(&exe.to_string_lossy()) {
+        let mut values = registration(&exe);
+        if ymir_claimable() {
+            values.extend(ymir_registration(&exe));
+        }
+        for v in values {
             let (key, _) = hkcu.create_subkey(&v.key).map_err(|e| format!("could not write {}: {e}", v.key))?;
             key.set_value(&v.name, &v.data).map_err(|e| format!("could not write {}\\{}: {e}", v.key, v.name))?;
         }
@@ -120,6 +153,17 @@ mod imp {
             );
         }
         Ok(())
+    }
+
+    /// Whether `weirdnet-ymir://` is free for Morph, read from the merged
+    /// HKEY_CLASSES_ROOT view (this user's and the machine's classes).
+    fn ymir_claimable() -> bool {
+        let classes = RegKey::predef(HKEY_CLASSES_ROOT);
+        let class = YMIR_CLASS.trim_start_matches(r"Software\Classes\");
+        let command: Option<String> =
+            classes.open_subkey_with_flags(format!(r"{class}\shell\open\command"), KEY_READ).ok().and_then(|k| k.get_value("").ok());
+        let marked = classes.open_subkey_with_flags(class, KEY_READ).ok().and_then(|k| k.get_value::<String, _>(MORPH_MARK).ok()).is_some();
+        may_claim_ymir(command.as_deref(), marked)
     }
 
     /// The ProgID the user chose for `scheme`.
@@ -186,8 +230,27 @@ mod tests {
         assert_eq!(get(r"Software\Classes\MorphHTML\shell\open\command", "").unwrap(), format!("\"{exe}\" \"%1\""));
         assert_eq!(get(r"Software\Classes\weirdnet-morph", "URL Protocol").as_deref(), Some(""));
         assert!(get(r"Software\Classes\weirdnet-morph\shell\open\command", "").unwrap().ends_with("\"%1\""));
-        assert_eq!(get(r"Software\Classes\weirdnet-ymir", "URL Protocol").as_deref(), Some(""));
-        assert!(get(r"Software\Classes\weirdnet-ymir\shell\open\command", "").unwrap().ends_with("\"%1\""));
+        assert!(values.iter().all(|v| !v.key.contains("weirdnet-ymir") && v.name != "weirdnet-ymir"), "Ymir's scheme is not claimed unconditionally");
+    }
+
+    #[test]
+    fn ymir_codes_open_in_morph_only_when_nothing_else_handles_them() {
+        let exe = r"C:\Program Files\Morph\morph.exe";
+        let values = ymir_registration(exe);
+        let get = |key: &str, name: &str| values.iter().find(|v| v.key == key && v.name == name).map(|v| v.data.clone());
+        assert_eq!(get(YMIR_CLASS, "URL Protocol").as_deref(), Some(""));
+        assert_eq!(get(YMIR_CLASS, MORPH_MARK).as_deref(), Some("1"), "marked as Morph's");
+        assert_eq!(get(&format!(r"{YMIR_CLASS}\shell\open\command"), "").unwrap(), format!("\"{exe}\" \"%1\""));
+        // Unclaimed: Morph registers it. Morph's own: Morph updates it.
+        assert!(may_claim_ymir(None, false));
+        assert!(may_claim_ymir(Some(""), false));
+        assert!(may_claim_ymir(Some(r#""C:\Old\morph.exe" "%1""#), true));
+        // Ymir's (or anyone's) stays.
+        assert!(!may_claim_ymir(Some(r#""C:\Program Files\Ymir\ymir.exe" "%1""#), false));
+        // The MSI applies the same rule: its Ymir component is conditional and marked.
+        let wxs = include_str!("../../../packaging/windows/morph.wxs");
+        assert!(wxs.contains(r#"Component Id="MorphYmirRegistration""#) && wxs.contains("Condition="), "conditional Ymir component");
+        assert!(wxs.contains(&format!(r#"Name="{MORPH_MARK}""#)), "the MSI marks its Ymir handler");
     }
 
     #[test]

@@ -455,6 +455,19 @@ jobs:
           if (Test-Path 'HKLM:\Software\Classes\weirdnet-morph') { throw "weirdnet-morph registration left behind" }
           if (Test-Path 'HKLM:\Software\Classes\weirdnet-ymir') { throw "weirdnet-ymir registration left behind" }
           if (Test-Path 'HKLM:\Software\Clients\StartMenuInternet\Morph') { throw "browser registration left behind" }
+          # Another app's weirdnet-ymir:// handler (Ymir's) is never replaced or removed.
+          $ymirKey = 'HKLM:\Software\Classes\weirdnet-ymir\shell\open\command'
+          New-Item -Path $ymirKey -Force | Out-Null
+          Set-Item -Path $ymirKey -Value '"C:\Ymir\ymir.exe" "%1"'
+          $p = Start-Process msiexec -ArgumentList "/i `"$msi`" /qn /l*v msi-install-ymir.log" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content msi-install-ymir.log -Tail 50; throw "install beside Ymir failed: $($p.ExitCode)" }
+          $ymir = (Get-ItemProperty $ymirKey).'(default)'
+          if ($ymir -notlike '*ymir.exe*') { throw "the MSI replaced Ymir's weirdnet-ymir handler: $ymir" }
+          if ($null -ne (Get-ItemProperty 'HKLM:\Software\Classes\weirdnet-ymir').MorphHandler) { throw "the MSI marked Ymir's handler as Morph's" }
+          $p = Start-Process msiexec -ArgumentList "/x `"$msi`" /qn" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "uninstall beside Ymir failed: $($p.ExitCode)" }
+          if ((Get-ItemProperty $ymirKey).'(default)' -notlike '*ymir.exe*') { throw "uninstall removed Ymir's weirdnet-ymir handler" }
+          Remove-Item -Path 'HKLM:\Software\Classes\weirdnet-ymir' -Recurse -Force
       - uses: actions/upload-artifact@v4
         if: always()
         with:
