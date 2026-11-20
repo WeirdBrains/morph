@@ -167,10 +167,10 @@ impl DeviceCaller {
 
     /// Refuse while the profile is locked.
     fn unlocked(&self) -> Result<(), DeviceCallError> {
-        match &self.profile {
-            Some(p) if !crate::profile_lock::is_locked(&p.0, &p.1) => Ok(()),
-            // Locked, or no profile to check: fail closed.
-            _ => Err(DeviceCallError::Locked),
+        // The one lock read: anything but a positive unlock (no profile, locked, unreadable) refuses.
+        match self.lock_state() {
+            LockState::Unlocked => Ok(()),
+            LockState::Locked | LockState::Unknown => Err(DeviceCallError::Locked),
         }
     }
 
