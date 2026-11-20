@@ -29,6 +29,7 @@ use morph_services::sync::DeviceView;
 
 mod agents;
 mod lock;
+mod passwords;
 mod servers;
 
 use crate::default_browser::{self, Status};
@@ -117,7 +118,9 @@ impl Section {
             Section::Layout => "tabs position top bottom left right collapse side width",
             Section::Appearance => "theme dark light colours colors",
             Section::Downloads => "downloads folder save files",
-            Section::Privacy => "clear browsing data cookies cache site permissions camera microphone location profile password lock security",
+            Section::Privacy => {
+                "clear browsing data cookies cache site permissions camera microphone location profile password lock security passwords saved logins autofill"
+            }
             Section::Identity => "identity backup recovery restore devices link",
             Section::Devices => "devices linked sync revoke remove lost stolen phone laptop",
             Section::Relays => {
@@ -169,6 +172,12 @@ pub enum Item {
     ProfilePassword,
     /// Change the profile password.
     ChangePassword,
+    /// The password saver on or off.
+    PasswordSaver,
+    /// Ask for the profile password before every fill.
+    AskAgain,
+    /// The saved logins.
+    SavedPasswords,
     OpenAbout,
 }
 
@@ -182,7 +191,9 @@ impl Item {
             Item::TabPosition | Item::Collapsed | Item::SideWidth => Section::Layout,
             Item::Theme => Section::Appearance,
             Item::ChooseDownloads | Item::DefaultDownloads => Section::Downloads,
-            Item::ClearData | Item::ProfilePassword | Item::ChangePassword => Section::Privacy,
+            Item::ClearData | Item::ProfilePassword | Item::ChangePassword | Item::PasswordSaver | Item::AskAgain | Item::SavedPasswords => {
+                Section::Privacy
+            }
             Item::OpenIdentity => Section::Identity,
             Item::Devices => Section::Devices,
             Item::CheckRelays | Item::Discovery | Item::ManualPeers => Section::Relays,
@@ -191,7 +202,7 @@ impl Item {
         }
     }
 
-    pub const ALL: [Item; 23] = [
+    pub const ALL: [Item; 26] = [
         Item::OpenBookmarks,
         Item::OpenHistory,
         Item::ClearHistory,
@@ -208,6 +219,9 @@ impl Item {
         Item::ClearData,
         Item::ProfilePassword,
         Item::ChangePassword,
+        Item::PasswordSaver,
+        Item::AskAgain,
+        Item::SavedPasswords,
         Item::OpenIdentity,
         Item::Devices,
         Item::CheckRelays,
@@ -217,6 +231,11 @@ impl Item {
         Item::OpenAbout,
     ];
 
+    /// The password saver's (hidden until it is finished: [`crate::password_saver::shown`]).
+    fn is_saver(self) -> bool {
+        matches!(self, Item::PasswordSaver | Item::AskAgain | Item::SavedPasswords)
+    }
+
     /// Whether ←/→ change it.
     fn is_choice(self) -> bool {
         matches!(self, Item::Engine | Item::TabPosition | Item::Theme | Item::SideWidth | Item::Collapsed | Item::Discovery | Item::DefaultCompanion)
@@ -225,7 +244,7 @@ impl Item {
 
 /// The settings a search for `query` leaves.
 pub fn visible_items(query: &str) -> Vec<Item> {
-    Item::ALL.into_iter().filter(|i| i.section().matches(query)).collect()
+    Item::ALL.into_iter().filter(|i| i.section().matches(query) && (!i.is_saver() || crate::password_saver::shown())).collect()
 }
 
 /// The next choice after (or before) `current` in `list`, wrapping.
@@ -276,6 +295,8 @@ pub struct SettingsView {
     confirm_revoke: Option<String>,
     /// The profile password rows ([`lock`]).
     lock: lock::State,
+    /// The password saver rows ([`passwords`]).
+    passwords: passwords::State,
     _subscriptions: Vec<gpui::Subscription>,
 }
 
@@ -290,6 +311,8 @@ impl SettingsView {
         let mut subscriptions = agents::subscribe(&agents_state, window, cx);
         let lock_state = lock::State::new(theme, cx);
         subscriptions.extend(lock::subscribe(&lock_state, window, cx));
+        let passwords_state = passwords::State::new(theme, cx);
+        subscriptions.extend(passwords::subscribe(&passwords_state, window, cx));
         subscriptions.extend(vec![
             cx.subscribe_in(&search, window, |this, _, event, window, cx| match event {
                 TextInputEvent::Changed => {
@@ -360,6 +383,7 @@ impl SettingsView {
             servers: servers::State::default(),
             confirm_revoke: None,
             lock: lock_state,
+            passwords: passwords_state,
             _subscriptions: subscriptions,
         };
         view.reload_quietly();
@@ -379,6 +403,9 @@ impl SettingsView {
         self.network = netprefs::load(&self.home).unwrap_or_default();
         self.devices = self.profile_id().and_then(|id| morph_services::sync::devices(&self.home, &id).ok()).unwrap_or_default();
         self.confirm_revoke = None;
+        if crate::password_saver::shown() {
+            self.passwords_reload();
+        }
     }
 
     fn profile_id(&self) -> Option<String> {
@@ -437,6 +464,9 @@ impl SettingsView {
         self.browser_note = None;
         self.relays_read = None;
         self.read_relays(cx);
+        if crate::password_saver::shown() {
+            self.passwords_reload();
+        }
         if let Some(section) = section {
             self.search.update(cx, |s, cx| s.set_text("", cx));
             self.current = visible_items("").iter().position(|i| i.section() == section);
@@ -533,6 +563,7 @@ impl SettingsView {
     pub fn poll(&mut self, cx: &mut Context<Self>) {
         self.poll_relays(cx);
         self.servers_poll(cx);
+        self.passwords_poll(cx);
         let Some((status, made)) = self.browser_check.as_ref().and_then(|c| c.take()) else {
             return;
         };
@@ -641,6 +672,7 @@ impl SettingsView {
                 self.note = Some("Cookies, cache, site storage and history cleared for this profile.".into());
             }
             Item::ProfilePassword | Item::ChangePassword => self.lock_activate(item, window, cx),
+            Item::PasswordSaver | Item::AskAgain | Item::SavedPasswords => self.passwords_activate(item, window, cx),
             Item::OpenIdentity => cx.emit(ShellRequest::Run(Action::ShowIdentity)),
             Item::Devices => {
                 self.devices = self.profile_id().and_then(|id| morph_services::sync::devices(&self.home, &id).ok()).unwrap_or_default();
@@ -1252,6 +1284,7 @@ impl SettingsView {
             ]
             .into_iter()
             .chain(self.lock_rows(cx))
+            .chain(if crate::password_saver::shown() { self.passwords_rows(cx) } else { Vec::new() })
             .collect(),
             Section::Identity => vec![
                 self.row(
