@@ -52,3 +52,8 @@ harness = false
 [[test]]
 name = "session_actions_webkit"
 harness = false
+
+# The password saver's host script in a real WebKitGTK page; needs a display (xvfb-run), skips without one.
+[[test]]
+name = "login_webkit"
+harness = false
