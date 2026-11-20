@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Updated to weirdnet-sync 0.7.0, weirdnet-net 0.8.1, weirdnet-device-link 0.3.1 and the new weirdnet-text 0.1.0, still with one copy of weirdnet-sync alongside weirdnet-agent 0.4.5. Morph links as a full device that holds the identity's seed and doesn't use weirdnet-sync's new service devices or device grants itself. The address bar's text editing now comes from weirdnet-text, unchanged. On Android, the start-up hook that lets name lookups reach the system's DNS now comes from weirdnet-net instead of Morph's own copy.
+
 - Updated to weirdnet-sync 0.5.2, so the build has one copy of weirdnet-sync alongside weirdnet-agent 0.4.5.
 
 - A device's link code or a Morph invite typed or pasted in the desktop address bar now opens the Identity panel (Add device, or receiving the identity for an invite) with it filled in, instead of trying to call an app. An invite opened as a `weirdnet-morph://invite/…` link goes to receiving the identity on this device after it is checked; a locked profile refuses both.
