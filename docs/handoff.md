@@ -89,7 +89,7 @@ Update this table when you start or finish an area.
 
 ## alpha.7: alpha.6 on a real GPU, and the render check
 
-alpha.6 on my-desktop (Hyprland, NVIDIA GPU, nvidia-open 615.78.08, EGL vendor
+alpha.6 on a Linux desktop (Hyprland, NVIDIA GPU, nvidia-open 615.78.08, EGL vendor
 NVIDIA, webkit2gtk-4.1 2.54.1, session `GDK_BACKEND=wayland GDK_SCALE=2`):
 
 - **Native Wayland aborted** at start: `GDK is not able to create a GL
@@ -508,7 +508,7 @@ Mesa lavapipe Vulkan, Rust 1.100), release build of `v0.2.0-alpha.1`:
   action mapping, UTF-16 offsets).
 
 **Not checked:** a real Wayland session through XWayland (Hyprland on
-my-desktop), NVIDIA, HiDPI scaling, IME input, window resizing by hand, real
+a Linux desktop), NVIDIA, HiDPI scaling, IME input, window resizing by hand, real
 sites and real sign-in popups, a long session's CPU cost of pumping GTK every
 8 ms, and m3talsmith's Arch box itself (packages were checked in a container only).
 
@@ -540,12 +540,12 @@ sites and real sign-in popups, a long session's CPU cost of pumping GTK every
 - WebKitGTK does not bind Ctrl+Z / Ctrl+Shift+Z itself, so a small injected
   script runs undo/redo when the page did not handle the key.
 
-## How m3talsmith builds and installs on my-desktop
+## How m3talsmith builds and installs on Arch
 
 Arch, Rust 1.99 (the workspace's `rust-version` is 1.99, so that is the minimum).
 
 ```sh
-cd ~/src/WeirdBrains/morph
+cd path/to/morph
 git switch main && git pull --ff-only origin main
 sudo pacman -S --needed base-devel webkit2gtk-4.1 gtk3 libxkbcommon-x11 libxcb \
   vulkan-icd-loader fontconfig freetype2 openssl clang cmake pkgconf
@@ -563,7 +563,7 @@ yay --aururl https://pkg.taur.weirdbrains.com -S morph-bin
 ```
 
 `makepkg` builds into `packaging/arch/morph/src/target` (its own target dir, not
-`<scratch-dir>`), so the first build takes a while. Without `MORPH_HOME` the
+the scratch directory), so the first build takes a while. Without `MORPH_HOME` the
 installed `morph` uses the normal profile directory. On Hyprland it runs
 natively on Wayland since alpha.6 (`MORPH_BACKEND=x11` for XWayland).
 
@@ -993,8 +993,8 @@ compositor), and is pushed straight to `origin/main` after
 `git pull --rebase origin main` (no pull requests, no force-push). Domain logic goes in `morph-*`
 crates that test without a display; the GPUI crates stay thin.
 
-**How m3talsmith tests a phase on my-desktop:** see "How m3talsmith builds and
-installs on my-desktop" above.
+**How m3talsmith tests a phase:** see "How m3talsmith builds and
+installs on Arch" above.
 
 **Every phase also ships Arch packages**, in the shape of m3talsmith's existing
 TAUR packages (`mouser-bin`, `muninn-bin`, `muninn-app-bin` under org
@@ -1030,8 +1030,8 @@ pre-release from `main` (`v0.2.0-alpha.N`) with the tarball and `SHA256SUMS`, fi
 the `morph-bin` recipe's version and sums, and leaves the recipe archive
 (`morph-bin/PKGBUILD` + `morph-bin/.SRCINFO`, as `morph-bin-<pkgver>.tar.gz`) for
 upload from m3talsmith's side with `taurctl pkg upload ... --org WeirdBrains`, dry
-run first. The agent does not run `taurctl`. After each push, m3talsmith's checkout
-at `~/src/WeirdBrains/morph` on my-desktop (branch `main`) is fast-forwarded
+run first. The agent does not run `taurctl`. After each push, m3talsmith's local
+checkout (branch `main`) is fast-forwarded
 (`git pull --ff-only origin main`). CI also attaches the tarball and the Arch
 package to each `main` run.
 
@@ -1161,7 +1161,7 @@ Still open:
 ## How to resume
 
 ```sh
-cd /workspace/morph            # or ~/src/WeirdBrains/morph
+cd /workspace/morph            # or your own checkout
 git switch main && git pull --rebase origin main
 ```
 

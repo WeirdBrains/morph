@@ -243,7 +243,7 @@ mod tests {
         assert!(decode_invite(SCHEME, &"x".repeat(5000)).is_err());
     }
 
-    /// What my-desktop listened on (LAN, Tailscale, Docker, IPv6, the
+    /// What a desktop listened on (LAN, Tailscale, Docker, IPv6, the
     /// public relay's circuit), as libp2p reports it.
     fn realistic_reachable(peer: &PeerId) -> Vec<String> {
         let relay = crate::KNOWN_RELAYS[0];

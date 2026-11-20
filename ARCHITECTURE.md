@@ -2310,7 +2310,7 @@ was installed.
   user temp path is long enough that OpenSSL's `cl` object paths exceed
   MAX_PATH and the compile fails with C1083; the script sets `TEMP` and
   `TMP` to `C:\t\morph` for the build. Checked on the Windows 11 VM
-  (windows-vm, x64, Flutter 3.47.8, rustc 1.99.1): release `morph.exe`
+  (x64, Flutter 3.47.8, rustc 1.99.1): release `morph.exe`
   is an x64 Windows GUI binary, `morph_bridge.dll` and `WebView2Loader.dll`
   sit beside it, and those three plus the web view plugin load. The GUI was
   not started. The WebView2 Runtime was already installed on that VM
