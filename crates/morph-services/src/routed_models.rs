@@ -146,7 +146,21 @@ impl ModelBackend for Remote {
         self.runs_on.set(Some(self.first.clone()));
         let turn = self.inner.complete(messages, tools, deltas, cancel).await;
         self.runs_on.set(None);
-        turn
+        turn.map_err(|e| explain(e, &self.labels))
+    }
+}
+
+/// A linked device's refusal in words the user can act on, not "node refused: revoked".
+fn explain(error: ModelError, labels: &[(String, String)]) -> ModelError {
+    let (ModelError::Unavailable(text) | ModelError::Failed(text)) = &error else { return error };
+    let device =
+        |text: &str| labels.iter().find(|(p, _)| text.contains(p.as_str())).map(|(_, l)| l.clone()).unwrap_or_else(|| "The other device".into());
+    if text.contains("refused: revoked") {
+        ModelError::Unavailable(format!("{} no longer lets this device use it: this device was revoked from your devices.", device(text)))
+    } else if text.contains("refused: profile-locked") {
+        ModelError::Unavailable(format!("{} is locked. Unlock it to run turns there.", device(text)))
+    } else {
+        error
     }
 }
 
@@ -209,6 +223,20 @@ mod tests {
 
     fn rt() -> tokio::runtime::Runtime {
         tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap()
+    }
+
+    #[test]
+    fn a_refusal_for_revoked_or_locked_reads_as_a_reason() {
+        let labels = vec![("12D3KooWDesk".to_string(), "my-desktop".to_string())];
+        let unavailable = |text: &str| explain(ModelError::Unavailable(text.into()), &labels).to_string();
+        assert!(unavailable("12D3KooWDesk: node refused: revoked").starts_with("model unavailable: my-desktop no longer lets this device use it"));
+        assert!(unavailable("12D3KooWDesk: node refused: profile-locked").contains("my-desktop is locked. Unlock it"));
+        assert!(
+            explain(ModelError::Failed("12D3KooWDesk: node refused: revoked".into()), &labels).to_string().contains("revoked from your devices"),
+            "also after text streamed"
+        );
+        assert_eq!(unavailable("12D3KooWDesk: node busy"), "model unavailable: 12D3KooWDesk: node busy", "others are left as they are");
+        assert_eq!(explain(ModelError::Cancelled, &labels), ModelError::Cancelled);
     }
 
     #[test]

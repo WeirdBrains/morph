@@ -528,35 +528,141 @@ pub mod protocols {
         }
     }
 
-    /// Drives `served` for `caller`'s stream, but stops it, running or still queued, within
-    /// [`WATCH`] of the profile locking or the caller leaving the roster (revoked, removed).
-    /// Needs a runtime with a timer.
-    async fn watched(
+    /// The protocol a stream speaks, to say a refusal the way the asking side reads it.
+    #[derive(Clone, Copy)]
+    enum Wire {
+        InferV1,
+        InferV2,
+        Task,
+    }
+
+    /// Both halves of a stream, kept by the service so it can still speak after the session
+    /// that owns the [`Channel`] was stopped, and the first message the asker sent (its request,
+    /// whose id a refusal must carry).
+    struct Tap {
+        tx: futures::lock::Mutex<Box<dyn LinkTx>>,
+        rx: futures::lock::Mutex<Box<dyn LinkRx>>,
+        first: std::sync::Mutex<Option<Vec<u8>>>,
+    }
+
+    struct TapTx(Arc<Tap>);
+    struct TapRx(Arc<Tap>);
+
+    #[async_trait]
+    impl FrameTx for TapTx {
+        async fn send(&mut self, message: Vec<u8>) -> Result<(), RemoteError> {
+            self.0.tx.lock().await.send(message).await.map_err(remote_error)
+        }
+    }
+
+    #[async_trait]
+    impl FrameRx for TapRx {
+        async fn recv(&mut self) -> Result<Option<Vec<u8>>, RemoteError> {
+            let got = self.0.rx.lock().await.recv().await.map_err(remote_error)?;
+            if let Some(frame) = &got {
+                self.0.first.lock().unwrap_or_else(|p| p.into_inner()).get_or_insert_with(|| frame.clone());
+            }
+            Ok(got)
+        }
+    }
+
+    impl Tap {
+        fn open(link: Link) -> (Channel, Arc<Tap>) {
+            let tap = Arc::new(Tap { tx: link.tx.into(), rx: link.rx.into(), first: Default::default() });
+            (Channel::new(Box::new(TapTx(tap.clone())), Box::new(TapRx(tap.clone()))), tap)
+        }
+
+        /// The id of the request the asker sent, reading it if the session never did.
+        async fn request_id(&self, wire: Wire) -> Option<String> {
+            let known = self.first.lock().unwrap_or_else(|p| p.into_inner()).clone();
+            let frame = match known {
+                Some(f) => f,
+                None => {
+                    let read = async { self.rx.lock().await.recv().await };
+                    tokio::time::timeout(REFUSAL_WAIT, read).await.ok()?.ok()??
+                }
+            };
+            match wire {
+                Wire::InferV1 => match serde_json::from_slice(&frame).ok()? {
+                    remote::infer::ClientMsg::Infer { request } => Some(request.id),
+                    _ => None,
+                },
+                Wire::InferV2 => match remote::from_cbor(&frame).ok()? {
+                    remote::infer::v2::ClientFrame::Infer(r) => Some(r.id),
+                    remote::infer::v2::ClientFrame::Embed(r) => Some(r.id),
+                    _ => None,
+                },
+                Wire::Task => match serde_json::from_slice(&frame).ok()? {
+                    remote::task::ClientMsg::Run { request } => Some(request.id),
+                    _ => None,
+                },
+            }
+        }
+
+        /// Tell the asker why its stream ends: `Refused{reason}` for its request, before the
+        /// stream closes, so it reads a refusal and not a dropped connection to retry.
+        async fn refuse(&self, wire: Wire, error: RemoteError) {
+            let Some(id) = self.request_id(wire).await else { return };
+            let frame = match wire {
+                Wire::InferV1 => serde_json::to_vec(&remote::infer::ServerMsg::Failed { id, error }).ok(),
+                Wire::InferV2 => remote::to_cbor(&remote::infer::v2::ServerFrame::Failed { id, error }).ok(),
+                Wire::Task => serde_json::to_vec(&remote::task::ServerMsg::Failed { id, error }).ok(),
+            };
+            let Some(frame) = frame else { return };
+            let send = async { self.tx.lock().await.send(frame).await };
+            let _ = tokio::time::timeout(REFUSAL_WAIT, send).await;
+        }
+    }
+
+    /// How long a refusal waits to read the request or to send (the asker is normally right there).
+    const REFUSAL_WAIT: Duration = Duration::from_millis(500);
+
+    /// Drives `serve` over `link` for `caller`, but stops it, running or still queued, within
+    /// [`WATCH`] of the profile locking or the caller leaving the roster (revoked, removed), and
+    /// answers the asker's request with `Refused{reason}` before the stream closes. Needs a
+    /// tokio runtime with a timer (the stream is raced against `tokio::time::sleep`).
+    async fn watched<Fut>(
         gate: &DeviceCaller,
         lock: &LockWatch,
         caller: &Caller,
-        served: impl std::future::Future<Output = Result<(), RemoteError>>,
-    ) -> Result<(), RemoteError> {
+        wire: Wire,
+        link: Link,
+        serve: impl FnOnce(Channel) -> Fut,
+    ) -> Result<(), RemoteError>
+    where
+        Fut: std::future::Future<Output = Result<(), RemoteError>>,
+    {
+        let (channel, tap) = Tap::open(link);
         // Nothing starts for a caller that is already gone: `remote::task::serve` has no
         // authorize hook, and the watcher below would only look after its first tick.
-        admit(gate, caller)?;
-        let gone = async {
-            loop {
-                tokio::time::sleep(WATCH).await;
-                // The lock is the watch thread's reading; the roster is in memory.
-                if lock.locked() {
-                    return RemoteError::refused("profile-locked");
+        if let Err(why) = admit(gate, caller) {
+            drop(channel);
+            tap.refuse(wire, why.clone()).await;
+            return Err(why);
+        }
+        let outcome = {
+            let served = serve(channel);
+            let gone = async {
+                loop {
+                    tokio::time::sleep(WATCH).await;
+                    // The lock is the watch thread's reading; the roster is in memory.
+                    if lock.locked() {
+                        return RemoteError::refused("profile-locked");
+                    }
+                    if let Some(reason) = gate.check(&caller.peer, None).reason() {
+                        return RemoteError::refused(reason);
+                    }
                 }
-                if let Some(reason) = gate.check(&caller.peer, None).reason() {
-                    return RemoteError::refused(reason);
-                }
+            };
+            futures::pin_mut!(served, gone);
+            match futures::future::select(served, gone).await {
+                futures::future::Either::Left((done, _)) => return done,
+                futures::future::Either::Right((why, _)) => why,
             }
         };
-        futures::pin_mut!(served, gone);
-        match futures::future::select(served, gone).await {
-            futures::future::Either::Left((done, _)) => done,
-            futures::future::Either::Right((why, _)) => Err(why),
-        }
+        // The session is dropped (running or queued turns stop) before the refusal is sent.
+        tap.refuse(wire, outcome.clone()).await;
+        Err(outcome)
     }
 
     /// A backend that checks the caller again whenever it is asked to run: a turn waits in the
@@ -705,11 +811,13 @@ pub mod protocols {
         /// link carries no certificate, so the peer id is checked against the roster alone.
         async fn handle(&self, from: String, link: Link) {
             let caller = Caller::new(from.clone());
+            let (host, admission) = (self.host.as_ref(), &self.admission);
             let served = if self.v2 {
-                watched(&self.gate, &self.lock, &caller, remote::infer::v2::serve(channel(link), caller.clone(), self.host.as_ref(), &self.admission))
-                    .await
+                let who = caller.clone();
+                watched(&self.gate, &self.lock, &caller, Wire::InferV2, link, |ch| remote::infer::v2::serve(ch, who, host, admission)).await
             } else {
-                watched(&self.gate, &self.lock, &caller, remote::infer::serve(channel(link), &caller, self.host.as_ref(), &self.admission)).await
+                let who = &caller;
+                watched(&self.gate, &self.lock, &caller, Wire::InferV1, link, |ch| remote::infer::serve(ch, who, host, admission)).await
             };
             if let Err(e) = served {
                 eprintln!("morph-agent: inference for {from}: {e}");
@@ -737,7 +845,8 @@ pub mod protocols {
     impl LinkHandler for TaskService {
         async fn handle(&self, from: String, link: Link) {
             let caller = Caller::new(from.clone());
-            if let Err(e) = watched(&self.gate, &self.lock, &caller, remote::task::serve(channel(link), self.host.as_ref())).await {
+            let host = self.host.as_ref();
+            if let Err(e) = watched(&self.gate, &self.lock, &caller, Wire::Task, link, |ch| remote::task::serve(ch, host)).await {
                 eprintln!("morph-agent: task for {from}: {e}");
             }
         }
@@ -1169,13 +1278,15 @@ mod tests {
             assert!(host.open(&caller, None).is_err());
         }
 
-        /// A link whose far end says nothing, counting how often the serving side waits on it.
-        struct Quiet(Arc<std::sync::atomic::AtomicUsize>);
-        struct Mute(Arc<std::sync::atomic::AtomicUsize>);
+        /// A link whose far end sent one request and then says nothing; what the serving side
+        /// sent back is kept.
+        struct Quiet(Option<Vec<u8>>);
+        struct Mute(Arc<Mutex<Vec<Vec<u8>>>>);
 
         #[async_trait]
         impl LinkTx for Mute {
-            async fn send(&mut self, _message: Vec<u8>) -> Result<(), RouteError> {
+            async fn send(&mut self, message: Vec<u8>) -> Result<(), RouteError> {
+                self.0.lock().unwrap().push(message);
                 Ok(())
             }
         }
@@ -1183,23 +1294,72 @@ mod tests {
         #[async_trait]
         impl LinkRx for Quiet {
             async fn recv(&mut self) -> Result<Option<Vec<u8>>, RouteError> {
-                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                std::future::pending().await
+                match self.0.take() {
+                    Some(first) => Ok(Some(first)),
+                    None => std::future::pending().await,
+                }
             }
         }
 
-        fn quiet_link() -> (Link, Arc<std::sync::atomic::AtomicUsize>) {
-            let waits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-            (Link { tx: Box::new(Mute(waits.clone())), rx: Box::new(Quiet(waits.clone())) }, waits)
+        /// A task host that counts the tasks it is asked to start (and declines them).
+        struct Counting(Arc<std::sync::atomic::AtomicUsize>);
+
+        impl TaskHost for Counting {
+            fn session(&self, _request: &TaskRequest, _approver: Arc<dyn Approver>) -> Result<AgentSession, RemoteError> {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Err(RemoteError::Refused { message: "not here".into() })
+            }
         }
 
-        /// How long `handle` takes to return for `peer` (None: still running after a second) and
-        /// whether it ever waited for the caller's request.
-        fn handle_task(rt: &tokio::runtime::Runtime, service: &TaskService, peer: &str) -> (Option<()>, usize) {
-            let (link, waits) = quiet_link();
-            let done =
-                rt.block_on(async { tokio::time::timeout(std::time::Duration::from_secs(1), service.handle(peer.to_string(), link)).await.ok() });
-            (done, waits.load(std::sync::atomic::Ordering::SeqCst))
+        /// What `service` does with a stream from `peer` carrying a task request: how many tasks it
+        /// started, and what it sent back.
+        fn handle_task(
+            rt: &tokio::runtime::Runtime,
+            service: &TaskService,
+            started: &Arc<std::sync::atomic::AtomicUsize>,
+            peer: &str,
+        ) -> (usize, Vec<weirdnet_agent::remote::task::ServerMsg>) {
+            let request = TaskRequest::new(AgentId::new("atlas"), "go", vec![]);
+            let first = serde_json::to_vec(&weirdnet_agent::remote::task::ClientMsg::Run { request }).unwrap();
+            let sent = Arc::new(Mutex::new(Vec::new()));
+            let link = Link { tx: Box::new(Mute(sent.clone())), rx: Box::new(Quiet(Some(first))) };
+            let before = started.load(std::sync::atomic::Ordering::SeqCst);
+            rt.block_on(async {
+                tokio::time::timeout(std::time::Duration::from_secs(3), service.handle(peer.to_string(), link)).await.expect("handle returned")
+            });
+            let frames = sent.lock().unwrap().iter().map(|f| serde_json::from_slice(f).unwrap()).collect();
+            (started.load(std::sync::atomic::Ordering::SeqCst) - before, frames)
+        }
+
+        #[test]
+        fn a_caller_revoked_or_locked_before_its_task_starts_never_starts_it_and_is_told_why() {
+            use weirdnet_agent::remote::task::ServerMsg;
+            let refused = |frames: &[ServerMsg], why: &str| matches!(frames, [ServerMsg::Failed { error: RemoteError::Refused { message }, .. }] if message == why);
+            let rt = tokio();
+            let tmp = tempfile::tempdir().unwrap();
+            let home = tmp.path().join("h");
+            morph_core::profiles::load_catalog(&home).unwrap();
+            crate::identity::create(&home, "default", &morph_identity::profile_identity::SecretString::from("a long password".to_string())).unwrap();
+            let user = Keypair::generate_ed25519();
+            let (a, b, d) = (device(&user, "desk"), device(&user, "phone"), device(&user, "gone"));
+            let (server, st, _) = up(&user, &a, &[&b.cert, &d.cert], None);
+            let server = server.for_locked_profile(&home, "default");
+            let started = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let service = TaskService::new(Arc::new(Counting(started.clone())), server);
+
+            // A member's task starts (the host here declines it, so the stream ends).
+            let (n, _) = handle_task(&rt, &service, &started, &b.cert.peer_id);
+            assert_eq!(n, 1, "a member's task is started");
+
+            // Revoked between the accept and the first message: never started, and told why.
+            drop(st.lock().unwrap().roster.revoke(&WEIRDNET, &user, &d.cert.peer_id, 5).unwrap());
+            let (n, frames) = handle_task(&rt, &service, &started, &d.cert.peer_id);
+            assert!(n == 0 && refused(&frames, "revoked"), "revoked: started {n}, sent {frames:?}");
+
+            // Locked: nobody's task starts.
+            crate::profile_lock::lock(&home, "default");
+            let (n, frames) = handle_task(&rt, &service, &started, &b.cert.peer_id);
+            assert!(n == 0 && refused(&frames, "profile-locked"), "locked: started {n}, sent {frames:?}");
         }
 
         #[test]
@@ -1224,34 +1384,6 @@ mod tests {
             assert!(script(vec![Unlocked, Unknown, Unknown, Unknown]), "an error that repeats fails closed");
             assert!(script(vec![Unlocked, Locked]), "a positive locked counts at once and stays");
             assert!(script(vec![Unknown]), "unreadable from the start fails closed");
-        }
-
-        #[test]
-        fn a_caller_revoked_or_locked_before_its_task_starts_never_starts_it() {
-            let rt = tokio();
-            let tmp = tempfile::tempdir().unwrap();
-            let home = tmp.path().join("h");
-            morph_core::profiles::load_catalog(&home).unwrap();
-            crate::identity::create(&home, "default", &morph_identity::profile_identity::SecretString::from("a long password".to_string())).unwrap();
-            let user = Keypair::generate_ed25519();
-            let (a, b, d) = (device(&user, "desk"), device(&user, "phone"), device(&user, "gone"));
-            let (server, st, _) = up(&user, &a, &[&b.cert, &d.cert], None);
-            let server = server.for_locked_profile(&home, "default");
-            let service = TaskService::new(Arc::new(Companions), server);
-
-            // A member is waited for: the task would start on its first message.
-            let (done, waits) = handle_task(&rt, &service, &b.cert.peer_id);
-            assert!(done.is_none() && waits >= 1, "a member's task runs (waits for its request): {done:?} {waits}");
-
-            // Revoked between the accept and the first message: returns at once, reads nothing.
-            drop(st.lock().unwrap().roster.revoke(&WEIRDNET, &user, &d.cert.peer_id, 5).unwrap());
-            let (done, waits) = handle_task(&rt, &service, &d.cert.peer_id);
-            assert!(done.is_some() && waits == 0, "revoked: {done:?} {waits}");
-
-            // Locked: nobody's task starts.
-            crate::profile_lock::lock(&home, "default");
-            let (done, waits) = handle_task(&rt, &service, &b.cert.peer_id);
-            assert!(done.is_some() && waits == 0, "locked: {done:?} {waits}");
         }
 
         /// A host whose turns take half a minute (or until they are stopped) and count their starts.
@@ -1373,6 +1505,8 @@ mod tests {
             let (took, ended) = s.three_turns_then(|| (s.revoke)());
             assert!(took < std::time::Duration::from_secs(3), "stopped in {took:?}, not after the 30 s turns");
             assert!(ended.iter().all(|t| t.is_err()), "{ended:?}");
+            // The asker is told why (a refusal), not left with a dropped connection.
+            assert!(ended.iter().all(|t| format!("{t:?}").contains("refused: revoked")), "{ended:?}");
             assert_eq!(s.started.load(std::sync::atomic::Ordering::SeqCst), 1, "a queued turn never started after the revoke");
         }
 
@@ -1382,6 +1516,7 @@ mod tests {
             let (took, ended) = s.three_turns_then(|| crate::profile_lock::lock(&s.home, "default"));
             assert!(took < std::time::Duration::from_secs(3), "stopped in {took:?}, not after the 30 s turns");
             assert!(ended.iter().all(|t| t.is_err()), "{ended:?}");
+            assert!(ended.iter().all(|t| format!("{t:?}").contains("refused: profile-locked")), "{ended:?}");
             assert_eq!(s.started.load(std::sync::atomic::Ordering::SeqCst), 1);
         }
 
