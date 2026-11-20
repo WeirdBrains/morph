@@ -168,12 +168,12 @@ class RoadmapPage extends StatelessComponent {
                 _row(
                   'macOS (universal)',
                   Status.shipped,
-                  'dmg and zip, ad-hoc signed, not notarized. Not there yet: default browser, links from other apps.',
+                  'dmg and zip, ad-hoc signed, not notarized.',
                 ),
                 _row(
                   'Windows x64',
                   Status.shipped,
-                  'msi and zip, not code-signed. Not there yet: default browser, a crashed-page panel. ARM64 is not built yet.',
+                  'msi and zip, not code-signed.',
                 ),
                 _row('Android', Status.shipped, 'arm64 APK to sideload. F-Droid and Google Play are planned channels.'),
                 _row(

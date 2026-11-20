@@ -90,11 +90,17 @@ class Layout extends StatelessComponent {
       footer([
         div([
           p([
-            Component.text('Morph is a Weird Brains project, released under the BSD 3-Clause License. '),
-            Component.text('Built on '),
+            Component.text('Morph is a '),
+            a([Component.text('Weird Brains')], href: weirdBrainsUrl),
+            Component.text(' project, released under the BSD 3-Clause License. Built on '),
             a([Component.text('Weirdnet')], href: weirdnetUrl),
             Component.text('.'),
           ]),
+          p([
+            Component.text('© 2026 '),
+            a([Component.text('Weird Brains LLC')], href: weirdBrainsUrl),
+            Component.text('.'),
+          ], classes: 'copyright'),
           div([
             a([Component.text('Releases')], href: releasesUrl, target: Target.blank, attributes: _external),
             a([Component.text('Changelog')], href: changelogUrl, target: Target.blank, attributes: _external),

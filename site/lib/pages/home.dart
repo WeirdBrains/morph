@@ -110,9 +110,9 @@ class Home extends StatelessComponent {
                 Component.element(
                   tag: 'dd',
                   children: [
-                    Component.text(
-                      'x86_64: tarball, zip, deb, rpm, Nix flake, and morph-bin for Arch on the WeirdBrains TAUR server.',
-                    ),
+                    Component.text('x86_64: tarball, zip, deb, rpm, Nix flake, and morph-bin for Arch on the '),
+                    a([Component.text('Weird Brains')], href: weirdBrainsUrl),
+                    Component.text(' TAUR server.'),
                   ],
                 ),
                 Component.element(tag: 'dt', children: [Component.text('macOS')]),

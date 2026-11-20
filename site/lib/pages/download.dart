@@ -52,8 +52,10 @@ class DownloadPage extends StatelessComponent {
             p([
               Component.text('The prebuilt '),
               code([Component.text('morph-bin')]),
-              Component.text(' package ($latestVersion-1) is on '),
-              extLink('the WeirdBrains TAUR server', taurUrl),
+              Component.text(' package ($latestVersion-1) is on the '),
+              a([Component.text('Weird Brains')], href: weirdBrainsUrl),
+              Component.text(' '),
+              extLink('TAUR server', taurUrl),
               Component.text(':'),
             ]),
             pre([

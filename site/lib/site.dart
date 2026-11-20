@@ -9,6 +9,7 @@ const siteDescription =
     'The browser is one part of the app, next to chat, notes, projects, '
     'and a peer-to-peer web on Weirdnet.';
 const githubUrl = 'https://github.com/WeirdBrains/morph';
+const weirdBrainsUrl = 'https://weirdbrains.com';
 const weirdnetUrl = 'https://net.weirdbrains.com';
 const taurUrl = 'https://pkg.taur.weirdbrains.com';
 const ogImageUrl = '$siteUrl/images/morph-icon-512.png';

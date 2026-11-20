@@ -97,7 +97,7 @@ const features = <Feature>[
         'search engine, home page and theme then sync between your devices over Weirdnet, soon after unlock '
         'and every 30 seconds. Settings > Linked devices lists them and revokes one.',
     image: 'screenshot-link-device.webp',
-    alt: 'The identity panel showing a QR code and a weirdnet-morph link for linking a new device, connected to the WeirdBrains public relay.',
+    alt: 'The identity panel showing a QR code and a weirdnet-morph link for linking a new device, connected to the public relay.',
     caption: 'Linking a new device with a QR code.',
     status: Status.shipped,
     when: '0.2.0',
@@ -106,11 +106,11 @@ const features = <Feature>[
     id: 'relays',
     title: 'Relays, discovery and manual peers',
     body:
-        'Morph reaches your other devices through WeirdBrains relays or your own. Settings > Relays shows the '
+        'Morph reaches your other devices through a public relay or your own. Settings > Relays shows the '
         'relay and checks it, turns Weirdnet discovery off for networks where you want it off, and adds peers '
         'by hand. An admin policy can lock discovery off.',
     image: 'screenshot-relays.webp',
-    alt: 'Morph settings showing the Linked devices and Relays sections, with the WeirdBrains public relay, Weirdnet discovery and manual peers.',
+    alt: 'Morph settings showing the Linked devices and Relays sections, with the public relay, Weirdnet discovery and manual peers.',
     caption: 'Settings > Linked devices and Relays.',
     status: Status.shipped,
     when: '0.2.0',
