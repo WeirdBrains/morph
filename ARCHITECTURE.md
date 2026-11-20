@@ -669,7 +669,7 @@ app-prefixed invite links such as `weirdnet-morph://join/`), so Morph and Muninn
   `weirdnet-morph://join/` and `weirdnet-morph://answer/`, through the scheme
   registry in section 5c. `weirdnet://` is not registered with the OS.
 - **Relays: both.**
-  - WeirdBrains runs public relay and bootstrap nodes (the W6 binary, deployed by ops).
+  - [Weird Brains](https://weirdbrains.com) runs public relay and bootstrap nodes (the W6 binary, deployed by ops).
     Every Morph node starts with them as `bootstrap` and `relays`.
   - Running your own relay is optional and only possible when the desktop has a domain
     tied to it through Grindvakt dynamic DNS (M6). Only then can it set
@@ -678,7 +678,7 @@ app-prefixed invite links such as `weirdnet-morph://join/`), so Morph and Muninn
 - Desktop: listens on TCP and QUIC, IPv4 and IPv6, with mDNS on. `external` comes from
   the DDNS name (`/dns4/<name>/tcp/<port>`, `/dns6/...`) when there is one.
 - Mobile: dial-out only. It reserves a slot on your own relay if you have one, otherwise
-  on WeirdBrains relays, then on relays found in Kademlia (`relay_key`). That relay is its
+  on [Weird Brains](https://weirdbrains.com) relays, then on relays found in Kademlia (`relay_key`). That relay is its
   *home relay*: it publishes a signed peer record there and to trusted peers, so peers find
   it by name or user id without DNS address updates (section 5b). DCUtR upgrades to a
   direct connection when NAT allows. It runs only while the app is in the foreground. On
@@ -707,7 +707,7 @@ app-prefixed invite links such as `weirdnet-morph://join/`), so Morph and Muninn
   scheme registry (section 5c). _(changed 2026-11-11)_ Public + Open projects can also be
   served over plain `https://<name>` to ordinary browsers from the owner's own dynamic DNS
   name, routed through the owner's relay or trusted peers when needed (section 6b). There
-  is still no WeirdBrains-run gateway.
+  is still no [Weird Brains](https://weirdbrains.com)-run gateway.
 - Name resolution through DNS: the host publishes `_dnsaddr.<name> TXT
   "dnsaddr=/dns4/<name>/tcp/<port>/p2p/<peer-id>"`. That is libp2p's standard, and
   `weirdnet-net` enables libp2p's `dns` feature. This is why DDNS comes before p2p: a
@@ -860,7 +860,7 @@ punching fails.
 3. *Could relays help?* Yes. They're the fallback that always works, as long as the
    phone can make one outbound connection.
    - The cost is bandwidth: every relayed byte crosses the relay twice, in and out.
-   - _(changed 2026-11-11)_ In phase 1, WeirdBrains public relays carry relayed data and
+   - _(changed 2026-11-11)_ In phase 1, [Weird Brains](https://weirdbrains.com) public relays carry relayed data and
      public HTTPS without rate limits or bandwidth caps, for compatibility. m3talsmith:
      bandwidth isn't a Priorities 1 goal. Rate limits and bandwidth controls come in
      phase 2 or later. Only the W1 protocol guards (idle timeouts, concurrency limits)
@@ -977,7 +977,7 @@ punching fails.
   - **Users can turn it off _(new 2026-11-11)_:**
     - **APNs/FCM push is on by default**, with a clear **per-device toggle** in
       Settings → Devices, also offered at first run. The toggle states what push
-      reveals: timing only, to Apple/Google and WeirdBrains.
+      reveals: timing only, to Apple/Google and [Weird Brains](https://weirdbrains.com).
     - Turning APNs/FCM off unregisters the device token from the push service and
       revokes the device's wake handle. Trusted peers and the home relay are told
       that the handle is gone.
@@ -988,14 +988,14 @@ punching fails.
       Android foreground service) is a separate control: **opt-in, off by default**,
       with a clear explanation of the battery cost shown before it is turned on.
   - **What the push providers see:**
-    - APNs/FCM and the WeirdBrains push service only ever handle an **encrypted, minimal
+    - APNs/FCM and the [Weird Brains](https://weirdbrains.com) push service only ever handle an **encrypted, minimal
       wake payload with no content**: a fixed-size ciphertext sealed to the device, plus
       the routing token or handle needed to deliver it.
     - No message text, sender identity, peer ids, addresses or site names ever go to
-      Apple, Google or WeirdBrains.
+      Apple, Google or [Weird Brains](https://weirdbrains.com).
     - The iOS alert text is generated on the device after decryption. The push request
       itself carries only a generic placeholder.
-  - **Phase 1:** a WeirdBrains-run, self-hostable push service in `weirdnet-push` (W14)
+  - **Phase 1:** a [Weird Brains](https://weirdbrains.com)-run, self-hostable push service in `weirdnet-push` (W14)
     wakes phones. Any Weirdnet app's phone needs it. Delivery paths:
     - **APNs** for iOS. **iOS background wake still requires APNs.** A persistent
       connection to a relay cannot keep a normal iOS app runnable in the background:
@@ -1007,7 +1007,7 @@ punching fails.
       (F-Droid, and sideloaded Android if the user prefers it). **This path is
       opt-in and off by default.** When the user turns it on, after a clear
       explanation of the battery cost, the phone keeps a connection to its home
-      relay (and can receive wake announcements originating from WeirdBrains,
+      relay (and can receive wake announcements originating from [Weird Brains](https://weirdbrains.com),
       relayed by any relay, so devices behind NAT are reachable). On Android this
       needs a **foreground service** with a visible notification. Battery cost is
       a real trade-off versus FCM: keepalives, doze/app-standby and Android's
@@ -1038,7 +1038,7 @@ punching fails.
       Notification Service Extension that decrypts on the device. Silent
       (`content-available`) pushes are throttled by iOS and not guaranteed. On Android
       Play builds, it's a high-priority FCM data message. On the relay path, the home
-      relay (or another relay carrying a WeirdBrains wake announcement) delivers the
+      relay (or another relay carrying a [Weird Brains](https://weirdbrains.com) wake announcement) delivers the
       same sealed payload over the existing connection.
     - On wake, the phone reconnects to its home relay if needed, collects the waiting
       sealed messages (store and forward), and republishes its peer record.
@@ -1075,7 +1075,7 @@ separate; this crate is only for URL schemes.
 
 **Prefixes.** Every app registers a **required prefix** for its scheme or schemes.
 Prefix registration is **signed**. Any prefix that begins with `weirdnet` is
-**blacklisted for third parties** and reserved for WeirdBrains.
+**blacklisted for third parties** and reserved for [Weird Brains](https://weirdbrains.com).
 - First-party apps use `weirdnet-<app>://`: Morph uses `weirdnet-morph://`, Muninn
   uses `weirdnet-muninn://`, and later first-party apps follow the same pattern.
 - Third parties register their own signed prefix, which must not begin with
@@ -1088,7 +1088,7 @@ Prefix registration is **signed**. Any prefix that begins with `weirdnet` is
   Morph, `weirdnet-muninn://join/` and `weirdnet-muninn://answer/` for Muninn.
 
 **Registry entry.** A `SchemeRecord` is signed by the app's **publisher key**
-(first-party reserved prefixes are also signed by the WeirdBrains key):
+(first-party reserved prefixes are also signed by the [Weird Brains](https://weirdbrains.com) key):
 scheme (for example `weirdnet-morph`), the registered prefix, a stable app id
 (for example `org.weirdbrains.morph`), publisher identity, a monotonic `seq` and
 an expiry, display name, handler capabilities (browse sites, join invites, and
@@ -1098,12 +1098,12 @@ same tombstone pattern as section 5b. Clients reject stale, lower-`seq`, expired
 or unsigned records, and reject any third-party prefix that begins with
 `weirdnet`.
 
-**Signing key.** m3talsmith holds and rotates the WeirdBrains signing key through
+**Signing key.** m3talsmith holds and rotates the [Weird Brains](https://weirdbrains.com) signing key through
 a new `weirdnetctl` CLI (W18). That CLI signs reserved-prefix registrations and
 the canonical list.
 
 **Distribution.**
-- A **WeirdBrains-hosted canonical list**, signed with `weirdnetctl`, ships in
+- A **[Weird Brains](https://weirdbrains.com)-hosted canonical list**, signed with `weirdnetctl`, ships in
   app defaults and can be refreshed. It is authoritative for reserved
   first-party prefixes and schemes.
 - Relays cache and serve records, so devices behind NAT can fetch them.
@@ -1288,16 +1288,16 @@ code folders). In v1 they are local folders, shared with peers.
 > Morph users only." m3talsmith's new item 7.1, confirmed: **Public projects can also be
 > served over HTTPS to anyone with an ordinary browser, at the owner's own dynamic DNS
 > name, optionally routed through Weirdnet peers.** What stays from the old rule: there is
-> **no WeirdBrains-run gateway** and no shared WeirdBrains domain, and nobody but the host
+> **no [Weird Brains](https://weirdbrains.com)-run gateway** and no shared [Weird Brains](https://weirdbrains.com) domain, and nobody but the host
 > terminates TLS.
 >
-> _(changed 2026-11-11)_ WeirdBrains public relays now also *forward* public HTTPS in
+> _(changed 2026-11-11)_ [Weird Brains](https://weirdbrains.com) public relays now also *forward* public HTTPS in
 > phase 1 for users without their own relay. This still isn't a gateway:
-> - the site keeps the owner's own domain (no WeirdBrains namespace);
+> - the site keeps the owner's own domain (no [Weird Brains](https://weirdbrains.com) namespace);
 > - the relay only passes encrypted bytes, by SNI, under the owner's signed grant;
 > - TLS terminates on the host, and the relay never holds a key or sees content.
 
-**What we already have (Let's Encrypt and ACME across WeirdBrains, read 2026-11-11):**
+**What we already have (Let's Encrypt and ACME across [Weird Brains](https://weirdbrains.com), read 2026-11-11):**
 
 | Project | Where | Challenges | Notable |
 |---|---|---|---|
@@ -1354,7 +1354,7 @@ part is a Weirdnet network protocol (W12), so `weirdnet-transports` isn't used.
     **ingress peer**, in this order of preference:
     1. your own relay (it already needs a domain through Grindvakt);
     2. a trusted peer that opts in;
-    3. **WeirdBrains public relays** _(changed 2026-11-11)_, for anyone without 1 or 2.
+    3. **[Weird Brains](https://weirdbrains.com) public relays** _(changed 2026-11-11)_, for anyone without 1 or 2.
        They forward in phase 1 for compatibility, with the same SNI-passthrough rules.
   - The ingress peer listens on TCP 443 and reads **only the TLS ClientHello's SNI**,
     without decrypting.
@@ -1377,12 +1377,12 @@ part is a Weirdnet network protocol (W12), so `weirdnet-transports` isn't used.
 - **Limits and risks:**
   - The ingress sees client IPs, SNI and traffic volume.
   - Ingress bandwidth is the operator's cost. _(changed 2026-11-11)_ In phase 1 there are
-    no per-grant byte rates or bandwidth caps, on WeirdBrains relays too. Those come in
+    no per-grant byte rates or bandwidth caps, on [Weird Brains](https://weirdbrains.com) relays too. Those come in
     phase 2 or later. Ops watches relay traffic in the meantime.
-  - Content forwarded through WeirdBrains relay IPs can draw abuse reports, even though
+  - Content forwarded through [Weird Brains](https://weirdbrains.com) relay IPs can draw abuse reports, even though
     the relay can't read it. _(changed 2026-11-11: decided)_ A published contact address
-    takes reports. WeirdBrains may revoke a grant per name on its own relays, and
-    WeirdBrains makes that call for those relays. Every device (a relay or an ingress
+    takes reports. [Weird Brains](https://weirdbrains.com) may revoke a grant per name on its own relays, and
+    [Weird Brains](https://weirdbrains.com) makes that call for those relays. Every device (a relay or an ingress
     peer) can blacklist a forwarded site and refuse to forward it, and can turn off
     site forwarding entirely.
   - HTTP/3 isn't passed through in v1: QUIC SNI sits inside encrypted Initial packets.
@@ -1674,7 +1674,7 @@ _(2026-11-14, GPUI switch)_ This section now covers the Flutter mobile builds. D
 builds are GPUI and get signed full updates, as desktop builds already did; downloaded UI
 (RFW) has no GPUI counterpart. See open decision 5 in the 2026-11-14 entries.
 
-App updates come from **Salty Gull**, a standalone WeirdBrains project. Morph uses
+App updates come from **Salty Gull**, a standalone [Weird Brains](https://weirdbrains.com) project. Morph uses
 that service; this document does not design it. See **Salty Gull's plan** (written
 by 0072; as read on 2026-11-11 from Salty Gull's `PLAN.md`) for the
 update mechanism, channels, signing and later Dart-patch work. Morph does not use
@@ -1682,7 +1682,7 @@ Shorebird.
 
 Requirements Morph relies on, agreed 2026-11-11:
 - Updates are **signed** and distributed over Weirdnet.
-- Every relay can carry update announcements originating from WeirdBrains, so devices
+- Every relay can carry update announcements originating from [Weird Brains](https://weirdbrains.com), so devices
   behind NAT can receive them.
 - Updates are **never forced**. The user opts in per update, or opts in to all updates.
 - No fees beyond our own server costs. The service is self-hostable.
@@ -1817,10 +1817,10 @@ uses it. **Morph** means work inside Morph. **Grindvakt** means App Maker's in-f
 | W12 | No public HTTPS path to hosts without a public address _(new 2026-11-11)_ | **Weirdnet** (`weirdnet-net::ingress`) | SNI-passthrough ingress: ClientHello SNI peek, signed `IngressGrant`, `/weirdnet/ingress/1` stream to the host, PROXY v2 header, HTTP-01-only port 80, per-grant byte and connection limits in phase 2 (changed 2026-11-11); no TLS termination; per-name grant revocation; per-device forwarded-site blacklist and a switch to turn off site forwarding (section 6b) |
 | W13 | No sandboxed out-of-process extension host _(new 2026-11-11, phase 2)_ | **Weirdnet** (`weirdnet-ext`, `weirdnet-ext-proto`, `weirdnet-ext-sdk`) | Supervisor, per-OS sandbox (Landlock + seccomp + bubblewrap, macOS spike, AppContainer + Job Objects, Android isolated process), tonic over UDS/named pipes, WIT bridge for wasm with the same protobuf messages, `.morphext` packages, signing (section 7) |
 | W15 | Relay → direct upgrade opens a second connection; app streams don't move _(new 2026-11-11)_ | **Weirdnet** (`weirdnet-net`) | Seamless path switching (iroh-style): keep a logical session across relayed and direct connections, migrate open W1 streams when DCUtR succeeds and fall back to the relay without resetting them, prefer direct while keeping the relay path warm; evaluate libp2p QUIC multipath support as it lands (section 5b) |
-| W14 | No way to wake a suspended phone _(new 2026-11-11)_ | **Weirdnet** (`weirdnet-push`, new crate) + **WeirdBrains ops** | Wake-handle registration, sealed fixed-size wake payloads (reason code only), sender API used by relays and peers, handle revocation and rotation; unregister API for the per-device APNs/FCM off switch (on by default); self-hostable server binary in phase 1 with APNs (required for iOS background wake), FCM (Play builds), and a Weirdnet-relay wake path that is opt-in and off by default (F-Droid and other builds without Google services; Android foreground service, with a clear battery-cost explanation before opt-in); relays carry wake announcements originating from WeirdBrains; UnifiedPush in phase 2 (section 5b) |
+| W14 | No way to wake a suspended phone _(new 2026-11-11)_ | **Weirdnet** (`weirdnet-push`, new crate) + **[Weird Brains](https://weirdbrains.com) ops** | Wake-handle registration, sealed fixed-size wake payloads (reason code only), sender API used by relays and peers, handle revocation and rotation; unregister API for the per-device APNs/FCM off switch (on by default); self-hostable server binary in phase 1 with APNs (required for iOS background wake), FCM (Play builds), and a Weirdnet-relay wake path that is opt-in and off by default (F-Droid and other builds without Google services; Android foreground service, with a clear battery-cost explanation before opt-in); relays carry wake announcements originating from [Weird Brains](https://weirdbrains.com); UnifiedPush in phase 2 (section 5b) |
 | W17 | Access policy lives only in Morph _(new 2026-11-11)_ | **Weirdnet** (`weirdnet-access`, new crate) | Private/Public and Gated/Open as independent axes (`Gated` on the wire; Muninn keeps `members`/`closed` as CLI aliases only); a small shared permission core that apps extend; Muninn's rank rules and permission implications as the default model; configurable roles (name, rank, permissions, builtin flag); actors (owner, member, guest); host-side enforcement order (auth, visibility, membership, role, sealed vs plain streams); used by Morph and Muninn; no forum-specific types here (section 6) |
-| W16 | No shared registry tying URL schemes to apps _(new 2026-11-11)_ | **Weirdnet** (`weirdnet-schemes`, new crate) + **WeirdBrains ops** | Signed prefix registration (required per app); prefixes beginning with `weirdnet` reserved for WeirdBrains and blacklisted for third parties; first-party `weirdnet-<app>://` (`weirdnet-morph://`, `weirdnet-muninn://`); signed `SchemeRecord` (scheme, prefix, app id, publisher key, seq, expiry, capabilities, install hint); canonical list signed with W18; local resolver; OS handler registration of *app* schemes only (`weirdnet://` is not registered); `join`/`answer` on the app scheme; missing-app fallback through Salty Gull, store or F-Droid hints (never auto-install); DHT and third-party prefixes later (section 5c) |
-| W18 | No CLI to hold or rotate the WeirdBrains signing key _(new 2026-11-11)_ | **Weirdnet** (`weirdnetctl`, new CLI) + **ops** | A `weirdnetctl` CLI that m3talsmith uses to hold and rotate the WeirdBrains signing key, and to sign reserved-prefix registrations and the canonical scheme list (section 5c) |
+| W16 | No shared registry tying URL schemes to apps _(new 2026-11-11)_ | **Weirdnet** (`weirdnet-schemes`, new crate) + **[Weird Brains](https://weirdbrains.com) ops** | Signed prefix registration (required per app); prefixes beginning with `weirdnet` reserved for [Weird Brains](https://weirdbrains.com) and blacklisted for third parties; first-party `weirdnet-<app>://` (`weirdnet-morph://`, `weirdnet-muninn://`); signed `SchemeRecord` (scheme, prefix, app id, publisher key, seq, expiry, capabilities, install hint); canonical list signed with W18; local resolver; OS handler registration of *app* schemes only (`weirdnet://` is not registered); `join`/`answer` on the app scheme; missing-app fallback through Salty Gull, store or F-Droid hints (never auto-install); DHT and third-party prefixes later (section 5c) |
+| W18 | No CLI to hold or rotate the [Weird Brains](https://weirdbrains.com) signing key _(new 2026-11-11)_ | **Weirdnet** (`weirdnetctl`, new CLI) + **ops** | A `weirdnetctl` CLI that m3talsmith uses to hold and rotate the [Weird Brains](https://weirdbrains.com) signing key, and to sign reserved-prefix registrations and the canonical scheme list (section 5c) |
 | W3+ | Request-to-join | **Weirdnet** (`weirdnet-net`, with W3) | `JoinRequest`, signed approval/denial, rate limits, host queue trait |
 | S | HF client + downloads + llama.cpp shared between Mouser and Morph | **Weirdnet** (`weirdnet-model`, cross-project) | Extract from Mouser, switch Mouser over, release (section 8) |
 | M-a | Morph-specific access glue | **Morph** (`morph-access`) over W17 | Resource types (projects, sites, Code Spaces, forums) and Morph role mappings (`owner`, `member`, later forum `moderator`) on top of `weirdnet-access`; uses W1, W3 and W17 |
@@ -1830,12 +1830,12 @@ uses it. **Morph** means work inside Morph. **Grindvakt** means App Maker's in-f
 | M-e | No Flutter platform views on Linux | **Morph** (`morph_webview_linux`) | Own WebKit plugin: DMA-BUF texture default (WPE public export → `FlTextureGL`) with webkit2gtk-4.1 offscreen snapshot fallback; hidden text layer (copying; early drift accepted, alignment tests planned); control layer over in-process gRPC; GTK 3 now / GTK 4 later; Wayland first, X11 later via XWayland; overlay last resort (section 2) |
 | M-g | Code Spaces sharing semantics | **Morph** (`morph-projects`) | Uses W2 + storage sync; permissions from project (section 6a) |
 | M-f | MSRV 1.99 pins Morph to latest stable | **Morph** | Track stable in CI |
-| M-h | Public HTTPS hosting UI and policy _(new 2026-11-11)_ | **Morph** (`morph-sites`, `morph-access`) | Serve Public + Open sites over hyper + rustls with `weirdnet-tls`; Public + Gated card page; choose ingress (own relay / trusted peer / WeirdBrains relay) and issue grants; per-device forwarded-site blacklist and a switch to turn off site forwarding; uses W11 + W12 + grindvakt-core |
+| M-h | Public HTTPS hosting UI and policy _(new 2026-11-11)_ | **Morph** (`morph-sites`, `morph-access`) | Serve Public + Open sites over hyper + rustls with `weirdnet-tls`; Public + Gated card page; choose ingress (own relay / trusted peer / [Weird Brains](https://weirdbrains.com) relay) and issue grants; per-device forwarded-site blacklist and a switch to turn off site forwarding; uses W11 + W12 + grindvakt-core |
 | M-i | Over-the-air updates _(changed 2026-11-11: decided)_ | **Morph** (client) + **Salty Gull** (service) | Morph consumes Salty Gull (plan by 0072, section 9a). Signed updates over Weirdnet, relayed announcements, opt-in per update or to all updates, no fees beyond server costs, self-hostable. Store builds: asset, downloaded-UI (RFW) and WASM updates; no Dart patches on iOS until the engine fork. Desktop and sideloaded builds: signed full updates. F-Droid uses stock Flutter, with updates off until the user opts in |
 | U | Switch Muninn org policy to `weirdnet-access` _(new 2026-11-11)_ | **Muninn** | No behavior change: `Visibility` stays; `Access::Members` is `Gated` on the wire, with `members`/`closed` as CLI aliases only; built-in roles extend the shared permission core; rank rules and implications come from W17; `Org.gated` stays a Muninn site flag; MCP client roles stay local. Released through Muninn's release script after W17 ships |
 | T | Switch existing ACME users to `weirdnet-tls` _(new 2026-11-11)_ | **Mouser, Muninn, itcmdr, TAUR** | Each project switches with no behavior change, released through the shared release script; after W11 ships |
 | G | Grindvakt: no library boundary, IPv4 A only, TTY secrets, no TXT, `anyhow` errors | **Grindvakt** | Delivered as `grindvakt-core` 1.1.0 with CNAME (section 10); pin `=1.1.0`; verify in M6 |
-| Ops | Public relay/bootstrap nodes, HTTPS forwarding, push service, scheme list | **WeirdBrains ops** | Deploy and monitor the W6 binary (including W12 ingress for public HTTPS, phase 1, with per-name revocation and a contact address for abuse reports) and the W14 push server (APNs/FCM credentials plus the relay wake path); host the W16 canonical scheme list, signed with `weirdnetctl` (W18); addresses and the reserved-prefix list ship in Morph's defaults |
+| Ops | Public relay/bootstrap nodes, HTTPS forwarding, push service, scheme list | **[Weird Brains](https://weirdbrains.com) ops** | Deploy and monitor the W6 binary (including W12 ingress for public HTTPS, phase 1, with per-name revocation and a contact address for abuse reports) and the W14 push server (APNs/FCM credentials plus the relay wake path); host the W16 canonical scheme list, signed with `weirdnetctl` (W18); addresses and the reserved-prefix list ship in Morph's defaults |
 
 ## 12. Milestones (phase 1)
 
@@ -1858,12 +1858,12 @@ child web view. Android criteria are unchanged. Dart items below are superseded 
 | M5 | **Projects, Code Spaces, notes** | Create a project from a Rust template (Dart templates come later), add Code Spaces (local folders with ignore rules), and write notes linked to projects and pages. Everything persists in the store and is searchable. Sharing Code Spaces comes in M8. |
 | W-a | **Weirdnet groundwork** (upstream, can run alongside M2–M5) | W4 real-network harness green in Weirdnet CI. W5 Android/iOS builds + async handle released. W8 storage cross builds released (M3 depends on it). |
 | M6 | **Dynamic DNS** | Using the Grindvakt library: configure a provider, and Morph keeps A, AAAA and `_dnsaddr` TXT records current on desktop. A dry-run preview works. `NoGlobalAddress` shows "will use relays". The conflict with a standalone Grindvakt is detected. The `_weirdnet.<name>` binding TXT is written and verified. |
-| W-b | **Weirdnet streaming + content** (upstream, before M7) | W1 `stream` with `Limits` and sealed streams, W2 `content`, W6 relay binary, W7 `dnsaddr` and W9 multi-protocol nodes, W10 names (with withdrawals and private locators) and W14 push, W15 path switching, W16 scheme registry and W18 `weirdnetctl` released; WeirdBrains push service deployed (`weirdnet-push`: APNs, FCM and the relay wake path); the canonical scheme list published, signed with `weirdnetctl`. WeirdBrains public relays/bootstrap deployed by ops. Request/response defaults unchanged, Muninn unaffected. Abuse tests (oversize frame, stream flood, slow reader, idle hold) pass. A multi-GB transfer completes, and a one-line edit to a large file resends only the changed chunks. |
-| M7 | **Peers + weirdnet-morph://** | Two desktops on different networks and a phone exchange `weirdnet-morph://join/` invites (short codes match) and pin each other. With no own relay, a phone reaches a desktop through WeirdBrains relays. With a Grindvakt domain, the desktop's own relay is preferred. Direct hole punching happens when possible. A Muninn node on the same network is unaffected. `weirdnet-morph://<name>` resolves via `_dnsaddr` and renders a signed static site with its own origin on all platforms. _(2026-11-11)_ A phone is reached by name with no DNS address change: `_weirdnet` TXT → user id → `PeerRecord` from its home relay rendezvous. After it switches Wi-Fi → cellular, peers re-resolve within one republish interval. W4 records hole-punch rates for desktop↔phone and phone↔phone on real carriers. A backgrounded iPhone and an Android (Play) phone are woken by push when a peer sends them a message, and a captured push payload holds only the fixed-size ciphertext. An Android F-Droid build (no Google Play Services) is not woken over the Weirdnet-relay path on a fresh install: that path is opt-in and off by default. After the user opts in, having been shown a clear explanation of the battery cost, it is woken over that path. A backgrounded iPhone without APNs is not woken. _(2026-11-11)_ APNs/FCM push is on by default on a fresh install. With the per-device APNs/FCM toggle off, the device's token and handle are revoked at the push service, a peer's wake attempt does nothing, and the message is delivered when the app is next opened. Turning it on registers a new handle. Inspecting what APNs/FCM and the WeirdBrains push service receive shows only the fixed-size ciphertext and the delivery token or handle: no content, sender, peer id, address or site name. A transfer that starts relayed and upgrades to direct (W15) keeps its streams open. A `weirdnet-morph://` link (including `join/` and `answer/`) opened in another Weirdnet app launches Morph when it is installed; if it is not, the install hint is shown and nothing is installed until the user opts in (W16). `weirdnet://` is not registered with the OS. |
+| W-b | **Weirdnet streaming + content** (upstream, before M7) | W1 `stream` with `Limits` and sealed streams, W2 `content`, W6 relay binary, W7 `dnsaddr` and W9 multi-protocol nodes, W10 names (with withdrawals and private locators) and W14 push, W15 path switching, W16 scheme registry and W18 `weirdnetctl` released; [Weird Brains](https://weirdbrains.com) push service deployed (`weirdnet-push`: APNs, FCM and the relay wake path); the canonical scheme list published, signed with `weirdnetctl`. [Weird Brains](https://weirdbrains.com) public relays/bootstrap deployed by ops. Request/response defaults unchanged, Muninn unaffected. Abuse tests (oversize frame, stream flood, slow reader, idle hold) pass. A multi-GB transfer completes, and a one-line edit to a large file resends only the changed chunks. |
+| M7 | **Peers + weirdnet-morph://** | Two desktops on different networks and a phone exchange `weirdnet-morph://join/` invites (short codes match) and pin each other. With no own relay, a phone reaches a desktop through [Weird Brains](https://weirdbrains.com) relays. With a Grindvakt domain, the desktop's own relay is preferred. Direct hole punching happens when possible. A Muninn node on the same network is unaffected. `weirdnet-morph://<name>` resolves via `_dnsaddr` and renders a signed static site with its own origin on all platforms. _(2026-11-11)_ A phone is reached by name with no DNS address change: `_weirdnet` TXT → user id → `PeerRecord` from its home relay rendezvous. After it switches Wi-Fi → cellular, peers re-resolve within one republish interval. W4 records hole-punch rates for desktop↔phone and phone↔phone on real carriers. A backgrounded iPhone and an Android (Play) phone are woken by push when a peer sends them a message, and a captured push payload holds only the fixed-size ciphertext. An Android F-Droid build (no Google Play Services) is not woken over the Weirdnet-relay path on a fresh install: that path is opt-in and off by default. After the user opts in, having been shown a clear explanation of the battery cost, it is woken over that path. A backgrounded iPhone without APNs is not woken. _(2026-11-11)_ APNs/FCM push is on by default on a fresh install. With the per-device APNs/FCM toggle off, the device's token and handle are revoked at the push service, a peer's wake attempt does nothing, and the message is delivered when the app is next opened. Turning it on registers a new handle. Inspecting what APNs/FCM and the [Weird Brains](https://weirdbrains.com) push service receive shows only the fixed-size ciphertext and the delivery token or handle: no content, sender, peer id, address or site name. A transfer that starts relayed and upgrades to direct (W15) keeps its streams open. A `weirdnet-morph://` link (including `join/` and `answer/`) opened in another Weirdnet app launches Morph when it is installed; if it is not, the install hint is shown and nothing is installed until the user opts in (W16). `weirdnet://` is not registered with the OS. |
 | W-c | **Weirdnet membership + access** (upstream, before M8) | W3 `Membership`, revocation and `JoinRequest` (approve/deny, rate limits) released with tests. W17 `weirdnet-access` published: both visibility/membership axes with `Gated` on the wire, a shared permission core that apps extend, Muninn rank and implication defaults, enforcement-order tests (stranger, trusted non-member, member, revoked member, guest on open vs gated). |
 | M8 | **Project hosting + Code Space sharing** | All four visibility/membership combinations are enforced as in section 6, through `weirdnet-access`. Tests cover a stranger, a trusted non-member, a member and a revoked member. Gated content uses sealed streams only. Public + Gated: request to join → owner approves → content opens; deny → stays closed. A Code Space is published, fetched read-only by a member, and updated incrementally. A non-member can't fetch it. _(2026-11-11)_ DHT: while a site is hosted its record is findable; a trusted peer derives, fetches and decrypts a private site's locator record, and a stranger's node storing it can't link it to the user or site; when hosting stops, the withdrawal supersedes the record, and a replayed older record is rejected. |
 | W-d | **Weirdnet TLS + ingress** (upstream, before M9) _(new 2026-11-11)_ | W11 `weirdnet-tls` published on crates.io with mock-CA tests for all three challenges and a DNS-01 test through grindvakt-core against the DigitalOcean/DNSimple sandbox. W12 ingress released with W6 ingress listener. Test: the relay process never has the certificate key, and a captured relay trace contains only TLS records. |
-| M9 | **Public HTTPS** _(new 2026-11-11)_ | A Public + Open project is served to a stock browser at `https://<name>`: (a) from a desktop with a public address, directly; (b) from a host behind CGNAT through the user's own relay (SNI passthrough, DNS-01 cert); (c) the same through a WeirdBrains public relay for a user with no relay of their own. A Let's Encrypt staging cert issues, then a production cert, and it renews without a restart. Public + Gated shows only the card; Private has no listener; revoking a grant stops forwarding. A published contact address is documented for abuse reports about sites on WeirdBrains relays; ops can revoke forwarding for one name on those relays. A device can blacklist a forwarded name and refuse it, and can turn off site forwarding entirely. |
+| M9 | **Public HTTPS** _(new 2026-11-11)_ | A Public + Open project is served to a stock browser at `https://<name>`: (a) from a desktop with a public address, directly; (b) from a host behind CGNAT through the user's own relay (SNI passthrough, DNS-01 cert); (c) the same through a [Weird Brains](https://weirdbrains.com) public relay for a user with no relay of their own. A Let's Encrypt staging cert issues, then a production cert, and it renews without a restart. Public + Gated shows only the card; Private has no listener; revoking a grant stops forwarding. A published contact address is documented for abuse reports about sites on [Weird Brains](https://weirdbrains.com) relays; ops can revoke forwarding for one name on those relays. A device can blacklist a forwarded name and refuse it, and can turn off site forwarding entirely. |
 
 Phase 2 (order to be set later):
 - third-party extensions (section 7): out-of-process native, with the wasm fallback on
@@ -1884,13 +1884,13 @@ Phase 2 (order to be set later):
   (section 9a);
 - Linux web view: GTK 4 / WebKitGTK 6.0 (and `GdkDmabufTexture` if useful), and
   native X11 beyond XWayland (section 2);
-- relay bandwidth controls and rate limits (WeirdBrains relays, ingress grants, data
+- relay bandwidth controls and rate limits ([Weird Brains](https://weirdbrains.com) relays, ingress grants, data
   circuits).
 
 ## 13. Open questions
 
 The five questions from the first 2026-11-11 round are answered and written in above:
-- WeirdBrains relays forward HTTPS (6b);
+- [Weird Brains](https://weirdbrains.com) relays forward HTTPS (6b);
 - the push service is phase 1 (5b, W14);
 - DHT records only while hosting, with withdrawal (5b);
 - the iOS App Store build allows WASM extensions (7, 9a);
@@ -1907,16 +1907,16 @@ The later 2026-11-11 questions are also answered:
    updates. The F-Droid build uses stock Flutter, with updates off until the user
    opts in. Signed updates over Weirdnet, relayed announcements, opt-in per
    update or to all updates, no fees beyond server costs, self-hostable (9a, M-i).
-3. **Abuse on WeirdBrains relay IPs:** a contact address, and per-site revocation by
-   WeirdBrains on its own relays (WeirdBrains makes that call). Every device can
+3. **Abuse on [Weird Brains](https://weirdbrains.com) relay IPs:** a contact address, and per-site revocation by
+   [Weird Brains](https://weirdbrains.com) on its own relays ([Weird Brains](https://weirdbrains.com) makes that call). Every device can
    blacklist a forwarded site or turn off site forwarding (6b, W12, M9).
 
 The scheme-registry and access questions (4–10) are also answered:
 4. **Third-party schemes:** every app registers a required, signed prefix. Prefixes
-   beginning with `weirdnet` are reserved for WeirdBrains and blacklisted for
+   beginning with `weirdnet` are reserved for [Weird Brains](https://weirdbrains.com) and blacklisted for
    third parties. First-party apps use `weirdnet-<app>://` (`weirdnet-morph://`,
    `weirdnet-muninn://`) (5c, W16).
-5. **Publisher keys:** m3talsmith holds and rotates the WeirdBrains signing key
+5. **Publisher keys:** m3talsmith holds and rotates the [Weird Brains](https://weirdbrains.com) signing key
    through a new `weirdnetctl` CLI (5c, W18).
 6. **Several apps for one capability:** each app has its own prefixed scheme, so
    Morph invites are `weirdnet-morph://join/` and Muninn's are
@@ -2453,7 +2453,7 @@ decided for phase 1 (next entry); the others are still open.
 2. **GPUI pin policy.** Zed's repository by commit (recommended; crates.io
    0.2.2 cannot host a child web view on X11, section 2.0), bumped on purpose.
    CI then fetches Zed's repository (about 550 MB) on a cold cache. The
-   alternative is a WeirdBrains fork of GPUI published to crates.io.
+   alternative is a [Weird Brains](https://weirdbrains.com) fork of GPUI published to crates.io.
 3. **`PRIORITIES.md` 1 item 1, "Linux: build our own WebKit plugin"** (texture
    layer, DMA-BUF default, snapshot fallback, hidden text layer, Wayland first,
    GTK 4 later). On desktop the child web view replaces the texture and text
@@ -2712,7 +2712,7 @@ alpha.6 on a Linux desktop (Hyprland, NVIDIA GPU, nvidia-open 615.78.08, webkit2
 
 ### 2026-11-16 — Device linking through the relay, and mobile answers invites
 
-Device-link nodes now reserve a circuit on the built-in WeirdBrains relay
+Device-link nodes now reserve a circuit on the built-in [Weird Brains](https://weirdbrains.com) relay
 (`morph_identity::device_link::PUBLIC_RELAYS`, TCP then QUIC on 4747; env
 `MORPH_LINK_RELAYS` replaces the list) and put that circuit next to their
 direct addresses in the code, so devices on different networks link through
