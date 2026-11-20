@@ -389,8 +389,14 @@ def settled(fn, still=0.6, timeout=6.0):
     return value
 
 
+# The agents bar is always on screen: folded, it is a strip down the window's right edge
+# (morph-desktop companion_view::COLLAPSED_WIDTH). Everything the shell lays out (page, ☰, popups)
+# ends where the strip starts.
+AGENTS_STRIP = 40
+
+
 def settled_layout(morph, win, fallback, timeout=10.0, still=1.0):
-    """The window width and the page state once neither has changed for
+    """The window width left of the agents strip and the page state once neither has changed for
     `still` seconds (or the last seen after `timeout`)."""
     end = time.time() + timeout
     last, since = None, time.time()
@@ -403,7 +409,7 @@ def settled_layout(morph, win, fallback, timeout=10.0, still=1.0):
         elif time.time() - since >= still:
             break
         time.sleep(0.2)
-    return width, page
+    return width - AGENTS_STRIP, page
 
 
 class Results:
@@ -1573,6 +1579,7 @@ def popup_backing(r, binary, display, shots=None):
         img = Image.open(png).convert("RGB")
         win = m2.own_window()
         gx, gy, w, _ = m2.geometry(win)
+        w -= AGENTS_STRIP
         f = img.width / (WaylandMorph.layout[0] if isinstance(m2, WaylandMorph) else img.width)
         at = lambda x, y: img.getpixel((min(int((gx + x) * f), img.width - 1), min(int((gy + y) * f), img.height - 1)))  # noqa: E731
         beside = luminance(at(w // 2 - 100, 400))
@@ -1600,6 +1607,7 @@ def popup_backing(r, binary, display, shots=None):
         win = m2.own_window() or win
         m2.activate(win)
         _, _, width, _ = m2.geometry(win)
+        width -= AGENTS_STRIP
         m2.click(win, width - 23, 55)
         time.sleep(1.0)
         ok, detail = corner("menu", 248, 150)
@@ -2199,7 +2207,7 @@ def start_screen(m, r, win, top):
         wx, wy, ww, wh = m.geometry(win)
         # Wayland: sway gives logical pixels, grim shoots the output in physical ones.
         f = 1600 / WaylandMorph.layout[0] if isinstance(m, WaylandMorph) else 1.0
-        box = (int(wx * f), int((wy + top) * f), int((wx + ww) * f), int((wy + wh) * f))
+        box = (int(wx * f), int((wy + top) * f), int((wx + ww - AGENTS_STRIP) * f), int((wy + wh) * f))
         page = img.crop(box)
         px = page.load()
         pw, ph = page.size
