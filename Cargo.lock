@@ -5721,7 +5721,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
- "unicode-segmentation",
+ "weirdnet-text",
 ]
 
 [[package]]
@@ -10489,6 +10489,15 @@ dependencies = [
  "weirdnet-keys",
  "weirdnet-net",
  "zeroize",
+]
+
+[[package]]
+name = "weirdnet-text"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73dd85cc5aa7cfb64f9ec433e0957334e1f0176b8ab130895c2a32f1f86f6eb3"
+dependencies = [
+ "unicode-segmentation",
 ]
 
 [[package]]
