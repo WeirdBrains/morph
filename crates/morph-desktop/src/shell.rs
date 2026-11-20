@@ -142,6 +142,9 @@ pub enum ShellRequest {
     Run(Action),
     /// Show Settings at one section (`morph://relays` and the like).
     ShowSettingsAt(crate::settings_view::Section),
+    /// A device-link code or invite typed in the address bar: route it as
+    /// an opened link ([`morph_core::scheme::is_pairing_link`]).
+    OpenPairingLink(String),
     /// Change the shown profile's layout settings (the tab bar's buttons).
     Change(morph_ui::chrome::SettingsChange),
     /// Forget the shown profile's history.
@@ -911,6 +914,12 @@ impl Shell {
             }
             ShellRequest::Run(action) => self.run(*action, window, cx),
             ShellRequest::ShowSettingsAt(section) => self.show_settings(Some(*section), window, cx),
+            ShellRequest::OpenPairingLink(url) => {
+                if morph_core::scheme::is_pairing_link(url) {
+                    let url = url.clone();
+                    self.open_external(&url, window, cx);
+                }
+            }
             ShellRequest::Change(change) => {
                 if let Some(settings) = self.settings.clone() {
                     settings.update(cx, |view, cx| view.change(*change, cx));
@@ -1232,6 +1241,7 @@ impl Shell {
         }
         let note = match scheme::parse(url).map(scheme::route) {
             Some(scheme::Route::DeviceLink(code)) => return self.open_device_code(&code, window, cx),
+            Some(scheme::Route::Invite(invite)) => return self.open_invite(&invite, window, cx),
             Some(scheme::Route::Unknown(link)) if link.scheme == scheme::YMIR_SCHEME => {
                 eprintln!("morph: no handler for {}", link.describe());
                 "Morph opens only Ymir's device-link codes (weirdnet-ymir://link/…)"
@@ -1262,16 +1272,44 @@ impl Shell {
         if std::env::var_os("MORPH_LOG_EVENTS").is_some_and(|v| v == "1") {
             println!("morph-event link code app={}", code.app.name());
         }
-        let Some(identity) = self.identity.clone() else {
+        let Some(identity) = self.identity_for_pairing(cx) else {
             return;
         };
+        identity.update(cx, |view, cx| view.open_code(&code.code, code.app.name(), window, cx));
+        cx.notify();
+    }
+
+    /// Another device's invite opened from outside or typed: the Identity
+    /// panel, waiting for that device's identity with the invite filled in
+    /// (checked there as a pasted one is; Send and the six-digit check
+    /// still come first). Never reached while the profile is locked.
+    fn open_invite(&mut self, invite: &morph_core::scheme::Invite, window: &mut Window, cx: &mut Context<Self>) {
+        if std::env::var_os("MORPH_LOG_EVENTS").is_some_and(|v| v == "1") {
+            println!("morph-event link invite-opened");
+        }
+        let Some(identity) = self.identity_for_pairing(cx) else {
+            return;
+        };
+        identity.update(cx, |view, cx| view.open_invite(&invite.code, window, cx));
+        cx.notify();
+    }
+
+    /// The Identity panel, shown in the sidebar, for a pairing link; `None`
+    /// (and the link refused) while the profile is locked.
+    fn identity_for_pairing(&mut self, cx: &mut Context<Self>) -> Option<Entity<IdentityView>> {
+        if self.lock.is_some() {
+            eprintln!("morph: refused a device-link code while the profile is locked");
+            self.refused_code = true;
+            return None;
+        }
+        let identity = self.identity.clone()?;
         let kind = KindId::new(component::IDENTITY);
         if self.layout.shown(Slot::Sidebar) != Some(&kind) {
             self.layout.toggle_kind(Slot::Sidebar, kind);
             self.save_layout();
         }
-        identity.update(cx, |view, cx| view.open_code(&code.code, code.app.name(), window, cx));
         cx.notify();
+        Some(identity)
     }
 
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1296,10 +1334,10 @@ impl Shell {
                 crate::single::Request::Open(url) => Some(url),
                 _ => None,
             }));
-            // Except device-link codes: a locked profile refuses them, and
-            // says so once it is unlocked (the code is short-lived anyway).
+            // Except device-link codes and invites: a locked profile refuses
+            // them, and says so once it is unlocked (they are short-lived anyway).
             let before = self.pending_links.len();
-            self.pending_links.retain(|url| morph_core::scheme::device_link_code(url).is_none());
+            self.pending_links.retain(|url| !morph_core::scheme::is_pairing_link(url));
             if self.pending_links.len() != before {
                 eprintln!("morph: refused a device-link code while the profile is locked");
                 self.refused_code = true;
@@ -1316,7 +1354,7 @@ impl Shell {
         if std::mem::take(&mut self.refused_code)
             && let Some(main) = self.main()
         {
-            main.toast("A device's link code was opened while this profile was locked and was refused. Open it again.", None, cx);
+            main.toast("A device's link code or invite was opened while this profile was locked and was refused. Open it again.", None, cx);
         }
         for request in handed {
             if let crate::single::Request::Open(url) = &request {

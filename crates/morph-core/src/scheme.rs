@@ -15,6 +15,12 @@
 //! the code filled in. The profile password and the six-digit check still
 //! come first; the code is only checked for shape here, and
 //! weirdnet-device-link verifies its signature when it pairs.
+//!
+//! The other direction too: an existing device's invite,
+//! `weirdnet-morph://invite/…` (the code its Add a device shows), routes to
+//! [`Route::Invite`]: this device waits for the identity with the invite
+//! filled in. Ymir shows no invites (a Ymir node only joins), so
+//! `weirdnet-ymir://invite/…` stays unknown.
 
 /// The scheme, without `://`.
 pub const SCHEME: &str = "weirdnet-morph";
@@ -50,6 +56,8 @@ pub struct Link {
 pub enum Route {
     /// A new device's device-link code: open Add a device with it.
     DeviceLink(DeviceLink),
+    /// An existing device's invite: receive its identity here.
+    Invite(Invite),
     /// No handler knows this link yet; the shell logs [`Link::describe`]
     /// and tells the user.
     Unknown(Link),
@@ -62,6 +70,14 @@ pub struct DeviceLink {
     pub code: String,
     /// Which app showed it.
     pub app: LinkApp,
+}
+
+/// An existing device's invite, `weirdnet-morph://invite/<base64url>`,
+/// shape-checked only (weirdnet-device-link decodes it before it is used).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Invite {
+    /// The invite as weirdnet-device-link reads it (scheme in lowercase).
+    pub code: String,
 }
 
 /// The app a device-link code came from, by its scheme.
@@ -116,25 +132,50 @@ pub fn parse(text: &str) -> Option<Link> {
     })
 }
 
-/// Route a link: a device-link code goes to Add a device; everything else
-/// waits for v0.3 (and `weirdnet-ymir://` means nothing else to Morph).
+/// Route a link: a device-link code goes to Add a device, a Morph invite
+/// to receiving an identity; everything else waits for v0.3 (and
+/// `weirdnet-ymir://` means nothing else to Morph).
 pub fn route(link: Link) -> Route {
-    match device_link(&link) {
-        Some(code) => Route::DeviceLink(code),
+    if let Some(code) = device_link(&link) {
+        return Route::DeviceLink(code);
+    }
+    match invite(&link) {
+        Some(invite) => Route::Invite(invite),
         None => Route::Unknown(link),
     }
+}
+
+/// `<host>/<one non-empty base64url segment>` with nothing after it.
+fn code_segment<'a>(link: &'a Link, host: &str) -> Option<&'a str> {
+    let [code] = link.path.as_slice() else { return None };
+    let base64url = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
+    (link.host == host && !link.has_query && !code.is_empty() && code.chars().all(base64url)).then_some(code.as_str())
 }
 
 /// `<scheme>://link/<code>` with a non-empty unpadded base64url code and
 /// nothing after it. Not a signature check: that happens when it pairs.
 fn device_link(link: &Link) -> Option<DeviceLink> {
-    let [code] = link.path.as_slice() else { return None };
-    let base64url = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
-    if link.host != "link" || link.has_query || code.is_empty() || !code.chars().all(base64url) {
-        return None;
-    }
+    let code = code_segment(link, "link")?;
     let app = if link.scheme == YMIR_SCHEME { LinkApp::Ymir } else { LinkApp::Morph };
     Some(DeviceLink { code: format!("{}://link/{code}", link.scheme), app })
+}
+
+/// `weirdnet-morph://invite/<code>` (Morph's scheme only).
+fn invite(link: &Link) -> Option<Invite> {
+    let code = code_segment(link, "invite").filter(|_| link.scheme == SCHEME)?;
+    Some(Invite { code: format!("{SCHEME}://invite/{code}") })
+}
+
+/// An existing device's invite in `text`, opened or pasted.
+pub fn invite_code(text: &str) -> Option<Invite> {
+    parse(text).as_ref().and_then(invite)
+}
+
+/// Whether `text` is a device-link code or an invite: links that start
+/// pairing, which a locked profile refuses and the address bar hands to
+/// the Identity panel instead of calling an app.
+pub fn is_pairing_link(text: &str) -> bool {
+    device_link_code(text).is_some() || invite_code(text).is_some()
 }
 
 /// A device-link code in `text`: a `weirdnet-morph://link/…` or
@@ -213,14 +254,29 @@ mod tests {
             "weirdnet-morph://link/abc#x",
             "weirdnet-morph://link/ab+c",
             "weirdnet-morph://link/ab=",
-            "weirdnet-morph://invite/abc",
             "weirdnet-ymir://invite/abc",
+            "weirdnet-morph://invite/abc/def",
+            "weirdnet-morph://invite/abc?x=1",
+            "weirdnet-morph://invite/ab+c",
             "weirdnet-morph://linkx/abc",
         ] {
             let link = parse(text).unwrap();
             assert_eq!(route(link.clone()), Route::Unknown(link), "{text}");
             assert_eq!(device_link_code(text), None, "{text}");
+            assert!(!is_pairing_link(text), "{text}");
         }
+    }
+
+    #[test]
+    fn morph_invites_route_to_receiving_an_identity() {
+        let invite = invite_code(" Weirdnet-Morph://INVITE/gqF2AQ_-x9 ").unwrap();
+        assert_eq!(invite, Invite { code: "weirdnet-morph://invite/gqF2AQ_-x9".into() });
+        assert_eq!(route(parse("weirdnet-morph://invite/gqF2AQ_-x9").unwrap()), Route::Invite(invite));
+        assert_eq!(device_link_code("weirdnet-morph://invite/gqF2AQ_-x9"), None);
+        assert_eq!(invite_code("weirdnet-ymir://invite/gqF2AQ_-x9"), None, "Ymir shows no invites");
+        assert_eq!(invite_code("weirdnet-morph://link/gqF2AQ_-x9"), None);
+        assert!(is_pairing_link("weirdnet-morph://invite/abc") && is_pairing_link("weirdnet-ymir://link/abc"));
+        assert!(!is_pairing_link("weirdnet-morph://peer/abc") && !is_pairing_link("https://example.com/invite/abc"));
     }
 
     #[test]

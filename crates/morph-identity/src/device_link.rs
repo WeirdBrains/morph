@@ -361,6 +361,13 @@ pub fn is_invite(text: &str) -> bool {
     weirdnet_device_link::is_invite(SCHEME, text)
 }
 
+/// Whether `text` reads as an existing device's invite for Morph: its shape
+/// and version (weirdnet-device-link's `decode_invite`). What an opened
+/// `weirdnet-morph://invite/…` link is checked with before it is used.
+pub fn check_invite(text: &str) -> Result<()> {
+    weirdnet_device_link::decode_invite(SCHEME, text.trim()).map(|_| ()).map_err(link_error)
+}
+
 /// The new device answers `invite` with its offer.
 pub fn answer_invite(invite: &str, offer_link: &str, cfg: NodeConfig) -> Result<()> {
     weirdnet_device_link::answer_invite(SCHEME, invite.trim(), offer_link, cfg).map_err(link_error)

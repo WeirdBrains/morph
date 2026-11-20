@@ -1227,6 +1227,16 @@ impl BrowserView {
         }
         // Show the page again before it takes the keyboard.
         self.close_address_menu(cx);
+        // A device-link code or invite typed or pasted here goes to the
+        // Identity panel, as an opened one does, never to an app call.
+        let typed = self.browser.address().text().trim().to_string();
+        if morph_core::scheme::is_pairing_link(&typed) {
+            self.browser.blur_address();
+            self.sync_focus(window, cx);
+            cx.emit(ShellRequest::OpenPairingLink(typed));
+            cx.notify();
+            return;
+        }
         let internal = self.browser.submit_address();
         self.sync_focus(window, cx);
         if let Some(internal) = internal {

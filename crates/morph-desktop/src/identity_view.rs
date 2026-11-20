@@ -110,6 +110,14 @@ impl IdentityView {
         cx.notify();
     }
 
+    /// Another device's invite opened from outside: this device waits for
+    /// the identity with the invite filled in ([`Identity::open_invite`]).
+    pub fn open_invite(&mut self, invite: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.model.open_invite(invite);
+        self.enter_step(window, cx);
+        cx.notify();
+    }
+
     /// Follow a link session; called by the host's tick.
     pub fn poll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.model.poll_relays();

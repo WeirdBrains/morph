@@ -234,6 +234,7 @@ impl Identity {
         match self.step {
             Step::Export => vec![String::new(), String::new(), suggested_backup_path(&self.profile_name)],
             Step::AddDevice => self.opened.iter().map(|code| vec![String::new(), code.clone()]).next().unwrap_or_default(),
+            Step::Offer { .. } => self.opened.iter().map(|invite| vec![invite.clone()]).next().unwrap_or_default(),
             _ => Vec::new(),
         }
     }
@@ -272,6 +273,33 @@ impl Identity {
         self.notice = Some(format!(
             "Opened a code from {app}. Type this profile's password and press Pair, then check that both devices show the same six digits."
         ));
+    }
+
+    /// Another device's invite opened from outside (`weirdnet-morph://invite/…`,
+    /// the code its Add a device shows): this device starts waiting for an
+    /// identity with the invite in the link field, checked as a pasted one is.
+    /// Nothing is sent until the user presses Send, and the six-digit check
+    /// follows. A profile that has an identity already is not a new device.
+    pub fn open_invite(&mut self, invite: &str) {
+        self.reload();
+        let invite = invite.trim();
+        if self.identity.is_some() {
+            self.start(Step::Overview);
+            self.error = Some(
+                "Another device's invite was opened, but this profile already has an identity. Open the invite on the new device (or in a profile without an identity) to receive it there.".into(),
+            );
+            return;
+        }
+        if let Err(e) = morph_services::device_link::check_invite(invite) {
+            self.start(Step::Choose);
+            self.error = Some(format!("That invite link is not valid ({e}). Open it again from the other device's Add a device."));
+            return;
+        }
+        self.start_offer();
+        self.opened = Some(invite.to_string());
+        self.notice = Some(
+            "Opened an invite from your other device. Press Send once this device's code is ready, then check that both devices show the same six digits.".into(),
+        );
     }
 
     /// Add a device: listen for a new device that scans this device's QR.
@@ -1084,6 +1112,53 @@ mod tests {
         assert_eq!(old.step, Step::Overview, "{:?}", old.error);
         assert!(old.notice.as_deref().unwrap().contains("Ymir"));
         assert_eq!(ymir.take().unwrap().user_id, old.identity.as_ref().unwrap().user_id);
+    }
+
+    /// An existing device's invite opened from outside on a new device:
+    /// it waits for an identity with the invite filled in, and Send answers
+    /// it. A profile with an identity, or a malformed invite, is refused.
+    #[test]
+    fn an_opened_invite_goes_to_the_new_devices_step() {
+        let (_a, old_home) = home();
+        let (_b, new_home) = home();
+        let shared = links();
+        let mut old = Identity::new(&old_home, "p1", "Work", shared);
+        old.start(Step::Create);
+        old.submit(&s(&["old password", "old password"]));
+        old.submit(&[]);
+        old.start(Step::AddDevice);
+        old.wait_started();
+        let invite = old.invite_link().expect("Add a device shows a code").to_string();
+
+        // The device that has the identity is not the new device.
+        let mut other = Identity::new(&old_home, "p1", "Work", shared);
+        other.open_invite(&invite);
+        assert_eq!(other.step, Step::Overview);
+        assert!(other.error.as_deref().unwrap().contains("already has an identity"), "{:?}", other.error);
+
+        let mut new = Identity::new(&new_home, "p1", "Work", shared);
+        new.open_invite("weirdnet-morph://invite/not-a-real-invite");
+        assert_eq!(new.step, Step::Choose);
+        assert!(new.error.as_deref().unwrap().contains("not valid"), "{:?}", new.error);
+        assert!(!new.is_starting(), "nothing started for a bad invite");
+
+        new.open_invite(&invite);
+        assert_eq!(new.error, None);
+        assert!(matches!(new.step, Step::Offer { .. }), "{:?}", new.step);
+        assert_eq!(new.defaults(), std::slice::from_ref(&invite), "the invite is in the link field");
+        new.wait_started();
+        let Step::Offer { session, .. } = new.step.clone() else { panic!("{:?} {:?}", new.step, new.error) };
+        assert_ne!(session, 0);
+        assert_eq!(new.defaults(), std::slice::from_ref(&invite), "still there once this device's code is ready");
+        assert!(!old.answered(), "nothing sent before Send");
+        new.submit(&s(&[&invite]));
+        assert_eq!(new.error, None);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while !old.answered() && std::time::Instant::now() < deadline {
+            old.poll();
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(old.answered(), "the existing device got the answer");
     }
 
     /// The other direction: the existing device's Add a device shows a QR,

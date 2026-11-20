@@ -11,7 +11,7 @@ use std::time::Instant;
 
 pub use morph_identity::device_link::LinkState;
 use morph_identity::device_link::{AddDevice, Invite, NetStatus, NewDevice, RelayProbe};
-pub use morph_identity::device_link::{is_invite, is_offer};
+pub use morph_identity::device_link::{check_invite, is_invite, is_offer};
 use morph_identity::profile_identity::{self, ProfileIdentity, SecretString};
 
 use crate::home::{now_ms, profile_dir};
