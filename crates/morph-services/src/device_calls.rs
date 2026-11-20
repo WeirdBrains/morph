@@ -98,23 +98,42 @@ impl DeviceCaller {
         let (node, state) = crate::sync::live(home, profile_id).ok_or(DeviceCallError::NotSyncing)?;
         let net = morph_core::network::load(home).unwrap_or_default();
         let addrs = move |cert: &NodeCert| crate::sync::addrs_for(cert, &net, &crate::sync::configured_relays());
-        let mut caller = Self::new(node, state, addrs);
-        caller.profile = Some(Arc::new((home.to_path_buf(), profile_id.to_string())));
-        Ok(caller)
+        Ok(Self::without_profile(node, state, addrs).for_profile_at(home, profile_id))
     }
 
-    /// A caller over a running sync node and its live state; `addrs` gives a device's
-    /// addresses (tests: an in-memory listener).
-    pub fn new(node: Arc<SyncNode>, state: Arc<Mutex<SyncState>>, addrs: impl Fn(&NodeCert) -> Vec<Multiaddr> + Send + Sync + 'static) -> Self {
+    /// A caller over a running sync node and its live state, acting for a fresh unlocked
+    /// temp profile (tests; production uses [`DeviceCaller::for_profile`]). `addrs` gives a
+    /// device's addresses (an in-memory listener).
+    #[cfg(test)]
+    pub(crate) fn new(
+        node: Arc<SyncNode>,
+        state: Arc<Mutex<SyncState>>,
+        addrs: impl Fn(&NodeCert) -> Vec<Multiaddr> + Send + Sync + 'static,
+    ) -> Self {
+        let home = tempfile::tempdir().unwrap().keep();
+        Self::without_profile(node, state, addrs).for_profile_at(&home, "default")
+    }
+
+    /// A caller with no profile: it fails closed, refusing everything as locked until
+    /// [`DeviceCaller::for_profile_at`] gives it one.
+    fn without_profile(
+        node: Arc<SyncNode>,
+        state: Arc<Mutex<SyncState>>,
+        addrs: impl Fn(&NodeCert) -> Vec<Multiaddr> + Send + Sync + 'static,
+    ) -> Self {
         Self { node, state, addrs: Arc::new(addrs), profile: None }
     }
 
     /// This caller, acting for the profile `(home, id)`: refused while it is locked (tests;
     /// [`DeviceCaller::for_profile`] sets it).
-    #[cfg(test)]
-    pub(crate) fn for_locked_profile(mut self, home: &Path, profile_id: &str) -> Self {
+    fn for_profile_at(mut self, home: &Path, profile_id: &str) -> Self {
         self.profile = Some(Arc::new((home.to_path_buf(), profile_id.to_string())));
         self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_locked_profile(self, home: &Path, profile_id: &str) -> Self {
+        self.for_profile_at(home, profile_id)
     }
 
     /// Whether the profile this caller acts for is unlocked: the lock check served requests
@@ -126,8 +145,9 @@ impl DeviceCaller {
     /// Refuse while the profile is locked.
     fn unlocked(&self) -> Result<(), DeviceCallError> {
         match &self.profile {
-            Some(p) if crate::profile_lock::is_locked(&p.0, &p.1) => Err(DeviceCallError::Locked),
-            _ => Ok(()),
+            Some(p) if !crate::profile_lock::is_locked(&p.0, &p.1) => Ok(()),
+            // Locked, or no profile to check: fail closed.
+            _ => Err(DeviceCallError::Locked),
         }
     }
 
@@ -285,6 +305,19 @@ mod tests {
         let st = state(user, me, others);
         let node = Arc::new(start_node(me.key.clone(), node_config(true), st.clone()).unwrap());
         DeviceCaller::new(node, st, move |_| server.clone().into_iter().collect())
+    }
+
+    /// A caller with no profile is refused everything, as a locked one is.
+    #[test]
+    fn a_caller_with_no_profile_is_refused() {
+        let user = Keypair::generate_ed25519();
+        let (a, b) = (device(&user, "a"), device(&user, "b"));
+        let st = state(&user, &a, &[&b.cert]);
+        let node = Arc::new(start_node(a.key.clone(), node_config(true), st.clone()).unwrap());
+        let caller = DeviceCaller::without_profile(node, st, |_| Vec::new());
+        assert!(matches!(caller.check_unlocked(), Err(DeviceCallError::Locked)));
+        let r = rt(caller.call(&b.cert.peer_id, AppRequest::new("morph-device-test", "GET", "/"), CALL_TIMEOUT));
+        assert!(matches!(r, Err(DeviceCallError::Locked)), "{r:?}");
     }
 
     fn rt<F: std::future::Future>(f: F) -> F::Output {
