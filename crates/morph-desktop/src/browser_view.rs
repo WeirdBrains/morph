@@ -6,6 +6,7 @@
 //! hands it pointer and key input (`page_input`), keeping the shell's own
 //! shortcuts.
 
+mod saver;
 mod suggestions;
 
 use std::ops::Range;
@@ -173,6 +174,12 @@ pub struct BrowserView {
     pub(crate) button_bounds: std::cell::RefCell<HashMap<&'static str, Bounds<Pixels>>>,
     /// Tab icons as images, by their PNG bytes.
     icon_images: std::cell::RefCell<HashMap<Arc<Vec<u8>>, Arc<gpui::Image>>>,
+    /// The password saver of this window's profile, and what its pages said.
+    saver: Option<crate::password_saver::Saver>,
+    saver_inbox: Option<crate::password_saver::Inbox>,
+    /// The profile password, when "ask again" is on.
+    saver_input: Entity<TextInput>,
+    saver_filling: Option<saver::Filling>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -413,6 +420,12 @@ impl BrowserView {
             }
             cx.notify();
         });
+        let saver_input = cx.new(|cx| TextInput::new("Profile password", theme, cx).masked());
+        let saver_events = cx.subscribe_in(&saver_input, window, |this, _, event, window, cx| match event {
+            TextInputEvent::Submit { .. } => this.saver_fill(window, cx),
+            TextInputEvent::Cancel => this.saver_dismiss(cx),
+            _ => {}
+        });
         Self {
             browser,
             theme,
@@ -477,7 +490,11 @@ impl BrowserView {
             shell_shown: true,
             icon_images: std::cell::RefCell::new(HashMap::new()),
             button_bounds: std::cell::RefCell::new(HashMap::new()),
-            _subscriptions: vec![find_events],
+            saver: None,
+            saver_inbox: None,
+            saver_input,
+            saver_filling: None,
+            _subscriptions: vec![find_events, saver_events],
         }
     }
 
@@ -493,14 +510,17 @@ impl BrowserView {
         session: Option<Vec<u8>>,
         window: &Window,
         keystrokes: &[String],
-    ) -> Result<Browser, String> {
+    ) -> Result<(Browser, crate::password_saver::Inbox), String> {
         use raw_window_handle::HasWindowHandle;
         let raw = HasWindowHandle::window_handle(window).map_err(|e| format!("no window handle: {e}"))?.as_raw();
         let mut backend = Self::backend(raw, window)?;
-        backend.set_page_bridge(morph_webview::PageBridge::new(
-            morph_core::page_bridge::BRIDGE_SCRIPT,
-            std::rc::Rc::new(morph_core::page_bridge::answer),
-        ));
+        // Morph's page channel, and the password saver's host script (login forms).
+        let inbox = crate::password_saver::Inbox::default();
+        backend.set_page_bridge(if crate::password_saver::shown() {
+            crate::password_saver::page_bridge(inbox.clone())
+        } else {
+            morph_webview::PageBridge::new(morph_core::page_bridge::BRIDGE_SCRIPT, std::rc::Rc::new(morph_core::page_bridge::answer))
+        });
         let home_for_history = home.to_path_buf();
         let profile_id = profile.to_string();
         let sink: morph_browser::HistorySink = Box::new(move |url: &str, title: &str| {
@@ -521,7 +541,7 @@ impl BrowserView {
         // the profile's encrypted library; nothing is kept while it is locked.
         browser.set_download_sessions(std::sync::Arc::new(morph_core::download_sessions::LibrarySessions::new(home, profile)));
         browser.set_shortcuts(keystrokes);
-        Ok(browser)
+        Ok((browser, inbox))
     }
 
     #[cfg(target_os = "linux")]
@@ -839,6 +859,7 @@ impl BrowserView {
             }));
         }
         self.tick_downloads(cx);
+        self.tick_saver(cx);
         while let Some(path) = self.browser.take_download_open() {
             open_file(&path, cx);
         }
@@ -2534,6 +2555,7 @@ impl Render for BrowserView {
                 .child(self.toolbar(window, cx))
                 .children(self.find_bar(cx))
                 .child(self.page_area(cx))
+                .children(self.saver_bar(cx))
                 .children(self.toast_bar(cx))
                 .children(self.download_bar(cx))
                 .into_any_element(),
@@ -2541,6 +2563,7 @@ impl Render for BrowserView {
                 .child(self.toolbar(window, cx))
                 .children(self.find_bar(cx))
                 .child(self.page_area(cx))
+                .children(self.saver_bar(cx))
                 .children(self.toast_bar(cx))
                 .children(self.download_bar(cx))
                 .child(self.tab_strip(window, cx))
@@ -2550,6 +2573,7 @@ impl Render for BrowserView {
                     .child(self.toolbar(window, cx))
                     .children(self.find_bar(cx))
                     .child(self.page_area(cx))
+                    .children(self.saver_bar(cx))
                     .children(self.toast_bar(cx))
                     .children(self.download_bar(cx));
                 let list = self.tab_list(width, collapsed, window, cx);

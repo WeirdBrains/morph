@@ -619,7 +619,7 @@ impl Shell {
         };
         let mut browser_entity: Option<Entity<BrowserView>> = None;
         self.error = match BrowserView::create(&home, &profile, &url, session, window, &keystrokes) {
-            Ok(mut browser) => {
+            Ok((mut browser, logins)) => {
                 // Each window's tabs read apart in the event log.
                 browser.set_log_base(self.log_base);
                 browser.restore_tabs(&more, active);
@@ -631,6 +631,7 @@ impl Shell {
                     let mut view = BrowserView::new(browser, theme, window, cx);
                     view.set_shortcut_labels(labels);
                     view.set_suggest_source(&home, &profile);
+                    view.set_password_saver(&home, &profile, logins);
                     view
                 });
                 self.profile_subscriptions.push(cx.subscribe_in(&view, window, |shell, _, request, window, cx| shell.request(request, window, cx)));

@@ -35,6 +35,7 @@ mod mcp_host;
 mod menu_view;
 mod notices;
 mod page_input;
+mod password_saver;
 mod perf;
 mod profiles;
 mod profiles_view;
