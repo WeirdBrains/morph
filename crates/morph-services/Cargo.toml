@@ -21,6 +21,8 @@ serde_json.workspace = true
 weirdnet-net.workspace = true
 weirdnet-sync.workspace = true
 futures = "0.3"
+# The router's first-message timeout, on whatever executor drives the sessions.
+futures-timer = "3"
 # Companion records (companion_sync) and routing to linked devices (node_router).
 morph-ai.workspace = true
 # `serve`: `decode_cert`, for the certificate a caller presents (the inference host's authorize).

@@ -9,12 +9,16 @@
 //! - [`for_profile`] is the app's router: it serves this device's [`Capabilities`] to linked
 //!   devices on [`DEVICE_APP`] and fills [`NodeInfo`] from theirs ([`NodeDirectory`]).
 //! - [`DeviceRouter::serve`] accepts streams ([`DeviceCaller::accept_streams`], linked devices
-//!   only) and runs a [`LinkHandler`] for each, concurrently, without a runtime of its own.
+//!   only) and runs a [`LinkHandler`] for each, concurrently, without a runtime of its own. A
+//!   stream that sends nothing within [`FIRST_MESSAGE`] is closed, and a device gets at most
+//!   [`MAX_SESSIONS_PER_PEER`] sessions of one protocol at once (more are reset).
 //!
 //! The protocols that run over a [`Link`] are in [`protocols`]; that is the only part that
 //! changes when Morph pins `weirdnet-agent` 0.2.0.
 
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::FutureExt;
@@ -50,11 +54,27 @@ pub struct DeviceRouter {
     caller: DeviceCaller,
     info: Arc<InfoFor>,
     limits: Limits,
+    first_message: Duration,
+    per_peer: usize,
 }
+
+/// How long a served stream may stay silent before its first message; then it is closed, so a
+/// linked device cannot hold sessions open without using them.
+pub const FIRST_MESSAGE: Duration = Duration::from_secs(10);
+
+/// Sessions one device may have open at once on one served protocol; a stream over it is reset
+/// as it is accepted.
+pub const MAX_SESSIONS_PER_PEER: usize = 16;
 
 impl DeviceRouter {
     pub fn new(caller: DeviceCaller) -> Self {
-        Self { caller, info: Arc::new(|_| NodeInfo::default()), limits: Limits::default() }
+        Self {
+            caller,
+            info: Arc::new(|_| NodeInfo::default()),
+            limits: Limits::default(),
+            first_message: FIRST_MESSAGE,
+            per_peer: MAX_SESSIONS_PER_PEER,
+        }
     }
 
     /// Where platform, online and serves-models come from.
@@ -68,6 +88,15 @@ impl DeviceRouter {
         self
     }
 
+    /// What [`Self::serve`] allows each session: `first_message` to say something (else it is
+    /// closed) and `per_peer` sessions open at once from one device (more are reset).
+    /// Defaults: [`FIRST_MESSAGE`], [`MAX_SESSIONS_PER_PEER`].
+    pub fn with_session_limits(mut self, first_message: Duration, per_peer: usize) -> Self {
+        self.first_message = first_message;
+        self.per_peer = per_peer.max(1);
+        self
+    }
+
     pub fn caller(&self) -> &DeviceCaller {
         &self.caller
     }
@@ -76,25 +105,76 @@ impl DeviceRouter {
     /// `handler`, and sessions run concurrently. Streams are accepted from the moment this
     /// returns; drive the returned future (on any executor) to run the sessions. It ends when
     /// the node stops accepting.
+    ///
+    /// The handler sees a stream only once its first message arrived (within the
+    /// [`Self::with_session_limits`] time, else the stream is closed unseen), and a device with
+    /// that many sessions of this protocol open has further streams reset as they arrive.
     pub fn serve(&self, protocol: &str, handler: Arc<dyn LinkHandler>) -> Result<impl Future<Output = ()> + Send + 'static, RouteError> {
         let mut incoming = self.caller.accept_streams(protocol, self.limits).map_err(route_error)?;
+        let (first_message, per_peer) = (self.first_message, self.per_peer);
         Ok(async move {
             let mut sessions = FuturesUnordered::new();
+            let mut open: HashMap<String, usize> = HashMap::new();
             loop {
                 futures::select! {
                     s = incoming.next().fuse() => match s {
                         Some(stream) => {
                             let from = stream.peer().to_string();
+                            let n = open.entry(from.clone()).or_default();
+                            if *n >= per_peer {
+                                stream.reset();
+                                continue;
+                            }
+                            *n += 1;
                             let handler = handler.clone();
-                            sessions.push(async move { handler.handle(from, frames(stream)).await });
+                            sessions.push(async move {
+                                session(handler, from.clone(), stream, first_message).await;
+                                from
+                            });
                         }
                         None => break,
                     },
-                    _ = sessions.select_next_some() => {}
+                    from = sessions.select_next_some() => {
+                        if let Some(n) = open.get_mut(&from) {
+                            *n -= 1;
+                            if *n == 0 {
+                                open.remove(&from);
+                            }
+                        }
+                    }
                 }
             }
             while sessions.next().await.is_some() {}
         })
+    }
+}
+
+/// One served stream: wait up to `first_message` for its first message, then hand the link
+/// (that message still unread) to `handler`. A stream that ends or stays silent is dropped.
+async fn session(handler: Arc<dyn LinkHandler>, from: String, stream: Stream, first_message: Duration) {
+    let Link { tx, mut rx } = frames(stream);
+    let first = futures::select! {
+        m = rx.recv().fuse() => m,
+        _ = futures_timer::Delay::new(first_message).fuse() => return,
+    };
+    let Ok(Some(first)) = first else { return };
+    handler.handle(from, Link { tx, rx: Box::new(Prefetched { first: Some(first), rest: rx }) }).await;
+}
+
+/// A link's receiving half with its first message already read.
+struct Prefetched {
+    first: Option<Vec<u8>>,
+    rest: Box<dyn LinkRx>,
+}
+
+#[async_trait]
+impl LinkRx for Prefetched {
+    /// Cancel-safe: the first message is taken whole, and then the inner `recv` is.
+    async fn recv(&mut self) -> Result<Option<Vec<u8>>, RouteError> {
+        if let Some(m) = self.first.take() {
+            return Ok(Some(m));
+        }
+        self.rest.recv().await
     }
 }
 
@@ -748,6 +828,111 @@ mod tests {
         let mut cl = rt(DeviceRouter::new(from_c).open(&a.cert.peer_id, protocols::TASK)).unwrap();
         let _ = rt(cl.tx.send(b"let me in".to_vec()));
         assert!(!matches!(rt(cl.rx.recv()), Ok(Some(_))), "no reply to an unlinked device");
+    }
+
+    /// `recv` on `link`, but `None` when nothing came within `wait` (a test never hangs).
+    fn recv_within(link: &mut Link, wait: std::time::Duration) -> Option<Result<Option<Vec<u8>>, RouteError>> {
+        rt(async {
+            futures::select! {
+                m = link.rx.recv().fuse() => Some(m),
+                _ = futures_timer::Delay::new(wait).fuse() => None,
+            }
+        })
+    }
+
+    /// Counts the sessions that reached the handler, then echoes.
+    struct Counted(Arc<std::sync::atomic::AtomicUsize>);
+
+    #[async_trait]
+    impl LinkHandler for Counted {
+        async fn handle(&self, from: String, link: Link) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Echo.handle(from, link).await
+        }
+    }
+
+    #[test]
+    fn a_stream_that_says_nothing_is_closed_before_the_handler_sees_it() {
+        let user = Keypair::generate_ed25519();
+        let (a, b) = (device(&user, "a"), device(&user, "b"));
+        let (server, _, listening) = up(&user, &a, &[&b.cert], None);
+        let at: Multiaddr = format!("{}/p2p/{}", listening[0], server.peer_id()).parse().unwrap();
+        let seen = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let served = DeviceRouter::new(server).with_session_limits(std::time::Duration::from_millis(400), MAX_SESSIONS_PER_PEER);
+        let serving = served.serve(protocols::TASK, Arc::new(Counted(seen.clone()))).unwrap();
+        std::thread::spawn(move || rt(serving));
+
+        let (from_b, _, _) = up(&user, &b, &[&a.cert], Some(at));
+        let b_router = DeviceRouter::new(from_b);
+        let mut silent = rt(b_router.open(&a.cert.peer_id, protocols::TASK)).unwrap();
+        let started = std::time::Instant::now();
+        let got = recv_within(&mut silent, std::time::Duration::from_secs(20)).expect("the silent stream is closed, not left open");
+        assert!(!matches!(got, Ok(Some(_))), "{got:?}");
+        assert!(started.elapsed() >= std::time::Duration::from_millis(300), "closed only after the first-message time");
+        assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 0, "the handler never saw it");
+
+        // A stream that speaks in time is served, its first message included.
+        let mut talking = rt(b_router.open(&a.cert.peer_id, protocols::TASK)).unwrap();
+        rt(talking.tx.send(b"hi".to_vec())).unwrap();
+        let reply = recv_within(&mut talking, std::time::Duration::from_secs(20)).unwrap().unwrap().unwrap();
+        assert_eq!(reply, format!("{}:hi", b.cert.peer_id).into_bytes());
+        rt(talking.tx.send(b"again".to_vec())).unwrap();
+        let reply = recv_within(&mut talking, std::time::Duration::from_secs(20)).unwrap().unwrap().unwrap();
+        assert_eq!(reply, format!("{}:again", b.cert.peer_id).into_bytes());
+        assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_device_over_its_session_cap_is_refused_and_others_are_not() {
+        let user = Keypair::generate_ed25519();
+        let (a, b, d) = (device(&user, "a"), device(&user, "b"), device(&user, "d"));
+        let (server, _, listening) = up(&user, &a, &[&b.cert, &d.cert], None);
+        let at: Multiaddr = format!("{}/p2p/{}", listening[0], server.peer_id()).parse().unwrap();
+        let served = DeviceRouter::new(server).with_session_limits(std::time::Duration::from_secs(30), 2);
+        let serving = served.serve(protocols::TASK, Arc::new(Echo)).unwrap();
+        std::thread::spawn(move || rt(serving));
+        let wait = std::time::Duration::from_secs(20);
+        let echoes = |link: &mut Link, peer: &str, text: &str| {
+            if let Err(e) = rt(link.tx.send(text.as_bytes().to_vec())) {
+                panic!("send {text}: {e:?}");
+            }
+            let got = recv_within(link, wait);
+            assert!(matches!(&got, Some(Ok(Some(m))) if *m == format!("{peer}:{text}").into_bytes()), "{text}: {got:?}");
+        };
+
+        let (from_b, _, _) = up(&user, &b, &[&a.cert], Some(at.clone()));
+        let b_router = DeviceRouter::new(from_b);
+        let mut one = rt(b_router.open(&a.cert.peer_id, protocols::TASK)).unwrap();
+        let mut two = rt(b_router.open(&a.cert.peer_id, protocols::TASK)).unwrap();
+        echoes(&mut one, &b.cert.peer_id, "one");
+        echoes(&mut two, &b.cert.peer_id, "two");
+
+        // Another device has its own allowance.
+        let (from_d, _, _) = up(&user, &d, &[&a.cert], Some(at));
+        let d_router = DeviceRouter::new(from_d);
+        let mut theirs = rt(d_router.open(&a.cert.peer_id, protocols::TASK)).unwrap();
+        echoes(&mut theirs, &d.cert.peer_id, "mine");
+
+        // A third session from B is reset at once.
+        let mut three = rt(b_router.open(&a.cert.peer_id, protocols::TASK)).unwrap();
+        let _ = rt(three.tx.send(b"three".to_vec()));
+        let got = recv_within(&mut three, wait).expect("the extra stream is reset, not left hanging");
+        assert!(!matches!(got, Ok(Some(_))), "{got:?}");
+
+        // When one of B's sessions ends, B may open another.
+        drop(one);
+        let deadline = std::time::Instant::now() + wait;
+        loop {
+            let mut again = rt(b_router.open(&a.cert.peer_id, protocols::TASK)).unwrap();
+            let _ = rt(again.tx.send(b"again".to_vec()));
+            if let Some(Ok(Some(reply))) = recv_within(&mut again, std::time::Duration::from_secs(5)) {
+                assert_eq!(reply, format!("{}:again", b.cert.peer_id).into_bytes());
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "the ended session's place never freed up");
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        echoes(&mut two, &b.cert.peer_id, "still");
     }
 
     mod agent_protocols {
