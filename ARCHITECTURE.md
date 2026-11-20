@@ -1235,7 +1235,7 @@ extends the shared core with its org, resource and code permissions (see
 Caches on other peers only ever hold Public + Open chunks, or chunks encrypted to members.
 Morph never shares private chunks.
 
-**Muninn today** (read 2026-11-11 from the my-desktop checkout of `muninn`,
+**Muninn today** (read 2026-11-11 from a local checkout of `muninn`,
 `crates/muninn-core/src/org/mod.rs` and `store/orgs.rs`; that tree is 6 commits behind
 `origin/main`, but those commits do not touch org roles; other uncommitted files in
 the checkout were not used). Orgs already have two axes, close to this model:
@@ -1687,7 +1687,7 @@ builds are GPUI and get signed full updates, as desktop builds already did; down
 
 App updates come from **Salty Gull**, a standalone WeirdBrains project. Morph uses
 that service; this document does not design it. See **Salty Gull's plan** (written
-by 0072; as read on 2026-11-11 from `<scratch-dir>/scratch/salty-gull/PLAN.md`) for the
+by 0072; as read on 2026-11-11 from Salty Gull's `PLAN.md`) for the
 update mechanism, channels, signing and later Dart-patch work. Morph does not use
 Shorebird.
 
@@ -2305,7 +2305,7 @@ was installed.
   variable is ignored), so it never meets a real profile's entry, and it forgets
   everything it saved:
   `MORPH_KEYSTORE_SERVICE=org.weirdbrains.morph.test cargo test -p morph-keystore --test system_keystore -- --ignored`.
-  It passed on the macOS login Keychain (Apple silicon Mac, macOS 26.5, arm64), the
+  It passed on the macOS login Keychain (an Apple silicon Mac, macOS 26.5, arm64), the
   Windows Credential Manager (Windows 11 VM, x64, MSVC) and the throwaway GNOME
   Keyring above, leaving no entries. The `rust (macos-latest)` and
   `rust (windows-latest)` CI jobs run clippy over the workspace and the
@@ -2573,7 +2573,7 @@ Settled while building phase 1 (details in section 2.0 and `docs/handoff.md`):
 
 ### 2026-11-15 — alpha.7: the render check replaces the GBM probe
 
-alpha.6 on my-desktop (Hyprland, NVIDIA GPU, nvidia-open 615.78.08, webkit2gtk
+alpha.6 on a Linux desktop (Hyprland, NVIDIA GPU, nvidia-open 615.78.08, webkit2gtk
 2.54.1) failed both ways; nothing below names a vendor.
 
 - **Native Wayland aborted** with "GDK is not able to create a GL context: The
@@ -2623,7 +2623,7 @@ alpha.6 on my-desktop (Hyprland, NVIDIA GPU, nvidia-open 615.78.08, webkit2gtk
   `morph-wl-input` (virtual keyboard with the standard evdev keymap and virtual
   pointer); `wtype` uploads its own keymap, so codes would be wrong.
 - **No vendor checks (m3talsmith, 2026-11-15).** Nothing is chosen by GPU
-  vendor. Black pages on my-desktop (Hyprland through XWayland, NVIDIA GPU,
+  vendor. Black pages on a Linux desktop (Hyprland through XWayland, NVIDIA GPU,
   nvidia-open 615.78, webkit2gtk 2.54.1, "Failed to create GBM buffer of
   size 2x2: Invalid argument") are handled by detecting the failure:
   `morph --probe-dmabuf`, run as a child at start, allocates a 2x2 ARGB8888

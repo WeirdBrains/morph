@@ -249,8 +249,8 @@ jobs:
   # The GPUI desktop shell on macOS (WKWebView child views): clippy and the
   # shell's tests, then a universal Morph.app (arm64 + x86_64) in a zip and a
   # dmg (scripts/macos-dist.sh). Pull requests build on GitHub's macOS
-  # runners. Pushes to main, tags and manual runs build on m3talsmith's
-  # Apple silicon Mac (self-hosted, label weirdbrains-mac) when the repo variable
+  # runners. Pushes to main, tags and manual runs build on the self-hosted
+  # macOS runner (label weirdbrains-mac) when the repo variable
   # MAC_RUNNER is "on" (gh variable set MAC_RUNNER --body on; unset or
   # anything else keeps them hosted): never pull requests, so a fork's code
   # never runs on a personal machine. On the Mac nothing is

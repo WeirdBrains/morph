@@ -14,9 +14,9 @@ overrides a rule and gives a reason.
 
 ## Build and test
 
-- On my-desktop, set `CARGO_TARGET_DIR` to a scratch directory under `<scratch-dir>`
-  (fallback `<scratch-dir>`). Never run cargo so that `target/` lands inside
-  `~/src`. After every build or test run, clean cargo targets and Flutter
+- Set `CARGO_TARGET_DIR` to a scratch directory outside the checkout (on a
+  disk with room for it). Never run cargo so that `target/` lands inside the
+  source tree. After every build or test run, clean cargo targets and Flutter
   `build/` / `.dart_tool/` outputs.
 - Tests and manual runs use a temp directory or `MORPH_HOME`. Never touch a
   user's real `~/.morph` or other home and config directories.
