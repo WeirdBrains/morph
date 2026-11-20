@@ -923,8 +923,8 @@ mod tests {
         assert_eq!(run_on(&load_settings(&p).offload), RunOn::Here);
         set_run_on(&p, RunOn::Automatic).unwrap();
         assert_eq!(load_settings(&p).offload.prefer, None, "the chosen device is forgotten");
-        let devices = vec![("12D3KooWDesk".to_string(), "my-desktop".to_string())];
-        assert!(run_on_note(&RunOn::Device("12D3KooWDesk".into()), &devices).contains("my-desktop first"));
+        let devices = vec![("12D3KooWDesk".to_string(), "desktop".to_string())];
+        assert!(run_on_note(&RunOn::Device("12D3KooWDesk".into()), &devices).contains("desktop first"));
         assert!(run_on_note(&RunOn::Device("gone".into()), &devices).contains("no longer linked"));
         assert!(run_on_note(&RunOn::Automatic, &devices).contains("while its model can run"));
         assert_eq!(load_settings(&p).search_provider, SearchProvider::DuckDuckGo, "other settings stay");

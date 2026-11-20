@@ -249,7 +249,7 @@ mod tests {
 
     #[test]
     fn only_the_owner_runs_a_project() {
-        let (a, b) = (dev("my-desktop"), dev("laptop"));
+        let (a, b) = (dev("desktop"), dev("laptop"));
         let p = owned(&a);
         let ps = projects_for(&a, vec![p.clone()]);
         assert!(crate::research::next_action(&ps, &Default::default(), 5) != crate::research::Next::Idle);
@@ -259,7 +259,7 @@ mod tests {
 
     #[test]
     fn a_steer_on_another_device_is_queued_and_the_owner_takes_it_in_once() {
-        let (a, b) = (dev("my-desktop"), dev("laptop"));
+        let (a, b) = (dev("desktop"), dev("laptop"));
         let p = owned(&a);
         let id = p.id.clone();
         let mut on_b = projects_for(&b, vec![p.clone()]);
@@ -297,19 +297,19 @@ mod tests {
 
     #[test]
     fn a_takeover_pauses_requeues_the_step_in_flight_and_says_from_whom() {
-        let (a, b) = (dev("my-desktop"), dev("laptop"));
+        let (a, b) = (dev("desktop"), dev("laptop"));
         let mut p = owned(&a);
         p.plan[0].status = StepStatus::Running;
         assert!(!p.take_over(&a, 5), "already ours");
         assert!(p.take_over(&b, 6));
         assert!(p.owned_by(&b.id) && !p.owned_by(&a.id));
         assert_eq!((p.state, p.plan[0].status), (ProjectState::Paused, StepStatus::Queued));
-        assert!(p.log.iter().any(|l| l.steer && l.text.contains("taken over by laptop from my-desktop")));
+        assert!(p.log.iter().any(|l| l.steer && l.text.contains("taken over by laptop from desktop")));
     }
 
     #[test]
     fn the_merge_keeps_our_own_copy_follows_a_takeover_and_keeps_device_choices_local() {
-        let (a, b) = (dev("my-desktop"), dev("laptop"));
+        let (a, b) = (dev("desktop"), dev("laptop"));
         // Ours, a step ahead of the merge.
         let mut ours = owned(&a);
         ours.findings.push(crate::research::Finding { step: "s".into(), text: "t".into(), sources: vec![], at_ms: 2 });

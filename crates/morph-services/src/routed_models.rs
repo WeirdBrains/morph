@@ -8,7 +8,7 @@
 //! - Turns that go out use [`protocols::remote_model`]: the plan's devices in order, then the
 //!   local model if it is available (and the setting allows the fallback). A device that
 //!   refuses, is busy, is offline or has no model is skipped.
-//! - [`RunsOn`] says which device a turn is on, for the working line ("Thinking on my-desktop…").
+//! - [`RunsOn`] says which device a turn is on, for the working line ("Thinking on desktop…").
 
 use std::sync::{Arc, Mutex};
 
@@ -227,10 +227,10 @@ mod tests {
 
     #[test]
     fn a_refusal_for_revoked_or_locked_reads_as_a_reason() {
-        let labels = vec![("12D3KooWDesk".to_string(), "my-desktop".to_string())];
+        let labels = vec![("12D3KooWDesk".to_string(), "desktop".to_string())];
         let unavailable = |text: &str| explain(ModelError::Unavailable(text.into()), &labels).to_string();
-        assert!(unavailable("12D3KooWDesk: node refused: revoked").starts_with("model unavailable: my-desktop no longer lets this device use it"));
-        assert!(unavailable("12D3KooWDesk: node refused: profile-locked").contains("my-desktop is locked. Unlock it"));
+        assert!(unavailable("12D3KooWDesk: node refused: revoked").starts_with("model unavailable: desktop no longer lets this device use it"));
+        assert!(unavailable("12D3KooWDesk: node refused: profile-locked").contains("desktop is locked. Unlock it"));
         assert!(
             explain(ModelError::Failed("12D3KooWDesk: node refused: revoked".into()), &labels).to_string().contains("revoked from your devices"),
             "also after text streamed"

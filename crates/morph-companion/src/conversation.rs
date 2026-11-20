@@ -74,7 +74,7 @@ pub enum Activity {
 }
 
 impl Activity {
-    /// The line when the turn runs on another of the user's devices ("Thinking on my-desktop…").
+    /// The line when the turn runs on another of the user's devices ("Thinking on desktop…").
     pub fn label_on(&self, loading: Option<&str>, device: Option<&str>) -> String {
         match (self, device) {
             (Activity::Thinking, Some(d)) => format!("Thinking on {d}…"),
@@ -618,13 +618,13 @@ mod tests {
     #[test]
     fn the_working_line_names_the_device_a_turn_runs_on() {
         assert_eq!(
-            Activity::Thinking.label_on(Some("Gemma 4 E4B"), Some("my-desktop")),
-            "Thinking on my-desktop…",
+            Activity::Thinking.label_on(Some("Gemma 4 E4B"), Some("desktop")),
+            "Thinking on desktop…",
             "not Loading: the model loads over there"
         );
         assert_eq!(Activity::Thinking.label_on(Some("Gemma 4 E4B"), None), "Loading Gemma 4 E4B…");
-        assert_eq!(Activity::Reasoning("hmm".into()).label_on(None, Some("my-desktop")), "Thinking on my-desktop: hmm");
-        assert_eq!(Activity::Writing.label_on(None, Some("my-desktop")), "Writing…");
+        assert_eq!(Activity::Reasoning("hmm".into()).label_on(None, Some("desktop")), "Thinking on desktop: hmm");
+        assert_eq!(Activity::Writing.label_on(None, Some("desktop")), "Writing…");
     }
 
     #[test]

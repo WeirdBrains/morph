@@ -544,7 +544,7 @@ mod tests {
     fn a_steer_waits_while_a_step_runs_and_lands_at_the_boundary() {
         let mut p = project();
         p.plan[0].status = StepStatus::Running;
-        p.submit_steer(10, "my-desktop", Steer::Brief { text: "Async drop proposals only".into() });
+        p.submit_steer(10, "desktop", Steer::Brief { text: "Async drop proposals only".into() });
         assert!(!p.apply_pending(11), "the running step is not cut");
         assert_eq!(p.brief, "How does Tokio cancel a task?");
         assert_eq!(p.steering.pending.len(), 1);

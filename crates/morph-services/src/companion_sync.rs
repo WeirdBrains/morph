@@ -1758,7 +1758,7 @@ mod tests {
     #[test]
     fn a_project_syncs_to_another_device_without_signed_in_or_always_allow() {
         let (_ta, mut a, _tb, mut b) = two_devices();
-        let (da, db) = (Device { id: "dev-a".into(), name: "my-desktop".into() }, Device { id: "dev-b".into(), name: "laptop".into() });
+        let (da, db) = (Device { id: "dev-a".into(), name: "desktop".into() }, Device { id: "dev-b".into(), name: "laptop".into() });
         let (sa, sb) = (device_store(&da), device_store(&db));
         let mut p = ResearchProject::from_question("How does Tokio cancel a task?", "atlas", 1);
         p.claim(&da, 1);
@@ -1779,7 +1779,7 @@ mod tests {
         materialize(&mut b, &sb).unwrap();
         let got = research(&sb);
         let q = got.get(&id).expect("the project arrived");
-        assert_eq!((q.findings.len(), q.reports.len(), q.owner.as_ref().map(|o| o.name.as_str())), (1, p.reports.len(), Some("my-desktop")));
+        assert_eq!((q.findings.len(), q.reports.len(), q.owner.as_ref().map(|o| o.name.as_str())), (1, p.reports.len(), Some("desktop")));
         assert!(!q.signed_in && !q.always_allow, "device choices never travel");
         // Nothing is logged back by the receiver.
         backfill(&mut b, &sb, 200).unwrap();
@@ -1791,7 +1791,7 @@ mod tests {
     #[test]
     fn a_steer_queued_on_another_device_reaches_the_owner_once_and_is_cleared() {
         let (_ta, mut a, _tb, mut b) = two_devices();
-        let (da, db) = (Device { id: "dev-a".into(), name: "my-desktop".into() }, Device { id: "dev-b".into(), name: "laptop".into() });
+        let (da, db) = (Device { id: "dev-a".into(), name: "desktop".into() }, Device { id: "dev-b".into(), name: "laptop".into() });
         let (sa, sb) = (device_store(&da), device_store(&db));
         let mut p = ResearchProject::from_question("How does Tokio cancel a task?", "atlas", 1);
         p.claim(&da, 1);
@@ -1832,7 +1832,7 @@ mod tests {
     #[test]
     fn a_takeover_moves_the_lease_and_the_old_owner_follows_keeping_its_own_choices() {
         let (_ta, mut a, _tb, mut b) = two_devices();
-        let (da, db) = (Device { id: "dev-a".into(), name: "my-desktop".into() }, Device { id: "dev-b".into(), name: "laptop".into() });
+        let (da, db) = (Device { id: "dev-a".into(), name: "desktop".into() }, Device { id: "dev-b".into(), name: "laptop".into() });
         let (sa, sb) = (device_store(&da), device_store(&db));
         let mut p = ResearchProject::from_question("How does Tokio cancel a task?", "atlas", 1);
         p.claim(&da, 1);
@@ -1861,7 +1861,7 @@ mod tests {
     #[test]
     fn a_large_project_syncs_whole_in_chunks() {
         let (_ta, mut a, _tb, mut b) = two_devices();
-        let da = Device { id: "dev-a".into(), name: "my-desktop".into() };
+        let da = Device { id: "dev-a".into(), name: "desktop".into() };
         let db = Device { id: "dev-b".into(), name: "laptop".into() };
         let (sa, sb) = (device_store(&da), device_store(&db));
         let mut p = ResearchProject::from_question("A big one", "atlas", 1);
@@ -1892,7 +1892,7 @@ mod tests {
     #[test]
     fn local_projects_new_since_the_last_pass_are_not_dropped_by_a_merge() {
         let (_ta, mut a, _tb, mut b) = two_devices();
-        let (da, db) = (Device { id: "dev-a".into(), name: "my-desktop".into() }, Device { id: "dev-b".into(), name: "laptop".into() });
+        let (da, db) = (Device { id: "dev-a".into(), name: "desktop".into() }, Device { id: "dev-b".into(), name: "laptop".into() });
         let (sa, sb) = (device_store(&da), device_store(&db));
         let mut one = ResearchProject::from_question("one", "atlas", 1);
         one.claim(&da, 1);
