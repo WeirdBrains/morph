@@ -1,0 +1,51 @@
+# Handoff
+
+The running log of finished work on Morph, newest first. Each finished part adds a dated entry in the same push: what changed, the commits, the checks run and what wasn't tested, what's left, and what's next. This file follows the public-content rules (no host names, IPs or home paths; m3talsmith only; links are full GitHub URLs).
+
+Morph's agent work has its own handoff doc: [docs/handoff.md](docs/handoff.md). It is kept separately and not duplicated here.
+
+Repo: https://github.com/WeirdBrains/morph. A [Weird Brains](https://weirdbrains.com) project.
+
+## 2026-11-20
+
+### v0.3.0-preview.1 (pre-release)
+
+- **What changed:** the first 0.3 preview, cut from main after the Android address-sheet fix ([`4013307`](https://github.com/WeirdBrains/morph/commit/40133076c0805a9019c810e89d5aa07b5eab1a97)). Tag `v0.3.0-preview.1` points at [`b20fd31`](https://github.com/WeirdBrains/morph/commit/b20fd315dde3fa8089e2596df537d70d574ccf1e). Release: https://github.com/WeirdBrains/morph/releases/tag/v0.3.0-preview.1 (pre-release, not Latest). Packaging moved to the preview in [`dba4b03`](https://github.com/WeirdBrains/morph/commit/dba4b03ab5393946a9b83cc3615355199126cb09) (PKGBUILDs, `.SRCINFO`, `packaging/nix/release.json`) because the tagged tree still held the 0.2.3 recipe. TAUR `morph-bin` is at `0.3.0preview1-1`; the PKGBUILD maintainer line is Weird Brains LLC. The signed `android-arm64` APK is attached by the Android release workflow (run https://github.com/WeirdBrains/morph/actions/runs/44861530556); with it the release has 13 assets.
+- **Checks:** CI https://github.com/WeirdBrains/morph/actions/runs/44856203143 and iOS https://github.com/WeirdBrains/morph/actions/runs/44856203047 passed on [`b20fd31`](https://github.com/WeirdBrains/morph/commit/b20fd315dde3fa8089e2596df537d70d574ccf1e). The release checks every platform asset and its checksum (`scripts/weirdnet_release.py assets 0.3.0-preview.1`). The TAUR recipe check and dry run passed before publishing. Not tested: installing the TAUR package on Arch, and the APK on real phones beyond the address-sheet fix.
+- **Left:** the site's latest-version and download pages; pinging Morph intern and the Weirdnet lead with the release link. `SHA256SUMS` lists the debug APK but not the arm64 APK, same as 0.2.3.
+- **Next:** feedback from the preview; see the open items in the entries below.
+
+### Password saver (hidden)
+
+- **What changed:** system authentication (polkit, LocalAuthentication, Windows Hello or CredUI), saving and filling logins only on the exact site they came from, and Settings > Privacy > Passwords with the saved-logins list. Commits [`d800089`](https://github.com/WeirdBrains/morph/commit/d8000899e6ccf8a2e408a35ba8de0f0ca40493c1) through [`3ae31cb`](https://github.com/WeirdBrains/morph/commit/3ae31cb98b573928582f64f5a819a8b5e8a665d5). It is hidden unless Morph starts with `MORPH_PASSWORD_SAVER=1`; the address-menu Passwords row follows the same gate ([`0950055`](https://github.com/WeirdBrains/morph/commit/0950055ffadec61150ddaa979a0ec58a76ce9d15)).
+- **Checks:** CI passed on all platforms. Not tested: Windows Hello and macOS prompts on real hardware beyond CI smoke runs.
+- **Left:** the gate decision (when to turn the saver on by default), and mobile biometrics.
+- **Next:** decide the gate, then mobile biometrics.
+
+### Weirdnet upgrade
+
+- **What changed:** weirdnet-net 0.8.1 and weirdnet-device-link 0.3.1 ([`62bd4d3`](https://github.com/WeirdBrains/morph/commit/62bd4d307c53b5ea9b09bca3dfb92fcb9642a145)), weirdnet-text 0.1.0 ([`8fe633e`](https://github.com/WeirdBrains/morph/commit/8fe633e9d07fad1f542d2c277a5a39a0a714457c)), weirdnet-sync 0.7.0 ([`7154b0d`](https://github.com/WeirdBrains/morph/commit/7154b0df2c8a7e4d84e9814159efb5b4dcb5ac17)), changelog in [`aebb1a9`](https://github.com/WeirdBrains/morph/commit/aebb1a9a1b3e7f426ce550f9ea461ed2e3698daf). Agent, model and mcp pins unchanged (Morph Dev owns them).
+- **Checks:** CI passed on every platform, iOS included. Not tested: linking service nodes across devices on mixed sync versions.
+- **Left:** profile lock leftovers (locked profiles in the picker, auto-lock after idle, unlock with OS authentication, mobile lock screen with biometrics).
+- **Next:** relays, AnchoredPopup, then the v0.3 backend (shares, DDNS, credentials, trash, autofill). Upgrade every device before linking service nodes.
+
+### v0.2.3
+
+- **What changed:** patch release from the 0.2.x branch so packages show Weird Brains LLC as maintainer: [`54e4aed`](https://github.com/WeirdBrains/morph/commit/54e4aede361a8aef2323bc4b103c9b545a82d2ed) (release), [`8d6bb21`](https://github.com/WeirdBrains/morph/commit/8d6bb2180b417e763cbb7ad3b13b05acd6bd795c) (packaging), [`ca62c48`](https://github.com/WeirdBrains/morph/commit/ca62c48c0ea8f9f7da6c95c7da31b511a40736d1) (changelog). https://github.com/WeirdBrains/morph/releases/tag/v0.2.3, TAUR `morph-bin` 0.2.3-1.
+- **Checks:** CI green, 13 assets verified. Not tested: upgrade from older packages.
+- **Left:** nothing open.
+- **Next:** none planned for 0.2.x.
+
+### Windows evidence screenshot
+
+- **What changed:** retaken on a fresh demo profile with no names, paths or host details: [`af6309a`](https://github.com/WeirdBrains/morph/commit/af6309aa7231c0c53f55c5cf9f2f21072f83df3b) (`docs/evidence/windows-webview.png`). The older shots were removed.
+- **Checks:** reviewed by eye before commit. Not tested: n/a.
+- **Left:** a macOS evidence screenshot, left out on purpose for now.
+- **Next:** retake it in a clean virtual session when needed.
+
+### Menu and settings "Coming soon" items hidden
+
+- **What changed:** removed placeholder rows so the preview shows nothing unfinished: [`63123f3`](https://github.com/WeirdBrains/morph/commit/63123f35790dadc4f5abcc099a760c17809ea385) (Settings > Agents MCP row), [`0950055`](https://github.com/WeirdBrains/morph/commit/0950055ffadec61150ddaa979a0ec58a76ce9d15) (address menu Extensions and More; Passwords gated), [`544bd3a`](https://github.com/WeirdBrains/morph/commit/544bd3a057c15be93d50a930825442b99f5e496d) (Privacy "site permissions" note).
+- **Checks:** fmt, clippy and desktop tests passed; CI green.
+- **Left:** restore these rows when the features land.
+- **Next:** see the Extensions and v0.3 backend work above.
