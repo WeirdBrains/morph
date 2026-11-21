@@ -1,7 +1,7 @@
 {
-  "version": "0.2.3",
+  "version": "0.3.0-preview.1",
   "x86_64-linux": {
-    "url": "https://github.com/WeirdBrains/morph/releases/download/v0.2.3/morph-0.2.3-x86_64-unknown-linux-gnu.tar.gz",
-    "sha256": "6e31b033714b5e7837302a272bb50725e9c454f2321f2a588dc1c7ffc9eb201e"
+    "url": "https://github.com/WeirdBrains/morph/releases/download/v0.3.0-preview.1/morph-0.3.0-preview.1-x86_64-unknown-linux-gnu.tar.gz",
+    "sha256": "27018d8209687f920b039bb59abad3606d067232fff14429237cf3afc4d0d8e2"
   }
 }
