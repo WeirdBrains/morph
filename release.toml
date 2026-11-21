@@ -4,7 +4,7 @@
 # then the `next` steps below. The Arch pkgver is {pkgver} (0.2.0alpha8).
 helpers = "0.3.0"
 project = "morph"
-branch = "release/0.2.x"            # 0.2.x patches are cut from this branch (main carries v0.3 work)
+branch = "main"                     # v0.3 pre-releases are cut from main; 0.2.x patches use release/0.2.x's own release.toml
 require_message = true
 tag_message = "{tag}: {title}"
 next = [
