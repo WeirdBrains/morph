@@ -1,5 +1,5 @@
 //! Settings > Agents: the companions (rename, default, model and its download state), per-site
-//! grants, Always allow entries, the research search provider and the MCP placeholder.
+//! grants, Always allow entries, the research search provider.
 //!
 //! Every change reads the profile's `companions/` files fresh, applies, saves and tells the shell
 //! ([`ShellRequest::AgentsChanged`]) so the Companion panel reloads; the functions at the top do
@@ -786,20 +786,6 @@ impl SettingsView {
 
         // Connected servers: MCP servers the companions use (not Morph's own server, below).
         rows.extend(self.servers_rows(&dir, cx));
-
-        // MCP placeholder: there is no server to turn on yet.
-        rows.push(self.plain_row(
-            "Morph MCP server",
-            "Would let Mouser and other local agents use this browser's tools. Off, and coming soon: no server exists yet, so this cannot be turned on.".into(),
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(8.))
-                .child(div().text_size(px(12.)).text_color(rgb(t.text_secondary)).child("Coming soon"))
-                .child(div().w(px(36.)).h(px(20.)).rounded(px(10.)).bg(rgb(t.surface_variant)).border_1().border_color(rgb(t.border)).opacity(0.6))
-                .into_any_element(),
-        ));
 
         if let Some(note) = &self.agents.note {
             rows.push(div().text_size(px(12.)).text_color(rgb(t.error)).child(SharedString::from(note.clone())).into_any_element());
