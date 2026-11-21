@@ -1,16 +1,17 @@
 # Library sync
 
-Status: 2026-11-18. Milestones 1–5 (bookmarks, folders, tags, history and
-settings) are wired on published `weirdnet-sync` 0.3.1 and `weirdnet-net`
-0.6.0. Milestone 6 is wired: Settings > Linked devices (desktop and phone)
-lists devices and revokes one, and a revoke rotates to a random epoch key
-the revoked device never gets (see "Revocation and key rotation"). Product rules are in
+Status: 2026-11-21. Milestones 1–6 are done: bookmarks, folders, tags,
+history and settings sync, and Settings > Linked devices (desktop and phone),
+which lists devices and revokes one; a revoke rotates to a random epoch key
+the revoked device never gets (see "Revocation and key rotation"). Morph pins
+published `weirdnet-sync` 0.7.0, `weirdnet-net` 0.8.1 and `weirdnet-device-link`
+0.3.1. Open tabs on other devices are not built. Product rules are in
 `docs/identity-recovery.md` section 5. This file is the Morph implementation
 plan for that section: bookmarks, folders, tags and history first, then
 settings, between a user's own linked devices, end-to-end encrypted, over
-`weirdnet-net` 0.6 and the same relays device linking already uses.
+`weirdnet-net` and the same relays device linking already uses.
 
-`weirdnet-sync/v1` is published (crates.io 0.2.0). Morph keeps only its
+`weirdnet-sync/v1` is published on crates.io. Morph keeps only its
 bookmark, folder, tag, history and settings record types plus wiring
 (`morph_core::sync`, `morph_core::history_sync`, `morph_core::settings_sync`,
 `morph_services::sync`).
@@ -43,10 +44,11 @@ already reads and writes.
 - **Nodes:** `weirdnet-device-link` already issues a `NodeCert` (user key
   signs the new node's peer id and name) and writes `identity/node.key` plus
   `identity/node.cert.json` on the new device. `Transfer` already has a
-  `sync: Vec<String>` field; `AddDevice::send` currently passes `settings = "{}"`
-  and `make_transfer` leaves `sync` empty. `has_linked_node` is true only on
-  a device that *received* a link: a profile that created or restored its
-  identity has no node key yet.
+  `sync: Vec<String>` field. Morph fills it from `morph_services::sync::link_payload`
+  (the device's opt-ins plus a certs-only roster snapshot in `Transfer.settings`).
+  `has_linked_node` is true only on a device that *received* a link; a profile
+  that created or restored its identity self-certifies through
+  `profile_identity::certify_local_node`.
 - **Transport:** `morph_identity::device_link::net_config` / `PUBLIC_RELAYS`
   (and `MORPH_LINK_RELAYS`) already dial TCP and QUIC together and fall back
   to a relay circuit. the `local-relay` example of `weirdnet-device-link` 0.3.0 (crates.io; CI installs it with `cargo install --example local-relay`)
@@ -103,7 +105,7 @@ migration; do not edit the shipped one):
 - Concurrent edit vs delete: the edit wins. A delete whose HLC is strictly
   later than the edit wins (the tombstone stands). Losing versions are kept
   for 30 days (`sync_conflict`) and the UI shows "1 conflict" for bookmarks
-  (and later settings), as in section 5.
+  (and settings), as in section 5.
 - Tombstones are garbage-collected after 90 days, but only after every known
   peer cursor is past that delete (otherwise a late catch-up would resurrect
   the row).
@@ -306,12 +308,12 @@ to an older one.
 
 1. The first device to hold an identity (create, import, or restore) must
    become a node: generate `identity/node.key`, self-certify a `NodeCert`
-   with the user key, and put itself in the roster. Today only a *new*
-   linked device gets a cert (`NewDevice::finish`). Sync cannot start until
-   this gap is closed.
+   with the user key, and put itself in the roster
+   (`profile_identity::certify_local_node`). A linked device gets its cert
+   from `NewDevice::finish`.
 2. QR / invite linking stays as it is (SAS, sealed seed, cert for the new
    node). Fill `Transfer.sync` with the existing device's opt-ins
-   (default: `bookmarks`, `history`; `settings` once that milestone ships)
+   (default: every supported type, including `bookmarks`, `history` and `settings`)
    and put a snapshot of the roster (certs only, no secrets) in
    `Transfer.settings` JSON, which is already defined as "app settings
    worth carrying over".
@@ -352,8 +354,8 @@ get `hlc` from `updated_ms` (or `added_ms` / `created_ms` if `updated_ms` is
 0) with counter 0 and `node_id` equal to this device's node once it exists;
 legacy ids from `legacy_id` stay. Existing history rows get deterministic
 ids; no tombstones are invented for past deletes (those are already gone).
-`settings.json` is left in place; on the settings milestone, the three
-syncable fields are copied into `library.db` once.
+`settings.json` is left in place; the three syncable fields are logged into
+`library.db` the first time sync runs with them.
 
 Profiles still on plaintext JSON (`LibraryState::Plain`) do not sync. Sync
 starts after the identity exists and the library is unlocked, which already
@@ -433,10 +435,12 @@ Morph pins that published version; it does not take a git or path dependency.
 1. **Edit vs delete:** this plan follows section 5 (concurrent edit wins;
    a strictly later delete wins). Confirm before milestone 1 tests freeze
    it.
-2. **Default opt-ins:** this plan turns `bookmarks` and `history` on at
-   link (and at "enable sync" on a first device) without a pre-flight
-   prompt, with a Settings toggle to turn a type off. A prompt-first
-   policy is the other option.
+2. **Default opt-ins:** as built, every supported type (bookmarks, history,
+   settings and the companion types) is on at link and on a first device,
+   with no pre-flight prompt. `morph_core::sync::set_types` can change the
+   list, but no Settings toggle for it exists in the desktop or phone UI yet;
+   Settings > Linked devices only lists and revokes devices. A per-type toggle
+   or a prompt-first policy is still open.
 3. **Sync reply cap:** 256 KiB pages, requested above the 16 KiB link
    answer cap. Exact number can move; it must stay under weirdnet-net's
    default 8 MiB.

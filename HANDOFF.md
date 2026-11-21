@@ -6,6 +6,15 @@ Morph's agent work has its own handoff doc: [docs/handoff.md](docs/handoff.md). 
 
 Repo: https://github.com/WeirdBrains/morph. A [Weird Brains](https://weirdbrains.com) project.
 
+## 2026-11-21
+
+### Docs: library sync status brought up to date
+
+- **What changed:** [docs/library-sync.md](https://github.com/WeirdBrains/morph/blob/main/docs/library-sync.md) now reads settings sync and Settings > Linked devices as done (milestones 1–6), lists the current pins (`weirdnet-sync` 0.7.0, `weirdnet-net` 0.8.1, `weirdnet-device-link` 0.3.1), and drops the stale "no cert on the first device" and "settings once that milestone ships" wording. The default opt-ins decision now says what the code does: every supported type is on at link, and no Settings toggle for per-type sync exists in the desktop or phone UI (only `morph_core::sync::set_types` in code); Linked devices lists and revokes only. Docs only.
+- **Checks:** claims checked against `crates/morph-core/src/sync.rs`, `crates/morph-services/src/sync.rs` and the Settings view. No code changed, so no new tests.
+- **Left:** a per-type sync toggle or a prompt-first policy is still an open decision; open tabs on other devices are not built.
+- **Next:** upstream Morph's `weirdnet-device-link` additions into the Weirdnet crate (needs a crate release, which needs Michael's OK).
+
 ## 2026-11-20
 
 ### Site: signed arm64 APK added to the preview
