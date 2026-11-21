@@ -8,6 +8,13 @@ Repo: https://github.com/WeirdBrains/morph. A [Weird Brains](https://weirdbrains
 
 ## 2026-11-20
 
+### Site: v0.3.0-preview.1 listed as a preview
+
+- **What changed:** the [Morph site](https://morph.weirdbrains.com) has a labeled Preview section on the [download page](https://morph.weirdbrains.com/download#preview) with the files that are on the [pre-release](https://github.com/WeirdBrains/morph/releases/tag/v0.3.0-preview.1), a note on the TAUR `morph-bin` preview (0.3.0preview1-1), and a line that previews may change and linking devices needs v0.3 on both. The home page links "Preview: 0.3.0-preview.1" and the v0.3 roadmap note mentions it; v0.3 items stay In progress. 0.2.3 is still the stable download. Commit [`85dc564`](https://github.com/WeirdBrains/morph/commit/85dc564d275eae4ce56f4a4b552d0db18159af8d), site files only.
+- **Checks:** `jaspr build` passes. Live page and link checks run after the Pages deploy. Not tested: installing the preview packages.
+- **Left:** the signed arm64 APK was not attached yet, so the site links only the debug APK and says the signed one is on its way.
+- **Next:** add the signed arm64 APK to the preview list once it is attached.
+
 ### v0.3.0-preview.1 (pre-release)
 
 - **What changed:** the first 0.3 preview, cut from main after the Android address-sheet fix ([`4013307`](https://github.com/WeirdBrains/morph/commit/40133076c0805a9019c810e89d5aa07b5eab1a97)). Tag `v0.3.0-preview.1` points at [`b20fd31`](https://github.com/WeirdBrains/morph/commit/b20fd315dde3fa8089e2596df537d70d574ccf1e). Release: https://github.com/WeirdBrains/morph/releases/tag/v0.3.0-preview.1 (pre-release, not Latest). Packaging moved to the preview in [`dba4b03`](https://github.com/WeirdBrains/morph/commit/dba4b03ab5393946a9b83cc3615355199126cb09) (PKGBUILDs, `.SRCINFO`, `packaging/nix/release.json`) because the tagged tree still held the 0.2.3 recipe. TAUR `morph-bin` is at `0.3.0preview1-1`; the PKGBUILD maintainer line is Weird Brains LLC. The signed `android-arm64` APK is attached by the Android release workflow (run https://github.com/WeirdBrains/morph/actions/runs/44861530556); with it the release has 13 assets.
