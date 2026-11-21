@@ -38,6 +38,7 @@ const _preview = [
   ('morph-$previewVersion-universal-apple-darwin.zip', 'macOS zip with Morph.app', '31.5 MB'),
   ('morph-$previewVersion-x86_64-pc-windows-msvc.msi', 'Windows installer', '13.3 MB'),
   ('morph-$previewVersion-x86_64-pc-windows-msvc.zip', 'Windows zip, no installation', '15.5 MB'),
+  ('morph-$previewVersion-android-arm64.apk', 'Android arm64 release APK, signed with a test key', '23.4 MB'),
   ('morph-$previewVersion-android-debug.apk', 'Android debug APK', '130.8 MB'),
 ];
 
@@ -138,7 +139,7 @@ class DownloadPage extends StatelessComponent {
               ], classes: 'files'),
               p([
                 extLink('Preview release notes and checksums', previewReleaseUrl),
-                Component.text('. A signed arm64 Android APK is on its way to the same page.'),
+                Component.text('.'),
               ]),
               p([
                 Component.text('On Arch Linux, the '),
