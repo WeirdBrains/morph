@@ -1275,12 +1275,6 @@ impl SettingsView {
                         .into_any_element(),
                     cx,
                 ),
-                div()
-                    .px(px(12.))
-                    .text_size(px(12.))
-                    .text_color(rgb(t.text_secondary))
-                    .child("Site permissions: per-site controls for camera, microphone, location and notifications are coming soon.")
-                    .into_any_element(),
             ]
             .into_iter()
             .chain(self.lock_rows(cx))
