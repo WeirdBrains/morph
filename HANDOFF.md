@@ -8,6 +8,13 @@ Repo: https://github.com/WeirdBrains/morph. A [Weird Brains](https://weirdbrains
 
 ## 2026-11-20
 
+### Site: signed arm64 APK added to the preview
+
+- **What changed:** the preview section on the [download page](https://morph.weirdbrains.com/download#preview) now lists the signed `morph-0.3.0-preview.1-android-arm64.apk` (23.4 MB) ahead of the debug APK, and the "signed APK is on its way" sentence is gone. Commit [`0e592fd`](https://github.com/WeirdBrains/morph/commit/0e592fd91f89f7b554bb815436515aaba724feb9), site files only.
+- **Checks:** `jaspr build` passes; the APK is attached to the [pre-release](https://github.com/WeirdBrains/morph/releases/tag/v0.3.0-preview.1). Live link checks run after the Pages deploy. Not tested: installing the APK.
+- **Left:** nothing open on the site for this preview.
+- **Next:** move the preview to the stable section when v0.3.0 ships.
+
 ### Site: v0.3.0-preview.1 listed as a preview
 
 - **What changed:** the [Morph site](https://morph.weirdbrains.com) has a labeled Preview section on the [download page](https://morph.weirdbrains.com/download#preview) with the files that are on the [pre-release](https://github.com/WeirdBrains/morph/releases/tag/v0.3.0-preview.1), a note on the TAUR `morph-bin` preview (0.3.0preview1-1), and a line that previews may change and linking devices needs v0.3 on both. The home page links "Preview: 0.3.0-preview.1" and the v0.3 roadmap note mentions it; v0.3 items stay In progress. 0.2.3 is still the stable download. Commit [`85dc564`](https://github.com/WeirdBrains/morph/commit/85dc564d275eae4ce56f4a4b552d0db18159af8d), site files only.
