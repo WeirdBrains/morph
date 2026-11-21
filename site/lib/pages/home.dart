@@ -16,6 +16,10 @@ class Home extends StatelessComponent {
         [
           div([
             p([Component.text('Version $latestVersion · Linux, macOS, Windows and Android')], classes: 'status'),
+            p([
+              a([Component.text('Preview: $previewVersion')], href: '/download#preview'),
+              Component.text(' · a first look at v0.3'),
+            ], classes: 'status'),
             h1([Component.text(siteTagline)]),
             p([
               Component.text(

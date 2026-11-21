@@ -24,3 +24,9 @@ const changelogUrl = '$githubUrl/blob/main/CHANGELOG.md';
 const unsignedDocsUrl = '$githubUrl/blob/main/docs/install-macos-windows.md';
 
 String assetUrl(String name) => '$githubUrl/releases/download/v$latestVersion/$name';
+
+/// The newest pre-release. Never the stable recommendation.
+const previewVersion = '0.3.0-preview.1';
+const previewTag = 'v$previewVersion';
+const previewReleaseUrl = '$githubUrl/releases/tag/$previewTag';
+String previewAssetUrl(String name) => '$githubUrl/releases/download/$previewTag/$name';

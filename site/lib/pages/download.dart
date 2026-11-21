@@ -26,6 +26,21 @@ const _android = [
   ('morph-$latestVersion-android-debug.apk', 'Debug APK', '128.8 MB'),
 ];
 
+/// Files on the v0.3.0-preview.1 GitHub pre-release (name, what it is, size).
+const _preview = [
+  ('morph-$previewVersion-x86_64-unknown-linux-gnu.tar.gz', 'Linux tarball', '20.7 MB'),
+  ('morph-$previewVersion-x86_64-unknown-linux-gnu.zip', 'Linux zip', '20.7 MB'),
+  ('morph_0.3.0.preview.1-1_amd64.deb', 'Debian package, with desktop entry', '14.8 MB'),
+  ('morph-standalone_0.3.0.preview.1-1_amd64.deb', 'Debian package, binary only', '14.8 MB'),
+  ('morph-0.3.0.preview.1-1.x86_64.rpm', 'RPM package, with desktop entry', '20.6 MB'),
+  ('morph-standalone-0.3.0.preview.1-1.x86_64.rpm', 'RPM package, binary only', '20.6 MB'),
+  ('morph-$previewVersion-universal-apple-darwin.dmg', 'macOS disk image', '35.7 MB'),
+  ('morph-$previewVersion-universal-apple-darwin.zip', 'macOS zip with Morph.app', '31.5 MB'),
+  ('morph-$previewVersion-x86_64-pc-windows-msvc.msi', 'Windows installer', '13.3 MB'),
+  ('morph-$previewVersion-x86_64-pc-windows-msvc.zip', 'Windows zip, no installation', '15.5 MB'),
+  ('morph-$previewVersion-android-debug.apk', 'Android debug APK', '130.8 MB'),
+];
+
 class DownloadPage extends StatelessComponent {
   const DownloadPage({super.key});
 
@@ -42,6 +57,7 @@ class DownloadPage extends StatelessComponent {
       section([
         div([
           div([
+            a([Component.text('Preview: $previewVersion')], href: '#preview'),
             extLink('Release notes', latestReleaseUrl),
             extLink('SHA256SUMS', assetUrl('SHA256SUMS')),
             extLink('Changelog', changelogUrl),
@@ -101,6 +117,41 @@ class DownloadPage extends StatelessComponent {
             ],
             classes: 'platform',
             id: 'ios',
+          ),
+          section(
+            [
+              h2([Component.text('Preview: $previewVersion')]),
+              p([
+                span([Component.text('Preview')], classes: 'tag'),
+                Component.text(
+                  ' A first look at v0.3, published as a GitHub pre-release. Morph $latestVersion stays the stable, '
+                  'recommended release; install that unless you want to try the preview. Previews may change, and '
+                  'linking devices in v0.3 needs v0.3 on both.',
+                ),
+              ], classes: 'callout'),
+              ul([
+                for (final (file, what, size) in _preview)
+                  li([
+                    a([Component.text(file)], href: previewAssetUrl(file), classes: 'file'),
+                    span([Component.text('$what · $size')], classes: 'file-meta'),
+                  ]),
+              ], classes: 'files'),
+              p([
+                extLink('Preview release notes and checksums', previewReleaseUrl),
+                Component.text('. A signed arm64 Android APK is on its way to the same page.'),
+              ]),
+              p([
+                Component.text('On Arch Linux, the '),
+                code([Component.text('morph-bin')]),
+                Component.text(' package at version 0.3.0preview1-1 is a preview too, on the '),
+                a([Component.text('Weird Brains')], href: weirdBrainsUrl),
+                Component.text(' '),
+                extLink('TAUR server', taurUrl),
+                Component.text('. The command above installs whichever version TAUR lists as newest, so check the version it shows before you confirm.'),
+              ]),
+            ],
+            classes: 'platform',
+            id: 'preview',
           ),
           section(
             [
