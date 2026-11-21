@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The shared WeirdBrains release script (weirdnet-project-helpers).
 
-    release.py [cut] [--major|--minor|--patch] [--pre alpha|beta|rc] [--version V] [--dry-run] [--yes]
+    release.py [cut] [--major|--minor|--patch] [--pre alpha|beta|preview|rc] [--version V] [--dry-run] [--yes]
                [--no-push] [--no-fetch] [--skip-checks] [--skip-hooks] [--skip-crates]
                [--expect-head SHA] [--date YYYY-MM-DD] [--section NAME]
                [--allow-empty-changelog] [MESSAGE ...]
@@ -20,7 +20,7 @@ annotated tag `vX.Y.Z`, one atomic push of main and that tag (never forced), the
 affected public crates to crates.io and print the project's next steps (TAUR and so on).
 [[requires]] crates released in lockstep (e.g. an app's library) must already be on crates.io:
 checked before any edit, pinned in the manifest, and matched in Cargo.lock against the index.
-MINOR is the default bump. Pre-releases (since 0.3.0) are X.Y.Z-alpha.N, -beta.N or -rc.N:
+MINOR is the default bump. Pre-releases (since 0.3.0) are X.Y.Z-alpha.N, -beta.N, -preview.N or -rc.N:
 `--pre alpha` starts or continues one, a plain bump from a pre-release finishes it, and
 {pkgver} (0.2.0alpha8, for PKGBUILDs) and {debver} (0.2.0~alpha.8) map it for packages.
 Python 3.9+, standard library only (3.11+ reads release.toml with
@@ -57,8 +57,8 @@ __version__ = "0.3.0"
 
 CONFIG = "release.toml"
 ORDER = ["Added", "Changed", "Deprecated", "Removed", "Fixed", "Security"]
-SEMVER = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(alpha|beta|rc)\.([1-9]\d*))?$")
-PRE_STAGES = ("alpha", "beta", "rc")
+SEMVER = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(alpha|beta|preview|rc)\.([1-9]\d*))?$")
+PRE_STAGES = ("alpha", "beta", "preview", "rc")  # semver order: alpha < beta < preview < rc
 PLACEHOLDER = re.compile(r"\{(version|old|tag|old_tag|date|title|title_cell|build|project|work|pkgver|debver|prerelease|gh_prerelease)\}")
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -75,10 +75,10 @@ def out(msg=""):
 
 def parse_version(v):
     """A sortable key: (MAJOR, MINOR, PATCH, stage, N), where a release sorts after its
-    pre-releases (alpha < beta < rc < release)."""
+    pre-releases (alpha < beta < preview < rc < release)."""
     m = SEMVER.match(str(v).strip())
     if not m:
-        raise ReleaseError(f"version {v!r} is not MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-(alpha|beta|rc).N "
+        raise ReleaseError(f"version {v!r} is not MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-(alpha|beta|preview|rc).N "
                            "(no v prefix or build metadata)")
     ma, mi, pa, stage, n = m.groups()
     rank = PRE_STAGES.index(stage) if stage else len(PRE_STAGES)
@@ -97,7 +97,7 @@ def bump(version, part, pre=None):
     ma, mi, pa, rank, n = parse_version(version)
     cur_pre = rank < len(PRE_STAGES)
     if pre is not None and pre not in PRE_STAGES:
-        raise ReleaseError(f"unknown pre-release stage {pre!r} (alpha, beta or rc)")
+        raise ReleaseError(f"unknown pre-release stage {pre!r} (alpha, beta, preview or rc)")
     if pre is not None and part is None and cur_pre:
         want = PRE_STAGES.index(pre)
         if want < rank:
@@ -1653,7 +1653,7 @@ def changelog_notes(text, version):
 def github_release(a, root):
     """Create the GitHub release for an existing tag: the [github] files (globs, each must match),
     an optional checksum file written with the names GitHub will give the files, notes from the
-    changelog section, marked pre-release for X.Y.Z-(alpha|beta|rc).N. Uploads to an existing
+    changelog section, marked pre-release for X.Y.Z-(alpha|beta|preview|rc).N. Uploads to an existing
     release instead (replacing files of the same name)."""
     cfg = load_config(root, a.config)
     gc = cfg.get("github") or {}
@@ -1733,7 +1733,7 @@ def parser():
     g.add_argument("--major", dest="part", action="store_const", const="major")
     g.add_argument("--minor", dest="part", action="store_const", const="minor", help="the default")
     g.add_argument("--patch", dest="part", action="store_const", const="patch")
-    g.add_argument("--version", help="explicit X.Y.Z or X.Y.Z-(alpha|beta|rc).N (must increase)")
+    g.add_argument("--version", help="explicit X.Y.Z or X.Y.Z-(alpha|beta|preview|rc).N (must increase)")
     c.add_argument("--pre", choices=PRE_STAGES, help="a pre-release: continue the current one (alpha.7 -> alpha.8) "
                    "or start one (with --major/--minor/--patch, default the next minor)")
     c.add_argument("message", nargs="*", help="changelog bullets / commit body (`Fixed: ...` picks a section)")

@@ -39,7 +39,7 @@ $outputs = @($zip)
 
 if (Get-Command wix -ErrorAction SilentlyContinue) {
   # MSI versions are numbers: 0.2.0-alpha.8 installs as 0.2.0.8.
-  $msiVersion = $version -replace '^(\d+\.\d+\.\d+)-(alpha|beta|rc)\.(\d+)$', '$1.$3'
+  $msiVersion = $version -replace '^(\d+\.\d+\.\d+)-(alpha|beta|preview|rc)\.(\d+)$', '$1.$3'
   $msi = "dist\$name.msi"
   # The installer's screens come from WiX's UI extension.
   wix extension add -g WixToolset.UI.wixext/5.0.2
