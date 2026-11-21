@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+The first preview of Morph 0.3 from [Weird Brains](https://weirdbrains.com). It is a pre-release: try it on a profile you can link again, and expect rough edges.
+
+- **Agents panel.** Companions live in a side panel next to your tabs: chats, a working line with the model's reasoning, approval cards for what a companion may do on each site (Always allow per site or per project), and a Research tab for long-running research projects you can steer, pause, resume and export as Markdown. Settings > Agents holds companions, models, per-site grants and connected MCP servers. Companions, grants, chats and MCP servers sync between your linked devices, and a revoked device's changes are voided.
+- **Local models.** Companions can run a model on this device. On an older x86 CPU without AVX2 (most from before 2013) local models are refused with a clear message instead of crashing Morph; use remote inference there.
+- **Remote inference.** Run a companion's turns on one of your linked devices (Run on: This device, Automatic, or a chosen device), with the local model as the fallback. A device serves its models only after you turn on serving in Settings > Agents, only to your current linked devices, and never while its profile is locked; a revoke or a lock stops a running stream.
+- **Weirdnet sync 0.7** (with weirdnet-net 0.8.1, weirdnet-device-link 0.3.1 and weirdnet-text 0.1.0). Devices on older Morph builds keep syncing, but sync 0.7 works best with every device upgraded before you link any service nodes.
+- **Profile lock.** A profile with a Weirdnet identity asks for its password before it opens, and its settings, tabs and library are encrypted at rest (details below).
+- **Linking.** Ymir nodes can join your devices, and a device link code or invite pasted in the address bar opens Identity with it filled in.
+- **Windows.** The Windows build is checked end to end with the system web view (WebView2), with a fresh screenshot in the repository's docs.
+- The address bar menu and Settings no longer show "Coming soon" entries.
+
+Not finished in this preview: Save to Notes and the journal, milestone notifications, the phone's research screens, choosing a Node companion and removing a companion; remote inference has so far been tested in automated runs on one machine, not yet between two real devices. The password saver is built but stays off in this build. Extensions and per-site permissions come later.
+
+Everything else in this release:
+
 - Updated to weirdnet-sync 0.7.0, weirdnet-net 0.8.1, weirdnet-device-link 0.3.1 and the new weirdnet-text 0.1.0, still with one copy of weirdnet-sync alongside weirdnet-agent 0.4.5. Morph links as a full device that holds the identity's seed and doesn't use weirdnet-sync's new service devices or device grants itself. The address bar's text editing now comes from weirdnet-text, unchanged. On Android, the start-up hook that lets name lookups reach the system's DNS now comes from weirdnet-net instead of Morph's own copy.
 
 - Updated to weirdnet-sync 0.5.2, so the build has one copy of weirdnet-sync alongside weirdnet-agent 0.4.5.
