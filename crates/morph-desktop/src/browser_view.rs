@@ -204,7 +204,8 @@ pub enum AddressItem {
     Refresh,
     Bookmark,
     Find,
-    ComingSoon(&'static str),
+    /// Settings > Privacy > Passwords (only while the password saver is shown).
+    Passwords,
     Run(Action, &'static str),
     Identity,
     Profile(String, String, bool),
@@ -218,8 +219,9 @@ impl AddressItem {
     }
 }
 
-/// The address menu's entries, in order (keyboard order too).
-pub fn address_items(profiles: &[(String, String, bool)]) -> Vec<AddressItem> {
+/// The address menu's entries, in order (keyboard order too). `passwords`:
+/// whether the password saver is shown ([`crate::password_saver::shown`]).
+pub fn address_items(profiles: &[(String, String, bool)], passwords: bool) -> Vec<AddressItem> {
     let mut items = vec![
         AddressItem::Back,
         AddressItem::Forward,
@@ -227,15 +229,14 @@ pub fn address_items(profiles: &[(String, String, bool)]) -> Vec<AddressItem> {
         AddressItem::Refresh,
         AddressItem::Bookmark,
         AddressItem::Find,
-        AddressItem::ComingSoon("Extensions"),
-        AddressItem::ComingSoon("More"),
         AddressItem::Run(Action::ShowHistory, "History"),
         AddressItem::Run(Action::ShowBookmarks, "Bookmarks"),
         AddressItem::Run(Action::ShowDownloads, "Downloads"),
-        AddressItem::ComingSoon("Passwords"),
-        AddressItem::Identity,
-        AddressItem::Run(Action::ShowSettings, "Settings"),
     ];
+    if passwords {
+        items.push(AddressItem::Passwords);
+    }
+    items.extend([AddressItem::Identity, AddressItem::Run(Action::ShowSettings, "Settings")]);
     items.extend(profiles.iter().map(|(id, name, shown)| AddressItem::Profile(id.clone(), name.clone(), *shown)));
     items.push(AddressItem::ManageProfiles);
     items
@@ -1241,7 +1242,7 @@ impl BrowserView {
             return;
         }
         if let Some(i) = self.address_menu.as_ref().and_then(|m| m.highlighted) {
-            if let Some(item) = address_items(&self.profiles).get(i).cloned() {
+            if let Some(item) = address_items(&self.profiles, crate::password_saver::shown()).get(i).cloned() {
                 self.activate_address_item(item, window, cx);
             }
             return;
@@ -2756,7 +2757,7 @@ impl BrowserView {
         if self.step_suggestions(down, cx) {
             return;
         }
-        let count = address_items(&self.profiles).len();
+        let count = address_items(&self.profiles, crate::password_saver::shown()).len();
         if self.address_menu.is_none() {
             self.open_address_menu();
         }
@@ -2797,8 +2798,8 @@ impl BrowserView {
                 cx.emit(ShellRequest::Run(Action::Bookmark));
                 None
             }
-            AddressItem::ComingSoon(what) => {
-                self.toast(&format!("{what} is coming soon"), None, cx);
+            AddressItem::Passwords => {
+                cx.emit(ShellRequest::ShowSettingsAt(crate::settings_view::Section::Privacy));
                 None
             }
             AddressItem::Profile(id, _, _) => {
@@ -2824,7 +2825,7 @@ impl BrowserView {
         let Some(bar) = self.button_bounds.borrow().get("address").copied() else {
             return Vec::new();
         };
-        let items = address_items(&self.profiles);
+        let items = address_items(&self.profiles, crate::password_saver::shown());
         let highlighted = menu.highlighted;
         let state = self.browser.toolbar();
         let url = self.browser.active_url().to_string();
@@ -2884,7 +2885,7 @@ impl BrowserView {
                     ((if marked { "Remove bookmark" } else { "Bookmark this page" }).into(), self.label_for(Action::Bookmark), marked)
                 }
                 AddressItem::Find => ("Find in page".into(), self.label_for(Action::Find), false),
-                AddressItem::ComingSoon(what) => ((*what).into(), "Coming soon".into(), false),
+                AddressItem::Passwords => ("Passwords".into(), SharedString::default(), false),
                 AddressItem::Run(action, label) => ((*label).into(), self.label_for(*action), false),
                 AddressItem::Identity => ("Identity".into(), self.profile_label.clone().into(), false),
                 AddressItem::Profile(_, name, shown) => (name.clone().into(), SharedString::default(), *shown),
@@ -3474,23 +3475,33 @@ mod tests {
     #[test]
     fn the_address_menu_matches_the_mobile_sheet() {
         use super::AddressItem as A;
-        let items = super::address_items(&[("a".into(), "Work".into(), true), ("b".into(), "Home".into(), false)]);
+        let items = super::address_items(&[("a".into(), "Work".into(), true), ("b".into(), "Home".into(), false)], false);
         let row: Vec<_> = items.iter().filter(|i| i.in_button_row()).cloned().collect();
         assert_eq!(row, [A::Back, A::Forward, A::CopyLink, A::Refresh]);
         let names: Vec<String> = items
             .iter()
             .filter_map(|i| match i {
-                A::ComingSoon(w) => Some(w.to_string()),
+                A::Passwords => Some("Passwords".to_string()),
                 A::Run(_, l) => Some(l.to_string()),
                 _ => None,
             })
             .collect();
-        assert_eq!(names, ["Extensions", "More", "History", "Bookmarks", "Downloads", "Passwords", "Settings"]);
+        assert_eq!(names, ["History", "Bookmarks", "Downloads", "Settings"], "no placeholder entries, no Passwords while the saver is hidden");
         assert!(items.contains(&A::Run(super::Action::ShowDownloads, "Downloads")), "Downloads opens the panel, no longer coming soon");
         assert!(items.contains(&A::Bookmark) && items.contains(&A::Find) && items.contains(&A::Identity));
         assert!(!format!("{items:?}").contains("Desktop"), "no desktop-site entry on desktop");
         assert_eq!(items.last(), Some(&A::ManageProfiles));
         assert!(items.contains(&A::Profile("a".into(), "Work".into(), true)));
+    }
+
+    #[test]
+    fn passwords_shows_in_the_address_menu_only_with_the_saver() {
+        use super::AddressItem as A;
+        let on = super::address_items(&[], true);
+        let at = on.iter().position(|i| *i == A::Passwords).expect("Passwords with the saver on");
+        assert_eq!(on[at - 1], A::Run(super::Action::ShowDownloads, "Downloads"));
+        assert_eq!(on[at + 1], A::Identity);
+        assert!(!super::address_items(&[], false).contains(&A::Passwords));
     }
 
     #[test]
