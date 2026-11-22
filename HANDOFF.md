@@ -8,12 +8,20 @@ Repo: https://github.com/WeirdBrains/morph. A [Weird Brains](https://weirdbrains
 
 ## 2026-11-22
 
+### Password saver on by default for profiles with an identity
+
+- **What changed:** the password saver is on as soon as a profile gets a Weirdnet identity (onboarding, restore or a device link) and stays off without one. The `MORPH_PASSWORD_SAVER` gate is gone: the desktop always injects the login script, shows the save/fill bar, Settings > Privacy > Passwords, and the address-menu Passwords row. The phone has Settings > Passwords (on/off, ask again, saved logins with show behind the profile password, copy and delete) and the address-sheet Passwords row opens it. Users can still turn it off per profile. Credentials stay in that profile's encrypted store; nothing is saved or filled while the profile is locked. Password values are never logged and companions still never read them back.
+- **Checks:** `cargo fmt --check`; `cargo clippy --locked --all-targets -p morph-core -p morph-services -p morph-bridge -p morph-desktop -- -D warnings`; `cargo test --locked` for the password-saver tests in morph-core, morph-services, morph-bridge and morph-desktop; Flutter `passwords_page_test` and `settings_page_test`. `scripts/xvfb-check.py --only password-saver` (a temp `MORPH_HOME`) is in the script and in the main Xvfb suite; it will run in CI. Not tested locally on this push: the Xvfb check (the desktop binary was not rebuilt here), Windows Hello and macOS prompts on real hardware beyond CI; capture and fill in the phone's page; mobile biometrics.
+- **Left:** capture and fill in the phone's page (Settings and the address-sheet row are in); mobile biometrics when the profile password is off; password sync (still waiting on weirdnet-sync).
+- **Next:** history sync, then the profile lock follow-ups (auto-lock, OS-authentication unlock, mobile biometrics).
+
 ### weirdnet-device-link 0.4.2
 
 - **What changed:** Morph now pins `weirdnet-device-link` =0.4.2 ([crates.io](https://crates.io/crates/weirdnet-device-link/0.4.2), tag [v0.4.2](https://github.com/WeirdBrains/weirdnet-device-link/releases/tag/v0.4.2)), the 0.4 line release of the generic helpers already used from 0.3.3. Commit [`d4a49d6`](https://github.com/WeirdBrains/morph/commit/d4a49d61c262b319384b30e5d80168a19ac62731) updates the workspace pin and lockfile (only this package), CI's `local-relay` install, and the current-version mentions in the README, changelog and [docs/library-sync.md](https://github.com/WeirdBrains/morph/blob/main/docs/library-sync.md). No further Morph device-link code was removed: the crate already provided those helpers in 0.3.3, and Morph's wrappers (`OFFER_SCHEMES`, `OfferApp`, `device_label`, `link_error`, `LinkState`, `NewDevice`, `AddDevice`, `Invite`, `has_linked_node`, the `Links` registry, `drop_later` and `check_invite`) stay here. The LinkSettings roster snapshot also stays in Morph; it is not in 0.4.2 and belongs in `weirdnet-sync`.
 - **Checks:** `cargo fmt --check`, `cargo clippy --locked --all-targets -- -D warnings` and `cargo test --locked` (whole workspace, headless) pass locally; `cargo metadata --locked` accepts the lockfile. CI and iOS results for this push are in the Actions tab. Not tested: linking two real devices through the public relay, and the Flutter apps beyond CI.
 - **Left:** the LinkSettings roster snapshot belongs in `weirdnet-sync` and needs its own release.
 - **Next:** history sync, then the profile lock follow-ups (auto-lock, OS-authentication unlock, mobile biometrics). The password saver (on once a profile has an identity) and per-type sync toggles are also approved and follow this pin.
+
 
 ### Weirdnet pins: clean patch releases and weirdnet-device-link 0.3.3
 

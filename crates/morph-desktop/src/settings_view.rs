@@ -231,11 +231,6 @@ impl Item {
         Item::OpenAbout,
     ];
 
-    /// The password saver's (hidden until it is finished: [`crate::password_saver::shown`]).
-    fn is_saver(self) -> bool {
-        matches!(self, Item::PasswordSaver | Item::AskAgain | Item::SavedPasswords)
-    }
-
     /// Whether ←/→ change it.
     fn is_choice(self) -> bool {
         matches!(self, Item::Engine | Item::TabPosition | Item::Theme | Item::SideWidth | Item::Collapsed | Item::Discovery | Item::DefaultCompanion)
@@ -244,7 +239,7 @@ impl Item {
 
 /// The settings a search for `query` leaves.
 pub fn visible_items(query: &str) -> Vec<Item> {
-    Item::ALL.into_iter().filter(|i| i.section().matches(query) && (!i.is_saver() || crate::password_saver::shown())).collect()
+    Item::ALL.into_iter().filter(|i| i.section().matches(query)).collect()
 }
 
 /// The next choice after (or before) `current` in `list`, wrapping.
@@ -403,9 +398,7 @@ impl SettingsView {
         self.network = netprefs::load(&self.home).unwrap_or_default();
         self.devices = self.profile_id().and_then(|id| morph_services::sync::devices(&self.home, &id).ok()).unwrap_or_default();
         self.confirm_revoke = None;
-        if crate::password_saver::shown() {
-            self.passwords_reload();
-        }
+        self.passwords_reload();
     }
 
     fn profile_id(&self) -> Option<String> {
@@ -464,9 +457,7 @@ impl SettingsView {
         self.browser_note = None;
         self.relays_read = None;
         self.read_relays(cx);
-        if crate::password_saver::shown() {
-            self.passwords_reload();
-        }
+        self.passwords_reload();
         if let Some(section) = section {
             self.search.update(cx, |s, cx| s.set_text("", cx));
             self.current = visible_items("").iter().position(|i| i.section() == section);
@@ -1278,7 +1269,7 @@ impl SettingsView {
             ]
             .into_iter()
             .chain(self.lock_rows(cx))
-            .chain(if crate::password_saver::shown() { self.passwords_rows(cx) } else { Vec::new() })
+            .chain(self.passwords_rows(cx))
             .collect(),
             Section::Identity => vec![
                 self.row(
@@ -1508,5 +1499,15 @@ mod tests {
         assert_eq!(cycle(&POSITIONS, TabPosition::Top, false), TabPosition::Right);
         assert_eq!(cycle(&THEMES, ThemeChoice::Light, true), ThemeChoice::Dark);
         assert_eq!(cycle(&ENGINES.map(|e| e.id), "google", true), "duckduckgo");
+    }
+
+    #[test]
+    fn passwords_are_among_the_privacy_settings() {
+        assert!(Section::Privacy.matches("passwords"));
+        let found = visible_items("passwords");
+        assert!(found.contains(&Item::PasswordSaver));
+        assert!(found.contains(&Item::AskAgain));
+        assert!(found.contains(&Item::SavedPasswords));
+        assert!(found.contains(&Item::ClearData), "searching a section still lists its other rows");
     }
 }

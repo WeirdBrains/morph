@@ -245,8 +245,8 @@ Build `v0.2.0-alpha.9`.
 
 # Priorities 2
 
-- Password saver _(new 2026-11-15: v0.3; until then the URL menu lists Passwords as
-  coming soon)_
+- Password saver _(new 2026-11-15: v0.3; on by default once a profile has an identity,
+  decided 2026-11-22; left: mobile biometrics, password sync)_
 - Extensions _(new; redesigned 2026-11-11; decided 2026-11-15: **v0.5 is dedicated to
   extensions**; until then menus list Extensions as coming soon)_
     - Chrome and Firefox extensions run unchanged _(decided 2026-11-15)_

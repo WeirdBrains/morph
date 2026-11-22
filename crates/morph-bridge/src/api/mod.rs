@@ -8,6 +8,7 @@ pub mod library;
 pub mod network;
 pub mod omnibox;
 pub mod page;
+pub mod password_saver;
 pub mod profiles;
 pub mod relays;
 pub mod settings;

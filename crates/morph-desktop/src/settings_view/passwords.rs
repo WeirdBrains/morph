@@ -91,6 +91,12 @@ impl SettingsView {
         if self.passwords.shown.as_ref().is_some_and(|(id, ..)| !self.passwords.logins.iter().any(|l| &l.id == id)) {
             self.passwords.shown = None;
         }
+        match self.saver_offer() {
+            Some((_, offer)) => {
+                println!("morph-event password-saver enabled={} active={} available={}", offer.enabled, offer.active(), offer.requirement.is_ok())
+            }
+            None => println!("morph-event password-saver enabled=false active=false available=false"),
+        }
     }
 
     /// Item::PasswordSaver, Item::AskAgain or Item::SavedPasswords was pressed.

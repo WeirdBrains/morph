@@ -16,6 +16,7 @@ import 'api/library.dart';
 import 'api/network.dart';
 import 'api/omnibox.dart';
 import 'api/page.dart';
+import 'api/password_saver.dart';
 import 'api/profiles.dart';
 import 'api/relays.dart';
 import 'api/settings.dart';
@@ -163,6 +164,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<RelayStatusView> dco_decode_list_relay_status_view(dynamic raw);
 
   @protected
+  List<SavedLoginView> dco_decode_list_saved_login_view(dynamic raw);
+
+  @protected
   List<SearchEngineView> dco_decode_list_search_engine_view(dynamic raw);
 
   @protected
@@ -208,6 +212,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   RelayStatusView dco_decode_relay_status_view(dynamic raw);
+
+  @protected
+  SavedLoginView dco_decode_saved_login_view(dynamic raw);
+
+  @protected
+  SaverOfferView dco_decode_saver_offer_view(dynamic raw);
 
   @protected
   SearchEngineView dco_decode_search_engine_view(dynamic raw);
@@ -390,6 +400,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  List<SavedLoginView> sse_decode_list_saved_login_view(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   List<SearchEngineView> sse_decode_list_search_engine_view(
     SseDeserializer deserializer,
   );
@@ -441,6 +456,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   RelayStatusView sse_decode_relay_status_view(SseDeserializer deserializer);
+
+  @protected
+  SavedLoginView sse_decode_saved_login_view(SseDeserializer deserializer);
+
+  @protected
+  SaverOfferView sse_decode_saver_offer_view(SseDeserializer deserializer);
 
   @protected
   SearchEngineView sse_decode_search_engine_view(SseDeserializer deserializer);
@@ -677,6 +698,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_saved_login_view(
+    List<SavedLoginView> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_search_engine_view(
     List<SearchEngineView> self,
     SseSerializer serializer,
@@ -748,6 +775,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_relay_status_view(
     RelayStatusView self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_saved_login_view(
+    SavedLoginView self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_saver_offer_view(
+    SaverOfferView self,
     SseSerializer serializer,
   );
 

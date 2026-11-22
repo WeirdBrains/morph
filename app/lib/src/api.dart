@@ -149,6 +149,66 @@ abstract class MorphApi
     String? home,
   });
 
+  /// Whether [profileId] can save and fill passwords, and its switch.
+  Future<MorphSaverOffer> passwordSaverOffer(String profileId, {String? home});
+
+  /// Turn offers to save and fill on or off. Saved logins stay.
+  Future<MorphSaverOffer> setPasswordSaverEnabled(
+    String profileId,
+    bool on, {
+    String? home,
+  });
+
+  /// Turn "ask again before filling" on or off. Turning it off needs
+  /// [password], the current profile password.
+  Future<MorphSaverOffer> setPasswordSaverAskAgain(
+    String profileId,
+    bool on, {
+    String? password,
+    String? home,
+  });
+
+  /// Saved logins (no passwords), optionally only for [pageUrl].
+  Future<List<MorphSavedLogin>> listSavedLogins(
+    String profileId, {
+    String? pageUrl,
+    String? home,
+  });
+
+  /// Delete a saved login; whether it existed.
+  Future<bool> deleteSavedLogin(
+    String profileId,
+    String loginId, {
+    String? home,
+  });
+
+  /// Show a saved password after a fresh proof ([password] is the profile
+  /// password). The value is only for the UI; do not log it.
+  Future<String> revealSavedPassword(
+    String profileId,
+    String loginId, {
+    String? password,
+    String? home,
+  });
+
+  /// Save (or update) a login from the page at [pageUrl].
+  Future<String> saveLogin(
+    String profileId,
+    String pageUrl,
+    String username,
+    String password, {
+    String? home,
+  });
+
+  /// The password to fill for [loginId] into the page at [pageUrl].
+  Future<String> fillSavedLogin(
+    String profileId,
+    String loginId,
+    String pageUrl, {
+    String? password,
+    String? home,
+  });
+
   /// [profileId]'s own Weirdnet identity, or null before onboarding.
   Future<MorphIdentity?> profileIdentity(String profileId, {String? home});
 
@@ -833,6 +893,45 @@ class MorphHistoryEntry {
   final String url;
   final String title;
   final DateTime visited;
+}
+
+class MorphSaverOffer {
+  const MorphSaverOffer({
+    required this.enabled,
+    required this.active,
+    required this.available,
+    this.askAgain = false,
+    this.unavailable = '',
+  });
+
+  /// Settings, "Offer to save passwords".
+  final bool enabled;
+
+  /// Offers to save and fill are live.
+  final bool active;
+
+  /// The profile can use the saver (it has an identity, and a way to prove it).
+  final bool available;
+  final bool askAgain;
+
+  /// Why it is not offered; empty when it is.
+  final String unavailable;
+}
+
+class MorphSavedLogin {
+  const MorphSavedLogin({
+    required this.id,
+    required this.origin,
+    required this.username,
+    this.created,
+    this.updated,
+  });
+
+  final String id;
+  final String origin;
+  final String username;
+  final DateTime? created;
+  final DateTime? updated;
 }
 
 class IdentityStatusView {

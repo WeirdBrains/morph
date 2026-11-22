@@ -22,15 +22,6 @@ use morph_webview::bridge::Trust;
 use morph_webview::login_form::{self, PageLogin};
 use morph_webview::{BridgeContext, PageBridge};
 
-/// Whether the saver is shown at all. It stays hidden until it is finished
-/// (a preview may be cut from main before then): `MORPH_PASSWORD_SAVER=1`
-/// turns it on for development and the headless checks. Hidden, pages get
-/// no login script, windows no bar, and Settings no Passwords rows.
-pub fn shown() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("MORPH_PASSWORD_SAVER").is_some_and(|v| v == "1"))
-}
-
 /// Logins the page bridge heard, until the window takes them.
 pub type Inbox = Rc<RefCell<Vec<PageLogin>>>;
 

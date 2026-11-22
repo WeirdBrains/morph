@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- The password saver is on by default for every profile that has a Weirdnet identity, as soon as it gets one (onboarding, restore or a device link). It stays off for profiles without an identity. You can turn it off per profile in Settings > Privacy (desktop) or Settings > Passwords (phone). Credentials stay in that profile's encrypted store; nothing is saved or filled while the profile is locked. The `MORPH_PASSWORD_SAVER` hidden gate is gone, and Passwords is a real row in the address menu again, not a "Coming soon" item.
+
 - Updated to the clean Weirdnet patch releases: weirdnet-net 0.8.2, weirdnet-sync 0.7.1, weirdnet-text 0.1.1, weirdnet-keys 0.1.2, weirdnet-schemes 0.1.1 and weirdnet-storage 0.1.1 (metadata and docs only, no code changes), replacing versions that were withdrawn from crates.io. SQLCipher and OpenSSL are still compiled from source on every platform (weirdnet-storage's new `vendored-openssl` feature is turned on explicitly).
 
 - Updated to weirdnet-device-link 0.4.2, the 0.4 line release of the same generic helpers Morph already used from 0.3.3: reading which app a new device's code is on, the built-in relay list, `MORPH_LINK_RELAYS` parsing and the link node's settings. 0.4.2 also includes the 0.4 service-link APIs. CI's local relay is installed from 0.4.2.

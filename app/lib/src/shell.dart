@@ -28,6 +28,7 @@ import 'widgets/page_crashed.dart';
 import 'widgets/page_error.dart';
 import 'widgets/profile_menu.dart';
 import 'widgets/settings_page.dart';
+import 'widgets/passwords_page.dart';
 import 'widgets/start_page.dart';
 import 'widgets/tab_switcher.dart';
 import 'qr_scanner.dart';
@@ -1564,6 +1565,17 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
   late final MorphDefaultBrowser _defaultBrowser =
       widget.defaultBrowser ?? MorphDefaultBrowser.forPlatform();
 
+  Future<void> _openPasswords() async {
+    final profileId = _profileId;
+    await _showPanel(
+      (panel) => MorphPasswordsPage(
+        api: widget.api,
+        profileId: profileId,
+        home: _home,
+      ),
+    );
+  }
+
   Future<void> _openSettings() async {
     await _showPanel(
       (panel) => MorphSettingsPage(
@@ -1572,6 +1584,7 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
         devices: widget.api,
         profileId: _profileId,
         home: _home,
+        passwords: widget.api,
         profileName: _profileName,
         coreVersion: coreVersionLabel ?? '…',
         renderPath: '${webView.renderPath}',
@@ -1726,6 +1739,7 @@ class MorphShellState extends State<MorphShell> with WidgetsBindingObserver {
               : null,
           onHistory: () => unawaited(_openLibrary(MorphLibraryTab.history)),
           onBookmarks: () => unawaited(_openLibrary(MorphLibraryTab.bookmarks)),
+          onPasswords: () => unawaited(_openPasswords()),
           onSettings: () => unawaited(_openSettings()),
           profiles: ValueListenableBuilder<ProfileCatalog>(
             valueListenable: _catalogNotifier,

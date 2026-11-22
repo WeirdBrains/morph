@@ -22,7 +22,8 @@ Progress note for whoever picks this up next (update it with each push).
   (stops servers beside the `applied_revision` watch), sync (`Error::Locked`)
   and `DeviceCaller` (`DeviceCallError::Locked`), the desktop lock screen,
   Settings > Privacy (off with the current password and a warning, change),
-  docs and changelog.
+  the password saver on by default for a profile with an identity, docs and
+  changelog.
 - Tests: workspace tests and clippy `-D warnings` pass;
   `sync::tests::three_homes_rotate_on_revoke_and_re_admit_a_restored_device`
   can time out under a full parallel run and passes alone, on main as well.
@@ -32,8 +33,8 @@ Progress note for whoever picks this up next (update it with each push).
 - Open: seal `companions/`, `ai/policy.json` and the MCP host's
   `mcp-*.local.json` under the file key (with Morph Dev); show locked
   profiles in `profiles_view`; auto-lock after idle; OS authentication
-  unlock; the Flutter gate with biometrics; turning the password saver on by
-  default (see "Password saver" below).
+  unlock; the Flutter gate with biometrics (see "Password saver" below for
+  what is left on the phone).
 
 ## Keys
 
@@ -202,12 +203,13 @@ Code: `morph-store/src/saver_store.rs` (table `saved_logins`, migration 6),
 `morph-os/src/os_auth.rs` (system authentication),
 `morph-webview/src/login_form.rs` (capture and fill in the page),
 `morph-desktop/src/password_saver.rs` and `browser_view/saver.rs` (the bar),
-`morph-desktop/src/settings_view/passwords.rs` (Settings > Privacy).
+`morph-desktop/src/settings_view/passwords.rs` (Settings > Privacy), `morph-bridge` and the Flutter Settings > Passwords page.
 
-**Hidden for now.** Until the saver is finished and turned on by default, the
-desktop shows none of it (no page script, no bar, no Settings rows) unless
-Morph starts with `MORPH_PASSWORD_SAVER=1`. Saved logins and settings stay in
-the profile either way.
+**On by default** for a profile that has a Weirdnet identity, as soon as it
+gets one (onboarding, restore or a device link). A profile without an
+identity is not offered the saver. The user can turn it off per profile in
+Settings > Privacy (desktop) or Settings > Passwords (phone). Credentials
+stay in that profile's encrypted store.
 
 - Saved logins live in `library.db`, so the profile password already gates
   them at rest. Each password is also sealed under a **saver key**:
@@ -267,9 +269,10 @@ the profile either way.
   each crate, and `morph-webview/tests/login_webkit.rs` in a real WebKitGTK
   page (docs/bridge-api.md).
 - Left:
-  - turning it on by default (drop the `MORPH_PASSWORD_SAVER` gate) once the
-    system prompts have been tried on real desktops;
-  - the phone (BiometricPrompt, Face ID / Touch ID);
+  - capture and fill in the phone's page (the Settings page and the
+    address-sheet Passwords row are in; the login bar is not);
+  - the phone (BiometricPrompt, Face ID / Touch ID) as the proof when the
+    profile password is off;
   - **password sync**: waits for weirdnet-sync. The `hlc` and `node_id`
     columns exist and are empty; deletes need a tombstone then. Values are
     already sealed, so nothing in the sync step needs the plaintext;

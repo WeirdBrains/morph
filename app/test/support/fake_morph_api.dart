@@ -540,6 +540,186 @@ class FakeMorphApi implements MorphApi {
     );
   }
 
+  /// Per-profile "offer to save" switch; missing means on (the real default).
+  final saverEnabled = <String, bool>{};
+
+  /// Per-profile "ask again" switch.
+  final saverAskAgain = <String, bool>{};
+
+  /// Saved logins by profile id (no passwords in test lists unless revealing).
+  final savedLogins = <String, List<MorphSavedLogin>>{};
+
+  /// The secret for each saved login id. Never printed by tests.
+  final savedPasswords = <String, String>{};
+
+  bool _hasIdentity(String profileId) =>
+      identitiesByProfile.containsKey(profileId) || onboarded;
+
+  MorphSaverOffer _offerFor(String profileId) {
+    final has = _hasIdentity(profileId);
+    final enabled = saverEnabled[profileId] ?? true;
+    final available = has;
+    return MorphSaverOffer(
+      enabled: enabled,
+      active: enabled && available,
+      available: available,
+      askAgain: saverAskAgain[profileId] ?? false,
+      unavailable: has ? '' : 'This profile has no identity, so it cannot save passwords. Create or import one in Identity.',
+    );
+  }
+
+  @override
+  Future<MorphSaverOffer> passwordSaverOffer(
+    String profileId, {
+    String? home,
+  }) async => _offerFor(profileId);
+
+  @override
+  Future<MorphSaverOffer> setPasswordSaverEnabled(
+    String profileId,
+    bool on, {
+    String? home,
+  }) async {
+    if (!_hasIdentity(profileId)) {
+      throw StateError('this profile has no identity');
+    }
+    saverEnabled[profileId] = on;
+    return _offerFor(profileId);
+  }
+
+  @override
+  Future<MorphSaverOffer> setPasswordSaverAskAgain(
+    String profileId,
+    bool on, {
+    String? password,
+    String? home,
+  }) async {
+    if (!_hasIdentity(profileId)) {
+      throw StateError('this profile has no identity');
+    }
+    if (!on) {
+      final expected = libraryPasswords[profileId];
+      if (expected == null || password != expected) {
+        throw StateError('wrong password');
+      }
+    }
+    saverAskAgain[profileId] = on;
+    return _offerFor(profileId);
+  }
+
+  @override
+  Future<List<MorphSavedLogin>> listSavedLogins(
+    String profileId, {
+    String? pageUrl,
+    String? home,
+  }) async {
+    if (!_hasIdentity(profileId)) {
+      throw StateError('this profile has no identity');
+    }
+    final all = savedLogins[profileId] ?? const [];
+    if (pageUrl == null) {
+      return List.of(all);
+    }
+    final origin = Uri.tryParse(pageUrl);
+    if (origin == null || origin.scheme != 'https') {
+      return const [];
+    }
+    final want =
+        '${origin.scheme}://${origin.host}${origin.hasPort && origin.port != 443 ? ':${origin.port}' : ''}';
+    return all.where((l) => l.origin == want).toList();
+  }
+
+  @override
+  Future<bool> deleteSavedLogin(
+    String profileId,
+    String loginId, {
+    String? home,
+  }) async {
+    final list = savedLogins[profileId];
+    if (list == null) {
+      return false;
+    }
+    final before = list.length;
+    list.removeWhere((l) => l.id == loginId);
+    savedPasswords.remove(loginId);
+    return list.length < before;
+  }
+
+  @override
+  Future<String> revealSavedPassword(
+    String profileId,
+    String loginId, {
+    String? password,
+    String? home,
+  }) async {
+    final expected = libraryPasswords[profileId];
+    if (expected != null && password != expected) {
+      throw StateError('wrong password');
+    }
+    if (expected == null && (password == null || password.isEmpty)) {
+      throw StateError('enter the profile password first');
+    }
+    final secret = savedPasswords[loginId];
+    if (secret == null) {
+      throw StateError('no such saved login');
+    }
+    return secret;
+  }
+
+  @override
+  Future<String> saveLogin(
+    String profileId,
+    String pageUrl,
+    String username,
+    String password, {
+    String? home,
+  }) async {
+    if (!_offerFor(profileId).active) {
+      throw StateError('the password saver is off for this profile');
+    }
+    final uri = Uri.parse(pageUrl);
+    if (uri.scheme != 'https') {
+      throw StateError('only https pages can have saved passwords');
+    }
+    final origin =
+        '${uri.scheme}://${uri.host}${uri.hasPort && uri.port != 443 ? ':${uri.port}' : ''}';
+    final list = savedLogins.putIfAbsent(profileId, () => []);
+    final existing = list.where(
+      (l) => l.origin == origin && l.username == username,
+    );
+    final id = existing.isEmpty
+        ? 'login-${list.length + 1}'
+        : existing.first.id;
+    list.removeWhere((l) => l.id == id);
+    list.add(MorphSavedLogin(id: id, origin: origin, username: username));
+    savedPasswords[id] = password;
+    return id;
+  }
+
+  @override
+  Future<String> fillSavedLogin(
+    String profileId,
+    String loginId,
+    String pageUrl, {
+    String? password,
+    String? home,
+  }) async {
+    if (!_offerFor(profileId).active) {
+      throw StateError('the password saver is off for this profile');
+    }
+    if (saverAskAgain[profileId] == true) {
+      final expected = libraryPasswords[profileId];
+      if (expected == null || password != expected) {
+        throw StateError('wrong password');
+      }
+    }
+    final secret = savedPasswords[loginId];
+    if (secret == null) {
+      throw StateError('no such saved login');
+    }
+    return secret;
+  }
+
   @override
   Future<MorphIdentity?> profileIdentity(
     String profileId, {

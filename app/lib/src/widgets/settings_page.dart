@@ -8,6 +8,7 @@ import '../theme/morph_theme.dart';
 import 'library_page.dart';
 import 'linked_devices.dart';
 import 'network_settings.dart';
+import 'passwords_page.dart';
 import 'relay_status.dart';
 
 /// Morph settings: this profile's data, the default browser, and About.
@@ -25,6 +26,7 @@ class MorphSettingsPage extends StatefulWidget {
     this.devices,
     this.profileId,
     this.home,
+    this.passwords,
   });
 
   /// Linked devices of [profileId]; null (or no [profileId]) hides them.
@@ -39,6 +41,9 @@ class MorphSettingsPage extends StatefulWidget {
 
   /// The Morph home [network] reads (null: the default).
   final String? home;
+
+  /// The API the Passwords page uses; null (or no [profileId]) hides it.
+  final MorphApi? passwords;
 
   /// Null or unsupported hides the Default browser section.
   final MorphDefaultBrowser? defaultBrowser;
@@ -175,6 +180,24 @@ class _MorphSettingsPageState extends State<MorphSettingsPage> {
             subtitle: Text('Only ${widget.profileName} is affected'),
             onTap: _clearHistory,
           ),
+          if (widget.passwords != null && widget.profileId != null)
+            ListTile(
+              key: const Key('settings-passwords'),
+              leading: const Icon(Icons.password),
+              title: const Text('Passwords'),
+              subtitle: const Text('Saved logins in this profile'),
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => MorphPasswordsPage(
+                      api: widget.passwords!,
+                      profileId: widget.profileId!,
+                      home: widget.home,
+                    ),
+                  ),
+                );
+              },
+            ),
           if (widget.devices != null && widget.profileId != null) ...[
             _Header('Linked devices · ${widget.profileName}'),
             MorphLinkedDevicesSection(

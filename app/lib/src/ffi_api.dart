@@ -11,6 +11,7 @@ import 'rust/api/library.dart' as rust_library;
 import 'rust/api/network.dart' as rust_network;
 import 'rust/api/omnibox.dart' as rust_omnibox;
 import 'rust/api/page.dart' as rust_page;
+import 'rust/api/password_saver.dart' as rust_saver;
 import 'rust/api/profiles.dart' as rust_profiles;
 import 'rust/api/relays.dart' as rust_relays;
 import 'rust/api/settings.dart' as rust_settings;
@@ -539,6 +540,132 @@ class FfiMorphApi implements MorphApi {
     );
     return MorphLibraryUnlock(remembered: v.remembered, reason: v.reason);
   }
+
+  MorphSaverOffer _saverOffer(rust_saver.SaverOfferView v) => MorphSaverOffer(
+    enabled: v.enabled,
+    active: v.active,
+    available: v.available,
+    askAgain: v.askAgain,
+    unavailable: v.unavailable,
+  );
+
+  MorphSavedLogin _savedLogin(rust_saver.SavedLoginView v) => MorphSavedLogin(
+    id: v.id,
+    origin: v.origin,
+    username: v.username,
+    created: DateTime.fromMillisecondsSinceEpoch(v.createdMs),
+    updated: DateTime.fromMillisecondsSinceEpoch(v.updatedMs),
+  );
+
+  @override
+  Future<MorphSaverOffer> passwordSaverOffer(
+    String profileId, {
+    String? home,
+  }) async {
+    return _saverOffer(
+      await rust_saver.passwordSaverOffer(home: home, profileId: profileId),
+    );
+  }
+
+  @override
+  Future<MorphSaverOffer> setPasswordSaverEnabled(
+    String profileId,
+    bool on, {
+    String? home,
+  }) async {
+    return _saverOffer(
+      await rust_saver.setPasswordSaverEnabled(
+        home: home,
+        profileId: profileId,
+        on_: on,
+      ),
+    );
+  }
+
+  @override
+  Future<MorphSaverOffer> setPasswordSaverAskAgain(
+    String profileId,
+    bool on, {
+    String? password,
+    String? home,
+  }) async {
+    return _saverOffer(
+      await rust_saver.setPasswordSaverAskAgain(
+        home: home,
+        profileId: profileId,
+        on_: on,
+        password: password,
+      ),
+    );
+  }
+
+  @override
+  Future<List<MorphSavedLogin>> listSavedLogins(
+    String profileId, {
+    String? pageUrl,
+    String? home,
+  }) async {
+    final list = await rust_saver.listSavedLogins(
+      home: home,
+      profileId: profileId,
+      pageUrl: pageUrl,
+    );
+    return [for (final v in list) _savedLogin(v)];
+  }
+
+  @override
+  Future<bool> deleteSavedLogin(
+    String profileId,
+    String loginId, {
+    String? home,
+  }) => rust_saver.deleteSavedLogin(
+    home: home,
+    profileId: profileId,
+    loginId: loginId,
+  );
+
+  @override
+  Future<String> revealSavedPassword(
+    String profileId,
+    String loginId, {
+    String? password,
+    String? home,
+  }) => rust_saver.revealSavedPassword(
+    home: home,
+    profileId: profileId,
+    loginId: loginId,
+    password: password,
+  );
+
+  @override
+  Future<String> saveLogin(
+    String profileId,
+    String pageUrl,
+    String username,
+    String password, {
+    String? home,
+  }) => rust_saver.saveLogin(
+    home: home,
+    profileId: profileId,
+    pageUrl: pageUrl,
+    username: username,
+    password: password,
+  );
+
+  @override
+  Future<String> fillSavedLogin(
+    String profileId,
+    String loginId,
+    String pageUrl, {
+    String? password,
+    String? home,
+  }) => rust_saver.fillSavedLogin(
+    home: home,
+    profileId: profileId,
+    loginId: loginId,
+    pageUrl: pageUrl,
+    password: password,
+  );
 
   @override
   Future<MorphIdentity?> profileIdentity(

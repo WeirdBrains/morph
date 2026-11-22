@@ -2608,6 +2608,44 @@ def app_calls(m, r, win, top):
 LOCK_PASSWORD = "xvfb lock password"
 
 
+
+def password_saver_check(r, binary, display):
+    """The password saver is off on a profile without an identity, and on
+    as soon as the profile gets one. Settings reports both (morph-event
+    password-saver) on a temporary MORPH_HOME, with no secrets in the log."""
+    g = "password-saver"
+    home = tempfile.mkdtemp(prefix="morph-xvfb-saver-")
+    m = Driver(binary, display, home)
+    try:
+        r.check(g, "a fresh home opens", wait_for(lambda: state(m), 20))
+        win = m.own_window() or m.window("Morph")
+        if win:
+            m.activate(win)
+        m.key("ctrl+comma", delay=0.8)
+        r.check(g, "Ctrl+, opens Settings", wait_for(lambda: m.title(win).startswith("Settings") if win else m.lines(r"morph-event password-saver")), m.title(win) if win else "")
+        none = wait_for(lambda: m.lines(r"morph-event password-saver enabled=false active=false available=false"), 15)
+        r.check(g, "without an identity the saver is not offered", none, str(m.lines(r"morph-event password-saver")[-3:]))
+        m.key("ctrl+w", delay=1.0)
+        open_identity(m, r, g)
+        m.key("1", delay=0.8)
+        m.type(PASSWORD)
+        m.key("Tab", "shift+Tab", "Tab", delay=0.3)
+        m.type(PASSWORD)
+        m.key("Return", delay=0.8)
+        made = wait_for(lambda: identity_file(m).get("user_id"))
+        r.check(g, "the profile now has an identity", made, str(identity_file(m)))
+        m.key("Escape", delay=0.8)
+        m.key("ctrl+comma", delay=0.8)
+        r.check(g, "Settings opens again", wait_for(lambda: m.title(win).startswith("Settings") if win else True, 10), m.title(win) if win else "")
+        on = wait_for(lambda: m.lines(r"morph-event password-saver enabled=true active=true available=true"), 15)
+        r.check(g, "with an identity the saver is on by default", on, str(m.lines(r"morph-event password-saver")[-3:]))
+        log = "\n".join(m.lines(r"."))
+        r.check(g, "the profile password never reaches the log", PASSWORD not in log)
+    finally:
+        m.stop()
+    shutil.rmtree(home, ignore_errors=True)
+
+
 def profile_lock_check(r, binary, display):
     """A profile with an identity opens on the lock screen: nothing of it
     loads (no page) until its password is typed; a wrong one keeps it
@@ -2670,7 +2708,7 @@ def main():
     ap.add_argument("--input-bin", help="morph-wl-input (default: next to --bin)")
     ap.add_argument("--local-relay", help="a local relay to link through (weirdnet-device-link's local-relay example)")
     ap.add_argument("--app-server", help="a Weirdnet app behind the local relay (morph-services' serve-app example)")
-    ap.add_argument("--only", choices=["downloads", "windows", "popups", "omnibox", "relays", "profile-lock"], help="run just this check")
+    ap.add_argument("--only", choices=["downloads", "windows", "popups", "omnibox", "relays", "profile-lock", "password-saver"], help="run just this check")
     ap.add_argument("--screenshots", help="save screenshots of checks that take them (X11) here")
     args = ap.parse_args()
     start_dns_stub()
@@ -2783,6 +2821,15 @@ def run(args):
         r = Results()
         try:
             profile_lock_check(r, args.bin, display)
+            return finish(r, args)
+        finally:
+            for proc in (wm, xvfb):
+                if proc and proc.poll() is None:
+                    proc.terminate()
+    if args.only == "password-saver":
+        r = Results()
+        try:
+            password_saver_check(r, args.bin, display)
             return finish(r, args)
         finally:
             for proc in (wm, xvfb):
@@ -2952,6 +2999,8 @@ def run(args):
             m.stop()
             m = Driver(args.bin, display, str(m.home))
             identity_relaunch(m, r)
+        m.stop()
+        password_saver_check(r, args.bin, display)
     finally:
         m.stop()
         if wm and wm is not xvfb:

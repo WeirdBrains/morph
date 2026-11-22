@@ -29,9 +29,6 @@ impl BrowserView {
     /// Save and fill logins for `profile` in this window's tabs; `inbox` is
     /// where its page bridge puts what pages said ([`crate::password_saver::page_bridge`]).
     pub fn set_password_saver(&mut self, home: &Path, profile: &str, inbox: Inbox) {
-        if !crate::password_saver::shown() {
-            return;
-        }
         crate::password_saver::warm_up();
         self.saver = Some(Saver::new(home, profile, Arc::new(SystemOsAuth)));
         self.saver_inbox = Some(inbox);

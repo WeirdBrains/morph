@@ -64,6 +64,9 @@ pub fn offer(home: &Path, profile_id: &str, os: &dyn OsAuth) -> Result<Offer> {
 /// Save (or update) a login. `page_url` is the page's address; only the origin is kept.
 pub fn save(home: &Path, profile_id: &str, os: &dyn OsAuth, page_url: &str, username: &str, password: &SecretString) -> Result<String> {
     use weirdnet_keys::ExposeSecret;
+    if morph_core::profile_lock::has_identity(home, profile_id) && !core::settings(home, profile_id).map_err(map)?.enabled {
+        return Err(Error::failed("the password saver is off for this profile"));
+    }
     core::save(home, profile_id, os, page_url, username, password.expose_secret(), now_ms()).map_err(map)
 }
 
@@ -271,6 +274,7 @@ mod tests {
         let offer_now = offer(&home, "default", &os).unwrap();
         assert!(!offer_now.enabled && !offer_now.active());
         assert!(fill(&home, "default", &os, &id, "https://example.com/", None).is_err());
+        assert!(save(&home, "default", &os, "https://example.com/", "bob", &pw("x")).is_err(), "off also refuses a new save");
         assert_eq!(list(&home, "default", &os, None).unwrap().len(), 1, "turning it off keeps the saved logins");
         set_ask_again(&home, "default", true, None).unwrap();
         set_enabled(&home, "default", true).unwrap();
@@ -326,5 +330,31 @@ mod tests {
             "s3cret",
             "the saved password survives lock and unlock"
         );
+    }
+
+    #[test]
+    fn the_saver_is_on_as_soon_as_a_profile_gets_an_identity() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("h");
+        morph_core::profiles::load_catalog(&home).unwrap();
+        let os = NoOsAuth;
+        assert_eq!(offer(&home, "default", &os).unwrap().requirement, Err(Unavailable::NoIdentity));
+        assert!(!offer(&home, "default", &os).unwrap().active());
+        assert!(matches!(set_enabled(&home, "default", true), Err(Error::NoIdentity)));
+
+        let created = crate::identity::create(&home, "default", &pw("profile password")).unwrap();
+        let on = offer(&home, "default", &os).unwrap();
+        assert!(on.enabled && on.active(), "on by default the moment the profile has an identity");
+
+        // Restore onto a fresh profile: same default.
+        let other = tmp.path().join("other");
+        morph_core::profiles::load_catalog(&other).unwrap();
+        crate::identity::import(&other, "default", &created.words, &pw("profile password")).unwrap();
+        let restored = offer(&other, "default", &os).unwrap();
+        assert!(restored.enabled && restored.active(), "a restored identity also turns the saver on");
+
+        set_enabled(&home, "default", false).unwrap();
+        assert!(!offer(&home, "default", &os).unwrap().active());
+        assert!(offer(&other, "default", &os).unwrap().active(), "one profile's switch does not change another's");
     }
 }

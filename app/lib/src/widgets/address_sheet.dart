@@ -27,6 +27,7 @@ class MorphAddressSheet extends StatefulWidget {
     this.onToggleBookmark,
     this.onHistory,
     this.onBookmarks,
+    this.onPasswords,
     this.onSettings,
     this.onIdentity,
     this.identityLabel,
@@ -51,6 +52,7 @@ class MorphAddressSheet extends StatefulWidget {
   final VoidCallback? onToggleBookmark;
   final VoidCallback? onHistory;
   final VoidCallback? onBookmarks;
+  final VoidCallback? onPasswords;
   final VoidCallback? onSettings;
   final VoidCallback? onIdentity;
   final String? identityLabel;
@@ -351,7 +353,7 @@ class _MorphAddressSheetState extends State<MorphAddressSheet> {
                         key: const Key('sheet-passwords'),
                         icon: Icons.password,
                         label: 'Passwords',
-                        onTap: () => _comingSoon('Passwords'),
+                        onTap: _closeThen(widget.onPasswords, 'Passwords'),
                       ),
                     ],
                   ),

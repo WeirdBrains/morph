@@ -5,6 +5,8 @@ import 'package:morph/src/theme/morph_theme.dart';
 import 'package:morph/src/widgets/library_page.dart';
 import 'package:morph/src/widgets/settings_page.dart';
 
+import 'support/fake_morph_api.dart';
+
 class _FakeBrowser extends MorphDefaultBrowser {
   _FakeBrowser(this.state, this.outcome);
 
@@ -129,5 +131,31 @@ void main() {
     );
     expect(find.byKey(const Key('settings-tab-position')), findsNothing);
     expect(find.byKey(const Key('settings-clear-history')), findsOneWidget);
+  });
+
+  testWidgets('Passwords opens the saver settings for this profile', (
+    tester,
+  ) async {
+    final api = FakeMorphApi();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: MorphTheme.dark,
+        home: MorphSettingsPage(
+          profileName: 'Work',
+          profileId: 'default',
+          coreVersion: '0.1.0',
+          renderPath: 'fake',
+          onClearHistory: () async {},
+          onOpenLibrary: (_) {},
+          passwords: api,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('settings-passwords')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('settings-passwords')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('passwords-page')), findsOneWidget);
+    expect(find.byKey(const Key('passwords-enabled')), findsOneWidget);
   });
 }
