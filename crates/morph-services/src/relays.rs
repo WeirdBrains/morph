@@ -375,7 +375,7 @@ mod tests {
     const RELAY: &str = "12D3KooWHp56KezbVCubjuznJGqyn9xTe8PWePfuwv4YQUGxaRBB";
 
     fn configured() -> Vec<morph_identity::device_link::Multiaddr> {
-        morph_identity::device_link::PUBLIC_RELAYS.iter().map(|a| a.parse().unwrap()).collect()
+        morph_identity::device_link::known_relays()
     }
 
     fn no_names(_: &str, _: &str) -> Option<String> {

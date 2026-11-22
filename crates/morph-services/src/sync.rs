@@ -815,13 +815,7 @@ mod tests {
     }
 
     fn link_cfg(relays: &[Multiaddr]) -> NodeConfig {
-        weirdnet_device_link::with_link_limits(NodeConfig {
-            listen: NodeConfig::default_listen(0),
-            relays: relays.to_vec(),
-            discovery: DiscoveryMode::Disabled,
-            label: "morph-link-test".into(),
-            ..Default::default()
-        })
+        NodeConfig { discovery: DiscoveryMode::Disabled, ..weirdnet_device_link::link_node_config("morph-link-test", relays.to_vec()) }
     }
 
     fn sync_cfg(relays: &[Multiaddr]) -> NodeConfig {

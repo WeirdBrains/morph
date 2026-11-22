@@ -915,8 +915,8 @@ mod tests {
 
     #[test]
     fn the_relay_line_shows_the_least_ready_relay() {
-        use morph_identity::device_link::{Multiaddr, NetStatus, PUBLIC_RELAYS};
-        let one: Vec<Multiaddr> = PUBLIC_RELAYS.iter().map(|a| a.parse().unwrap()).collect();
+        use morph_identity::device_link::{Multiaddr, NetStatus, known_relays};
+        let one: Vec<Multiaddr> = known_relays();
         let (text, state) = relay_line(&RelayReport::build(&one, &[], &[], false, |_, _| None));
         assert_eq!(state, RelayStatus::NoNode);
         assert!(text.starts_with("Not connected"), "{text}");

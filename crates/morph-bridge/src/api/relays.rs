@@ -75,11 +75,11 @@ pub fn relay_check_stop() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use morph_identity::device_link::{Multiaddr, NetStatus, PUBLIC_RELAYS};
+    use morph_identity::device_link::{Multiaddr, NetStatus, known_relays};
 
     #[test]
     fn the_view_carries_the_mapped_state() {
-        let relays: Vec<Multiaddr> = PUBLIC_RELAYS.iter().map(|a| a.parse().unwrap()).collect();
+        let relays: Vec<Multiaddr> = known_relays();
         let none: RelayReportView = RelayReport::build(&relays, &[], &[], false, |_, _| None).into();
         assert_eq!(none.nodes, 0);
         assert_eq!(none.relays.len(), 1);

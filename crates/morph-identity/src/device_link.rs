@@ -16,7 +16,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use weirdnet_device_link::{HostNode, HostStatus, InviteHost, Pairing};
-pub use weirdnet_device_link::{RelayProbe, RelayState, relay_groups, relay_states};
+pub use weirdnet_device_link::{RelayProbe, RelayState, known_relays, parse_relays, relay_groups, relay_states};
 use weirdnet_keys::{Key32, SecretString, password_seal};
 use weirdnet_net::Keypair;
 pub use weirdnet_net::Multiaddr;
@@ -48,19 +48,13 @@ pub enum OfferApp {
 
 /// Which of [`OFFER_SCHEMES`] `text` is a new device's code on (scheme and
 /// `link/` in any case), and the code with them in lowercase, as
-/// weirdnet-device-link reads it. Only the prefix is looked at here; the
-/// pairing checks the rest (encoding, version, signature, size).
+/// weirdnet-device-link reads it ([`weirdnet_device_link::offer_scheme`]).
+/// Only the prefix is looked at here; the pairing checks the rest (encoding,
+/// version, signature, size).
 pub fn offer_scheme(text: &str) -> Option<(OfferApp, String)> {
-    let text = text.trim();
-    OFFER_SCHEMES.iter().find_map(|scheme| {
-        let prefix = format!("{scheme}link/");
-        let head = text.get(..prefix.len())?;
-        if !head.eq_ignore_ascii_case(&prefix) {
-            return None;
-        }
-        let app = if *scheme == YMIR_SCHEME { OfferApp::Ymir } else { OfferApp::Morph };
-        Some((app, format!("{prefix}{}", &text[prefix.len()..])))
-    })
+    let (i, link) = weirdnet_device_link::offer_scheme(OFFER_SCHEMES, text)?;
+    let app = if OFFER_SCHEMES[i] == YMIR_SCHEME { OfferApp::Ymir } else { OfferApp::Morph };
+    Some((app, link))
 }
 
 /// Whether `text` is a new device's code Morph can pair with (Morph's or
@@ -83,41 +77,28 @@ pub fn device_label(app: OfferApp, hint: &str) -> String {
 }
 use crate::profile_identity::NODE_AAD;
 
-/// The official WeirdBrains Weirdnet relay, built in on every platform: TCP
-/// first (UDP is often blocked), then QUIC. Links dial both at once and keep
-/// whichever answers first. Addresses it
-/// advertises in its info (WebSocket over TLS on 443, once it serves that)
-/// are added at run time, in morph-services:
-/// <https://relay.net.weirdbrains.com/.well-known/weirdnet-relay.json>.
-pub const PUBLIC_RELAYS: &[&str] = &[
-    "/dns4/relay.net.weirdbrains.com/tcp/4747/p2p/12D3KooWHp56KezbVCubjuznJGqyn9xTe8PWePfuwv4YQUGxaRBB",
-    "/dns4/relay.net.weirdbrains.com/udp/4747/quic-v1/p2p/12D3KooWHp56KezbVCubjuznJGqyn9xTe8PWePfuwv4YQUGxaRBB",
-];
-
-/// Where the link listens and dials: TCP and QUIC on every interface, on a
-/// port the system picks, plus a circuit reserved on the public relay. The
-/// code carries the direct addresses and the circuit, so devices on one
-/// network connect directly and devices on different networks (a phone on
-/// mobile data, a guest Wi-Fi that isolates clients) connect through the
-/// relay. `MORPH_LINK_RELAYS` (comma-separated multiaddrs ending in
-/// `/p2p/<relay>`; empty for none) replaces the relay list.
-/// Requests and answers are capped at the link limits
-/// ([`weirdnet_device_link::reach`]), far below weirdnet-net's defaults.
+/// Where the link listens and dials
+/// ([`weirdnet_device_link::link_node_config`]): TCP and QUIC on every
+/// interface, on a port the system picks, plus a circuit reserved on each
+/// relay in [`link_relays`]. The code carries the direct addresses and the
+/// circuit, so devices on one network connect directly and devices on
+/// different networks (a phone on mobile data, a guest Wi-Fi that isolates
+/// clients) connect through the relay. Requests and answers are capped at
+/// the link limits, far below weirdnet-net's defaults.
 pub fn net_config() -> NodeConfig {
-    weirdnet_device_link::with_link_limits(NodeConfig {
-        listen: NodeConfig::default_listen(0),
-        relays: link_relays(),
-        label: "morph-link".into(),
-        ..Default::default()
-    })
+    weirdnet_device_link::link_node_config("morph-link", link_relays())
 }
 
-/// The relays links use: [`PUBLIC_RELAYS`], or `MORPH_LINK_RELAYS` when set.
-pub fn link_relays() -> Vec<weirdnet_net::Multiaddr> {
-    match std::env::var("MORPH_LINK_RELAYS") {
-        Ok(v) => v.split(',').filter_map(|a| a.trim().parse().ok()).collect(),
-        Err(_) => PUBLIC_RELAYS.iter().filter_map(|a| a.parse().ok()).collect(),
-    }
+/// The relays links use: the official WeirdBrains Weirdnet relay built in on
+/// every platform ([`known_relays`]: TCP first, since UDP is often blocked,
+/// then QUIC; links dial both at once and keep whichever answers first), or
+/// `MORPH_LINK_RELAYS` when set (comma-separated multiaddrs ending in
+/// `/p2p/<relay>`; empty for none). Addresses the relay advertises in its
+/// info (WebSocket over TLS on 443, once it serves that) are added at run
+/// time, in morph-services:
+/// <https://relay.net.weirdbrains.com/.well-known/weirdnet-relay.json>.
+pub fn link_relays() -> Vec<Multiaddr> {
+    weirdnet_device_link::relays_from_env("MORPH_LINK_RELAYS")
 }
 
 /// What the new device's screen should show.
@@ -397,10 +378,11 @@ mod tests {
     }
 
     #[test]
-    fn the_public_relays_are_full_relay_addresses() {
-        for a in PUBLIC_RELAYS {
-            let m: weirdnet_net::Multiaddr = a.parse().unwrap();
-            assert!(a.contains("/p2p/12D3Koo") && weirdnet_net::addr::addr_peer(&m).is_some(), "{a}");
+    fn the_built_in_relays_are_full_relay_addresses() {
+        let relays = known_relays();
+        assert!(!relays.is_empty());
+        for m in relays {
+            assert!(m.to_string().contains("/p2p/12D3Koo") && weirdnet_net::addr::addr_peer(&m).is_some(), "{m}");
         }
     }
 

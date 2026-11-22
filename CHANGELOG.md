@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Updated to the clean Weirdnet patch releases: weirdnet-net 0.8.2, weirdnet-sync 0.7.1, weirdnet-text 0.1.1, weirdnet-keys 0.1.2, weirdnet-schemes 0.1.1 and weirdnet-storage 0.1.1 (metadata and docs only, no code changes), replacing versions that were withdrawn from crates.io. SQLCipher and OpenSSL are still compiled from source on every platform (weirdnet-storage's new `vendored-openssl` feature is turned on explicitly).
+
+- Updated to weirdnet-device-link 0.3.3, which now provides the generic device-link helpers Morph carried itself: reading which app a new device's code is on, the built-in relay list, `MORPH_LINK_RELAYS` parsing and the link node's settings. Linking behaves the same, except that an entry in `MORPH_LINK_RELAYS` without a `/p2p/<relay>` peer id is now ignored (such an entry could never hold a relay reservation).
+
 ## [0.3.0-preview.1] - 2026-11-20
 
 The first preview of Morph 0.3 from [Weird Brains](https://weirdbrains.com). It is a pre-release: try it on a profile you can link again, and expect rough edges.

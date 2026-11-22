@@ -54,7 +54,7 @@ async fn answer(peer: PeerId, req: AppRequest) -> Result<AppResponse, AppError> 
 }
 
 fn main() {
-    let relays: Vec<Multiaddr> = std::env::var("MORPH_LINK_RELAYS").unwrap_or_default().split(',').filter_map(|a| a.trim().parse().ok()).collect();
+    let relays: Vec<Multiaddr> = morph_identity::device_link::parse_relays(&std::env::var("MORPH_LINK_RELAYS").unwrap_or_default());
     if relays.is_empty() {
         eprintln!("serve-app: set MORPH_LINK_RELAYS to the relays to serve through");
         std::process::exit(2);
