@@ -491,7 +491,10 @@ impl SettingsView {
         self.browser_note = None;
         self.relays_read = None;
         self.read_relays(cx);
-        self.passwords_reload();
+        // Sync types, linked devices and the password saver are loaded here
+        // (not only at window start) so opening Settings shows this profile's
+        // current list, including after a device link.
+        self.reload_quietly();
         if let Some(section) = section {
             self.search.update(cx, |s, cx| s.set_text("", cx));
             self.current = visible_items("").iter().position(|i| i.section() == section);
