@@ -179,7 +179,7 @@ both:         erase e_N, e_E, k; the QR is now dead
   that holds the key. Three wrong attempts cancel.
 - **No secret in the QR:** only public keys, addresses and a signature, so a
   leaked screenshot is useless after two minutes and without the SAS step.
-- **Transport:** Weirdnet sealed request/response (`/weirdnet/link/1`) over
+- **Transport:** Weirdnet sealed request/response (`/weirdnet/link/2`) over
   libp2p Noise; relays only see ciphertext. Same LAN works with mDNS and no
   internet.
 - **Result:** both devices are nodes of the same user; the new node holds a

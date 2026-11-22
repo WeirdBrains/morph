@@ -266,7 +266,7 @@ the same official relay and talk through it. Do not send library pages as
 `weirdnet-<app>://` app calls; those are for opening a peer's app in a tab.
 
 Wire format `weirdnet-sync/v1`, length-prefixed CBOR, one request/reply at a
-time (same style as `/weirdnet/link/1`). After the authenticated channel is
+time (same style as `/weirdnet/link/2`). After the authenticated channel is
 up, every payload that carries records is sealed with `SyncKey(type)`.
 
 Messages:

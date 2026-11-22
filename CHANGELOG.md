@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Morph moves to weirdnet-net 0.8 and weirdnet-sync 0.5. Network messages are smaller (byte fields travel as CBOR byte strings) and a sync page holds about twice as much. Breaking on the network: device linking (`/weirdnet/link/2`, `/weirdnet/link-invite/2`), device sync (`/weirdnet/sync/2`) and the other Weirdnet protocols moved to `/2`, so a device on this build can't link or sync with one on an earlier build. Update every device together. Stored data is unchanged.
+
 - Companion research can load pages in a throwaway, signed-out session: a hidden page a companion opens gets storage of its own that starts empty, is never written to disk, never shares cookies or site storage with your profile and is gone when the page closes (WebKitGTK ephemeral context, WKWebView non-persistent store, WebView2 InPrivate). It is the default for host pages (`HostPageRequest::new`); signed-in pages stay an explicit choice, and an engine without throwaway storage refuses rather than signing in.
 
 - Page bridge actions for companions (tier 2, after approval): find an element in a tab or hidden page by selector, role, accessible name or text, then click it, fill it (text fields, selects, editable text), focus it, outline it or read it back, or scroll by a distance or to an element, now in web view tabs too, not only pages the shell draws. They run in Morph's own script world, so page scripts can't see them or change what they do or report; they refuse on another origin than the one approved, and report not found, not usable (hidden, disabled, covered) or blocked as such. Password values are never read back.

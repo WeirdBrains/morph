@@ -1,4 +1,4 @@
-//! Running a link over Weirdnet (`/weirdnet/link/1`, Noise-authenticated
+//! Running a link over Weirdnet (`/weirdnet/link/2`, Noise-authenticated
 //! request/response): the new device listens, the existing device dials it.
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};

@@ -1,4 +1,4 @@
-//! Messages on `/weirdnet/link/1` and the sealed transfer.
+//! Messages on `/weirdnet/link/2` and the sealed transfer.
 use serde::{Deserialize, Serialize};
 use weirdnet_keys::Sealed;
 use weirdnet_net::user::NodeCert;

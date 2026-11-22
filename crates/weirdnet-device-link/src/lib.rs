@@ -4,7 +4,7 @@
 //! The **new device** (no identity yet) shows an [`Offer`] as a QR code or link:
 //! its node key, a fresh X25519 key, its addresses and a 120 s expiry, signed by
 //! the node key. The **existing device** (holds the identity) scans it, connects
-//! over Weirdnet on `/weirdnet/link/1`, and both derive a key and a 6-digit
+//! over Weirdnet on `/weirdnet/link/2`, and both derive a key and a 6-digit
 //! short authentication string (SAS) from the X25519 agreement and a transcript
 //! hash. Only after the user confirms the SAS matches on the existing device does
 //! it send the [`Transfer`] (seed, profile name, a node certificate for the new
@@ -43,7 +43,7 @@ pub const MAX_ATTEMPTS: u32 = 3;
 
 /// The Weirdnet network with this protocol's own stream id, so other nodes
 /// ignore it (and it ignores them).
-pub static LINK_PROFILE: Profile = Profile { protocol: "/weirdnet/link/1", thread: "weirdnet-link", ..WEIRDNET };
+pub static LINK_PROFILE: Profile = Profile { protocol: "/weirdnet/link/2", thread: "weirdnet-link", ..WEIRDNET };
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
