@@ -1007,6 +1007,49 @@ class FakeMorphApi implements MorphApi {
     return List.of(devices);
   }
 
+  /// What [syncTypes] returns; [setSyncType] flips one.
+  List<MorphSyncType> syncTypeList = const [
+    MorphSyncType(
+      id: 'bookmarks',
+      label: 'Bookmarks',
+      help: 'Folders and tags go with them.',
+    ),
+    MorphSyncType(
+      id: 'history',
+      label: 'History',
+      help: 'Pages this profile has visited.',
+    ),
+    MorphSyncType(
+      id: 'settings',
+      label: 'Settings',
+      help: 'Search engine, start page and theme.',
+    ),
+  ];
+  final List<String> syncTypeChanges = [];
+
+  @override
+  Future<List<MorphSyncType>> syncTypes(
+    String profileId, {
+    String? home,
+  }) async => List.of(syncTypeList);
+
+  @override
+  Future<List<MorphSyncType>> setSyncType(
+    String profileId,
+    String typeId,
+    bool on, {
+    String? home,
+  }) async {
+    syncTypeChanges.add('$typeId=${on ? 'on' : 'off'}');
+    syncTypeList = [
+      for (final t in syncTypeList)
+        t.id == typeId
+            ? MorphSyncType(id: t.id, label: t.label, help: t.help, on: on)
+            : t,
+    ];
+    return List.of(syncTypeList);
+  }
+
   /// What [relayReport] returns; tests change it to move the state.
   MorphRelayReport relays = const MorphRelayReport(
     nodes: 0,

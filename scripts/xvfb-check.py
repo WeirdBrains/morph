@@ -2254,6 +2254,72 @@ def check_qr(r, area, what, m, expected):
     r.check(area, what, expected in texts, f"decoded {[t[:40] for t in texts]}")
 
 
+
+def sync_types_event(m):
+    lines = m.lines(r"morph-event sync-types ")
+    return lines[-1] if lines else ""
+
+
+def sync_type_state(line, typ):
+    token = typ + "="
+    for part in line.split():
+        if part.startswith(token):
+            return part.split("=", 1)[1]
+    return ""
+
+
+def open_sync_settings(m, r, win, who):
+    """Open Settings, search for the Sync section, and wait until it logs the types."""
+    m.activate(win)
+    before = len(m.lines(r"morph-event sync-types "))
+    m.key("ctrl+comma", delay=1.0)
+    r.check("sync", f"Ctrl+, opens Settings on {who}", wait_for(lambda: (m.title(win) or "").startswith("Settings"), 10), m.title(win))
+    m.key("slash", delay=0.4)
+    m.type("sync bookmarks")
+    m.key("Return", delay=0.6)
+    got = wait_for(lambda: m.lines(r"morph-event sync-types ")[before:], 10)
+    r.check("sync", f"Settings > Sync lists the types on {who}", bool(got), sync_types_event(m))
+    return got[-1] if got else sync_types_event(m)
+
+
+def close_settings(m, win):
+    if (m.title(win) or "").startswith("Settings"):
+        m.key("ctrl+w", delay=0.8)
+
+
+def sync_types_after_link(m, m2, r, win, win2):
+    """Two linked homes: Settings > Sync shows every type on, turning History
+    off on the new device stays off there and does not change the first
+    device, and turning it back on catches the list up."""
+    # Leave the identity panels so Ctrl+, reaches Settings.
+    for dev, w in ((m, win), (m2, win2)):
+        dev.activate(w)
+        for _ in range(3):
+            dev.key("Escape", delay=0.4)
+    first = open_sync_settings(m, r, win, "the first device")
+    r.check("sync", "a new link starts with history on, on the first device", sync_type_state(first, "history") == "on" and sync_type_state(first, "bookmarks") == "on", first)
+    close_settings(m, win)
+    second = open_sync_settings(m2, r, win2, "the new device")
+    r.check("sync", "and on the new device", sync_type_state(second, "history") == "on" and sync_type_state(second, "bookmarks") == "on", second)
+    # Enter focused the intro row; Down twice is History (intro, Bookmarks, History).
+    m2.key("Down", delay=0.3)
+    m2.key("Down", delay=0.3)
+    before = len(m2.lines(r"morph-event sync-types "))
+    m2.key("space", delay=0.8)
+    off = wait_for(lambda: [ln for ln in m2.lines(r"morph-event sync-types ")[before:] if sync_type_state(ln, "history") == "off"], 8)
+    r.check("sync", "Space on History turns it off on the new device", bool(off), off[-1] if off else sync_types_event(m2))
+    # Refresh the first device: its own history switch stays on.
+    first_again = open_sync_settings(m, r, win, "the first device again")
+    r.check("sync", "the first device still has history on (the choice is per device)", sync_type_state(first_again, "history") == "on", first_again)
+    close_settings(m, win)
+    # Turn it back on so the device is left in the default state.
+    before = len(m2.lines(r"morph-event sync-types "))
+    m2.key("space", delay=0.8)
+    on = wait_for(lambda: [ln for ln in m2.lines(r"morph-event sync-types ")[before:] if sync_type_state(ln, "history") == "on"], 8)
+    r.check("sync", "Space again turns history back on", bool(on), on[-1] if on else sync_types_event(m2))
+    close_settings(m2, win2)
+
+
 def identity_link_invite(m, r, binary, display, user_id):
     """The other direction: the device with the identity shows a QR under
     Add a device (a), a fresh Morph pastes its link on its own link screen
@@ -2291,6 +2357,8 @@ def identity_link_invite(m, r, binary, display, user_id):
         fill(m4, PASSWORD)
         got = wait_for(lambda: identity_file(m4, "default").get("user_id"), 20)
         r.check("invite", "after both confirm, the new device has the same identity", got and got == user_id, f"{got} vs {user_id}")
+        if got and got == user_id:
+            sync_types_after_link(m, m4, r, win, new_win)
     finally:
         m4.stop()
     m.activate(win)

@@ -135,8 +135,12 @@ pub fn apply_link_snapshot(home: &Path, profile_id: &str, types: &[String], sett
             roster.upsert(c);
         }
         core::save_roster(lib, &roster)?;
-        if !types.is_empty() {
-            core::set_types(lib, types)?;
+        // Opt-ins are per device. A new link always starts with every
+        // supported type on, even if the device that sent the invite had
+        // turned some off. A device that already has a list keeps it (a re-link).
+        let _ = types;
+        if core::types_on(lib)?.is_empty() {
+            core::set_types(lib, &core::default_type_list())?;
         }
         core::refresh_live(&morph_core::profiles::profile_dir(home, profile_id), lib);
         Ok(())
@@ -189,6 +193,93 @@ pub fn link_payload(home: &Path, profile_id: &str) -> Result<(String, Vec<String
         roster.upsert(cert);
     }
     Ok((core::encode_link_settings(&roster), types))
+}
+
+/// One record type this device can send and receive for the profile.
+///
+/// The switches in Settings > Sync are per profile and stay on this device;
+/// they are not themselves a synced setting (turning Settings sync off must
+/// not be able to unsay itself, and a work computer can opt out of history
+/// without changing the phone).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncTypeView {
+    pub id: String,
+    pub label: String,
+    pub help: String,
+    pub on: bool,
+}
+
+fn type_views(types: &[String]) -> Vec<SyncTypeView> {
+    core::SUPPORTED_TYPES
+        .iter()
+        .map(|id| SyncTypeView {
+            id: (*id).to_string(),
+            label: core::type_label(id).into(),
+            help: core::type_help(id).into(),
+            on: types.iter().any(|t| t == id),
+        })
+        .collect()
+}
+
+fn current_types(lib: &morph_store::Library) -> morph_store::Result<Vec<String>> {
+    let types = core::types_on(lib)?;
+    if types.is_empty() { Ok(core::default_type_list()) } else { Ok(types) }
+}
+
+/// What this device sends and receives for the profile. Empty when the
+/// library is not open (no identity). A locked profile is [`Error::Locked`].
+pub fn sync_types(home: &Path, profile_id: &str) -> Result<Vec<SyncTypeView>> {
+    if crate::profile_lock::is_locked(home, profile_id) {
+        return Err(Error::Locked);
+    }
+    let taken = library_db::with(home, profile_id, |lib| Ok(type_views(&current_types(lib)?))).map_err(Error::failed)?;
+    Ok(taken.unwrap_or_default())
+}
+
+/// Turn one type on or off for this profile on this device. Does not delete
+/// data already here. Turning a type on backfills local rows and runs a
+/// sync pass so this device can catch up. Locked profiles are [`Error::Locked`].
+pub fn set_sync_type(home: &Path, profile_id: &str, typ: &str, on: bool) -> Result<Vec<SyncTypeView>> {
+    if !core::type_is_supported(typ) {
+        return Err(Error::failed(format!("Morph does not sync {typ} yet.")));
+    }
+    if crate::profile_lock::is_locked(home, profile_id) {
+        return Err(Error::Locked);
+    }
+    let dir = morph_core::profiles::profile_dir(home, profile_id);
+    let views = library_db::with(home, profile_id, |lib| {
+        let mut types = current_types(lib)?;
+        if on {
+            if !types.iter().any(|t| t == typ) {
+                types.push(typ.to_string());
+            }
+        } else {
+            types.retain(|t| t != typ);
+        }
+        types = core::normalize_types(&types);
+        core::set_types(lib, &types)?;
+        if on {
+            let now = now_ms();
+            if typ == core::BOOKMARKS {
+                core::backfill_bookmarks(lib, now)?;
+            } else if typ == core::HISTORY {
+                morph_core::history_sync::backfill(lib, now)?;
+            } else if typ == core::SETTINGS {
+                morph_core::settings_sync::backfill(lib, home, profile_id)?;
+            } else if let Err(e) = companion_sync::backfill_with(lib, &companion_sync::store(&dir), companion_sync::secrets_for(&dir).as_deref(), now)
+            {
+                eprintln!("morph-sync: companions: {e}");
+            }
+        }
+        core::refresh_live(&dir, lib);
+        Ok(type_views(&types))
+    })
+    .map_err(Error::failed)?
+    .ok_or_else(|| Error::failed("the library is not open"))?;
+    if on {
+        let _ = tick(home, profile_id);
+    }
+    Ok(views)
 }
 
 static AUTOSTART: AtomicBool = AtomicBool::new(false);
@@ -1329,6 +1420,76 @@ mod tests {
         for h in [&a, &b, &c, &d] {
             stop(h, "p1");
         }
+        set_relays_for_tests(None);
+    }
+
+    #[test]
+    fn sync_types_are_per_device_and_a_locked_profile_refuses_changes() {
+        let (_t, home) = home();
+        crate::identity::create(&home, "p1", &pw("old password")).unwrap();
+        let types = sync_types(&home, "p1").unwrap();
+        assert_eq!(types.len(), core::SUPPORTED_TYPES.len());
+        assert!(types.iter().all(|t| t.on), "{types:?}");
+        assert_eq!(types[0].id, core::BOOKMARKS);
+        assert_eq!(types[0].label, "Bookmarks");
+
+        let types = set_sync_type(&home, "p1", core::HISTORY, false).unwrap();
+        assert!(!types.iter().find(|t| t.id == core::HISTORY).unwrap().on);
+        assert!(types.iter().find(|t| t.id == core::BOOKMARKS).unwrap().on);
+        let stored = library_db::with(&home, "p1", |lib| core::types_on(lib)).unwrap().unwrap();
+        assert!(!stored.iter().any(|t| t == core::HISTORY));
+        assert!(stored.iter().any(|t| t == core::BOOKMARKS));
+
+        set_sync_type(&home, "p1", core::HISTORY, true).unwrap();
+        assert!(sync_types(&home, "p1").unwrap().iter().find(|t| t.id == core::HISTORY).unwrap().on);
+
+        assert!(set_sync_type(&home, "p1", "tabs", false).is_err());
+        crate::profile_lock::lock(&home, "p1");
+        assert!(matches!(sync_types(&home, "p1"), Err(Error::Locked)));
+        assert!(matches!(set_sync_type(&home, "p1", core::HISTORY, false), Err(Error::Locked)));
+    }
+
+    #[test]
+    fn two_homes_honour_a_type_turned_off_and_catch_up_when_it_is_turned_back_on() {
+        let _one = RELAY_TESTS.lock().unwrap_or_else(|p| p.into_inner());
+        let relay = start_local_relay();
+        set_relays_for_tests(Some(relay.addrs.clone()));
+        let cfg = link_cfg(&relay.addrs);
+        let scfg = sync_cfg(&relay.addrs);
+
+        let (_ta, a) = home();
+        let (_tb, b) = home();
+        crate::identity::create(&a, "p1", &pw("old password")).unwrap();
+        hist::record_visit(&a, "p1", "https://before.example/", "Before", 10).unwrap();
+        bookmarks::add_bookmark(&a, "p1", "https://before-mark.example/", "Before mark", 11).unwrap();
+
+        // A turns history off before linking: the new device still starts with every type on.
+        set_sync_type(&a, "p1", core::HISTORY, false).unwrap();
+        link_home(&a, &b, "Phone", &cfg);
+        start_with(&a, "p1", scfg.clone()).unwrap();
+        start_with(&b, "p1", scfg.clone()).unwrap();
+        wait_reserved(&a);
+        wait_reserved(&b);
+        assert!(sync_types(&b, "p1").unwrap().iter().find(|t| t.id == core::HISTORY).unwrap().on, "a new link defaults to everything on");
+        // A still has history off, so turn it back on and catch the pre-link visit up first.
+        set_sync_type(&a, "p1", core::HISTORY, true).unwrap();
+        tick_until(&a, &b, || has_url(&b, "https://before-mark.example/") && has_visit(&b, "https://before.example/"));
+
+        set_sync_type(&b, "p1", core::HISTORY, false).unwrap();
+        hist::record_visit(&a, "p1", "https://while-off-a.example/", "A while off", 20).unwrap();
+        bookmarks::add_bookmark(&a, "p1", "https://while-off-mark.example/", "Mark while off", 21).unwrap();
+        hist::record_visit(&b, "p1", "https://while-off-b.example/", "B local", 22).unwrap();
+        tick_until(&a, &b, || has_url(&b, "https://while-off-mark.example/"));
+        assert!(!has_visit(&b, "https://while-off-a.example/"), "B stopped receiving history");
+        assert!(!has_visit(&a, "https://while-off-b.example/"), "B stopped sending history");
+        assert!(has_visit(&b, "https://while-off-b.example/"), "data already on B stays");
+        assert!(has_visit(&b, "https://before.example/"), "earlier history stays");
+
+        set_sync_type(&b, "p1", core::HISTORY, true).unwrap();
+        tick_until(&a, &b, || has_visit(&b, "https://while-off-a.example/") && has_visit(&a, "https://while-off-b.example/"));
+
+        stop(&a, "p1");
+        stop(&b, "p1");
         set_relays_for_tests(None);
     }
 }

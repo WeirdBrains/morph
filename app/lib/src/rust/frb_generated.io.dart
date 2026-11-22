@@ -168,6 +168,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<SearchEngineView> dco_decode_list_search_engine_view(dynamic raw);
 
   @protected
+  List<SyncTypeView> dco_decode_list_sync_type_view(dynamic raw);
+
+  @protected
   NetworkPeerView dco_decode_network_peer_view(dynamic raw);
 
   @protected
@@ -222,6 +225,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   SettingsView dco_decode_settings_view(dynamic raw);
+
+  @protected
+  SyncTypeView dco_decode_sync_type_view(dynamic raw);
 
   @protected
   int dco_decode_u_16(dynamic raw);
@@ -408,6 +414,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  List<SyncTypeView> sse_decode_list_sync_type_view(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   NetworkPeerView sse_decode_network_peer_view(SseDeserializer deserializer);
 
   @protected
@@ -466,6 +477,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   SettingsView sse_decode_settings_view(SseDeserializer deserializer);
+
+  @protected
+  SyncTypeView sse_decode_sync_type_view(SseDeserializer deserializer);
 
   @protected
   int sse_decode_u_16(SseDeserializer deserializer);
@@ -708,6 +722,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_sync_type_view(
+    List<SyncTypeView> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_network_peer_view(
     NetworkPeerView self,
     SseSerializer serializer,
@@ -796,6 +816,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_settings_view(SettingsView self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_sync_type_view(SyncTypeView self, SseSerializer serializer);
 
   @protected
   void sse_encode_u_16(int self, SseSerializer serializer);

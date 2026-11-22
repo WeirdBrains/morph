@@ -25,7 +25,7 @@ use std::sync::mpsc;
 
 use morph_services::device_link::Links;
 use morph_services::relays::{RelayReport, RelayStatus};
-use morph_services::sync::DeviceView;
+use morph_services::sync::{DeviceView, SyncTypeView};
 
 mod agents;
 mod lock;
@@ -47,6 +47,7 @@ impl Section {
             "agents" => Section::Agents,
             "search" => Section::Search,
             "identity" => Section::Identity,
+            "sync" => Section::Sync,
             "devices" => Section::Devices,
             "about" => Section::About,
             "privacy" => Section::Privacy,
@@ -67,6 +68,7 @@ pub enum Section {
     Downloads,
     Privacy,
     Identity,
+    Sync,
     Devices,
     Relays,
     Agents,
@@ -74,7 +76,7 @@ pub enum Section {
 }
 
 impl Section {
-    pub const ALL: [Section; 13] = [
+    pub const ALL: [Section; 14] = [
         Section::Profile,
         Section::Browser,
         Section::Search,
@@ -84,6 +86,7 @@ impl Section {
         Section::Downloads,
         Section::Privacy,
         Section::Identity,
+        Section::Sync,
         Section::Devices,
         Section::Relays,
         Section::Agents,
@@ -101,6 +104,7 @@ impl Section {
             Section::Downloads => "Downloads",
             Section::Privacy => "Privacy and site data",
             Section::Identity => "Identity and backup",
+            Section::Sync => "Sync",
             Section::Devices => "Linked devices",
             Section::Relays => "Relays",
             Section::Agents => "Agents",
@@ -122,6 +126,7 @@ impl Section {
                 "clear browsing data cookies cache site permissions camera microphone location profile password lock security passwords saved logins autofill"
             }
             Section::Identity => "identity backup recovery restore devices link",
+            Section::Sync => "sync types bookmarks history settings companions agents grants chats mcp secrets journal passwords tabs opt-in",
             Section::Devices => "devices linked sync revoke remove lost stolen phone laptop",
             Section::Relays => {
                 "relays relay network weirdnet connected connection reservation slot link devices nat peer discovery mdns dht corporate lan"
@@ -163,6 +168,10 @@ pub enum Item {
     DefaultDownloads,
     ClearData,
     OpenIdentity,
+    /// The Sync section's intro row.
+    Sync,
+    /// One of [`morph_core::sync::SUPPORTED_TYPES`], by index.
+    SyncType(u8),
     Devices,
     CheckRelays,
     Discovery,
@@ -195,6 +204,7 @@ impl Item {
                 Section::Privacy
             }
             Item::OpenIdentity => Section::Identity,
+            Item::Sync | Item::SyncType(_) => Section::Sync,
             Item::Devices => Section::Devices,
             Item::CheckRelays | Item::Discovery | Item::ManualPeers => Section::Relays,
             Item::DefaultCompanion => Section::Agents,
@@ -202,7 +212,7 @@ impl Item {
         }
     }
 
-    pub const ALL: [Item; 26] = [
+    pub const ALL: [Item; 36] = [
         Item::OpenBookmarks,
         Item::OpenHistory,
         Item::ClearHistory,
@@ -223,6 +233,16 @@ impl Item {
         Item::AskAgain,
         Item::SavedPasswords,
         Item::OpenIdentity,
+        Item::Sync,
+        Item::SyncType(0),
+        Item::SyncType(1),
+        Item::SyncType(2),
+        Item::SyncType(3),
+        Item::SyncType(4),
+        Item::SyncType(5),
+        Item::SyncType(6),
+        Item::SyncType(7),
+        Item::SyncType(8),
         Item::Devices,
         Item::CheckRelays,
         Item::Discovery,
@@ -233,7 +253,17 @@ impl Item {
 
     /// Whether ←/→ change it.
     fn is_choice(self) -> bool {
-        matches!(self, Item::Engine | Item::TabPosition | Item::Theme | Item::SideWidth | Item::Collapsed | Item::Discovery | Item::DefaultCompanion)
+        matches!(
+            self,
+            Item::Engine
+                | Item::TabPosition
+                | Item::Theme
+                | Item::SideWidth
+                | Item::Collapsed
+                | Item::Discovery
+                | Item::DefaultCompanion
+                | Item::SyncType(_)
+        )
     }
 }
 
@@ -284,6 +314,8 @@ pub struct SettingsView {
     peer_input: Entity<TextInput>,
     /// The shown profile's linked devices (its sync roster).
     devices: Vec<DeviceView>,
+    /// What this device sends and receives for the shown profile.
+    sync_types: Vec<SyncTypeView>,
     agents: agents::State,
     servers: servers::State,
     /// A device whose Revoke was pressed once and waits for Confirm.
@@ -374,6 +406,7 @@ impl SettingsView {
             network: netprefs::load(home).unwrap_or_default(),
             peer_input,
             devices: Vec::new(),
+            sync_types: Vec::new(),
             agents: agents_state,
             servers: servers::State::default(),
             confirm_revoke: None,
@@ -397,6 +430,7 @@ impl SettingsView {
         }
         self.network = netprefs::load(&self.home).unwrap_or_default();
         self.devices = self.profile_id().and_then(|id| morph_services::sync::devices(&self.home, &id).ok()).unwrap_or_default();
+        self.sync_types = self.load_sync_types();
         self.confirm_revoke = None;
         self.passwords_reload();
     }
@@ -665,6 +699,10 @@ impl SettingsView {
             Item::ProfilePassword | Item::ChangePassword => self.lock_activate(item, window, cx),
             Item::PasswordSaver | Item::AskAgain | Item::SavedPasswords => self.passwords_activate(item, window, cx),
             Item::OpenIdentity => cx.emit(ShellRequest::Run(Action::ShowIdentity)),
+            Item::Sync => {
+                self.sync_types = self.load_sync_types();
+            }
+            Item::SyncType(i) => self.toggle_sync_type(i as usize, cx),
             Item::Devices => {
                 self.devices = self.profile_id().and_then(|id| morph_services::sync::devices(&self.home, &id).ok()).unwrap_or_default();
             }
@@ -693,6 +731,7 @@ impl SettingsView {
             Item::Collapsed => self.change(SettingsChange::ToggleCollapsed, cx),
             Item::Discovery => self.set_discovery(forward, cx),
             Item::DefaultCompanion => self.agents_step_default(forward, cx),
+            Item::SyncType(i) => self.set_sync_type(i as usize, forward, cx),
             _ => {}
         }
     }
@@ -867,6 +906,74 @@ impl SettingsView {
             Err(e) => self.error = Some(format!("Could not save the network settings: {e}")),
         }
         cx.notify();
+    }
+
+    fn load_sync_types(&self) -> Vec<SyncTypeView> {
+        let Some(id) = self.profile_id() else { return Vec::new() };
+        match morph_services::sync::sync_types(&self.home, &id) {
+            Ok(types) => {
+                log_sync_types(&types);
+                types
+            }
+            Err(_) => Vec::new(),
+        }
+    }
+
+    fn toggle_sync_type(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(current) = self.sync_types.get(index) else { return };
+        let on = !current.on;
+        self.set_sync_type(index, on, cx);
+    }
+
+    fn set_sync_type(&mut self, index: usize, on: bool, cx: &mut Context<Self>) {
+        let Some(id) = self.profile_id() else { return };
+        let Some(typ) = self.sync_types.get(index).map(|t| t.id.clone()) else { return };
+        match morph_services::sync::set_sync_type(&self.home, &id, &typ, on) {
+            Ok(types) => {
+                self.sync_types = types;
+                self.error = None;
+                log_sync_types(&self.sync_types);
+            }
+            Err(e) => self.error = Some(format!("Could not update sync: {e}")),
+        }
+        cx.notify();
+    }
+
+    /// Settings → Sync: a switch for each type this device sends and receives.
+    fn sync_rows(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+        let t = self.theme;
+        let help = if self.sync_types.is_empty() {
+            "Unlock the library and link a device (Identity) to choose what this device syncs.".to_string()
+        } else {
+            "What this device sends and receives for this profile. Turning a type off does not delete data already here. These choices stay on this device.".to_string()
+        };
+        let mut rows = vec![
+            self.row(
+                Item::Sync,
+                "Synced data",
+                Some(help),
+                button(t, "settings-sync-refresh", "Refresh", false)
+                    .on_click(cx.listener(|this, _, w, cx| this.activate(Item::Sync, w, cx)))
+                    .into_any_element(),
+                cx,
+            ),
+        ];
+        for (i, typ) in self.sync_types.iter().enumerate() {
+            let idx = i;
+            let on = typ.on;
+            rows.push(
+                self.row(
+                    Item::SyncType(i as u8),
+                    typ.label.as_str(),
+                    Some(typ.help.clone()),
+                    button(t, ("settings-sync-type", i), if on { "On" } else { "Off" }, on)
+                        .on_click(cx.listener(move |this, _, _, cx| this.toggle_sync_type(idx, cx)))
+                        .into_any_element(),
+                    cx,
+                ),
+            );
+        }
+        rows
     }
 
     /// Settings → Linked devices: the profile's sync roster, with Revoke.
@@ -1271,6 +1378,7 @@ impl SettingsView {
             .chain(self.lock_rows(cx))
             .chain(self.passwords_rows(cx))
             .collect(),
+            Section::Sync => self.sync_rows(cx),
             Section::Identity => vec![
                 self.row(
                     Item::OpenIdentity,
@@ -1381,6 +1489,11 @@ impl Render for SettingsView {
 }
 
 /// "2 devices, 1 revoked" style summary.
+fn log_sync_types(types: &[SyncTypeView]) {
+    let line = types.iter().map(|t| format!("{}={}", t.id, if t.on { "on" } else { "off" })).collect::<Vec<_>>().join(" ");
+    println!("morph-event sync-types {line}");
+}
+
 fn device_summary(devices: &[DeviceView]) -> String {
     let revoked = devices.iter().filter(|d| d.revoked_ms.is_some()).count();
     let n = devices.len();
@@ -1460,8 +1573,16 @@ mod tests {
         assert!(w.starts_with("Phone has not synced since updating Morph"), "{w}");
         assert_eq!(morph_services::sync::revoke_warning(&[d(true, None), old], "old"), None, "the device being revoked does not count");
         assert_eq!(Section::named("devices"), Some(Section::Devices));
+        assert_eq!(Section::named("sync"), Some(Section::Sync));
         assert_eq!(visible_items("revoke"), [Item::Devices]);
         assert!(!Section::Devices.app_wide());
+        assert!(!Section::Sync.app_wide());
+        assert_eq!(
+            Item::ALL.iter().filter(|i| matches!(i, Item::SyncType(_))).count(),
+            morph_core::sync::SUPPORTED_TYPES.len(),
+            "every supported type needs a Settings row"
+        );
+        assert!(visible_items("sync history").contains(&Item::SyncType(1)));
     }
 
     #[test]

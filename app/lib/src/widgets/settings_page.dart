@@ -10,6 +10,7 @@ import 'linked_devices.dart';
 import 'network_settings.dart';
 import 'passwords_page.dart';
 import 'relay_status.dart';
+import 'sync_types.dart';
 
 /// Morph settings: this profile's data, the default browser, and About.
 class MorphSettingsPage extends StatefulWidget {
@@ -199,6 +200,13 @@ class _MorphSettingsPageState extends State<MorphSettingsPage> {
               },
             ),
           if (widget.devices != null && widget.profileId != null) ...[
+            _Header('Sync · ${widget.profileName}'),
+            MorphSyncTypesSection(
+              key: ValueKey('sync-types-${widget.profileId}'),
+              source: widget.devices!,
+              profileId: widget.profileId!,
+              home: widget.home,
+            ),
             _Header('Linked devices · ${widget.profileName}'),
             MorphLinkedDevicesSection(
               key: ValueKey('linked-devices-${widget.profileId}'),

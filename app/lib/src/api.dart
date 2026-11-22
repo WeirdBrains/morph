@@ -417,6 +417,19 @@ abstract class MorphDeviceSource {
     String peerId, {
     String? home,
   });
+
+  /// What this device sends and receives for [profileId]. Empty when the
+  /// library is not open. Throws if the profile is locked.
+  Future<List<MorphSyncType>> syncTypes(String profileId, {String? home});
+
+  /// Turn [typeId] on or off for this profile on this device. Does not
+  /// delete data already here. Turning a type on catches this device up.
+  Future<List<MorphSyncType>> setSyncType(
+    String profileId,
+    String typeId,
+    bool on, {
+    String? home,
+  });
 }
 
 /// One linked device in Settings → Linked devices.
@@ -450,6 +463,21 @@ class MorphLinkedDevice {
   final bool hasKey;
 
   bool get revoked => revokedMs != null;
+}
+
+/// One record type in Settings → Sync.
+class MorphSyncType {
+  const MorphSyncType({
+    required this.id,
+    required this.label,
+    this.help = '',
+    this.on = true,
+  });
+
+  final String id;
+  final String label;
+  final String help;
+  final bool on;
 }
 
 /// Shown after restoring an identity from its recovery words or a backup:

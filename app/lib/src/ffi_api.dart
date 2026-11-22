@@ -895,6 +895,37 @@ class FfiMorphApi implements MorphApi {
       _device(d),
   ];
 
+  static MorphSyncType _syncType(rust_devices.SyncTypeView t) =>
+      MorphSyncType(id: t.id, label: t.label, help: t.help, on: t.on_);
+
+  @override
+  Future<List<MorphSyncType>> syncTypes(
+    String profileId, {
+    String? home,
+  }) async => [
+    for (final t in await rust_devices.syncTypes(
+      home: home,
+      profileId: profileId,
+    ))
+      _syncType(t),
+  ];
+
+  @override
+  Future<List<MorphSyncType>> setSyncType(
+    String profileId,
+    String typeId,
+    bool on, {
+    String? home,
+  }) async => [
+    for (final t in await rust_devices.setSyncType(
+      home: home,
+      profileId: profileId,
+      typ: typeId,
+      on_: on,
+    ))
+      _syncType(t),
+  ];
+
   @override
   MorphRelayReport relayReport() {
     final v = rust_relays.relayReport();

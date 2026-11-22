@@ -64,6 +64,36 @@ pub fn revoke_linked_device(home: Option<String>, profile_id: String, peer_id: S
     linked_devices(home, profile_id)
 }
 
+/// One record type in Settings → Sync.
+pub struct SyncTypeView {
+    pub id: String,
+    pub label: String,
+    pub help: String,
+    pub on: bool,
+}
+
+impl From<&sync::SyncTypeView> for SyncTypeView {
+    fn from(t: &sync::SyncTypeView) -> Self {
+        SyncTypeView { id: t.id.clone(), label: t.label.clone(), help: t.help.clone(), on: t.on }
+    }
+}
+
+/// What this device sends and receives for the profile. Empty when the
+/// library is not open (no identity). A locked profile returns an error.
+pub fn sync_types(home: Option<String>, profile_id: String) -> Result<Vec<SyncTypeView>, String> {
+    let home = resolve(home)?;
+    let list = sync::sync_types(&home, &profile_id).map_err(|e| e.to_string())?;
+    Ok(list.iter().map(SyncTypeView::from).collect())
+}
+
+/// Turn one type on or off for this profile on this device. Does not delete
+/// data already here. Turning a type on catches this device up.
+pub fn set_sync_type(home: Option<String>, profile_id: String, typ: String, on: bool) -> Result<Vec<SyncTypeView>, String> {
+    let h = resolve(home.clone())?;
+    let list = sync::set_sync_type(&h, &profile_id, &typ, on).map_err(|e| e.to_string())?;
+    Ok(list.iter().map(SyncTypeView::from).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -96,6 +126,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let home = Some(dir.path().to_string_lossy().into_owned());
         assert!(linked_devices(home.clone(), "default".into()).map(|l| l.is_empty()).unwrap_or(true));
-        assert!(revoke_linked_device(home, "default".into(), "nobody".into()).is_err());
+        assert!(revoke_linked_device(home.clone(), "default".into(), "nobody".into()).is_err());
+        assert!(sync_types(home.clone(), "default".into()).map(|l| l.is_empty()).unwrap_or(true));
+        assert!(set_sync_type(home, "default".into(), "history".into(), false).is_err());
     }
 }

@@ -112,7 +112,11 @@ void main() {
         ),
       ),
     );
+    await tester.binding.setSurfaceSize(const Size(800, 2000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpAndSettle();
+    expect(find.text('SYNC · WORK'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('LINKED DEVICES · WORK'), 200);
     expect(find.text('LINKED DEVICES · WORK'), findsOneWidget);
     expect(find.byKey(const Key('linked-devices-empty')), findsOneWidget);
   });

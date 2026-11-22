@@ -3,7 +3,10 @@
 Status: 2026-11-22. Milestones 1–6 are done: bookmarks, folders, tags,
 history and settings sync, and Settings > Linked devices (desktop and phone),
 which lists devices and revokes one; a revoke rotates to a random epoch key
-the revoked device never gets (see "Revocation and key rotation"). Morph pins
+the revoked device never gets (see "Revocation and key rotation"). Settings >
+Sync (desktop and phone) has a switch for each type this device sends and
+receives; the choices are per profile and stay on this device (see "Sync
+type toggles"). Morph pins
 published `weirdnet-sync` 0.7.1, `weirdnet-net` 0.8.2 and `weirdnet-device-link`
 0.4.2. Open tabs on other devices are not built. Product rules are in
 `docs/identity-recovery.md` section 5. This file is the Morph implementation
@@ -45,7 +48,9 @@ already reads and writes.
   signs the new node's peer id and name) and writes `identity/node.key` plus
   `identity/node.cert.json` on the new device. `Transfer` already has a
   `sync: Vec<String>` field. Morph fills it from `morph_services::sync::link_payload`
-  (the device's opt-ins plus a certs-only roster snapshot in `Transfer.settings`).
+  (this device's opt-ins plus a certs-only roster snapshot in `Transfer.settings`).
+  A new device does not inherit those opt-ins: it always starts with every
+  supported type on (`apply_link_snapshot`).
   `has_linked_node` is true only on a device that *received* a link; a profile
   that created or restored its identity self-certifies through
   `profile_identity::certify_local_node`.
@@ -316,7 +321,9 @@ to an older one.
    (default: every supported type, including `bookmarks`, `history` and `settings`)
    and put a snapshot of the roster (certs only, no secrets) in
    `Transfer.settings` JSON, which is already defined as "app settings
-   worth carrying over".
+   worth carrying over". The new device still starts with every supported
+   type on, even if the device that sent the invite had turned some off;
+   the list in `Transfer.sync` is not applied as the new device's opt-ins.
 3. `finish` on the new device stores the seed, derives `LibraryKey`, adopts
    the library (`morph_services::library::adopt_new_identity`), writes the
    node key and cert, and saves the roster. Any plaintext bookmarks and
@@ -430,17 +437,33 @@ Morph pins that published version; it does not take a git or path dependency.
 7. Later, out of scope here: open tabs on other devices, an optional
    always-on sealed page store, saved passwords (separate opt-in and key).
 
+## Sync type toggles
+
+Settings > Sync (desktop and phone, also `morph://settings` then the Sync
+section) shows a switch for each type this build can merge: bookmarks,
+history, settings, and the companion types (companions, permissions, chats,
+MCP servers, MCP secrets, journal). The switches belong to this profile on
+this device. They are stored in `library.db` sync_meta (`types`) and are
+not a synced setting: turning Settings sync off must not be able to unsay
+itself, and a work computer can drop history without changing the phone.
+
+Turning a type off stops sending and receiving it and does not delete data
+already here. Turning it back on backfills local rows that were added
+meanwhile and pulls what the other devices have. A locked profile cannot
+change the list. New links, and a first device, still default to
+everything on.
+
 ## Open decisions
 
 1. **Edit vs delete:** this plan follows section 5 (concurrent edit wins;
    a strictly later delete wins). Confirm before milestone 1 tests freeze
    it.
-2. **Default opt-ins:** as built, every supported type (bookmarks, history,
+2. **Default opt-ins:** decided. Every supported type (bookmarks, history,
    settings and the companion types) is on at link and on a first device,
-   with no pre-flight prompt. `morph_core::sync::set_types` can change the
-   list, but no Settings toggle for it exists in the desktop or phone UI yet;
-   Settings > Linked devices only lists and revokes devices. A per-type toggle
-   or a prompt-first policy is still open.
+   with no pre-flight prompt. Settings > Sync has a switch for each type
+   (see "Sync type toggles"); `morph_core::sync::set_types` is the same list
+   in code. Linked devices still only lists and revokes. Open tabs and
+   saved passwords are not types in this build, so they have no switch yet.
 3. **Sync reply cap:** 256 KiB pages, requested above the 16 KiB link
    answer cap. Exact number can move; it must stay under weirdnet-net's
    default 8 MiB.

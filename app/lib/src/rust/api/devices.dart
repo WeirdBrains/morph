@@ -7,7 +7,7 @@ import '../frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`, `from`
 
 /// The profile's linked devices, this one first. Empty when the profile does
 /// not sync yet (no identity, or the library is locked).
@@ -43,6 +43,30 @@ Future<List<LinkedDeviceView>> revokeLinkedDevice({
   home: home,
   profileId: profileId,
   peerId: peerId,
+);
+
+/// What this device sends and receives for the profile. Empty when the
+/// library is not open (no identity). A locked profile returns an error.
+Future<List<SyncTypeView>> syncTypes({
+  String? home,
+  required String profileId,
+}) => RustLib.instance.api.crateApiDevicesSyncTypes(
+  home: home,
+  profileId: profileId,
+);
+
+/// Turn one type on or off for this profile on this device. Does not delete
+/// data already here. Turning a type on catches this device up.
+Future<List<SyncTypeView>> setSyncType({
+  String? home,
+  required String profileId,
+  required String typ,
+  required bool on_,
+}) => RustLib.instance.api.crateApiDevicesSetSyncType(
+  home: home,
+  profileId: profileId,
+  typ: typ,
+  on_: on_,
 );
 
 /// One linked device as the Linked devices list shows it.
@@ -101,4 +125,33 @@ class LinkedDeviceView {
           state == other.state &&
           note == other.note &&
           hasKey == other.hasKey;
+}
+
+/// One record type in Settings → Sync.
+class SyncTypeView {
+  final String id;
+  final String label;
+  final String help;
+  final bool on_;
+
+  const SyncTypeView({
+    required this.id,
+    required this.label,
+    required this.help,
+    required this.on_,
+  });
+
+  @override
+  int get hashCode =>
+      id.hashCode ^ label.hashCode ^ help.hashCode ^ on_.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SyncTypeView &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          label == other.label &&
+          help == other.help &&
+          on_ == other.on_;
 }

@@ -25,6 +25,52 @@ pub const DEFAULT_TYPES: &[&str] = &[BOOKMARKS, HISTORY, SETTINGS, COMPANIONS, G
 /// Record types this build can merge. A pull asks for each one that is on.
 pub const SUPPORTED_TYPES: &[&str] = &[BOOKMARKS, HISTORY, SETTINGS, COMPANIONS, GRANTS, CHATS, MCP, MCP_SECRETS, JOURNAL];
 
+/// Today's default opt-ins, as a owned list.
+pub fn default_type_list() -> Vec<String> {
+    DEFAULT_TYPES.iter().map(|s| (*s).to_string()).collect()
+}
+
+/// Keep only types this build can merge, in [`SUPPORTED_TYPES`] order, with no repeats.
+pub fn normalize_types(types: &[String]) -> Vec<String> {
+    SUPPORTED_TYPES.iter().filter(|t| types.iter().any(|x| x == *t)).map(|t| (*t).to_string()).collect()
+}
+
+pub fn type_is_supported(typ: &str) -> bool {
+    SUPPORTED_TYPES.contains(&typ)
+}
+
+/// Short Settings label for a supported type. Unknown ids come back as "Unknown".
+pub fn type_label(typ: &str) -> &'static str {
+    match typ {
+        BOOKMARKS => "Bookmarks",
+        HISTORY => "History",
+        SETTINGS => "Settings",
+        COMPANIONS => "Companions",
+        GRANTS => "Companion permissions",
+        CHATS => "Companion chats",
+        MCP => "Connected MCP servers",
+        MCP_SECRETS => "MCP server secrets",
+        JOURNAL => "Journal",
+        _ => "Unknown",
+    }
+}
+
+/// One-line help under the Settings row for a supported type.
+pub fn type_help(typ: &str) -> &'static str {
+    match typ {
+        BOOKMARKS => "Folders and tags go with them.",
+        HISTORY => "Pages this profile has visited.",
+        SETTINGS => "Search engine, start page and theme.",
+        COMPANIONS => "Your companions and their setup.",
+        GRANTS => "What each companion may do on a site.",
+        CHATS => "Companion conversations.",
+        MCP => "MCP server configurations.",
+        MCP_SECRETS => "Tokens and credentials for those servers.",
+        JOURNAL => "Companion journal entries.",
+        _ => "",
+    }
+}
+
 /// Earlier builds' default opt-ins, upgraded once to [`DEFAULT_TYPES`].
 const OLD_DEFAULTS: &[&[&str]] =
     &[&[BOOKMARKS], &[BOOKMARKS, HISTORY], &[BOOKMARKS, HISTORY, SETTINGS], &[BOOKMARKS, HISTORY, SETTINGS, COMPANIONS, GRANTS, CHATS, MCP, JOURNAL]];
@@ -89,11 +135,17 @@ pub fn types_on(lib: &Library) -> morph_store::Result<Vec<String>> {
 }
 
 pub fn set_types(lib: &mut Library, types: &[String]) -> morph_store::Result<()> {
-    lib.set_sync_meta("types", &serde_json::to_vec(types).expect("types json"))
+    let types = normalize_types(types);
+    lib.set_sync_meta("types", &serde_json::to_vec(&types).expect("types json"))
+}
+
+/// Whether `typ` is among this library's opt-ins.
+pub fn type_on(lib: &Library, typ: &str) -> bool {
+    types_on(lib).ok().is_some_and(|t| t.iter().any(|x| x == typ))
 }
 
 pub fn bookmarks_on(lib: &Library) -> bool {
-    types_on(lib).ok().is_some_and(|t| t.iter().any(|x| x == BOOKMARKS))
+    type_on(lib, BOOKMARKS)
 }
 
 /// Turn this library into a syncing replica: record our node, default
@@ -106,7 +158,7 @@ pub fn enable(lib: &mut Library, our_node: &str, now_ms: i64) -> morph_store::Re
     }
     set_node_id(lib, our_node)?;
     if types_on(lib)?.is_empty() {
-        set_types(lib, &DEFAULT_TYPES.iter().map(|s| s.to_string()).collect::<Vec<_>>())?;
+        set_types(lib, &default_type_list())?;
         lib.set_sync_meta(META_DEFAULTS, DEFAULTS_VERSION)?;
     }
     backfill_local_log(lib, our_node, now_ms)?;
@@ -125,7 +177,7 @@ fn upgrade_defaults(lib: &mut Library) -> morph_store::Result<()> {
     }
     let types = types_on(lib)?;
     if OLD_DEFAULTS.iter().any(|old| types.iter().map(String::as_str).eq(old.iter().copied())) {
-        set_types(lib, &DEFAULT_TYPES.iter().map(|s| s.to_string()).collect::<Vec<_>>())?;
+        set_types(lib, &default_type_list())?;
     }
     if !types.is_empty() {
         lib.set_sync_meta(META_DEFAULTS, DEFAULTS_VERSION)?;
@@ -147,21 +199,47 @@ pub fn materialize_all(lib: &mut Library, now_ms: i64) -> morph_store::Result<()
 }
 
 fn backfill_local_log(lib: &mut Library, our_node: &str, now_ms: i64) -> morph_store::Result<()> {
-    if !lib.sync_log()?.is_empty() {
+    let _ = our_node;
+    backfill_bookmarks(lib, now_ms)
+}
+
+/// Put local bookmarks and folders that are not in the log yet into our
+/// stream (first enable, or bookmarks sync turned on later), so they go
+/// out on the next pull. No-op when bookmarks sync is off.
+pub fn backfill_bookmarks(lib: &mut Library, now_ms: i64) -> morph_store::Result<()> {
+    let Some(our) = node_id(lib)? else { return Ok(()) };
+    if !bookmarks_on(lib) {
         return Ok(());
     }
     let set = lib.bookmark_set()?;
-    let node = NodeId::new(our_node);
+    let node = NodeId::new(&our);
     let mut clock = load_clock(lib)?;
     let mut log = load_log(lib)?;
+    let logged: std::collections::BTreeSet<String> = {
+        let mut ids = std::collections::BTreeSet::new();
+        for n in log.cursors().keys().map(|n| n.0.clone()).chain(node_id(lib)?) {
+            for e in log.iter_node(&NodeId::new(n)).filter(|e| e.typ == BOOKMARKS) {
+                ids.insert(e.record_id.clone());
+            }
+        }
+        ids
+    };
+    let mut wrote = false;
     for f in &set.folders {
+        if logged.contains(&f.id) {
+            continue;
+        }
         let wall = if f.updated_ms > 0 { f.updated_ms as u64 } else { now_ms as u64 };
         let hlc = Hlc::tick(clock.as_ref(), wall, node.clone());
         clock = Some(hlc.clone());
         let op = BookmarksOp::PutFolder { name: f.name.clone(), parent_id: f.parent_id.clone(), order: f.order.clone(), created_ms: f.created_ms };
         log.append(node.clone(), hlc, BOOKMARKS, f.id.clone(), encode_op(&op));
+        wrote = true;
     }
     for b in &set.bookmarks {
+        if logged.contains(&b.id) {
+            continue;
+        }
         let wall = if b.updated_ms > 0 { b.updated_ms as u64 } else { now_ms as u64 };
         let hlc = Hlc::tick(clock.as_ref(), wall, node.clone());
         clock = Some(hlc.clone());
@@ -178,8 +256,11 @@ fn backfill_local_log(lib: &mut Library, our_node: &str, now_ms: i64) -> morph_s
             clock = Some(hlc.clone());
             log.append(node.clone(), hlc, BOOKMARKS, b.id.clone(), encode_op(&BookmarksOp::AddTag { tag: tag.clone() }));
         }
+        wrote = true;
     }
-    persist_log(lib, &log, clock.as_ref())?;
+    if wrote {
+        persist_log(lib, &log, clock.as_ref())?;
+    }
     Ok(())
 }
 
@@ -1054,5 +1135,61 @@ mod tests {
         assert!(f1.parent_id.is_none() || folders.iter().find(|f| f.id == "f2").unwrap().parent_id.is_none());
         let parent = |id: &str| folders.iter().find(|f| f.id == id).unwrap().parent_id.clone();
         assert!(!folder_cycle(&"f1".to_string(), parent("f1").as_ref(), |p| parent(p)));
+    }
+
+    #[test]
+    fn every_supported_type_has_a_label() {
+        for typ in SUPPORTED_TYPES {
+            assert!(type_is_supported(typ));
+            assert_ne!(type_label(typ), "Unknown", "{typ}");
+            assert!(!type_help(typ).is_empty(), "{typ}");
+        }
+        assert!(!type_is_supported("tabs"));
+        assert_eq!(type_label("tabs"), "Unknown");
+        assert_eq!(normalize_types(&["history".into(), "nope".into(), "bookmarks".into(), "history".into()]), ["bookmarks", "history"]);
+        assert_eq!(default_type_list(), SUPPORTED_TYPES.iter().map(|s| (*s).to_string()).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn turning_bookmarks_off_keeps_rows_and_turning_them_on_logs_ones_added_meanwhile() {
+        let (_t, mut lib) = open();
+        enable(&mut lib, "a", 10).unwrap();
+        let mut set = lib.bookmark_set().unwrap();
+        set.bookmarks.push(Bookmark {
+            id: "b-keep".into(),
+            url: "https://keep.example/".into(),
+            title: "Keep".into(),
+            added_ms: 11,
+            updated_ms: 11,
+            ..Default::default()
+        });
+        let empty = BookmarkSet::default();
+        record_local_changes(&mut lib, &empty, &mut set, 11).unwrap();
+        lib.save_bookmark_set(&set).unwrap();
+        assert!(load_log(&lib).unwrap().iter_node(&node("a")).any(|e| e.record_id == "b-keep"));
+
+        set_types(&mut lib, &[HISTORY.to_string()]).unwrap();
+        assert!(!bookmarks_on(&lib));
+        let logged = load_log(&lib).unwrap().iter_node(&node("a")).count();
+        let mut later = lib.bookmark_set().unwrap();
+        later.bookmarks.push(Bookmark {
+            id: "b-later".into(),
+            url: "https://later.example/".into(),
+            title: "Later".into(),
+            added_ms: 20,
+            updated_ms: 20,
+            ..Default::default()
+        });
+        let prev = lib.bookmark_set().unwrap();
+        record_local_changes(&mut lib, &prev, &mut later, 20).unwrap();
+        lib.save_bookmark_set(&later).unwrap();
+        assert_eq!(load_log(&lib).unwrap().iter_node(&node("a")).count(), logged, "off means not logged");
+        assert!(lib.bookmark_set().unwrap().bookmarks.iter().any(|b| b.id == "b-later"), "rows already here stay");
+
+        set_types(&mut lib, &default_type_list()).unwrap();
+        backfill_bookmarks(&mut lib, 30).unwrap();
+        let ids: Vec<_> = load_log(&lib).unwrap().iter_node(&node("a")).filter(|e| e.typ == BOOKMARKS).map(|e| e.record_id.clone()).collect();
+        assert!(ids.contains(&"b-later".to_string()), "turning it back on logs the row added meanwhile: {ids:?}");
+        assert!(ids.contains(&"b-keep".to_string()));
     }
 }

@@ -80,7 +80,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.13.0';
 
   @override
-  int get rustContentHash => 1276424685;
+  int get rustContentHash => 800263101;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -464,6 +464,13 @@ abstract class RustLibApi extends BaseApi {
     required int width,
   });
 
+  Future<List<SyncTypeView>> crateApiDevicesSetSyncType({
+    String? home,
+    required String profileId,
+    required String typ,
+    required bool on_,
+  });
+
   Future<SettingsView> crateApiSettingsSetTabPosition({
     String? home,
     required String position,
@@ -476,6 +483,11 @@ abstract class RustLibApi extends BaseApi {
   Future<String> crateApiControlStartWebviewControlLoopback();
 
   Future<void> crateApiControlStopWebviewControl();
+
+  Future<List<SyncTypeView>> crateApiDevicesSyncTypes({
+    String? home,
+    required String profileId,
+  });
 
   Future<LibraryUnlockView> crateApiLibraryUnlockLibrary({
     String? home,
@@ -3123,6 +3135,44 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<List<SyncTypeView>> crateApiDevicesSetSyncType({
+    String? home,
+    required String profileId,
+    required String typ,
+    required bool on_,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_opt_String(home, serializer);
+          sse_encode_String(profileId, serializer);
+          sse_encode_String(typ, serializer);
+          sse_encode_bool(on_, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 77,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_sync_type_view,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiDevicesSetSyncTypeConstMeta,
+        argValues: [home, profileId, typ, on_],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiDevicesSetSyncTypeConstMeta => const TaskConstMeta(
+    debugName: "set_sync_type",
+    argNames: ["home", "profileId", "typ", "on_"],
+  );
+
+  @override
   Future<SettingsView> crateApiSettingsSetTabPosition({
     String? home,
     required String position,
@@ -3136,7 +3186,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 77,
+            funcId: 78,
             port: port_,
           );
         },
@@ -3166,7 +3216,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 78,
+            funcId: 79,
             port: port_,
           );
         },
@@ -3194,7 +3244,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 79,
+            funcId: 80,
             port: port_,
           );
         },
@@ -3224,7 +3274,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 80,
+            funcId: 81,
             port: port_,
           );
         },
@@ -3254,7 +3304,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 81,
+            funcId: 82,
             port: port_,
           );
         },
@@ -3273,6 +3323,40 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "stop_webview_control", argNames: []);
 
   @override
+  Future<List<SyncTypeView>> crateApiDevicesSyncTypes({
+    String? home,
+    required String profileId,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_opt_String(home, serializer);
+          sse_encode_String(profileId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 83,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_sync_type_view,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiDevicesSyncTypesConstMeta,
+        argValues: [home, profileId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiDevicesSyncTypesConstMeta => const TaskConstMeta(
+    debugName: "sync_types",
+    argNames: ["home", "profileId"],
+  );
+
+  @override
   Future<LibraryUnlockView> crateApiLibraryUnlockLibrary({
     String? home,
     required String profileId,
@@ -3288,7 +3372,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 82,
+            funcId: 84,
             port: port_,
           );
         },
@@ -3331,7 +3415,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 83,
+            funcId: 85,
             port: port_,
           );
         },
@@ -3762,6 +3846,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<SyncTypeView> dco_decode_list_sync_type_view(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_sync_type_view).toList();
+  }
+
+  @protected
   NetworkPeerView dco_decode_network_peer_view(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
@@ -3974,6 +4064,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       sidebarCollapsed: dco_decode_bool(arr[1]),
       sidebarWidth: dco_decode_u_32(arr[2]),
       searchEngine: dco_decode_String(arr[3]),
+    );
+  }
+
+  @protected
+  SyncTypeView dco_decode_sync_type_view(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    return SyncTypeView(
+      id: dco_decode_String(arr[0]),
+      label: dco_decode_String(arr[1]),
+      help: dco_decode_String(arr[2]),
+      on_: dco_decode_bool(arr[3]),
     );
   }
 
@@ -4526,6 +4630,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<SyncTypeView> sse_decode_list_sync_type_view(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <SyncTypeView>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_sync_type_view(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
   NetworkPeerView sse_decode_network_peer_view(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_peerId = sse_decode_String(deserializer);
@@ -4780,6 +4898,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       sidebarCollapsed: var_sidebarCollapsed,
       sidebarWidth: var_sidebarWidth,
       searchEngine: var_searchEngine,
+    );
+  }
+
+  @protected
+  SyncTypeView sse_decode_sync_type_view(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_id = sse_decode_String(deserializer);
+    var var_label = sse_decode_String(deserializer);
+    var var_help = sse_decode_String(deserializer);
+    var var_on_ = sse_decode_bool(deserializer);
+    return SyncTypeView(
+      id: var_id,
+      label: var_label,
+      help: var_help,
+      on_: var_on_,
     );
   }
 
@@ -5286,6 +5419,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_list_sync_type_view(
+    List<SyncTypeView> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_sync_type_view(item, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_network_peer_view(
     NetworkPeerView self,
     SseSerializer serializer,
@@ -5498,6 +5643,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_bool(self.sidebarCollapsed, serializer);
     sse_encode_u_32(self.sidebarWidth, serializer);
     sse_encode_String(self.searchEngine, serializer);
+  }
+
+  @protected
+  void sse_encode_sync_type_view(SyncTypeView self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.id, serializer);
+    sse_encode_String(self.label, serializer);
+    sse_encode_String(self.help, serializer);
+    sse_encode_bool(self.on_, serializer);
   }
 
   @protected
