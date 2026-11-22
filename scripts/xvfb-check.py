@@ -2282,25 +2282,51 @@ def focus_morph(m, win):
     w = m.own_window() or win
     if w:
         m.activate(w)
+        # windowactivate is not enough when another Morph is on the same
+        # display: keys would otherwise go to the window that still has
+        # the keyboard. On X11, raise, focus, and later send keys to this id.
+        if hasattr(m, "xdo"):
+            m.xdo("windowraise", str(w))
+            m.xdo("windowfocus", "--sync", str(w))
         time.sleep(0.3)
     return m.own_window() or w or win
+
+
+def send_key(m, win, key, delay=0.35):
+    """A key to this Morph's window, not whichever happens to be focused."""
+    win = focus_morph(m, win)
+    if win and hasattr(m, "xdo"):
+        m.xdo("key", "--window", str(win), "--clearmodifiers", key)
+        time.sleep(delay)
+    else:
+        m.key(key, delay=delay)
+    return win
+
+
+def send_text(m, win, text):
+    win = focus_morph(m, win)
+    if win and hasattr(m, "xdo"):
+        m.xdo("type", "--window", str(win), "--delay", "60", text)
+        time.sleep(0.5)
+    else:
+        m.type(text)
+    return win
 
 
 def open_sync_settings(m, r, win, who):
     """Open Settings, search for the Sync section, and wait until it logs the types."""
     win = focus_morph(m, win)
     before = len(m.lines(r"morph-event sync-types "))
-    m.key("ctrl+comma", delay=1.0)
+    win = send_key(m, win, "ctrl+comma", delay=1.0)
     opened = wait_for(lambda: settings_open(m, win), 10)
     if not opened:
-        win = focus_morph(m, win)
-        m.key("ctrl+comma", delay=1.0)
+        win = send_key(m, win, "ctrl+comma", delay=1.0)
         opened = wait_for(lambda: settings_open(m, win), 10)
     win = opened or win
     r.check("sync", f"Ctrl+, opens Settings on {who}", bool(opened), m.title(win) if win else "")
-    m.key("slash", delay=0.4)
-    m.type("sync bookmarks")
-    m.key("Return", delay=0.6)
+    win = send_key(m, win, "slash", delay=0.4)
+    win = send_text(m, win, "sync bookmarks")
+    win = send_key(m, win, "Return", delay=0.6)
     got = wait_for(lambda: m.lines(r"morph-event sync-types ")[before:], 10)
     r.check("sync", f"Settings > Sync lists the types on {who}", bool(got), sync_types_event(m))
     return (got[-1] if got else sync_types_event(m), win)
@@ -2309,18 +2335,18 @@ def open_sync_settings(m, r, win, who):
 def close_settings(m, win):
     win = focus_morph(m, win)
     if settings_open(m, win):
-        m.key("ctrl+w", delay=0.8)
+        win = send_key(m, win, "ctrl+w", delay=0.8)
     return win
 
 
-def turn_history(m, on, r, label):
+def turn_history(m, win, on, r, label):
     """History is the third Sync row (intro, Bookmarks, History) after the
     search in open_sync_settings lands on the intro row."""
-    m.key("Down", delay=0.3)
-    m.key("Down", delay=0.3)
+    win = send_key(m, win, "Down", delay=0.3)
+    win = send_key(m, win, "Down", delay=0.3)
     want = "on" if on else "off"
     before = len(m.lines(r"morph-event sync-types "))
-    m.key("space", delay=0.8)
+    send_key(m, win, "space", delay=0.8)
     got = wait_for(lambda: [ln for ln in m.lines(r"morph-event sync-types ")[before:] if sync_type_state(ln, "history") == want], 8)
     r.check("sync", label, bool(got), got[-1] if got else sync_types_event(m))
     return got
@@ -2332,15 +2358,15 @@ def sync_types_after_link(m, m2, r, win, win2):
     device, and turning it back on catches the list up."""
     # Leave the identity panels so Ctrl+, reaches Settings.
     for dev, w in ((m, win), (m2, win2)):
-        focus_morph(dev, w)
+        w = focus_morph(dev, w)
         for _ in range(3):
-            dev.key("Escape", delay=0.4)
+            send_key(dev, w, "Escape", delay=0.4)
     first, win = open_sync_settings(m, r, win, "the first device")
     r.check("sync", "a new link starts with history on, on the first device", sync_type_state(first, "history") == "on" and sync_type_state(first, "bookmarks") == "on", first)
     win = close_settings(m, win)
     second, win2 = open_sync_settings(m2, r, win2, "the new device")
     r.check("sync", "and on the new device", sync_type_state(second, "history") == "on" and sync_type_state(second, "bookmarks") == "on", second)
-    turn_history(m2, False, r, "Space on History turns it off on the new device")
+    turn_history(m2, win2, False, r, "Space on History turns it off on the new device")
     # Close the new device's Settings before switching, so Ctrl+, reaches the first.
     win2 = close_settings(m2, win2)
     first_again, win = open_sync_settings(m, r, win, "the first device again")
@@ -2349,7 +2375,7 @@ def sync_types_after_link(m, m2, r, win, win2):
     # Re-open Settings on the new device and turn History back on (focus was lost
     # when we switched away).
     _, win2 = open_sync_settings(m2, r, win2, "the new device again")
-    turn_history(m2, True, r, "Space again turns history back on")
+    turn_history(m2, win2, True, r, "Space again turns history back on")
     close_settings(m2, win2)
 
 
