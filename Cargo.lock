@@ -10346,9 +10346,9 @@ dependencies = [
 
 [[package]]
 name = "weirdnet-device-link"
-version = "0.3.1"
+version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13d8da2680b690e2061aeba19ef59d7eb2adda6c4a3e313b1b4cc5fba16334d8"
+checksum = "099a9f221e358f73a7320ee09109ef01041431087c888e007e2366216a6bf3a5"
 dependencies = [
  "base64 0.22.1",
  "cbor4ii",
@@ -10363,9 +10363,9 @@ dependencies = [
 
 [[package]]
 name = "weirdnet-keys"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1b44f05a7a1fd01e6d7afd61bf4c8b124a0b31292fc43aac43027bab706bb7e"
+checksum = "1ce2e882d131c4f718da06de5f796e77cb5aa86eff2ee8c29d21e0dc239131db"
 dependencies = [
  "age",
  "argon2",
@@ -10424,9 +10424,9 @@ dependencies = [
 
 [[package]]
 name = "weirdnet-net"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "24bacdd9fd2af8a0f609bfddf0c5cc0116e094d498adf7fadfce6ebd3f8c24b8"
+checksum = "75a48adc55905fdd8343424eaf56fcf74ddbd0933e447c940a7a982d4af4586f"
 dependencies = [
  "base64 0.22.1",
  "blake3",
@@ -10453,9 +10453,9 @@ dependencies = [
 
 [[package]]
 name = "weirdnet-schemes"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69fb6dab59139dcd4afc00a6bd873c41ce32d35eddf7db8221ebb506c62eebd7"
+checksum = "b4178c6ca93f343e6ff6460da6de87bba9815521321e5bf1a564a81b00d3f28c"
 dependencies = [
  "base64 0.22.1",
  "hex",
@@ -10468,9 +10468,9 @@ dependencies = [
 
 [[package]]
 name = "weirdnet-storage"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e7f9c6b42abf074593b380012ebe23ddc6e82f7d5a9b6880ae3710620602fc2"
+checksum = "95b68e48ded63f832b6c685719b164e02929c79f962455717369f7b7fc12a398"
 dependencies = [
  "hex",
  "rusqlite",
@@ -10480,9 +10480,9 @@ dependencies = [
 
 [[package]]
 name = "weirdnet-sync"
-version = "0.7.0"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d05697dc714dd052f56f930953c09719f4cdd46cd1d49e58ececd6cd2ff39f20"
+checksum = "ef64f9f02036cb50ad2984a5df77e556b5abce9448863b4b4ff77d833beac9a4"
 dependencies = [
  "blake3",
  "cbor4ii",
@@ -10498,9 +10498,9 @@ dependencies = [
 
 [[package]]
 name = "weirdnet-text"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "73dd85cc5aa7cfb64f9ec433e0957334e1f0176b8ab130895c2a32f1f86f6eb3"
+checksum = "95fdceb4c3611357b6ab8abc6002f7048e1d3025b51ba9a3f884e3df4738fe35"
 dependencies = [
  "unicode-segmentation",
 ]

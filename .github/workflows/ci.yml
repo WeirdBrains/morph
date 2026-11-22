@@ -214,7 +214,7 @@ jobs:
       # A relay on the runner itself, so the relay check and the link
       # screens have a relay to reserve a slot on (and a round trip to show).
       - name: Local relay and test app
-        run: cargo install weirdnet-device-link --version '=0.3.0' --locked --example local-relay --root target/relay-tool && cargo build --release --locked -p morph-services --example serve-app
+        run: cargo install weirdnet-device-link --version '=0.3.3' --locked --example local-relay --root target/relay-tool && cargo build --release --locked -p morph-services --example serve-app
       - name: Xvfb checks
         env:
           LIBGL_ALWAYS_SOFTWARE: "1"

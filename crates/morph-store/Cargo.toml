@@ -16,7 +16,7 @@ serde = { version = "1", features = ["derive"] }
 thiserror.workspace = true
 uuid = { version = "1", features = ["v7"] }
 # SQLCipher and OpenSSL are compiled from source (no system libraries on any platform).
-weirdnet-storage = { version = "=0.1.0", default-features = false }
+weirdnet-storage = { version = "=0.1.1", default-features = false, features = ["vendored-openssl"] }
 
 [dev-dependencies]
 tempfile.workspace = true

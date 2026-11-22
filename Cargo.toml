@@ -18,7 +18,7 @@ morph-identity = { path = "crates/morph-identity" }
 morph-store = { path = "crates/morph-store" }
 morph-keystore = { path = "crates/morph-keystore" }
 morph-webview-control = { path = "crates/morph-webview-control" }
-weirdnet-device-link = "=0.3.1"
+weirdnet-device-link = "=0.3.3"
 morph-ui = { path = "crates/morph-ui" }
 morph-webview = { path = "crates/morph-webview" }
 morph-browser = { path = "crates/morph-browser" }
@@ -26,10 +26,10 @@ morph-services = { path = "crates/morph-services" }
 morph-os = { path = "crates/morph-os" }
 morph-ai = { path = "crates/morph-ai" }
 morph-companion = { path = "crates/morph-companion" }
-weirdnet-keys = "=0.1.0"
-weirdnet-net = "=0.8.1"
-weirdnet-sync = "=0.7.0"
-weirdnet-text = "=0.1.0"
+weirdnet-keys = "=0.1.2"
+weirdnet-net = "=0.8.2"
+weirdnet-sync = "=0.7.1"
+weirdnet-text = "=0.1.1"
 weirdnet-agent = "=0.4.5"
 weirdnet-mcp = { version = "=0.5.2", default-features = false }
 pulldown-cmark = { version = "=0.13.6", default-features = false }
