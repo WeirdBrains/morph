@@ -1,11 +1,11 @@
 # Library sync
 
-Status: 2026-11-21. Milestones 1–6 are done: bookmarks, folders, tags,
+Status: 2026-11-22. Milestones 1–6 are done: bookmarks, folders, tags,
 history and settings sync, and Settings > Linked devices (desktop and phone),
 which lists devices and revokes one; a revoke rotates to a random epoch key
 the revoked device never gets (see "Revocation and key rotation"). Morph pins
 published `weirdnet-sync` 0.7.1, `weirdnet-net` 0.8.2 and `weirdnet-device-link`
-0.3.3. Open tabs on other devices are not built. Product rules are in
+0.4.2. Open tabs on other devices are not built. Product rules are in
 `docs/identity-recovery.md` section 5. This file is the Morph implementation
 plan for that section: bookmarks, folders, tags and history first, then
 settings, between a user's own linked devices, end-to-end encrypted, over
@@ -51,7 +51,7 @@ already reads and writes.
   `profile_identity::certify_local_node`.
 - **Transport:** `morph_identity::device_link::net_config` / `link_relays` (`weirdnet_device_link::known_relays`)
   (and `MORPH_LINK_RELAYS`) already dial TCP and QUIC together and fall back
-  to a relay circuit. the `local-relay` example of `weirdnet-device-link` 0.3.3 (crates.io; CI installs it with `cargo install --example local-relay`)
+  to a relay circuit. the `local-relay` example of `weirdnet-device-link` 0.4.2 (crates.io; CI installs it with `cargo install --example local-relay`)
   and `scripts/xvfb-check.py --local-relay` are the CI pattern to reuse.
 - **Now in the tree:** per-record HLCs and node ids, the op log and cursors in
   `library.db`, history row ids and tombstones, a self-issued `NodeCert` on the
