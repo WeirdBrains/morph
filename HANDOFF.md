@@ -6,6 +6,15 @@ Morph's agent work has its own handoff doc: [docs/handoff.md](docs/handoff.md). 
 
 Repo: https://github.com/WeirdBrains/morph. A [Weird Brains](https://weirdbrains.com) project.
 
+## 2026-11-22
+
+### Weirdnet pins: clean patch releases and weirdnet-device-link 0.3.3
+
+- **What changed:** Morph now pins `weirdnet-net` =0.8.2, `weirdnet-sync` =0.7.1, `weirdnet-text` =0.1.1, `weirdnet-device-link` =0.3.3, `weirdnet-keys` =0.1.2, `weirdnet-schemes` =0.1.1 and `weirdnet-storage` =0.1.1, replacing versions withdrawn from crates.io; `Cargo.lock` changes only those seven packages ([`228c70b`](https://github.com/WeirdBrains/morph/commit/228c70b335863b0f191234b450dcbb48dee06a67)). `weirdnet-storage` 0.1.1 moved vendored OpenSSL behind a default `vendored-openssl` feature, so `morph-store` turns it on to keep SQLCipher and OpenSSL compiled from source. CI's local relay is installed from device-link 0.3.3. Morph's generic device-link code now comes from the crate ([`59bcf9d`](https://github.com/WeirdBrains/morph/commit/59bcf9dd99d62702ca4ca7b033caf26aed92f5bf)): `PUBLIC_RELAYS` is gone (use `known_relays()`), `offer_scheme`/`is_offer` wrap the crate's `offer_scheme` over `OFFER_SCHEMES`, `net_config` is `link_node_config("morph-link", link_relays())`, and `link_relays` is `relays_from_env("MORPH_LINK_RELAYS")`. The scheme constants, `OfferApp`, `device_label`, `link_error`, `LinkState`, `NewDevice`, `AddDevice`, `Invite`, `has_linked_node`, the `Links` registry, `drop_later`, `check_invite` and the LinkSettings snapshot stay in Morph. One behavior difference: a `MORPH_LINK_RELAYS` entry without a `/p2p/<relay>` peer id is now dropped (it could never hold a relay reservation).
+- **Checks:** `cargo fmt --check`, `cargo clippy --locked --all-targets -- -D warnings` and `cargo test --locked` (whole workspace, headless) pass locally; `cargo metadata --locked` accepts the lockfile. CI and iOS results for this push are in the next entry or the Actions tab. Not tested: linking two real devices through the public relay, and the Flutter apps beyond CI.
+- **Left:** device-link main has the same additions unreleased (0.4.2 needs Michael's OK); the LinkSettings roster snapshot belongs in `weirdnet-sync` and needs its own release.
+- **Next:** history sync, then the profile lock follow-ups (auto-lock, OS-authentication unlock, mobile biometrics).
+
 ## 2026-11-21
 
 ### Docs: library sync status brought up to date
