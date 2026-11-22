@@ -2691,7 +2691,9 @@ def password_saver_check(r, binary, display):
             m.activate(win)
         m.key("ctrl+comma", delay=0.8)
         r.check(g, "Ctrl+, opens Settings", wait_for(lambda: m.title(win).startswith("Settings") if win else m.lines(r"morph-event password-saver")), m.title(win) if win else "")
-        none = wait_for(lambda: m.lines(r"morph-event password-saver enabled=false active=false available=false"), 15)
+        # Default preference is on, but without an identity the saver is not
+        # offered (available=false) and not active.
+        none = wait_for(lambda: m.lines(r"morph-event password-saver \S+ active=false available=false"), 15)
         r.check(g, "without an identity the saver is not offered", none, str(m.lines(r"morph-event password-saver")[-3:]))
         m.key("ctrl+w", delay=1.0)
         open_identity(m, r, g)
