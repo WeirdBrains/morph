@@ -138,7 +138,7 @@ mod tests {
     fn off_without_an_identity_and_on_once_it_has_one() {
         let (_tmp, home) = home();
         let none = password_saver_offer(Some(home.clone()), "default".into()).unwrap();
-        assert!(!none.available && !none.active);
+        assert!(!none.enabled && !none.available && !none.active);
         assert!(none.unavailable.contains("no identity"));
         assert!(set_password_saver_enabled(Some(home.clone()), "default".into(), true).is_err());
 

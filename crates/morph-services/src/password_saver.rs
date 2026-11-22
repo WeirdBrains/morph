@@ -51,9 +51,11 @@ impl Offer {
 
 /// Whether the saver is offered for `profile_id` and what filling needs.
 pub fn offer(home: &Path, profile_id: &str, os: &dyn OsAuth) -> Result<Offer> {
-    let settings =
-        if morph_core::profile_lock::has_identity(home, profile_id) { core::settings(home, profile_id).map_err(map)? } else { Default::default() };
-    let (ask_again, enabled) = (settings.ask_again, settings.enabled);
+    let has_identity = morph_core::profile_lock::has_identity(home, profile_id);
+    let settings = if has_identity { core::settings(home, profile_id).map_err(map)? } else { Default::default() };
+    // The stored default is on, but the saver stays off in Settings and in
+    // offers until the profile has an identity.
+    let (ask_again, enabled) = (settings.ask_again, has_identity && settings.enabled);
     match core::requirement(home, profile_id, os) {
         Ok(r) => Ok(Offer { requirement: Ok(r), ask_again, enabled }),
         Err(SaverError::Unavailable(u)) => Ok(Offer { requirement: Err(u), ask_again, enabled }),
@@ -338,8 +340,9 @@ mod tests {
         let home = tmp.path().join("h");
         morph_core::profiles::load_catalog(&home).unwrap();
         let os = NoOsAuth;
-        assert_eq!(offer(&home, "default", &os).unwrap().requirement, Err(Unavailable::NoIdentity));
-        assert!(!offer(&home, "default", &os).unwrap().active());
+        let none = offer(&home, "default", &os).unwrap();
+        assert_eq!(none.requirement, Err(Unavailable::NoIdentity));
+        assert!(!none.enabled && !none.active(), "off until the profile has an identity");
         assert!(matches!(set_enabled(&home, "default", true), Err(Error::NoIdentity)));
 
         let created = crate::identity::create(&home, "default", &pw("profile password")).unwrap();
