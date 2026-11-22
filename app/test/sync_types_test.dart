@@ -1,6 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
-import 'package:morph/src/api.dart';
 import 'package:morph/src/theme/morph_theme.dart';
 import 'package:morph/src/widgets/settings_page.dart';
 import 'package:morph/src/widgets/sync_types.dart';
