@@ -2301,9 +2301,10 @@ def focus_morph(m, win, click=False):
     return m.own_window() or w or win
 
 
-def send_key(m, win, key, delay=0.35, click=False):
+def send_key(m, win, key, delay=0.35, click=False, refocus=True):
     """A key to this Morph's window, not whichever happens to be focused."""
-    win = focus_morph(m, win, click=click)
+    if refocus:
+        win = focus_morph(m, win, click=click)
     if win and hasattr(m, "xdo"):
         m.xdo("key", "--window", str(win), "--clearmodifiers", key)
         time.sleep(delay)
@@ -2312,13 +2313,24 @@ def send_key(m, win, key, delay=0.35, click=False):
     return win
 
 
-def send_text(m, win, text, click=False):
-    win = focus_morph(m, win, click=click)
+def send_text(m, win, text, click=False, refocus=True):
+    if refocus:
+        win = focus_morph(m, win, click=click)
     if win and hasattr(m, "xdo"):
         m.xdo("type", "--window", str(win), "--delay", "60", text)
         time.sleep(0.5)
     else:
         m.type(text)
+    return win
+
+
+def search_sync(m, win):
+    """Filter Settings to the Sync section. Return lands on the intro row.
+    Do not refocus between keys: windowfocus would leave the Settings list."""
+    win = send_key(m, win, "Escape", delay=0.3, refocus=False)
+    win = send_key(m, win, "slash", delay=0.4, refocus=False)
+    win = send_text(m, win, "sync bookmarks", refocus=False)
+    win = send_key(m, win, "Return", delay=0.6, refocus=False)
     return win
 
 
@@ -2340,9 +2352,7 @@ def open_sync_settings(m, r, win, who):
         opened = wait_for(lambda: settings_open(m, win), 10)
     win = opened or win
     r.check("sync", f"Ctrl+, opens Settings on {who}", bool(opened), m.title(win) if win else "")
-    win = send_key(m, win, "slash", delay=0.4)
-    win = send_text(m, win, "sync bookmarks")
-    win = send_key(m, win, "Return", delay=0.6)
+    win = search_sync(m, win)
     got = wait_for(lambda: m.lines(r"morph-event sync-types ")[before:], 10)
     r.check("sync", f"Settings > Sync lists the types on {who}", bool(got), sync_types_event(m))
     return (got[-1] if got else sync_types_event(m), win)
@@ -2356,13 +2366,15 @@ def close_settings(m, win):
 
 
 def turn_history(m, win, on, r, label):
-    """History is the third Sync row (intro, Bookmarks, History) after the
-    search in open_sync_settings lands on the intro row."""
-    win = send_key(m, win, "Down", delay=0.3)
-    win = send_key(m, win, "Down", delay=0.3)
+    """History is the third Sync row (intro, Bookmarks, History) after
+    search_sync lands on the intro row. The search is repeated here so a
+    reopen does not leave the keyboard on the wrong row."""
+    win = search_sync(m, win)
+    win = send_key(m, win, "Down", delay=0.3, refocus=False)
+    win = send_key(m, win, "Down", delay=0.3, refocus=False)
     want = "on" if on else "off"
     before = len(m.lines(r"morph-event sync-types "))
-    send_key(m, win, "space", delay=0.8)
+    send_key(m, win, "space", delay=0.8, refocus=False)
     got = wait_for(lambda: [ln for ln in m.lines(r"morph-event sync-types ")[before:] if sync_type_state(ln, "history") == want], 8)
     r.check("sync", label, bool(got), got[-1] if got else sync_types_event(m))
     return got
