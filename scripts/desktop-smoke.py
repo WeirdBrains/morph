@@ -139,6 +139,9 @@ def wait_line(lines, log, rx, timeout):
 
 
 def launch(binary, url, env):
+    # MORPH_FOREGROUND: this process is the browser (its output is read
+    # here), not a launcher that starts one and exits.
+    env = dict(env, MORPH_FOREGROUND="1")
     proc = subprocess.Popen([binary, url], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, text=True, encoding="utf-8", errors="replace")
     lines = queue.Queue()
     threading.Thread(target=lambda: [lines.put(line) for line in proc.stdout], daemon=True).start()

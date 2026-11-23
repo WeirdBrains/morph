@@ -53,7 +53,9 @@ class Morph:
         self.env = self.session_env(display)
         # One window with the page, whatever the last run left open (the
         # windows check turns restoring back on).
-        self.env.update(MORPH_HOME=str(home), MORPH_LOG_EVENTS="1", MORPH_NO_RESTORE="1")
+        # MORPH_FOREGROUND: the first launch with a URL is the browser
+        # itself (its output is the log), not a launcher that starts one.
+        self.env.update(MORPH_HOME=str(home), MORPH_LOG_EVENTS="1", MORPH_NO_RESTORE="1", MORPH_FOREGROUND="1")
         self.env.update(extra_env or {})
         # A desktop of its own for the default-browser check: morph.desktop
         # and a `morph` on PATH (xdg-mime wants both), fresh config.
@@ -2022,6 +2024,112 @@ def single_instance(m, r, binary):
     r.check("single", "the first Morph keeps running", m.proc.poll() is None)
 
 
+def link_from_terminal(r, binary, display):
+    """A program that opens the browser and waits for it (`gh auth
+    refresh`, or a CLI with a loopback OAuth callback) gets control back as
+    soon as the page is on its way, when no Morph was running too: the
+    launch starts the browser on its own and exits 0, with no hold on the
+    caller's pipes. The page then completes a loopback sign-in: an
+    authorize page on 127.0.0.1 redirects to localhost, which posts a form
+    back to 127.0.0.1, where the waiting program hears the code."""
+    import html
+    import http.server
+    import signal
+    import threading
+    import urllib.parse
+
+    g = "terminal link"
+    got = {}
+
+    class Callback(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            port = self.server.server_address[1]
+            path, _, query = self.path.partition("?")
+            params = urllib.parse.parse_qs(query)
+            if path == "/authorize":
+                state = params.get("state", [""])[0]
+                self.send_response(302)
+                self.send_header("Location", f"http://localhost:{port}/consent?state={urllib.parse.quote(state)}")
+                self.end_headers()
+            elif path == "/consent":
+                state = html.escape(params.get("state", [""])[0], quote=True)
+                body = (
+                    f'<!doctype html><title>consent</title><form method=post action="http://127.0.0.1:{port}/callback">'
+                    f'<input name=code value=c0de-42><input name=state value="{state}"></form>'
+                    "<script>document.forms[0].submit()</script>"
+                ).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self.send_error(404)
+
+        def do_POST(self):
+            data = self.rfile.read(int(self.headers.get("Content-Length", 0))).decode()
+            if self.path == "/callback":
+                got.update({k: v[0] for k, v in urllib.parse.parse_qs(data).items()})
+            body = b"<!doctype html><title>signed in</title>You can close this tab."
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a, **k):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Callback)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    port = server.server_address[1]
+    home = Path(tempfile.mkdtemp(prefix="morph-xvfb-terminal-"))
+    env = Driver.session_env(display)
+    for var in ("BROWSER", "XDG_CURRENT_DESKTOP", "DESKTOP_SESSION", "MORPH_FOREGROUND"):
+        env.pop(var, None)
+    env.update(MORPH_HOME=str(home), MORPH_LOG_EVENTS="1", MORPH_NO_RESTORE="1", XDG_DATA_HOME=str(home / "xdg" / "data"), XDG_CONFIG_HOME=str(home / "xdg" / "config"))
+    redirect = urllib.parse.quote(f"http://127.0.0.1:{port}/callback", safe="")
+    url = f"http://127.0.0.1:{port}/authorize?client_id=morph-check&redirect_uri={redirect}&state=s7%2Bx%3D1&scope=a%20b"
+    start = time.time()
+    try:
+        # capture_output: the caller's pipes close when the launch exits
+        # (a browser left holding them would hang a program reading them).
+        done = subprocess.run([binary, url], env=env, capture_output=True, text=True, timeout=30)
+        code, took, err = done.returncode, time.time() - start, done.stderr.strip()[-300:]
+    except subprocess.TimeoutExpired:
+        code, took, err = None, 30.0, "still running"
+    try:
+        r.check(g, "a first launch with a URL exits 0 once the browser is up", code == 0 and took < 25, f"exit {code} after {took:.1f}s {err}")
+        pids = wait_for(lambda: morph_pids(binary, home), 5)
+        r.check(g, "and the browser runs on in a session of its own", pids and any(os.getsid(p) == p for p in pids), str(pids))
+        wait_for(lambda: got, 30)
+        r.check(g, "the page reaches the loopback callback (127.0.0.1 -> localhost redirect -> form POST)", got.get("code") == "c0de-42", str(got))
+        r.check(g, "and the query string arrived intact", got.get("state") == "s7+x=1", str(got))
+    finally:
+        for p in morph_pids(binary, home):
+            try:
+                os.kill(p, signal.SIGTERM)
+            except OSError:
+                pass
+        server.shutdown()
+
+
+def morph_pids(binary, home):
+    """Morphs (`binary`) with MORPH_HOME=`home`, which this script did not
+    start itself."""
+    want, exe = f"MORPH_HOME={home}".encode(), Path(binary).resolve()
+    out = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit() or int(entry.name) == os.getpid():
+            continue
+        try:
+            if want in (entry / "environ").read_bytes().split(b"\0") and (entry / "exe").resolve() == exe:
+                out.append(int(entry.name))
+        except OSError:
+            continue
+    return out
+
+
 def identity_file(m, profile=None):
     profile = profile or catalog(m).get("current", "default")
     try:
@@ -2865,7 +2973,7 @@ def main():
     ap.add_argument("--input-bin", help="morph-wl-input (default: next to --bin)")
     ap.add_argument("--local-relay", help="a local relay to link through (weirdnet-device-link's local-relay example)")
     ap.add_argument("--app-server", help="a Weirdnet app behind the local relay (morph-services' serve-app example)")
-    ap.add_argument("--only", choices=["downloads", "windows", "popups", "omnibox", "relays", "profile-lock", "password-saver"], help="run just this check")
+    ap.add_argument("--only", choices=["downloads", "windows", "popups", "omnibox", "relays", "profile-lock", "password-saver", "terminal-link"], help="run just this check")
     ap.add_argument("--screenshots", help="save screenshots of checks that take them (X11) here")
     args = ap.parse_args()
     start_dns_stub()
@@ -2978,6 +3086,15 @@ def run(args):
         r = Results()
         try:
             profile_lock_check(r, args.bin, display)
+            return finish(r, args)
+        finally:
+            for proc in (wm, xvfb):
+                if proc and proc.poll() is None:
+                    proc.terminate()
+    if args.only == "terminal-link":
+        r = Results()
+        try:
+            link_from_terminal(r, args.bin, display)
             return finish(r, args)
         finally:
             for proc in (wm, xvfb):
@@ -3107,6 +3224,7 @@ def run(args):
         m = Driver(args.bin, display, home, LINK_ENV)
         settings_relaunch(m, r, w0, h0)
         single_instance(m, r, args.bin)
+        link_from_terminal(r, args.bin, display)
         bridge_round_trip(m, r, args.bin)
         popup_close(m, r, args.bin)
         media(m, r, args.bin)
