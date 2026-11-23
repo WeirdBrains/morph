@@ -324,6 +324,19 @@ Identity and links in the GPUI shell (`v0.2.0-alpha.4`).
   `$XDG_RUNTIME_DIR` (`morph-<hash>.sock`); a second `morph URL` hands the URL
   over (a new tab in the running window, which is raised) and exits; a second
   `morph` alone raises the window. A stale socket is replaced.
+  _(2026-11-22)_ A first `morph URL` (no Morph running) no longer becomes
+  the browser in the caller's process: on Linux and macOS it starts Morph
+  with `setsid` (`launch.rs`; `MORPH_FOREGROUND=1` in the child, stdin
+  null, stdout/stderr to `$MORPH_HOME/morph.log`), waits up to 20 s for
+  the socket to take connections, and exits 0 (the child's exit code if it
+  died first, with the log's tail on stderr). Callers that wait for the
+  browser command (`gh auth refresh` via `xdg-open`, which waits in the
+  generic desktop mode, or `$BROWSER`) used to hang until the window
+  closed. A launch without a URL stays in the foreground. Harnesses that
+  read the first Morph's output set `MORPH_FOREGROUND=1`
+  (`scripts/xvfb-check.py`, `scripts/desktop-smoke.py`); the Xvfb group
+  "terminal link" checks the launch and a loopback sign-in (127.0.0.1
+  authorize, 302 to localhost, form POST back to 127.0.0.1).
 - **Library:** after unlocking, the keyboard goes to the search (it was left
   nowhere, so Escape did nothing).
 - **Checks on this box:** fmt, build, clippy `-D warnings`, `cargo test

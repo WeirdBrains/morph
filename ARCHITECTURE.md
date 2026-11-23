@@ -399,8 +399,13 @@ backend per platform.
   Links arrive as arguments (Linux, Windows) or over the
   `org.weirdbrains.morph/links` channel (Android intents, macOS Apple
   Events) and open in a new tab of the active profile; an empty start tab
-  is reused. A second launch on Linux/Windows is still a second instance
-  until Morph is single-instance.
+  is reused. A later launch hands its URL to the running Morph and exits
+  (`single.rs`). On Linux and macOS a launch with a URL that finds no
+  Morph running starts the browser as a process of its own (a new
+  session, output to `$MORPH_HOME/morph.log`) and exits 0 once it listens
+  for links (`launch.rs`), so programs that run the browser and wait for
+  it (`gh auth refresh`, loopback OAuth CLIs) go on at once;
+  `MORPH_FOREGROUND=1` keeps the browser in the launching process.
 - _(new 2026-11-12)_ **Library opens wait for the panel.** Opening a bookmark
   or history entry navigates only after the library panel's close animation
   has finished, then checks the surface. Surface checks asked for while one
