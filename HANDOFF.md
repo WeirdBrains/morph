@@ -6,6 +6,14 @@ Morph's agent work has its own handoff doc: [docs/handoff.md](docs/handoff.md). 
 
 Repo: https://github.com/WeirdBrains/morph. A [Weird Brains](https://weirdbrains.com) project.
 
+## 2026-11-23
+
+### v0.3.0-preview.2 (pre-release)
+
+- **What changed:** the second 0.3 preview, cut from main at [`bc41a7f`](https://github.com/WeirdBrains/morph/commit/bc41a7f031ca) after CI and iOS passed there. Tag `v0.3.0-preview.2` points at [`c887255`](https://github.com/WeirdBrains/morph/commit/c8872558a565). Release: https://github.com/WeirdBrains/morph/releases/tag/v0.3.0-preview.2 (pre-release, not Latest). Lead items: links from a terminal hand control back (`gh auth refresh` no longer hangs when Morph was not running), per-type sync toggles, the password saver on for profiles with an identity, and `weirdnet-device-link` 0.4.2. Phone build number 10410. Assets are CI's builds of the release commit (Linux, macOS, Windows, Android debug APK); the signed `android-arm64` APK is attached by the Android release workflow. This commit moves the Arch recipes (`morph-bin`, `morph`, `.SRCINFO`) and `packaging/nix/release.json` to the preview.
+- **Checks:** every platform asset and checksum (`scripts/weirdnet_release.py assets 0.3.0-preview.2`), `taur-check` for `morph-bin`. Not tested: installing the TAUR package on Arch, the APK on real phones.
+- **Next:** history sync, then the profile lock follow-ups (auto-lock, OS-authentication unlock, mobile biometrics).
+
 ## 2026-11-22
 
 ### Links from a terminal hand control back (gh auth refresh)
