@@ -2482,7 +2482,9 @@ def turn_history(m, _win, on, r, label):
     before = len(m.lines(r"morph-event sync-types "))
     hook = Path(m.home) / "test-sync-type"
     hook.write_text(f"history={want}\n")
-    got = wait_for(lambda: [ln for ln in m.lines(r"morph-event sync-types ")[before:] if sync_type_state(ln, "history") == want], 8)
+    # Turning a type on backfills and ticks before Settings logs the new
+    # state (often ~20s). Turning one off is immediate.
+    got = wait_for(lambda: [ln for ln in m.lines(r"morph-event sync-types ")[before:] if sync_type_state(ln, "history") == want], 30 if on else 8)
     hook.unlink(missing_ok=True)
     r.check("sync", label, bool(got), got[-1] if got else sync_types_event(m))
     return got
