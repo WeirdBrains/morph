@@ -2494,32 +2494,42 @@ def turn_history(m, win, on, r, label):
     search_sync lands on the intro row. The search is repeated here so a
     reopen does not leave the keyboard on the wrong row.
 
-    Two Morphs share a display, so give this one the keyboard first (a
-    caption click is fine: search_sync re-lands on the intro). If Space
-    still misses, click the History switch from its layout probe."""
+    Do not click the caption before that search: the click takes focus
+    off the Settings list, and Escape then can close Settings instead of
+    driving the row. xdotool --window already reaches this Morph on X11.
+    On Wayland, if Space misses, give this window the seat and click the
+    History switch (layout probe); do not Escape first."""
     want = "on" if on else "off"
 
     def history_is(before):
         return [ln for ln in m.lines(r"morph-event sync-types ")[before:] if sync_type_state(ln, "history") == want]
 
-    got = []
-    for attempt in range(3):
-        win = focus_morph(m, win, click=True)
+    def space_toggle():
+        nonlocal win
         win = search_sync(m, win)
-        win = send_key(m, win, "Down", delay=0.4, refocus=False)
-        win = send_key(m, win, "Down", delay=0.4, refocus=False)
+        win = send_key(m, win, "Down", delay=0.3, refocus=False)
+        win = send_key(m, win, "Down", delay=0.3, refocus=False)
         before = len(m.lines(r"morph-event sync-types "))
         send_key(m, win, "space", delay=0.8, refocus=False)
-        got = wait_for(lambda: history_is(before), 5)
-        if got:
-            break
-        # Wayland with two Morphs: the seat can still be on the other
-        # window, so Space never hits the list. Click the switch.
+        return wait_for(lambda: history_is(before), 8)
+
+    got = space_toggle()
+    if not got:
+        # Wayland: two Morphs share a seat, so Space may not have arrived.
+        # A caption click gives this window the keyboard; do not search_sync
+        # next (Escape would close Settings while the list is unfocused).
+        win = focus_morph(m, win, click=True)
+        if not settings_open(m, win):
+            win = send_key(m, win, "ctrl+comma", delay=1.0)
+            opened = wait_for(lambda: settings_open(m, win), 10)
+            win = opened or win
         before = len(m.lines(r"morph-event sync-types "))
         if click_sync_type(m, win, 1):
             got = wait_for(lambda: history_is(before), 5)
-            if got:
-                break
+        else:
+            print("INFO  sync    no History switch layout to click", flush=True)
+        if not got:
+            got = space_toggle()
     r.check("sync", label, bool(got), got[-1] if got else sync_types_event(m))
     return got
 
