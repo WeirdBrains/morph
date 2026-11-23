@@ -84,7 +84,7 @@ class RoadmapPage extends StatelessComponent {
               ),
               ('First local AI helpers, moved up from v0.4', Status.inProgress),
             ],
-            note: 'A first preview, $previewVersion, is out; $latestVersion is still the stable release. Linking devices in v0.3 needs v0.3 on both.',
+            note: 'A preview, $previewVersion, is out; $latestVersion is still the stable release. Linking devices in v0.3 needs v0.3 on both.',
             image: (
               'concept-p2p-web.svg',
               'Concept diagram: a Morph device hosting a site, a relay, and a peer opening a weirdnet-morph link.',
