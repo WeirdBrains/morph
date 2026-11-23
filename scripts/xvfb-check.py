@@ -2276,7 +2276,7 @@ def settings_open(m, win):
     return None
 
 
-def focus_morph(m, win):
+def focus_morph(m, win, click=False):
     """Bring this Morph to the front. Two Morphs share a display, so the
     window id from an earlier step can go stale; use this process's."""
     w = m.own_window() or win
@@ -2288,13 +2288,22 @@ def focus_morph(m, win):
         if hasattr(m, "xdo"):
             m.xdo("windowraise", str(w))
             m.xdo("windowfocus", "--sync", str(w))
+        if click:
+            # A click in the caption is what actually gives this window the
+            # keyboard once another Morph has had it. Only when switching
+            # windows: a click on every key would leave the Sync row.
+            try:
+                _, _, width, _ = m.geometry(w)
+                m.click(w, max(width // 2, 80), 16)
+            except Exception:
+                pass
         time.sleep(0.3)
     return m.own_window() or w or win
 
 
-def send_key(m, win, key, delay=0.35):
+def send_key(m, win, key, delay=0.35, click=False):
     """A key to this Morph's window, not whichever happens to be focused."""
-    win = focus_morph(m, win)
+    win = focus_morph(m, win, click=click)
     if win and hasattr(m, "xdo"):
         m.xdo("key", "--window", str(win), "--clearmodifiers", key)
         time.sleep(delay)
@@ -2303,8 +2312,8 @@ def send_key(m, win, key, delay=0.35):
     return win
 
 
-def send_text(m, win, text):
-    win = focus_morph(m, win)
+def send_text(m, win, text, click=False):
+    win = focus_morph(m, win, click=click)
     if win and hasattr(m, "xdo"):
         m.xdo("type", "--window", str(win), "--delay", "60", text)
         time.sleep(0.5)
@@ -2315,12 +2324,19 @@ def send_text(m, win, text):
 
 def open_sync_settings(m, r, win, who):
     """Open Settings, search for the Sync section, and wait until it logs the types."""
-    win = focus_morph(m, win)
+    win = focus_morph(m, win, click=True)
     before = len(m.lines(r"morph-event sync-types "))
     win = send_key(m, win, "ctrl+comma", delay=1.0)
     opened = wait_for(lambda: settings_open(m, win), 10)
     if not opened:
-        win = send_key(m, win, "ctrl+comma", delay=1.0)
+        win = send_key(m, win, "ctrl+comma", delay=1.0, click=True)
+        opened = wait_for(lambda: settings_open(m, win), 10)
+    if not opened:
+        # Ctrl+, reaches this window the first time, but after the other
+        # Morph has had the keyboard it can fail; morph://settings still opens the page.
+        win = send_key(m, win, "ctrl+l", delay=0.6, click=True)
+        win = send_text(m, win, "morph://settings")
+        win = send_key(m, win, "Return", delay=1.0)
         opened = wait_for(lambda: settings_open(m, win), 10)
     win = opened or win
     r.check("sync", f"Ctrl+, opens Settings on {who}", bool(opened), m.title(win) if win else "")
@@ -2333,7 +2349,7 @@ def open_sync_settings(m, r, win, who):
 
 
 def close_settings(m, win):
-    win = focus_morph(m, win)
+    win = focus_morph(m, win, click=True)
     if settings_open(m, win):
         win = send_key(m, win, "ctrl+w", delay=0.8)
     return win
@@ -2358,7 +2374,7 @@ def sync_types_after_link(m, m2, r, win, win2):
     device, and turning it back on catches the list up."""
     # Leave the identity panels so Ctrl+, reaches Settings.
     for dev, w in ((m, win), (m2, win2)):
-        w = focus_morph(dev, w)
+        w = focus_morph(dev, w, click=True)
         for _ in range(3):
             send_key(dev, w, "Escape", delay=0.4)
     first, win = open_sync_settings(m, r, win, "the first device")
