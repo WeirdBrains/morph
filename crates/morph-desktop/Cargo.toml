@@ -40,10 +40,13 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time"] }
 # Logged-out research fetches with no cookie store (companion_web.rs).
 ureq = { version = "=3.5.2", default-features = false, features = ["rustls", "gzip"] }
 
-# Linux: GPUI's patched platform (the raw key behind a key event) and the
-# render check's process handling.
+# Linux: GPUI's patched platform (the raw key behind a key event).
 [target.'cfg(target_os = "linux")'.dependencies]
 gpui_linux.workspace = true
+
+# Linux and macOS: the render check's process handling and the background
+# start of a link launch (launch.rs).
+[target.'cfg(unix)'.dependencies]
 libc.workspace = true
 
 # Windows: `morph --version` and errors reach the console the app was

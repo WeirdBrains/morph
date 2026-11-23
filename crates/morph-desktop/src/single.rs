@@ -80,6 +80,7 @@ pub fn hand_off(path: &Path, request: &Request) -> bool {
 }
 
 /// Whether a Morph listens at `path` (it may still be starting up).
+#[cfg(unix)]
 pub fn is_running(path: &Path) -> bool {
     connect(path).is_ok()
 }
