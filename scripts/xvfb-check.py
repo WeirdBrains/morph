@@ -2442,22 +2442,6 @@ def search_sync(m, win):
     return win
 
 
-def click_sync_type(m, win, index):
-    """Click the On/Off switch for SUPPORTED_TYPES[index], using the last
-    `settings-layout SyncType(N) controls` line (MORPH_LOG_LAYOUT)."""
-    found = m.lines(rf"^morph-event settings-layout SyncType\({index}\) controls ")
-    if not (found and win):
-        return False
-    try:
-        x, y, w, h = (int(v) for v in found[-1].split()[-4:])
-    except ValueError:
-        return False
-    if w < 4 or h < 4:
-        return False
-    m.click(win, x + w // 2, y + h // 2)
-    return True
-
-
 def open_sync_settings(m, r, win, who):
     """Open Settings, search for the Sync section, and wait until it logs the types."""
     win = focus_morph(m, win, click=True)
@@ -2489,47 +2473,17 @@ def close_settings(m, win):
     return win
 
 
-def turn_history(m, win, on, r, label):
-    """History is the third Sync row (intro, Bookmarks, History) after
-    search_sync lands on the intro row. The search is repeated here so a
-    reopen does not leave the keyboard on the wrong row.
-
-    Do not click the caption before that search: the click takes focus
-    off the Settings list, and Escape then can close Settings instead of
-    driving the row. xdotool --window already reaches this Morph on X11.
-    On Wayland, if Space misses, give this window the seat and click the
-    History switch (layout probe); do not Escape first."""
+def turn_history(m, _win, on, r, label):
+    """Turn History on or off through SettingsView's test hook: with
+    `MORPH_TEST_SYNC=1`, a `test-sync-type` file in this Morph's home is
+    applied by the same set_sync_type path as the Settings switch. Two
+    Morphs sharing a seat made Space on the History row unreliable."""
     want = "on" if on else "off"
-
-    def history_is(before):
-        return [ln for ln in m.lines(r"morph-event sync-types ")[before:] if sync_type_state(ln, "history") == want]
-
-    def space_toggle():
-        nonlocal win
-        win = search_sync(m, win)
-        win = send_key(m, win, "Down", delay=0.3, refocus=False)
-        win = send_key(m, win, "Down", delay=0.3, refocus=False)
-        before = len(m.lines(r"morph-event sync-types "))
-        send_key(m, win, "space", delay=0.8, refocus=False)
-        return wait_for(lambda: history_is(before), 8)
-
-    got = space_toggle()
-    if not got:
-        # Wayland: two Morphs share a seat, so Space may not have arrived.
-        # A caption click gives this window the keyboard; do not search_sync
-        # next (Escape would close Settings while the list is unfocused).
-        win = focus_morph(m, win, click=True)
-        if not settings_open(m, win):
-            win = send_key(m, win, "ctrl+comma", delay=1.0)
-            opened = wait_for(lambda: settings_open(m, win), 10)
-            win = opened or win
-        before = len(m.lines(r"morph-event sync-types "))
-        if click_sync_type(m, win, 1):
-            got = wait_for(lambda: history_is(before), 5)
-        else:
-            print("INFO  sync    no History switch layout to click", flush=True)
-        if not got:
-            got = space_toggle()
+    before = len(m.lines(r"morph-event sync-types "))
+    hook = Path(m.home) / "test-sync-type"
+    hook.write_text(f"history={want}\n")
+    got = wait_for(lambda: [ln for ln in m.lines(r"morph-event sync-types ")[before:] if sync_type_state(ln, "history") == want], 8)
+    hook.unlink(missing_ok=True)
     r.check("sync", label, bool(got), got[-1] if got else sync_types_event(m))
     return got
 
@@ -2548,7 +2502,7 @@ def sync_types_after_link(m, m2, r, win, win2):
     win = close_settings(m, win)
     second, win2 = open_sync_settings(m2, r, win2, "the new device")
     r.check("sync", "and on the new device", sync_type_state(second, "history") == "on" and sync_type_state(second, "bookmarks") == "on", second)
-    turn_history(m2, win2, False, r, "Space on History turns it off on the new device")
+    turn_history(m2, win2, False, r, "turning History off on the new device")
     # Close the new device's Settings before switching, so Ctrl+, reaches the first.
     win2 = close_settings(m2, win2)
     first_again, win = open_sync_settings(m, r, win, "the first device again")
@@ -2557,7 +2511,7 @@ def sync_types_after_link(m, m2, r, win, win2):
     # Re-open Settings on the new device and turn History back on (focus was lost
     # when we switched away).
     _, win2 = open_sync_settings(m2, r, win2, "the new device again")
-    turn_history(m2, win2, True, r, "Space again turns history back on")
+    turn_history(m2, win2, True, r, "turning History back on")
     close_settings(m2, win2)
 
 
@@ -2575,7 +2529,7 @@ def identity_link_invite(m, r, binary, display, user_id):
     if not invite:
         return
     check_qr(r, "invite", "its QR code paints and reads back as its link", m, invite[-1])
-    m4 = Driver(binary, display, tempfile.mkdtemp(prefix="morph-xvfb-invite-"), {**LINK_ENV, "MORPH_LOG_LAYOUT": "1"})
+    m4 = Driver(binary, display, tempfile.mkdtemp(prefix="morph-xvfb-invite-"), {**LINK_ENV, "MORPH_TEST_SYNC": "1"})
     try:
         r.check("invite", "a new device (another home) opens", wait_for(lambda: state(m4), 20))
         new_win, _ = open_identity(m4, r, "invite")

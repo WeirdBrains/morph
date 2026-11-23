@@ -587,8 +587,34 @@ impl SettingsView {
         cx.notify();
     }
 
+    /// `MORPH_TEST_SYNC=1`: the desktop checks drop `test-sync-type` in this
+    /// Morph's home (`history=off`) to drive a Settings type switch through
+    /// the same [`Self::set_sync_type`] path as the On/Off control, without
+    /// depending on keyboard focus across two windows.
+    fn apply_test_sync_hook(&mut self, cx: &mut Context<Self>) {
+        if !test_sync_hook_enabled() {
+            return;
+        }
+        let path = self.home.join("test-sync-type");
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return;
+        };
+        let _ = std::fs::remove_file(&path);
+        let Some((id, on)) = parse_test_sync_hook(&text) else {
+            return;
+        };
+        if self.sync_types.is_empty() {
+            self.sync_types = self.load_sync_types();
+        }
+        let Some(index) = self.sync_types.iter().position(|t| t.id == id) else {
+            return;
+        };
+        self.set_sync_type(index, on, cx);
+    }
+
     /// Pick up finished default-browser work; called by the host's tick.
     pub fn poll(&mut self, cx: &mut Context<Self>) {
+        self.apply_test_sync_hook(cx);
         self.poll_relays(cx);
         self.servers_poll(cx);
         self.passwords_poll(cx);
@@ -1543,9 +1569,40 @@ fn layout_probe(name: String) -> gpui::AnyElement {
     .into_any_element()
 }
 
+fn test_sync_hook_enabled() -> bool {
+    std::env::var_os("MORPH_TEST_SYNC").is_some_and(|v| v == "1")
+}
+
+/// One line from `test-sync-type`: `history=off` or `bookmarks=on`.
+fn parse_test_sync_hook(text: &str) -> Option<(String, bool)> {
+    let (id, val) = text.trim().split_once('=')?;
+    let on = match val.trim() {
+        "on" | "1" | "true" => true,
+        "off" | "0" | "false" => false,
+        _ => return None,
+    };
+    let id = id.trim();
+    if id.is_empty() {
+        return None;
+    }
+    Some((id.to_string(), on))
+}
+
 #[cfg(test)]
 mod tests {
+
     use super::*;
+
+    #[test]
+    fn test_sync_hook_parses_a_type_and_on_or_off() {
+        assert_eq!(parse_test_sync_hook("history=off"), Some(("history".into(), false)));
+        assert_eq!(parse_test_sync_hook(" history = on \n"), Some(("history".into(), true)));
+        assert_eq!(parse_test_sync_hook("bookmarks=0"), Some(("bookmarks".into(), false)));
+        assert_eq!(parse_test_sync_hook(""), None);
+        assert_eq!(parse_test_sync_hook("history"), None);
+        assert_eq!(parse_test_sync_hook("=on"), None);
+        assert_eq!(parse_test_sync_hook("history=maybe"), None);
+    }
 
     #[test]
     fn devices_read_plainly() {
