@@ -2438,8 +2438,24 @@ def search_sync(m, win):
     win = send_key(m, win, "Escape", delay=0.3, refocus=False)
     win = send_key(m, win, "slash", delay=0.4, refocus=False)
     win = send_text(m, win, "sync bookmarks", refocus=False)
-    win = send_key(m, win, "Return", delay=0.6, refocus=False)
+    win = send_key(m, win, "Return", delay=0.8, refocus=False)
     return win
+
+
+def click_sync_type(m, win, index):
+    """Click the On/Off switch for SUPPORTED_TYPES[index], using the last
+    `settings-layout SyncType(N) controls` line (MORPH_LOG_LAYOUT)."""
+    found = m.lines(rf"^morph-event settings-layout SyncType\({index}\) controls ")
+    if not (found and win):
+        return False
+    try:
+        x, y, w, h = (int(v) for v in found[-1].split()[-4:])
+    except ValueError:
+        return False
+    if w < 4 or h < 4:
+        return False
+    m.click(win, x + w // 2, y + h // 2)
+    return True
 
 
 def open_sync_settings(m, r, win, who):
@@ -2476,14 +2492,34 @@ def close_settings(m, win):
 def turn_history(m, win, on, r, label):
     """History is the third Sync row (intro, Bookmarks, History) after
     search_sync lands on the intro row. The search is repeated here so a
-    reopen does not leave the keyboard on the wrong row."""
-    win = search_sync(m, win)
-    win = send_key(m, win, "Down", delay=0.3, refocus=False)
-    win = send_key(m, win, "Down", delay=0.3, refocus=False)
+    reopen does not leave the keyboard on the wrong row.
+
+    Two Morphs share a display, so give this one the keyboard first (a
+    caption click is fine: search_sync re-lands on the intro). If Space
+    still misses, click the History switch from its layout probe."""
     want = "on" if on else "off"
-    before = len(m.lines(r"morph-event sync-types "))
-    send_key(m, win, "space", delay=0.8, refocus=False)
-    got = wait_for(lambda: [ln for ln in m.lines(r"morph-event sync-types ")[before:] if sync_type_state(ln, "history") == want], 8)
+
+    def history_is(before):
+        return [ln for ln in m.lines(r"morph-event sync-types ")[before:] if sync_type_state(ln, "history") == want]
+
+    got = []
+    for attempt in range(3):
+        win = focus_morph(m, win, click=True)
+        win = search_sync(m, win)
+        win = send_key(m, win, "Down", delay=0.4, refocus=False)
+        win = send_key(m, win, "Down", delay=0.4, refocus=False)
+        before = len(m.lines(r"morph-event sync-types "))
+        send_key(m, win, "space", delay=0.8, refocus=False)
+        got = wait_for(lambda: history_is(before), 5)
+        if got:
+            break
+        # Wayland with two Morphs: the seat can still be on the other
+        # window, so Space never hits the list. Click the switch.
+        before = len(m.lines(r"morph-event sync-types "))
+        if click_sync_type(m, win, 1):
+            got = wait_for(lambda: history_is(before), 5)
+            if got:
+                break
     r.check("sync", label, bool(got), got[-1] if got else sync_types_event(m))
     return got
 
@@ -2529,7 +2565,7 @@ def identity_link_invite(m, r, binary, display, user_id):
     if not invite:
         return
     check_qr(r, "invite", "its QR code paints and reads back as its link", m, invite[-1])
-    m4 = Driver(binary, display, tempfile.mkdtemp(prefix="morph-xvfb-invite-"), LINK_ENV)
+    m4 = Driver(binary, display, tempfile.mkdtemp(prefix="morph-xvfb-invite-"), {**LINK_ENV, "MORPH_LOG_LAYOUT": "1"})
     try:
         r.check("invite", "a new device (another home) opens", wait_for(lambda: state(m4), 20))
         new_win, _ = open_identity(m4, r, "invite")
