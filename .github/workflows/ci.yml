@@ -519,7 +519,7 @@ jobs:
           morph --version
           Xvfb :9 -screen 0 1280x800x24 &
           sleep 2
-          sudo -u builder env DISPLAY=:9 MORPH_HOME=/tmp/morph-ci timeout 20 morph about:blank & pid=$!
+          sudo -u builder env DISPLAY=:9 MORPH_HOME=/tmp/morph-ci MORPH_FOREGROUND=1 timeout 20 morph about:blank & pid=$!
           sleep 12
           DISPLAY=:9 xdotool search --name Morph
           kill $pid || true
