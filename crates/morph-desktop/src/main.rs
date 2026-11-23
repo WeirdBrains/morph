@@ -26,6 +26,8 @@ mod default_browser;
 mod dialogs;
 mod identity;
 mod identity_view;
+#[cfg(unix)]
+mod launch;
 #[cfg(target_os = "linux")]
 mod legacy_desktop;
 mod library;
@@ -97,6 +99,32 @@ fn main() -> ExitCode {
     };
     if single::hand_off(&socket, &request) {
         return ExitCode::SUCCESS;
+    }
+    // No Morph yet: a launch that opens a link (`xdg-open`, `$BROWSER`)
+    // starts the browser on its own and exits once it listens, so callers
+    // that wait for the browser command (`gh auth refresh`) go on.
+    #[cfg(unix)]
+    if let Some(url) = args.open.as_deref().filter(|u| launch::in_background(Some(u), std::env::var_os(launch::FOREGROUND_ENV).as_deref())) {
+        match std::env::current_exe().and_then(|exe| launch::start(&exe, &paths.home, &socket, url)) {
+            Ok(launch::Started::Ready) => return ExitCode::SUCCESS,
+            Ok(launch::Started::Slow) => {
+                eprintln!("morph: still starting; the page opens when the window does (log: {})", launch::log_path(&paths.home).display());
+                return ExitCode::SUCCESS;
+            }
+            // Handed to a Morph that started at the same moment.
+            Ok(launch::Started::Exited(0)) => return ExitCode::SUCCESS,
+            Ok(launch::Started::Exited(code)) => {
+                let log = std::fs::read_to_string(launch::log_path(&paths.home)).unwrap_or_default();
+                let lines: Vec<&str> = log.lines().collect();
+                for line in &lines[lines.len().saturating_sub(20)..] {
+                    eprintln!("{line}");
+                }
+                eprintln!("morph: the browser exited with code {code} as it started");
+                return ExitCode::from(u8::try_from(code).unwrap_or(1));
+            }
+            // Could not start a process of its own: be the browser here.
+            Err(e) => eprintln!("morph: running in the foreground: {e}"),
+        }
     }
     #[cfg(target_os = "linux")]
     if let Err(e) = backend::start() {

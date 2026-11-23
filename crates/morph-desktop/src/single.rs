@@ -79,6 +79,11 @@ pub fn hand_off(path: &Path, request: &Request) -> bool {
     BufReader::new(stream).read_line(&mut answer).is_ok() && answer.trim() == "ok"
 }
 
+/// Whether a Morph listens at `path` (it may still be starting up).
+pub fn is_running(path: &Path) -> bool {
+    connect(path).is_ok()
+}
+
 /// The running Morph's end: requests from later launches arrive on
 /// [`Listener::requests`]. The socket file goes away when this is dropped.
 pub struct Listener {
