@@ -2393,7 +2393,7 @@ def focus_morph(m, win, click=False):
         # windowactivate is not enough when another Morph is on the same
         # display: keys would otherwise go to the window that still has
         # the keyboard. On X11, raise, focus, and later send keys to this id.
-        if hasattr(m, "xdo"):
+        if not isinstance(m, WaylandMorph):
             m.xdo("windowraise", str(w))
             m.xdo("windowfocus", "--sync", str(w))
         if click:
@@ -2413,7 +2413,7 @@ def send_key(m, win, key, delay=0.35, click=False, refocus=True):
     """A key to this Morph's window, not whichever happens to be focused."""
     if refocus:
         win = focus_morph(m, win, click=click)
-    if win and hasattr(m, "xdo"):
+    if win and not isinstance(m, WaylandMorph):
         m.xdo("key", "--window", str(win), "--clearmodifiers", key)
         time.sleep(delay)
     else:
@@ -2424,7 +2424,7 @@ def send_key(m, win, key, delay=0.35, click=False, refocus=True):
 def send_text(m, win, text, click=False, refocus=True):
     if refocus:
         win = focus_morph(m, win, click=click)
-    if win and hasattr(m, "xdo"):
+    if win and not isinstance(m, WaylandMorph):
         m.xdo("type", "--window", str(win), "--delay", "60", text)
         time.sleep(0.5)
     else:
