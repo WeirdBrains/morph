@@ -1,6 +1,8 @@
 //! The profiles panel (`morph.profiles`): switch, create, rename and delete
 //! profiles. Switching asks the shell ([`ShellRequest::SwitchProfile`]),
-//! which rebuilds the window's components for the profile.
+//! which rebuilds the window's components for the profile. A profile that
+//! asks for its password before it opens is marked "Locked"; switching to it
+//! shows the lock screen.
 
 use std::path::Path;
 
@@ -128,6 +130,7 @@ impl Render for ProfilesView {
                 .child(div().w(px(18.)).text_color(rgb(t.accent)).child(if e.current { "●" } else { "" }))
                 .child(div().flex_1().overflow_hidden().whitespace_nowrap().text_ellipsis().text_size(px(13.)).child(e.profile.name.clone()))
                 .when(e.current, |d| d.child(div().text_size(px(11.)).text_color(rgb(t.text_secondary)).child("this window")))
+                .when(e.locked, |d| d.child(div().id(("profile-locked", i)).text_size(px(11.)).text_color(rgb(t.text_secondary)).child("Locked")))
                 .child(icon(t, ("profile-rename", i), "✎").on_click(cx.listener(move |this, _, w, cx| {
                     cx.stop_propagation();
                     this.start(Edit::Rename(rename.clone()), &name, w, cx);

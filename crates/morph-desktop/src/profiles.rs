@@ -10,6 +10,9 @@ use morph_core::profiles::{self, Profile};
 pub struct Entry {
     pub profile: Profile,
     pub current: bool,
+    /// The profile asks for its password before it opens: it has an
+    /// identity, the password is on, and it is not open in this process.
+    pub locked: bool,
 }
 
 pub struct Profiles {
@@ -35,7 +38,11 @@ impl Profiles {
     }
 
     pub fn entries(&self) -> Vec<Entry> {
-        profiles::list(&self.home).unwrap_or_default().into_iter().map(|profile| Entry { current: profile.id == self.shown, profile }).collect()
+        profiles::list(&self.home)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|profile| Entry { current: profile.id == self.shown, locked: shows_locked(&self.home, &profile.id), profile })
+            .collect()
     }
 
     fn result<T>(&mut self, r: Result<T, impl std::fmt::Display>) -> Option<T> {
@@ -87,9 +94,41 @@ impl Profiles {
     }
 }
 
+/// Whether the picker shows `id` as locked: opening it would ask for its
+/// password. A profile without an identity, one whose password is off (it
+/// opens from the keystore) and one already open here are not.
+pub fn shows_locked(home: &Path, id: &str) -> bool {
+    morph_core::profile_lock::has_identity(home, id)
+        && morph_core::profile_lock::requires_password(home, id)
+        && morph_services::profile_lock::is_locked(home, id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use morph_identity::profile_identity::SecretString;
+
+    #[test]
+    fn locked_profiles_show_as_locked() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("h");
+        profiles::load_catalog(&home).unwrap();
+        let mut p = Profiles::new(&home, profiles::DEFAULT_PROFILE_ID);
+        let work = p.create("Work").unwrap();
+        let locked = |p: &Profiles, id: &str| p.entries().into_iter().find(|e| e.profile.id == id).unwrap().locked;
+        assert!(!locked(&p, &work), "no identity: never locked");
+        let password = SecretString::from("profile password".to_string());
+        morph_services::identity::create(&home, &work, &password).unwrap();
+        assert!(!locked(&p, &work), "open right after onboarding");
+        morph_services::profile_lock::lock(&home, &work);
+        assert!(locked(&p, &work), "locked after a lock");
+        assert!(!locked(&p, profiles::DEFAULT_PROFILE_ID));
+        morph_services::library::unlock(&home, &work, &password).unwrap();
+        assert!(!locked(&p, &work), "open again after the unlock");
+        morph_services::profile_lock::set_require_password(&home, &work, &password, false).unwrap();
+        morph_services::profile_lock::lock(&home, &work);
+        assert!(!locked(&p, &work), "password off: opens without a prompt");
+    }
 
     #[test]
     fn create_rename_switch_and_delete() {

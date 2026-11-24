@@ -31,8 +31,8 @@ Progress note for whoever picks this up next (update it with each push).
   dev machine has no `xdotool` (or `sway` for `--wayland`). Run it in CI or a
   box that has them.
 - Open: seal `companions/`, `ai/policy.json` and the MCP host's
-  `mcp-*.local.json` under the file key (with Morph Dev); show locked
-  profiles in `profiles_view`; auto-lock after idle; OS authentication
+  `mcp-*.local.json` under the file key (with Morph Dev); auto-lock after
+  idle; OS authentication
   unlock; the Flutter gate with biometrics (see "Password saver" below for
   what is left on the phone).
 
@@ -138,6 +138,10 @@ Every path goes through `morph_services::library::open` or
   on a locked profile returns `DeviceCallError::Locked` ("profile locked").
   A caller made before the lock refuses calls, streams and served requests
   from then on, as well as losing its halted node.
+- **Profiles panel:** a profile that would ask for its password (it has an
+  identity, the password is on, and it is not open in this process) is
+  marked "Locked" (`morph-desktop/src/profiles.rs` `shows_locked`). One
+  whose password is off is not: it opens from the keystore.
 - **Lock profile** (main menu, or `shell.lock_profile`): saves the tabs, then
   every window of the profile drops its pages and shows the lock screen.
 
