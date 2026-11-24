@@ -6,6 +6,15 @@ Morph's agent work has its own handoff doc: [docs/handoff.md](docs/handoff.md). 
 
 Repo: https://github.com/WeirdBrains/morph. A [Weird Brains](https://weirdbrains.com) project.
 
+## 2026-11-24
+
+### Profile lock follow-ups 1: locked profiles marked in the profiles panel
+
+- **What changed:** the profiles panel (desktop) marks a profile as "Locked" when opening it would ask for its password: it has an identity, the password is on, and it is not open in this run. A profile whose password is off opens from the keystore and is not marked. Switching to a locked one shows the lock screen as before. Commit [`f0e1a07`](https://github.com/WeirdBrains/morph/commit/f0e1a0786efcf1bf1f43bc00614f9275de2d696b) (`crates/morph-desktop/src/profiles.rs` `shows_locked`, `profiles_view.rs`); [docs/profile-lock.md](https://github.com/WeirdBrains/morph/blob/main/docs/profile-lock.md) updated.
+- **Checks:** `cargo fmt --check`, `cargo clippy --locked -p morph-desktop --all-targets -- -D warnings`, and the new `profiles::tests::locked_profiles_show_as_locked` (no identity, just onboarded, locked, unlocked again, password off). CI and iOS for this push are in the Actions tab. Not tested: the panel by eye (no screenshot taken), the phone (it has no lock gate yet).
+- **Left:** the phone's profile list, once the phone has the lock (item 4).
+- **Next:** auto-lock after idle, then OS-authentication unlock, then the phone lock with biometrics.
+
 ## 2026-11-23
 
 ### v0.3.0-preview.2 (pre-release)

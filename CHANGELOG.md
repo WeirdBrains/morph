@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- The profiles panel marks a profile that will ask for its password as Locked (it has an identity, the password is on, and it is not open in this run). Switching to it shows the lock screen as before.
+
 ## [0.3.0-preview.2] - 2026-11-23
 
 - Links opened from a terminal or another program now hand control back right away when Morph was not already running. `gh auth refresh`, `gh auth login` and other tools that open the browser and wait for it (through `xdg-open`, `$BROWSER` or `morph URL`) used to stay stuck until the Morph window closed, because that launch became the browser itself. Now it starts Morph as a process of its own, waits until it is ready for links, and exits 0; the page opens as before. Morph's output from such a start goes to `morph.log` in the Morph home. `MORPH_FOREGROUND=1` keeps the old behavior. Linux and macOS.
