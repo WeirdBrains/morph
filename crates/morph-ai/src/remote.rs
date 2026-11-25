@@ -140,6 +140,15 @@ pub struct OffloadSettings {
     /// linked devices with its local model. Off until the user turns it on; synced with the rest.
     #[serde(default, skip_serializing_if = "is_false")]
     pub serve: bool,
+    /// "Run on: Ymir pool": model turns go to the user's Ymir model cloud (inference nodes among
+    /// the linked devices) instead of following `mode`. When the pool can't take a turn before
+    /// any text, this device's model runs it. Devices from before this field ignore it and
+    /// keep following `mode`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub pool: bool,
+    /// The pool model to ask for (a catalog id); `None` lets the pool choose.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pool_model: Option<String>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -152,7 +161,7 @@ fn yes() -> bool {
 
 impl Default for OffloadSettings {
     fn default() -> Self {
-        Self { mode: OffloadMode::Auto, prefer: None, fallback_local: true, serve: false }
+        Self { mode: OffloadMode::Auto, prefer: None, fallback_local: true, serve: false, pool: false, pool_model: None }
     }
 }
 
@@ -242,7 +251,7 @@ mod tests {
             "a desktop whose model cannot run asks the others"
         );
 
-        let prefer = OffloadSettings { mode: OffloadMode::Always, prefer: Some("desk-b".into()), fallback_local: false, serve: false };
+        let prefer = OffloadSettings { mode: OffloadMode::Always, prefer: Some("desk-b".into()), fallback_local: false, ..Default::default() };
         let plan = offload_plan(&prefer, Platform::Desktop, &nodes, true);
         assert_eq!(plan.nodes, ["desk-b"], "the chosen device only");
         assert!(!plan.fallback_local);
@@ -257,10 +266,27 @@ mod tests {
         quiet.serves_models = false;
         let me = LinkedNode { this_device: true, ..node("me", Platform::Desktop, true) };
         let nodes = vec![quiet, me, node("off", Platform::Desktop, false)];
-        let s = OffloadSettings { mode: OffloadMode::Always, prefer: None, fallback_local: false, serve: false };
+        let s = OffloadSettings { mode: OffloadMode::Always, prefer: None, fallback_local: false, ..Default::default() };
         let plan = offload_plan(&s, Platform::Phone, &nodes, true);
         assert!(plan.runs_here());
         assert!(plan.fallback_local, "nothing to offload to: run here");
+    }
+
+    #[test]
+    fn the_pool_choice_is_off_the_wire_by_default_and_older_settings_read_without_it() {
+        let old: OffloadSettings = serde_json::from_str(r#"{"mode":"always","prefer":"desk","fallback_local":false}"#).unwrap();
+        assert!(!old.pool && old.pool_model.is_none());
+        let json = serde_json::to_value(OffloadSettings::default()).unwrap();
+        assert!(json.get("pool").is_none() && json.get("pool_model").is_none(), "{json}");
+        let pool = OffloadSettings { pool: true, pool_model: Some("qwen3-8b".into()), ..OffloadSettings::default() };
+        let json = serde_json::to_string(&pool).unwrap();
+        assert_eq!(serde_json::from_str::<OffloadSettings>(&json).unwrap(), pool);
+        // A device from before the pool reads it as its `mode`.
+        #[derive(serde::Deserialize)]
+        struct Before {
+            mode: OffloadMode,
+        }
+        assert_eq!(serde_json::from_str::<Before>(&json).unwrap().mode, OffloadMode::Auto);
     }
 
     #[test]
