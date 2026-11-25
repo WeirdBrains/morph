@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0-preview.3] - 2026-11-25
+
 The third preview of Morph 0.3 from [Weird Brains](https://weirdbrains.com), with companions that can run on a [Ymir](https://github.com/WeirdBrains/ymir) pool of GPU nodes. It is a pre-release: the stable download stays on [0.2.3](https://github.com/WeirdBrains/morph/releases/tag/v0.2.3).
 
 - **Ymir pool as a Run on choice.** Companions can run their turns on a [Ymir](https://github.com/WeirdBrains/ymir) pool of GPU nodes linked to your devices. Pick "Ymir pool" under Run on in Settings > Agents, beside This device, Automatic and your linked devices; it is an extra choice, not the default. A Pool model picker lists the pool's chat models with their live state, speed and the inputs they read (text, images), or leaves the choice to the pool. A turn that a node drops partway continues on another node.
