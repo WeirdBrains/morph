@@ -40,6 +40,9 @@ pub enum Entry {
     },
     Notice(NoticeView),
     Blocked(String),
+    /// Where the model ran changed during the turn (the Ymir pool fell back to this device, or
+    /// continued on another node): a small note, not part of the answer.
+    ModelNote(String),
     Tool {
         call_id: String,
         tool: String,
@@ -381,7 +384,10 @@ impl Conversation {
             ViewUpdate::Text(delta) => {
                 self.writing = true;
                 self.reasoning.clear();
-                match self.entries.last_mut() {
+                // A note that came mid-answer ("continued on another node") stays under the
+                // answer's start; the text goes on in the same answer.
+                let at = self.entries.iter().rposition(|e| !matches!(e, Entry::ModelNote(_)));
+                match at.and_then(|i| self.entries.get_mut(i)) {
                     Some(Entry::Assistant { text, doc, .. }) => {
                         text.push_str(&delta);
                         doc.push_str(&delta);
@@ -396,6 +402,7 @@ impl Conversation {
             ViewUpdate::Approval(card) => self.entries.push(Entry::Card { card, answer: None }),
             ViewUpdate::Notice(n) => self.entries.push(Entry::Notice(n)),
             ViewUpdate::Blocked(text) => self.entries.push(Entry::Blocked(text)),
+            ViewUpdate::ModelNote(text) => self.entries.push(Entry::ModelNote(text)),
             ViewUpdate::ToolRunning { call_id, tool } => {
                 // The tool's own step line may have come first; it says more than the name.
                 self.doing.get_or_insert_with(|| format!("Running {tool}…"));
@@ -532,6 +539,19 @@ mod tests {
         assert!(matches!(&c.entries()[0], Entry::Tool { state: ToolState::Failed, .. }));
         assert!(matches!(&c.entries()[1], Entry::Notice(n) if n.allow_id == 3));
         assert!(matches!(&c.entries()[2], Entry::Blocked(_)));
+    }
+
+    #[test]
+    fn a_model_note_mid_answer_does_not_split_the_answer() {
+        let mut c = Conversation::default();
+        c.apply(ViewUpdate::ModelNote("fell back".into()));
+        c.apply(ViewUpdate::Text("Hello ".into()));
+        c.apply(ViewUpdate::ModelNote("continued".into()));
+        c.apply(ViewUpdate::Text("world".into()));
+        assert!(matches!(&c.entries()[0], Entry::ModelNote(t) if t == "fell back"));
+        assert!(matches!(&c.entries()[1], Entry::Assistant { text, .. } if text == "Hello world"));
+        assert!(matches!(&c.entries()[2], Entry::ModelNote(t) if t == "continued"));
+        assert_eq!(c.entries().len(), 3);
     }
 
     #[test]

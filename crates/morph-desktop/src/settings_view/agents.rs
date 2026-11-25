@@ -11,7 +11,9 @@ use std::sync::Arc;
 
 use gpui::{Context, Entity, SharedString, Subscription, Window, div, prelude::*, px, rgb};
 use morph_ai::{AgentSettings, AiStore, CpuLimit, FileStore, Grants, ModelChoice, OffloadMode, OffloadSettings, Platform, Roster, SearchProvider};
-use weirdnet_agent::{AgentId, AllowRule, CompanionScope, SiteLevel, StandingAllow};
+use weirdnet_agent::remote::catalog::{CatalogModel, ModelState as PoolModelState};
+use weirdnet_agent::remote::pool_model::PoolStatus;
+use weirdnet_agent::{AgentId, AllowRule, CompanionScope, Modalities, SiteLevel, StandingAllow};
 use weirdnet_model::{ModelStore, catalog, human};
 
 use super::{Item, SettingsView};
@@ -152,10 +154,15 @@ pub enum RunOn {
     Automatic,
     /// A linked device (peer id), asked first and alone; this device's model backs it up.
     Device(String),
+    /// The user's Ymir model cloud; this device's model backs it up automatically.
+    Pool,
 }
 
 /// The choice the saved offload settings make.
 pub fn run_on(o: &OffloadSettings) -> RunOn {
+    if o.pool {
+        return RunOn::Pool;
+    }
     match (o.mode, &o.prefer) {
         (OffloadMode::Never, _) => RunOn::Here,
         (OffloadMode::Always, Some(p)) => RunOn::Device(p.clone()),
@@ -166,12 +173,58 @@ pub fn run_on(o: &OffloadSettings) -> RunOn {
 /// Saves the choice in the agent settings (so it syncs).
 pub fn set_run_on(dir: &Path, run: RunOn) -> Result<(), String> {
     let mut s = load_settings(dir);
+    s.offload.pool = run == RunOn::Pool;
+    // The pool leaves the device choice as it was, for when the user goes back to it.
     (s.offload.mode, s.offload.prefer) = match run {
         RunOn::Here => (OffloadMode::Never, None),
         RunOn::Automatic => (OffloadMode::Auto, None),
         RunOn::Device(p) => (OffloadMode::Always, Some(p)),
+        RunOn::Pool => (s.offload.mode, s.offload.prefer.take()),
     };
     store(dir).save_settings(&s).map_err(|e| e.to_string())
+}
+
+/// The pool model to ask for (`None`: the pool chooses). Synced with the other agent settings.
+pub fn set_pool_model(dir: &Path, model: Option<String>) -> Result<(), String> {
+    let mut s = load_settings(dir);
+    s.offload.pool_model = model;
+    store(dir).save_settings(&s).map_err(|e| e.to_string())
+}
+
+/// What the Pool model row says: whether the pool is there.
+pub fn pool_summary(status: &PoolStatus) -> String {
+    match status {
+        PoolStatus::Live { catalog, .. } => {
+            let n = catalog.models.iter().filter(|m| m.accepts(Modalities::TEXT)).count();
+            format!("Your Ymir pool is up with {n} chat model{}. Models that can't read a page's images are skipped for that page.", if n == 1 { "" } else { "s" })
+        }
+        PoolStatus::Searching { last: None } => "Looking for your Ymir pool…".into(),
+        PoolStatus::Searching { .. } => "Reconnecting to your Ymir pool…".into(),
+        PoolStatus::Unreachable { .. } => "Can't reach your Ymir pool right now, so turns run on this device's model. Check that a Ymir inference node is on and linked to this profile's devices.".into(),
+        _ => String::new(),
+    }
+}
+
+/// A pool model's chip: its id, state and speed, and the inputs beyond text it reads.
+pub fn pool_model_label(m: &CatalogModel) -> String {
+    let state = match m.state {
+        PoolModelState::Warm => "ready",
+        PoolModelState::Loading => "loading",
+        PoolModelState::Loadable => "loads when asked",
+        PoolModelState::Busy => "busy",
+        _ => "unknown",
+    };
+    let mut label = format!("{} · {state}", m.id);
+    if let Some(tps) = m.tokens_per_sec {
+        label.push_str(&format!(" · {} tok/s", tps.round() as u32));
+    }
+    if m.inputs.vision {
+        label.push_str(" · images");
+    }
+    if m.inputs.audio {
+        label.push_str(" · audio");
+    }
+    label
 }
 
 /// What the Run on row says under its chips.
@@ -185,6 +238,7 @@ pub fn run_on_note(run: &RunOn, devices: &[(String, String)]) -> String {
             Some((_, label)) => format!("Model turns go to {label} first. If it is offline or will not take the turn, this device's model runs it when it can."),
             None => "That device is no longer linked, so turns run on this device.".into(),
         },
+        RunOn::Pool => "Model turns go to your Ymir pool, the model cloud on your own devices. If it can't be reached or fails before answering, this device's model runs the turn and the panel says so.".into(),
     }
 }
 
@@ -324,6 +378,8 @@ pub struct State {
     /// Set when this CPU cannot run local models (checked once).
     pub cpu: Option<CpuLimit>,
     pub note: Option<String>,
+    /// Redraws the page every few seconds while the pool's state is shown.
+    pub pool_tick: Option<gpui::Task<()>>,
 }
 
 impl State {
@@ -338,6 +394,7 @@ impl State {
             custom_open: false,
             cpu: morph_ai::cpu_limit(),
             note: None,
+            pool_tick: None,
         }
     }
 }
@@ -476,6 +533,38 @@ impl SettingsView {
             .into_any_element()
     }
 
+    /// Run on > Ymir pool: the pool's models with their state and speed, and the pool's choice.
+    fn pool_model_row(&mut self, dir: &Path, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let t = self.theme;
+        let Some(profile) = self.profile_id() else { return div().into_any_element() };
+        let status = morph_services::ymir_pool::for_profile(&self.home, &profile).status();
+        if self.agents.pool_tick.is_none() {
+            self.agents.pool_tick = Some(cx.spawn(async move |this, cx| {
+                loop {
+                    cx.background_executor().timer(std::time::Duration::from_secs(2)).await;
+                    if this.update(cx, |_, cx| cx.notify()).is_err() {
+                        break;
+                    }
+                }
+            }));
+        }
+        let chosen = load_settings(dir).offload.pool_model;
+        let models = status.chat_models(Modalities::TEXT);
+        let mut chips: Vec<(Option<String>, String)> = vec![(None, "Pool's choice".into())];
+        chips.extend(models.iter().map(|m| (Some(m.id.clone()), pool_model_label(m))));
+        if let Some(id) = chosen.as_ref().filter(|id| !models.iter().any(|m| &m.id == *id)) {
+            chips.push((Some(id.clone()), format!("{id} · not in the pool now")));
+        }
+        let row = div().flex().flex_row().flex_wrap().gap(px(6.)).children(chips.into_iter().enumerate().map(|(i, (id, label))| {
+            let selected = id == chosen;
+            chip(t, ("agents-pool-model", i), label, selected).on_click(cx.listener(move |this, _, _, cx| {
+                let id = id.clone();
+                this.agents_apply(move |d| set_pool_model(d, id), cx);
+            }))
+        }));
+        self.plain_row("Pool model", pool_summary(&status), row.into_any_element())
+    }
+
     pub(super) fn agents_rows(&mut self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
         let t = self.theme;
         let Some(dir) = self.agents_dir() else {
@@ -530,6 +619,7 @@ impl SettingsView {
         let mut options: Vec<(RunOn, String)> = vec![(RunOn::Here, "This device".into())];
         options.extend(linked.iter().map(|(id, label)| (RunOn::Device(id.clone()), label.clone())));
         options.push((RunOn::Automatic, "Automatic".into()));
+        options.push((RunOn::Pool, "Ymir pool".into()));
         let run_chips = div().flex().flex_row().flex_wrap().gap(px(6.)).children(options.into_iter().enumerate().map(|(i, (choice, label))| {
             let selected = choice == current;
             chip(t, ("agents-run-on", i), label, selected).on_click(cx.listener(move |this, _, _, cx| {
@@ -538,6 +628,11 @@ impl SettingsView {
             }))
         }));
         rows.push(self.plain_row("Run on", run_on_note(&current, &linked), run_chips.into_any_element()));
+        if current == RunOn::Pool {
+            rows.push(self.pool_model_row(&dir, cx));
+        } else {
+            self.agents.pool_tick = None;
+        }
         if let Some(p) = profile {
             let is_default = default_id.as_ref() == Some(p.id());
             let model = p.model.clone().unwrap_or_else(|| ModelChoice::default_for(Platform::Desktop));
@@ -914,6 +1009,40 @@ mod tests {
         assert!(run_on_note(&RunOn::Device("gone".into()), &devices).contains("no longer linked"));
         assert!(run_on_note(&RunOn::Automatic, &devices).contains("while its model can run"));
         assert_eq!(load_settings(&p).search_provider, SearchProvider::DuckDuckGo, "other settings stay");
+    }
+
+    #[test]
+    fn the_ymir_pool_is_an_extra_run_on_choice_that_keeps_the_device_choice() {
+        let (_d, p) = tmp();
+        set_run_on(&p, RunOn::Device("12D3KooWDesk".into())).unwrap();
+        set_run_on(&p, RunOn::Pool).unwrap();
+        let o = load_settings(&p).offload;
+        assert_eq!(run_on(&o), RunOn::Pool);
+        assert!(
+            o.pool && o.mode == OffloadMode::Always && o.prefer.as_deref() == Some("12D3KooWDesk"),
+            "devices before the pool still read their mode: {o:?}"
+        );
+        set_pool_model(&p, Some("qwen3-8b".into())).unwrap();
+        assert_eq!(load_settings(&p).offload.pool_model.as_deref(), Some("qwen3-8b"));
+        set_run_on(&p, RunOn::Here).unwrap();
+        let o = load_settings(&p).offload;
+        assert!(!o.pool && run_on(&o) == RunOn::Here);
+        assert_eq!(o.pool_model.as_deref(), Some("qwen3-8b"), "the pool model is kept for next time");
+        assert!(run_on_note(&RunOn::Pool, &[]).contains("this device's model runs the turn"));
+    }
+
+    #[test]
+    fn pool_models_show_state_speed_and_inputs() {
+        use weirdnet_agent::remote::catalog::{Catalog, Purpose};
+        let vision = CatalogModel::new("qwen-vl", Purpose::Chat, PoolModelState::Loadable).with_inputs(Modalities::VISION).with_speed(23.6);
+        assert_eq!(pool_model_label(&vision), "qwen-vl · loads when asked · 24 tok/s · images");
+        assert_eq!(pool_model_label(&CatalogModel::new("small", Purpose::Chat, PoolModelState::Warm)), "small · ready");
+        let live = PoolStatus::Live {
+            node: "n".into(),
+            catalog: Catalog::new(1, vec![vision, CatalogModel::new("embed", Purpose::Embedding, PoolModelState::Warm)]),
+        };
+        assert!(pool_summary(&live).starts_with("Your Ymir pool is up with 1 chat model."), "{}", pool_summary(&live));
+        assert!(pool_summary(&PoolStatus::Searching { last: None }).starts_with("Looking"));
     }
 
     #[test]
