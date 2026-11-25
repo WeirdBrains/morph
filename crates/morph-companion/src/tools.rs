@@ -1044,7 +1044,7 @@ mod tests {
         let history = sessions.messages(&id).to_vec();
         assert!(history.len() > kept, "the conversation went on");
         assert!(history[..kept].iter().any(|m| m.content == "research"), "the first question is still there");
-        assert!(history.iter().any(|m| m.content.contains("Read up to 2 more pages")));
+        assert!(history.iter().any(|m| m.content.text().contains("Read up to 2 more pages")));
 
         let third = sessions.run(&roster, &id, "again", |_| {}).await.unwrap();
         assert_eq!(third.text, "again");
@@ -1117,6 +1117,6 @@ mod tests {
     }
 
     fn sessions_messages(s: &Sessions) -> String {
-        s.messages(&AgentId::new("local")).iter().map(|m| m.content.clone()).collect::<Vec<_>>().join("\n")
+        s.messages(&AgentId::new("local")).iter().map(|m| m.content.text().into_owned()).collect::<Vec<_>>().join("\n")
     }
 }
