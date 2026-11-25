@@ -265,19 +265,22 @@ impl CompanionView {
             ),
             calls: Some(calls),
         };
-        // Model turns run here or on a linked device, per Settings > Agents > Run on.
+        // Model turns run here, on a linked device or on the Ymir pool, per Settings > Agents > Run on.
         let router = RouterSlot::default();
         let companions_dir = morph_core::profiles::profile_dir(home, profile).join("companions");
-        let routed = Arc::new(RoutedModels::new(
-            models.clone(),
-            {
-                let models = models.clone();
-                move |choice| matches!(models.status(choice), ModelStatus::Ready { .. })
-            },
-            move || morph_services::profile_io::file_store(&companions_dir).load_settings().ok().flatten().map(|s| s.offload).unwrap_or_default(),
-            router.clone(),
-            Platform::Desktop,
-        ));
+        let routed = Arc::new(
+            RoutedModels::new(
+                models.clone(),
+                {
+                    let models = models.clone();
+                    move |choice| matches!(models.status(choice), ModelStatus::Ready { .. })
+                },
+                move || morph_services::profile_io::file_store(&companions_dir).load_settings().ok().flatten().map(|s| s.offload).unwrap_or_default(),
+                router.clone(),
+                Platform::Desktop,
+            )
+            .with_pool(morph_services::ymir_pool::for_profile(home, profile)),
+        );
         let runs_on = routed.runs_on();
         let worker = Worker::start_with(routed, policy.clone(), tools, Some(hosts));
         let selected = roster.default_companion().map(|c| c.id().clone()).unwrap_or_else(|| AgentId::new("local"));
@@ -1637,6 +1640,7 @@ impl Render for CompanionView {
                 Entry::Card { card, answer } => approval_card(t, i, card, answer.as_deref(), cx).into_any_element(),
                 Entry::Notice(n) => notice_row(t, i, n, running, cx).into_any_element(),
                 Entry::Blocked(text) => div().text_size(px(11.)).text_color(rgb(t.error)).child(text.clone()).into_any_element(),
+                Entry::ModelNote(text) => div().text_size(px(11.)).text_color(rgb(t.text_secondary)).child(format!("ⓘ {text}")).into_any_element(),
                 Entry::Tool { tool, state, .. } => {
                     let (mark, color) = match state {
                         ToolState::Running => ("…", t.text_secondary),
@@ -1971,6 +1975,7 @@ mod tests {
                 Entry::Card { .. } => "card",
                 Entry::Notice(_) => "notice",
                 Entry::Blocked(_) => "blocked",
+                Entry::ModelNote(_) => "model note",
                 Entry::Tool { .. } => "tool",
                 Entry::Error(_) => "error",
                 Entry::MorePages { .. } => "more pages",

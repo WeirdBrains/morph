@@ -1,8 +1,8 @@
 //! Event-to-view-model translation.
 
 use weirdnet_agent::{
-    AgentEvent, ApprovalOutcome, ApprovalPrompt, Citation, CitationTarget, DenyReason, Scope, SessionMark, SkipNotice, StepKind, StopReason, Tier,
-    Trace, retain_valid,
+    AgentEvent, ApprovalOutcome, ApprovalPrompt, Citation, CitationTarget, DenyReason, ModelNotice, Scope, SessionMark, SkipNotice, StepKind,
+    StopReason, Tier, Trace, retain_valid,
 };
 
 /// One choice on an approval card.
@@ -63,6 +63,8 @@ pub enum ViewUpdate {
     Approval(ApprovalCard),
     Notice(NoticeView),
     Blocked(String),
+    /// A note about where the model ran ([`model_note`]).
+    ModelNote(String),
     ToolRunning {
         call_id: String,
         tool: String,
@@ -230,6 +232,19 @@ fn stop_text(stop: &StopReason) -> String {
     }
 }
 
+/// What the panel says when the model's place changed during a turn (the Ymir pool).
+pub fn model_note(notice: &ModelNotice) -> Option<String> {
+    Some(match notice {
+        ModelNotice::Continued { node, .. } => format!("A pool node stopped mid-answer, so the answer continued on {node}. Nothing was repeated."),
+        ModelNotice::FellBack { reason, .. } => {
+            let reason: String = reason.chars().take(160).collect();
+            format!("Your Ymir pool couldn't take this turn, so this device's model answered instead ({reason}).")
+        }
+        ModelNotice::Rerouted { from, needs } => format!("{from} can't read {needs}, so the pool picked a model that can."),
+        _ => return None,
+    })
+}
+
 /// Turns one event into what the panel shows.
 pub fn translate(companion: &str, event: &AgentEvent) -> Vec<ViewUpdate> {
     match event {
@@ -245,6 +260,7 @@ pub fn translate(companion: &str, event: &AgentEvent) -> Vec<ViewUpdate> {
         }
         AgentEvent::Step(s) => vec![ViewUpdate::Trace(TraceRowView { step: s.id.0, text: step_text(&s.kind), session: session_text(&s.session) })],
         AgentEvent::Finished { task_id, stop } => vec![ViewUpdate::Finished { task_id: task_id.clone(), status: stop_text(stop) }],
+        AgentEvent::ModelNotice(n) => model_note(n).map(ViewUpdate::ModelNote).into_iter().collect(),
         // Events newer than this build knows show nothing.
         _ => Vec::new(),
     }
@@ -276,6 +292,21 @@ pub fn footnotes(trace: &Trace, citations: Vec<Citation>) -> Vec<FootnoteView> {
 mod tests {
     use super::*;
     use weirdnet_agent::{ActionRequest, AgentId, StepId, TraceStep};
+
+    #[test]
+    fn pool_notices_read_as_notes() {
+        let note = |n: ModelNotice| match translate("Local", &AgentEvent::ModelNotice(n)).as_slice() {
+            [ViewUpdate::ModelNote(t)] => t.clone(),
+            other => panic!("{other:?}"),
+        };
+        assert!(note(ModelNotice::Continued { node: "gpu box".into(), offset: 12 }).contains("continued on gpu box"));
+        let fell = note(ModelNotice::FellBack { reason: "model pool unreachable: no inference node to ask".into(), to: "gemma".into() });
+        assert!(fell.starts_with("Your Ymir pool couldn't take this turn, so this device's model answered"), "{fell}");
+        assert_eq!(
+            note(ModelNotice::Rerouted { from: "qwen3-8b".into(), needs: "images".into() }),
+            "qwen3-8b can't read images, so the pool picked a model that can."
+        );
+    }
 
     fn trace() -> Trace {
         let mut t = Trace::new("t1", AgentId::new("local"));
