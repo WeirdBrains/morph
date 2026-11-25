@@ -30,7 +30,7 @@ weirdnet-keys = "=0.1.2"
 weirdnet-net = "=0.8.2"
 weirdnet-sync = "=0.7.1"
 weirdnet-text = "=0.1.1"
-weirdnet-agent = "=0.5.2"
+weirdnet-agent = "=0.5.3"
 weirdnet-mcp = { version = "=0.5.3", default-features = false }
 pulldown-cmark = { version = "=0.13.6", default-features = false }
 weirdnet-model = { version = "=0.5.3", default-features = false }
@@ -84,9 +84,6 @@ strip = "symbols"
 # third_party/README.md.
 [patch.crates-io]
 libp2p-swarm = { path = "third_party/libp2p-swarm" }
-# Development only (branch feat/ymir-pool): weirdnet-agent's unreleased PoolModel and PoolWatch.
-# Remove once weirdnet-agent ships them, and pin that version instead.
-weirdnet-agent = { git = "https://github.com/WeirdBrains/weirdnet-agent", branch = "feat/pool-model" }
 
 [patch."https://github.com/zed-industries/zed"]
 gpui_linux = { path = "third_party/gpui_linux" }
