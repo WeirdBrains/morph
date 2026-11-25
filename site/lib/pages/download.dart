@@ -26,18 +26,18 @@ const _android = [
   ('morph-$latestVersion-android-debug.apk', 'Debug APK', '128.8 MB'),
 ];
 
-/// Files on the v0.3.0-preview.2 GitHub pre-release (name, what it is, size).
+/// Files on the v0.3.0-preview.3 GitHub pre-release (name, what it is, size).
 const _preview = [
-  ('morph-$previewVersion-x86_64-unknown-linux-gnu.tar.gz', 'Linux tarball', '20.7 MB'),
-  ('morph-$previewVersion-x86_64-unknown-linux-gnu.zip', 'Linux zip', '20.7 MB'),
-  ('morph_0.3.0.preview.2-1_amd64.deb', 'Debian package, with desktop entry', '14.8 MB'),
-  ('morph-standalone_0.3.0.preview.2-1_amd64.deb', 'Debian package, binary only', '14.8 MB'),
-  ('morph-0.3.0.preview.2-1.x86_64.rpm', 'RPM package, with desktop entry', '20.6 MB'),
-  ('morph-standalone-0.3.0.preview.2-1.x86_64.rpm', 'RPM package, binary only', '20.6 MB'),
-  ('morph-$previewVersion-universal-apple-darwin.dmg', 'macOS disk image', '35.8 MB'),
-  ('morph-$previewVersion-universal-apple-darwin.zip', 'macOS zip with Morph.app', '31.6 MB'),
-  ('morph-$previewVersion-x86_64-pc-windows-msvc.msi', 'Windows installer', '13.3 MB'),
-  ('morph-$previewVersion-x86_64-pc-windows-msvc.zip', 'Windows zip, no installation', '15.5 MB'),
+  ('morph-$previewVersion-x86_64-unknown-linux-gnu.tar.gz', 'Linux tarball', '20.8 MB'),
+  ('morph-$previewVersion-x86_64-unknown-linux-gnu.zip', 'Linux zip', '20.8 MB'),
+  ('morph_0.3.0.preview.3-1_amd64.deb', 'Debian package, with desktop entry', '14.9 MB'),
+  ('morph-standalone_0.3.0.preview.3-1_amd64.deb', 'Debian package, binary only', '14.9 MB'),
+  ('morph-0.3.0.preview.3-1.x86_64.rpm', 'RPM package, with desktop entry', '20.7 MB'),
+  ('morph-standalone-0.3.0.preview.3-1.x86_64.rpm', 'RPM package, binary only', '20.7 MB'),
+  ('morph-$previewVersion-universal-apple-darwin.dmg', 'macOS disk image', '36.0 MB'),
+  ('morph-$previewVersion-universal-apple-darwin.zip', 'macOS zip with Morph.app', '31.7 MB'),
+  ('morph-$previewVersion-x86_64-pc-windows-msvc.msi', 'Windows installer', '13.4 MB'),
+  ('morph-$previewVersion-x86_64-pc-windows-msvc.zip', 'Windows zip, no installation', '15.6 MB'),
   ('morph-$previewVersion-android-arm64.apk', 'Android arm64 release APK, signed with a test key', '23.4 MB'),
   ('morph-$previewVersion-android-debug.apk', 'Android debug APK', '130.9 MB'),
 ];
@@ -125,7 +125,8 @@ class DownloadPage extends StatelessComponent {
               p([
                 span([Component.text('Preview')], classes: 'tag'),
                 Component.text(
-                  ' A first look at v0.3, published as a GitHub pre-release. Morph $latestVersion stays the stable, '
+                  ' A first look at v0.3, published as a GitHub pre-release. This preview lets companions run on a Ymir GPU pool, '
+                  'with an automatic fallback to the model on this device. Morph $latestVersion stays the stable, '
                   'recommended release; install that unless you want to try the preview. Previews may change, and '
                   'linking devices in v0.3 needs v0.3 on both.',
                 ),
@@ -144,7 +145,7 @@ class DownloadPage extends StatelessComponent {
               p([
                 Component.text('On Arch Linux, the '),
                 code([Component.text('morph-bin')]),
-                Component.text(' package at version 0.3.0preview2-1 is a preview too, on the '),
+                Component.text(' package at version 0.3.0preview3-1 is a preview too, on the '),
                 a([Component.text('Weird Brains')], href: weirdBrainsUrl),
                 Component.text(' '),
                 extLink('TAUR server', taurUrl),

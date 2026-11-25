@@ -26,7 +26,7 @@ const unsignedDocsUrl = '$githubUrl/blob/main/docs/install-macos-windows.md';
 String assetUrl(String name) => '$githubUrl/releases/download/v$latestVersion/$name';
 
 /// The newest pre-release. Never the stable recommendation.
-const previewVersion = '0.3.0-preview.2';
+const previewVersion = '0.3.0-preview.3';
 const previewTag = 'v$previewVersion';
 const previewReleaseUrl = '$githubUrl/releases/tag/$previewTag';
 String previewAssetUrl(String name) => '$githubUrl/releases/download/$previewTag/$name';
