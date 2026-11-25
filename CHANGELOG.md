@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+The third preview of Morph 0.3 from [Weird Brains](https://weirdbrains.com), with companions that can run on a [Ymir](https://github.com/WeirdBrains/ymir) pool of GPU nodes. It is a pre-release: the stable download stays on [0.2.3](https://github.com/WeirdBrains/morph/releases/tag/v0.2.3).
+
+- **Ymir pool as a Run on choice.** Companions can run their turns on a [Ymir](https://github.com/WeirdBrains/ymir) pool of GPU nodes linked to your devices. Pick "Ymir pool" under Run on in Settings > Agents, beside This device, Automatic and your linked devices; it is an extra choice, not the default. A Pool model picker lists the pool's chat models with their live state, speed and the inputs they read (text, images), or leaves the choice to the pool. A turn that a node drops partway continues on another node.
+
+- **Automatic local fallback.** When the pool can't be reached, or fails before the first word of an answer, the turn falls back to the model on this device on its own, and the companion panel shows a short note saying so. Notes also show when a turn continued on another node or was rerouted to a model that reads images.
+
+- **Companions and local models.** The [agents panel](https://github.com/WeirdBrains/morph/releases/tag/v0.3.0-preview.1) keeps its chats, approvals and research projects, and the local model download in Settings > Agents stays: This device, Automatic and linked devices work as before, and the local model is what the pool falls back to.
+
+- Updated to [weirdnet-agent 0.5.3](https://crates.io/crates/weirdnet-agent/0.5.3) (the pool client), [weirdnet-model 0.5.3](https://crates.io/crates/weirdnet-model/0.5.3) and [weirdnet-mcp 0.5.3](https://crates.io/crates/weirdnet-mcp/0.5.3), still with one copy of [weirdnet-sync 0.7.1](https://crates.io/crates/weirdnet-sync/0.7.1).
+
 - The profiles panel marks a profile that will ask for its password as Locked (it has an identity, the password is on, and it is not open in this run). Switching to it shows the lock screen as before.
 
 ## [0.3.0-preview.2] - 2026-11-23
