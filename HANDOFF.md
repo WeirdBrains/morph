@@ -8,6 +8,12 @@ Repo: https://github.com/WeirdBrains/morph. A [Weird Brains](https://weirdbrains
 
 ## 2026-11-25
 
+### v0.3.0-preview.3 (pre-release, in progress)
+
+- **What changed:** the third 0.3 preview, cut with `scripts/weirdnet_release.py --pre preview` from main at [`dacdb6b`](https://github.com/WeirdBrains/morph/commit/dacdb6b2ad4cb52648b7926c2f2be2611bbc0fd1) (CI and iOS green there) plus the changelog notes in [`3a139df`](https://github.com/WeirdBrains/morph/commit/3a139df). Tag `v0.3.0-preview.3` (annotated object `6b41ceb`) points at [`3d20220`](https://github.com/WeirdBrains/morph/commit/3d20220403d0293272116a71860f36fd0aa2a934). Lead items: the [Ymir](https://github.com/WeirdBrains/ymir) pool as a Run on choice with an automatic local fallback, on [weirdnet-agent 0.5.3](https://crates.io/crates/weirdnet-agent/0.5.3). No crates are published from this repo (`[crates] publish = []`).
+- **Checks:** the release script's checks (`cargo fmt`, `cargo clippy -D warnings`, `cargo test --workspace`) passed before the tag. iOS passed on the release commit. CI on the release commit: the Linux Xvfb "windows" group failed once (Ctrl+click, Move to new window; the same flaky group needed reruns on earlier releases), to be rerun when the run ends.
+- **Left (resume here):** rerun the failed CI job; download the CI artifacts (`morph-linux-x86_64`, `morph-macos-universal`, `morph-windows-x86_64`, `morph-android-debug`) into `dist/`; `weirdnet_release.py github 0.3.0-preview.3`; dispatch the Android release APK workflow for the tag; `assets`; packaging to the preview (PKGBUILDs, `.SRCINFO`, `packaging/nix/release.json`); `taur` dry run then publish; the site preview section.
+
 ### Ymir pool merged to main on weirdnet-agent 0.5.3
 
 - **What changed:** [`weirdnet-agent` 0.5.3](https://crates.io/crates/weirdnet-agent/0.5.3) ([release](https://github.com/WeirdBrains/weirdnet-agent/releases/tag/v0.5.3)) ships `PoolModel` and `PoolWatch`, so the dev-only `[patch.crates-io]` git entry is gone and Morph pins `weirdnet-agent`, `weirdnet-model` and `weirdnet-mcp` at `=0.5.3` from crates.io (commit [`87903f5`](https://github.com/WeirdBrains/morph/commit/87903f57ae06f0f8d121ef483832ada0b8632adb); approved by m3talsmith, 2026-11-25, with no objection from Morph Lead Dev). `weirdnet-sync` stays at `=0.7.1`: agent 0.5 accepts it, and `cargo tree -d` shows no duplicate weirdnet crates. Then `feat/ymir-pool` (the entry below) merged into main with `--no-ff`. No Morph release was cut.
