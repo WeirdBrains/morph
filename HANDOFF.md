@@ -8,7 +8,14 @@ Repo: https://github.com/WeirdBrains/morph. A [Weird Brains](https://weirdbrains
 
 ## 2026-11-25
 
-### Ymir pool as a Run on choice (branch `feat/ymir-pool`, not on main)
+### Ymir pool merged to main on weirdnet-agent 0.5.3
+
+- **What changed:** [`weirdnet-agent` 0.5.3](https://crates.io/crates/weirdnet-agent/0.5.3) ([release](https://github.com/WeirdBrains/weirdnet-agent/releases/tag/v0.5.3)) ships `PoolModel` and `PoolWatch`, so the dev-only `[patch.crates-io]` git entry is gone and Morph pins `weirdnet-agent`, `weirdnet-model` and `weirdnet-mcp` at `=0.5.3` from crates.io (commit [`87903f5`](https://github.com/WeirdBrains/morph/commit/87903f57ae06f0f8d121ef483832ada0b8632adb); approved by m3talsmith, 2026-11-25, with no objection from Morph Lead Dev). `weirdnet-sync` stays at `=0.7.1`: agent 0.5 accepts it, and `cargo tree -d` shows no duplicate weirdnet crates. Then `feat/ymir-pool` (the entry below) merged into main with `--no-ff`. No Morph release was cut.
+- **Checks:** `cargo fmt --all -- --check`, `cargo build --locked --workspace`, `cargo clippy --locked --workspace --all-targets -- -D warnings`, `cargo test --locked -p morph-ai -p morph-companion -p morph-services` (108, 64, 121 passed, 2 ignored), and all `morph-desktop` tests (177 passed) under `xvfb-run` with a clean environment. CI for this push is in the Actions tab. **Not tested:** a real Ymir node, the Settings and panel UI by eye, the phone.
+- **Left:** as below (companions don't attach page images yet).
+- **Next:** a run against a real Ymir inference node.
+
+### Ymir pool as a Run on choice (branch `feat/ymir-pool`)
 
 - **What changed:** companions can run on a [Ymir](https://github.com/WeirdBrains/ymir) pool of GPU nodes. m3talsmith's calls (2026-11-25): the pool is an extra Run on choice beside This device, Automatic and linked devices (not the default); when the pool can't be reached or fails before the first token, the turn falls back to this device's model on its own with a notice; the local model download stays; models that can't read a turn's images are skipped. Commits on [`feat/ymir-pool`](https://github.com/WeirdBrains/morph/tree/feat/ymir-pool):
   - [`9cd2a9d`](https://github.com/WeirdBrains/morph/commit/9cd2a9db34c72267c60499a3aa107064205dae62): `weirdnet-agent` 0.5 from its [`feat/pool-model`](https://github.com/WeirdBrains/weirdnet-agent/tree/feat/pool-model) branch through a `[patch.crates-io]` git entry (dev only, must not reach main), `weirdnet-model` and `weirdnet-mcp` `=0.5.3`; the companion tool tests read `Content` as text.
