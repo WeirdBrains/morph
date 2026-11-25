@@ -32,7 +32,7 @@ serde.workspace = true
 blake3.workspace = true
 async-trait.workspace = true
 # The inference service's sessions run on a small runtime of their own (infer_serving).
-tokio = { version = "1", features = ["rt", "time"] }
+tokio = { version = "1", features = ["rt", "time", "sync", "macros"] }
 # A relay's display name from its well-known info (HTTPS, in the background).
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 

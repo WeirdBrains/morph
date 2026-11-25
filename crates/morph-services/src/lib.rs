@@ -25,6 +25,7 @@ pub mod profiles;
 pub mod relays;
 pub mod routed_models;
 pub mod sync;
+pub mod ymir_pool;
 
 pub use morph_identity::profile_identity::{SecretString, Zeroizing};
 
