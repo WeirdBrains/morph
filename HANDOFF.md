@@ -6,6 +6,15 @@ Morph's agent work has its own handoff doc: [docs/handoff.md](docs/handoff.md). 
 
 Repo: https://github.com/WeirdBrains/morph. A [Weird Brains](https://weirdbrains.com) project.
 
+## 2026-11-27
+
+### Agents bar: fold button at the bottom
+
+- **What changed:** m3talsmith asked for the Agents bar's collapse button to sit at the bottom, as the tab list's does when the tabs are on the left or right. In `crates/morph-desktop/src/companion_view.rs`: the open panel's collapse button (»), which was in the header beside the "Companions" title, is now in a row of its own under the composer, at the outer (right) edge, on both the Chat and Research tabs. The folded strip's expand button («), which was at the top, is now at the bottom, below the companion's initial and the running/waiting marks (the whole strip still opens it out on a click). Both buttons now have tooltips, "Collapse agents" and "Expand agents", and keep the tab list's glyphs for a bar on the right. The Agents bar is only ever on the right, so there is no top/bottom layout to change; the tab list is unchanged. Commit [`9652ebb`](https://github.com/WeirdBrains/morph/commit/9652ebb0e62ae1f5515c2d0343b5e693d87bd15d).
+- **Checks:** `cargo fmt --all -- --check`, `cargo clippy --locked --workspace --all-targets -- -D warnings`, and all `morph-desktop` tests (178 passed, including the new `the_fold_button_matches_the_tab_list_on_the_right`) under `xvfb-run` with a clean environment. A dev build was also run in a private Xvfb display on a temporary Morph home and screenshotted folded and open: « at the bottom of the strip, » at the bottom right under Send. **Not tested:** clicking the buttons in a real window, Wayland, macOS and Windows.
+- **Left:** nothing for this change.
+- **Next:** m3talsmith's look at it in the next build.
+
 ## 2026-11-25
 
 ### v0.3.0-preview.3 (pre-release)
