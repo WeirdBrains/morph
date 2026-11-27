@@ -1314,7 +1314,9 @@ impl BrowserView {
         }
     }
 
-    /// The ☰ button: the main menu under it, at the window's right edge.
+    /// The ☰ button: the main menu right under it, its right edge on the
+    /// button's (wherever the toolbar ends, e.g. beside an open Companions
+    /// bar), kept inside the window.
     fn open_main_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_downloads(window, cx);
         let entries = MAIN_MENU
@@ -1330,7 +1332,8 @@ impl BrowserView {
             TabStrip::Top => TAB_STRIP_HEIGHT + TOOLBAR_HEIGHT,
             _ => TOOLBAR_HEIGHT,
         };
-        let at = point(width - px(MENU_WIDTH + 8.), px(y - 4.));
+        let button = self.button_bounds.borrow().get("main-menu").copied();
+        let at = main_menu_origin(button, width, px(y - 4.));
         self.open_shell_menu("main-menu", entries, at, window, cx);
     }
 
@@ -3349,6 +3352,23 @@ fn indeterminate_phase() -> f32 {
     if x > 1.0 { 2.0 - x } else { x }
 }
 
+/// Where the main menu opens: under the ☰ button, right-aligned to its
+/// right edge, so it follows the button wherever the toolbar ends (an open
+/// Companions bar on the right moves the button in from the window edge).
+/// Clamped to stay inside the window. Before the button has been laid out
+/// (`button` is `None`), it falls back to the window's right edge at
+/// `fallback_y`.
+fn main_menu_origin(button: Option<Bounds<Pixels>>, viewport_width: Pixels, fallback_y: Pixels) -> Point<Pixels> {
+    const MARGIN: f32 = 4.;
+    let (right, y) = match button {
+        Some(b) => (b.right(), b.bottom() + px(MARGIN)),
+        None => (viewport_width - px(8.), fallback_y),
+    };
+    let max_x = (viewport_width - px(MENU_WIDTH + MARGIN)).max(px(MARGIN));
+    let x = (right - px(MENU_WIDTH)).max(px(MARGIN)).min(max_x);
+    point(x, y)
+}
+
 /// Records where an element was laid out, under `id` (the toolbar's
 /// buttons; their menus and panels open there).
 fn bounds_probe(entity: Entity<BrowserView>, id: &'static str) -> impl IntoElement {
@@ -3435,6 +3455,41 @@ fn step(from: Option<usize>, count: usize, down: bool) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
+    use gpui::{Bounds, point, px, size};
+
+    use super::{MENU_WIDTH, main_menu_origin};
+
+    fn button(left: f32, top: f32) -> Bounds<gpui::Pixels> {
+        Bounds::new(point(px(left), px(top)), size(px(32.), px(32.)))
+    }
+
+    #[test]
+    fn main_menu_opens_under_its_button_not_the_window_edge() {
+        // No side bar: the button sits at the window's right edge.
+        let at = main_menu_origin(Some(button(1160., 40.)), px(1200.), px(0.));
+        assert_eq!(at.x, px(1192. - MENU_WIDTH));
+        assert_eq!(at.y, px(76.));
+        // The Companions bar open on the right: the toolbar (and its ☰)
+        // ends at x=732, and the menu follows it instead of sitting over
+        // the bar at the window edge.
+        let at = main_menu_origin(Some(button(700., 40.)), px(1200.), px(0.));
+        assert_eq!(at.x, px(732. - MENU_WIDTH));
+        assert!(at.x + px(MENU_WIDTH) <= px(732.));
+        assert_eq!(at.y, px(76.));
+    }
+
+    #[test]
+    fn main_menu_stays_inside_the_window() {
+        // Button near the left edge: clamped to the margin, not off-screen.
+        let at = main_menu_origin(Some(button(20., 0.)), px(1200.), px(0.));
+        assert_eq!(at.x, px(4.));
+        // Button past the right edge (mid-resize): pulled back inside.
+        let at = main_menu_origin(Some(button(1300., 0.)), px(1200.), px(0.));
+        assert_eq!(at.x, px(1200. - MENU_WIDTH - 4.));
+        // Not laid out yet: the old window-edge spot.
+        let at = main_menu_origin(None, px(1200.), px(48.));
+        assert_eq!(at, point(px(1200. - MENU_WIDTH - 8.), px(48.)));
+    }
     #[test]
     fn the_maximize_button_follows_the_window_state() {
         use super::{MaximizeAction, WindowButtons, maximize_action};
