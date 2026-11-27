@@ -428,8 +428,9 @@ impl CompanionView {
         cx.notify();
     }
 
-    /// The folded strip: open it out, the selected companion's initial, and a pulse while a
-    /// task runs, in the card colour with "!" while a card waits, so nothing waits unseen.
+    /// The folded strip: the selected companion's initial, and a pulse while a task runs, in
+    /// the card colour with "!" while a card waits, so nothing waits unseen. The button that
+    /// opens it out is at the bottom, as on the folded tab list.
     fn strip(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let t = self.theme;
         let waiting = self.conversations.values().any(|c| c.pending_card().is_some());
@@ -447,7 +448,6 @@ impl CompanionView {
             .bg(rgb(t.surface))
             .cursor_pointer()
             .on_click(cx.listener(|this, _, _, cx| this.set_collapsed(false, cx)))
-            .child(icon(t, "companions-expand", "«").on_click(cx.listener(|this, _, _, cx| this.set_collapsed(false, cx))))
             .child(
                 div()
                     .size(px(24.))
@@ -469,6 +469,8 @@ impl CompanionView {
                     .opacity(0.35 + 0.65 * (1. - (pulse - 1.5).abs() / 1.5))
             }))
             .children(waiting.then(|| div().text_size(px(13.)).text_color(rgb(t.accent_alt)).child("!")))
+            .child(div().flex_1())
+            .child(self.fold_button(cx))
             .into_any_element()
     }
 
@@ -873,42 +875,47 @@ impl CompanionView {
         self.save_research();
     }
 
-    /// Header: title, fold and close, and the Chat / Research tabs.
+    /// The fold or open-out button: the same glyphs and tooltips as the tab list's when it
+    /// is on the right.
+    fn fold_button(&self, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
+        let (id, glyph, tooltip) = fold_button_face(self.collapsed);
+        let fold = !self.collapsed;
+        icon(self.theme, id, glyph).tooltip(crate::browser_view::tip(tooltip, self.theme)).on_click(cx.listener(move |this, _, _, cx| {
+            cx.stop_propagation();
+            this.set_collapsed(fold, cx)
+        }))
+    }
+
+    /// The bottom row of the open panel: the fold button at the outer edge, as the tab list
+    /// puts its collapse button below the tabs.
+    fn fold_row(&self, cx: &mut Context<Self>) -> gpui::Div {
+        div().flex().flex_row().justify_end().child(self.fold_button(cx))
+    }
+
+    /// Header: title and the Chat / Research tabs. The fold button is at the bottom of the
+    /// panel (see `fold_row`), as on the tab list.
     fn header(&self, cx: &mut Context<Self>) -> gpui::Div {
         let t = self.theme;
         let active = self.research.active();
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(6.))
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(2.))
-                    .child(div().flex_1().text_size(px(13.)).child("Companions"))
-                    .child(icon(t, "companions-collapse", "»").on_click(cx.listener(|this, _, _, cx| this.set_collapsed(true, cx)))),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .gap(px(4.))
-                    .child(
-                        chip(t, "companions-tab-chat", "Chat", !self.research_tab)
-                            .on_click(cx.listener(|this, _, _, cx| this.set_research_tab(false, cx))),
+        div().flex().flex_col().gap(px(6.)).child(div().text_size(px(13.)).child("Companions")).child(
+            div()
+                .flex()
+                .flex_row()
+                .gap(px(4.))
+                .child(
+                    chip(t, "companions-tab-chat", "Chat", !self.research_tab)
+                        .on_click(cx.listener(|this, _, _, cx| this.set_research_tab(false, cx))),
+                )
+                .child(
+                    chip(
+                        t,
+                        "companions-tab-research",
+                        if active > 0 { format!("Research  {active}") } else { "Research".to_string() },
+                        self.research_tab,
                     )
-                    .child(
-                        chip(
-                            t,
-                            "companions-tab-research",
-                            if active > 0 { format!("Research  {active}") } else { "Research".to_string() },
-                            self.research_tab,
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| this.set_research_tab(true, cx))),
-                    ),
-            )
+                    .on_click(cx.listener(|this, _, _, cx| this.set_research_tab(true, cx))),
+                ),
+        )
     }
 
     /// A question from the address bar (`> q` or `>name q`): select that companion and send it.
@@ -1414,6 +1421,12 @@ fn dim(t: Theme, text: impl Into<SharedString>) -> gpui::Div {
     div().text_size(px(11.)).text_color(rgb(t.text_secondary)).child(text.into())
 }
 
+/// The agents bar's fold button: its id, glyph and tooltip. The bar is on the right, so it
+/// matches the tab list on the right: "»" folds it toward the edge, "«" opens it out.
+fn fold_button_face(collapsed: bool) -> (&'static str, &'static str, &'static str) {
+    if collapsed { ("companions-expand", "«", "Expand agents") } else { ("companions-collapse", "»", "Collapse agents") }
+}
+
 /// What the "Research as" chip says: the browser session research reads with.
 fn research_as_label(signed_in: bool) -> &'static str {
     if signed_in { "Research as: signed in (this task) ▾" } else { "Research as: logged out ▾" }
@@ -1593,7 +1606,8 @@ impl Render for CompanionView {
                         .gap(px(6.))
                         .child(div().flex_1().min_w(px(0.)).min_h(px(28.)).px(px(8.)).rounded(px(6.)).bg(rgb(t.background)).child(self.input.clone()))
                         .child(button(t, "research-start", "Start project", true).on_click(cx.listener(|this, _, _, cx| this.submit(cx)))),
-                );
+                )
+                .child(self.fold_row(cx));
         }
         let conv = self.conversations.get(&self.selected).cloned().unwrap_or_default();
         let picker: Vec<_> = self
@@ -1805,6 +1819,7 @@ impl Render for CompanionView {
                         button(t, "companion-send", "Send", true).on_click(cx.listener(|this, _, _, cx| this.submit(cx))).into_any_element()
                     }),
             )
+            .child(self.fold_row(cx))
     }
 }
 
@@ -1926,6 +1941,12 @@ mod tests {
     fn the_research_chip_names_the_session_and_not_an_on_off_switch() {
         assert_eq!(research_as_label(false), "Research as: logged out ▾");
         assert_eq!(research_as_label(true), "Research as: signed in (this task) ▾");
+    }
+
+    #[test]
+    fn the_fold_button_matches_the_tab_list_on_the_right() {
+        assert_eq!(fold_button_face(false), ("companions-collapse", "»", "Collapse agents"));
+        assert_eq!(fold_button_face(true), ("companions-expand", "«", "Expand agents"));
     }
 
     #[test]
