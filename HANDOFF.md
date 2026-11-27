@@ -8,6 +8,13 @@ Repo: https://github.com/WeirdBrains/morph. A [Weird Brains](https://weirdbrains
 
 ## 2026-11-27
 
+### Main menu opens under its ☰ button
+
+- **What changed:** the ☰ main menu used to open at the window's right edge, so with the Companions bar open on the right it sat over the bar, away from its button (reported by m3talsmith). It now opens right under the button, its right edge on the button's right edge, wherever the toolbar ends; it is clamped 4 px inside the window, and falls back to the old window-edge spot only before the button has been laid out. The button's bounds come from the existing `bounds_probe` (the downloads panel already anchored this way); the new helper is `main_menu_origin` in `crates/morph-desktop/src/browser_view.rs`. The other toolbar menus (downloads, tab position, search engine) already open at their buttons. Commit [`f08b0f8`](https://github.com/WeirdBrains/morph/commit/f08b0f826f19fb1f3a80b97c25947d877e88f774).
+- **Checks:** `cargo fmt --all -- --check`, `cargo build --locked --workspace`, `cargo clippy --locked --workspace --all-targets -- -D warnings`, and all `morph-desktop` tests (180 passed) under `xvfb-run` with a clean environment, after rebasing on the agents bar change below. New tests: the menu under the button with and without a right side bar, clamping at both window edges, and the not-yet-laid-out fallback. **Not tested:** the menu by eye in a real window (no screenshot taken), tab strips on the left, right or bottom by eye.
+- **Left:** nothing known.
+- **Next:** m3talsmith to confirm it in the next dev build.
+
 ### Agents bar: fold button at the bottom
 
 - **What changed:** m3talsmith asked for the Agents bar's collapse button to sit at the bottom, as the tab list's does when the tabs are on the left or right. In `crates/morph-desktop/src/companion_view.rs`: the open panel's collapse button (»), which was in the header beside the "Companions" title, is now in a row of its own under the composer, at the outer (right) edge, on both the Chat and Research tabs. The folded strip's expand button («), which was at the top, is now at the bottom, below the companion's initial and the running/waiting marks (the whole strip still opens it out on a click). Both buttons now have tooltips, "Collapse agents" and "Expand agents", and keep the tab list's glyphs for a bar on the right. The Agents bar is only ever on the right, so there is no top/bottom layout to change; the tab list is unchanged. Commit [`9652ebb`](https://github.com/WeirdBrains/morph/commit/9652ebb0e62ae1f5515c2d0343b5e693d87bd15d).
