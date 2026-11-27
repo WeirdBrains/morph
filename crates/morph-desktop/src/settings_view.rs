@@ -31,6 +31,7 @@ mod agents;
 mod lock;
 mod passwords;
 mod servers;
+pub mod ymir_link;
 
 use crate::default_browser::{self, Status};
 use crate::shell::ShellRequest;

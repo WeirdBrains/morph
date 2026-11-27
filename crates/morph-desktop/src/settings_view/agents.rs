@@ -380,6 +380,12 @@ pub struct State {
     pub note: Option<String>,
     /// Redraws the page every few seconds while the pool's state is shown.
     pub pool_tick: Option<gpui::Task<()>>,
+    /// Link to Ymir: a pasted Ymir node's code, what was wrong with the last one, and which Copy
+    /// button was pressed when (it reads "Copied" for a moment).
+    pub ymir_code: Entity<TextInput>,
+    pub ymir_note: Option<String>,
+    pub copied: Option<(&'static str, std::time::Instant)>,
+    pub copied_reset: Option<gpui::Task<()>>,
 }
 
 impl State {
@@ -395,6 +401,10 @@ impl State {
             cpu: morph_ai::cpu_limit(),
             note: None,
             pool_tick: None,
+            ymir_code: cx.new(|cx| TextInput::new("weirdnet-ymir://link/…", theme, cx)),
+            ymir_note: None,
+            copied: None,
+            copied_reset: None,
         }
     }
 }
@@ -420,6 +430,12 @@ pub fn subscribe(state: &State, window: &mut Window, cx: &mut Context<SettingsVi
         cx.subscribe_in(&state.site, window, |this, _, event, window, cx| {
             if let TextInputEvent::Submit { .. } = event {
                 this.agents_add_site(cx);
+                window.focus(&this.focus, cx);
+            }
+        }),
+        cx.subscribe_in(&state.ymir_code, window, |this, _, event, window, cx| {
+            if let TextInputEvent::Submit { .. } = event {
+                this.ymir_link_code(cx);
                 window.focus(&this.focus, cx);
             }
         }),
@@ -630,8 +646,11 @@ impl SettingsView {
         rows.push(self.plain_row("Run on", run_on_note(&current, &linked), run_chips.into_any_element()));
         if current == RunOn::Pool {
             rows.push(self.pool_model_row(&dir, cx));
+            let status = self.profile_id().map(|id| morph_services::ymir_pool::for_profile(&self.home, &id).status());
+            rows.push(self.ymir_link_row(status.as_ref(), cx));
         } else {
             self.agents.pool_tick = None;
+            rows.push(self.ymir_link_row(None, cx));
         }
         if let Some(p) = profile {
             let is_default = default_id.as_ref() == Some(p.id());

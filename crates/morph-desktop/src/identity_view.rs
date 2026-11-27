@@ -533,13 +533,25 @@ impl IdentityView {
             }
             Step::Offer { link, .. } => {
                 let copy = link.clone();
+                let ymir = link.clone();
                 col()
                     .child(self.text("On your other device, open Identity, choose Add a device and scan this code or paste the link."))
                     .child(self.qr(link))
                     .child(div().text_size(px(11.)).text_color(rgb(t.text_secondary)).overflow_hidden().child(link.clone()))
                     .child(
-                        button(t, "identity-copy", "Copy link", false).on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))),
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap(px(6.))
+                            .child(
+                                button(t, "identity-copy", "Copy link", false)
+                                    .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))),
+                            )
+                            .child(button(t, "identity-copy-ymir", "Copy for Ymir", false).on_click(move |_, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(crate::settings_view::ymir_link::ymir_add_command(&ymir)))
+                            })),
                     )
+                    .child(self.text("Joining your Ymir pool? Run Copy for Ymir's command (ymirctl pool add 'CODE') on a Ymir node that holds the identity."))
                     .child(self.text("Or, when your other device shows a code under Add a device, paste its link here:"))
                     .child(inputs)
                     .child(row(main("identity-submit", "Send").into_any_element(), back.into_any_element()))
