@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0-preview.4] - 2026-11-27
+
 A small follow-up to [0.3.0-preview.3](https://github.com/WeirdBrains/morph/releases/tag/v0.3.0-preview.3) from [Weird Brains](https://weirdbrains.com), with two layout fixes and a way to link Morph to a [Ymir](https://github.com/WeirdBrains/ymir) pool. It is a pre-release: the stable download stays on [0.2.3](https://github.com/WeirdBrains/morph/releases/tag/v0.2.3).
 
 - **Link to Ymir.** Settings > Agents has a new Link to Ymir card under Run on. It shows the profile's Identity and this device's peer id, each with a Copy button, lists the Ymir nodes already linked to the profile and, with Run on set to Ymir pool, whether the pool answers. Paste a Ymir node's `weirdnet-ymir://link/…` code (from `ymirctl pool link`) and Link Ymir node opens the usual device link with the code filled in. A profile without an identity gets Open Identity instead, and Identity > Link from another device now has **Copy for Ymir**, which copies the `ymirctl pool add …` command to run on a Ymir node.
