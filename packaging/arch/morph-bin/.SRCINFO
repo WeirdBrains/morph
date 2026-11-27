@@ -1,6 +1,6 @@
 pkgbase = morph-bin
 	pkgdesc = Distributed web browser with local AI (GPUI desktop shell), prebuilt
-	pkgver = 0.3.0preview3
+	pkgver = 0.3.0preview4
 	pkgrel = 1
 	url = https://github.com/WeirdBrains/morph
 	arch = x86_64
@@ -23,7 +23,7 @@ pkgbase = morph-bin
 	conflicts = morph
 	options = !strip
 	options = !debug
-	source_x86_64 = https://github.com/WeirdBrains/morph/releases/download/v0.3.0-preview.3/morph-0.3.0-preview.3-x86_64-unknown-linux-gnu.tar.gz
-	sha256sums_x86_64 = 1fbfe79a842da756606587e20ebb32e3a25e93e9b211290e65a6329911f52897
+	source_x86_64 = https://github.com/WeirdBrains/morph/releases/download/v0.3.0-preview.4/morph-0.3.0-preview.4-x86_64-unknown-linux-gnu.tar.gz
+	sha256sums_x86_64 = 4923ca87a1269a9c8a5587793b32a40f78ecef62ccdb9ed32f4426798e2056cc
 
 pkgname = morph-bin
